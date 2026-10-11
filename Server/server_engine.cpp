@@ -176,6 +176,13 @@ bool ServerEngine::load_environment(const std::filesystem::path& folder, const s
             renamed = true;
         }
     }
+    for (auto &park : config_.park_mods) { // and so are the maps the park mods belong to
+        if (const auto *level = find_level(park.map); level && level->name != park.map) {
+            park.map = level->name;
+            renamed = true;
+        }
+    }
+    config_.mods = folder_ / "Mods";
     if (renamed) try { save_config(config_); } catch (...) {}
     if (const auto error = config_error(config_); !error.empty()) {
         std::string err = "Config problem: " + error;
