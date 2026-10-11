@@ -12,6 +12,10 @@ Changes made when the trainer moved into ReSkate itself.
   a starting point and were not measured in game.
   `trainer preset apply hardcore`, or `trainer dial <x> hardcore` for part of it (0.75 is the
   preset). The `trainer_presets` test checks that it never goes easier than Realistic.
+- **Your presets no longer hide a built-in one.** A preset of yours saved before a built-in
+  preset took its name (yours first, so the built-in's button applied yours) is renamed when the
+  trainer loads, to "Hardcore (yours)" for example, and the maps that apply it follow. The log
+  says so. Saving under a built-in preset's name was already refused.
 - **Nothing happens until you ask.** The jump read-out and the controller shortcuts start off,
   jumps are written to the log only while the read-out or telemetry recording is on, and trick
   launches only when the trainer scaled them.

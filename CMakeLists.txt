@@ -276,7 +276,8 @@ if(DINGOSDK_BUILD_TRAINER_TESTS)
     add_executable(dingosdk_trainer_landing_tests Extension/Trainer/Test/landing_tests.cpp)
     target_include_directories(dingosdk_trainer_landing_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     add_test(NAME trainer_landing COMMAND dingosdk_trainer_landing_tests)
-    # The REALISTIC list's presets: Hardcore goes at least as far as Realistic, and class names are spelt right.
+    # Built-in presets: Hardcore goes at least as far as Realistic, class names are spelt right, and
+    # the player's own presets never keep a built-in's name.
     add_executable(dingosdk_trainer_presets_tests Extension/Trainer/Test/presets_tests.cpp Extension/Trainer/trainer_presets.cpp)
     target_include_directories(dingosdk_trainer_presets_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     add_test(NAME trainer_presets COMMAND dingosdk_trainer_presets_tests)

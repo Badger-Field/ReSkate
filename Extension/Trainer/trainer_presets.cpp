@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <iterator>
 #include <string_view>
 #include <utility>
@@ -208,5 +209,37 @@ const std::vector<BuiltinPreset> &builtin_presets() {
          {{"physicstrucks.truckzposfront", false, 0.0143}, {"physicstrucks.truckzposback", false, 0.0143}}},
     };
     return presets;
+}
+
+namespace {
+// Preset names compare as the console's commands do: ignoring ASCII case.
+bool same_name(std::string_view a, std::string_view b) {
+    return std::ranges::equal(a, b, [](char x, char y) {
+        return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
+    });
+}
+} // namespace
+bool reserved_preset_name(std::string_view name) {
+    return same_name(name, "stock") || same_name(name, "map") ||
+           std::ranges::any_of(builtin_presets(), [&](const BuiltinPreset &preset) { return same_name(name, preset.name); });
+}
+std::vector<std::pair<std::string, std::string>> rename_reserved_presets(UserPresets &user) {
+    std::vector<std::string> hidden;
+    for (const auto &entry : user)
+        if (reserved_preset_name(entry.first)) hidden.push_back(entry.first);
+    const auto taken = [&](std::string_view name) {
+        return reserved_preset_name(name) || std::ranges::any_of(user, [&](const auto &entry) { return same_name(entry.first, name); });
+    };
+    std::vector<std::pair<std::string, std::string>> renamed;
+    for (const auto &name : hidden) {
+        // A reserved name is short, so the new one stays well inside max_preset_name.
+        auto next = name + " (yours)";
+        for (int n = 2; taken(next); ++n) next = name + " (yours " + std::to_string(n) + ")";
+        auto node = user.extract(name);
+        node.key() = next;
+        user.insert(std::move(node));
+        renamed.emplace_back(name, std::move(next));
+    }
+    return renamed;
 }
 } // namespace dingosdk::trainer
