@@ -451,7 +451,7 @@ bool start(std::uintptr_t base) noexcept {
         return false;
     }
     s.base.store(base, std::memory_order_release);
-    s.on.store(profile_runtime::local_preference(enabled_preference).value_or(true), std::memory_order_release);
+    s.on.store(profile_runtime::local_preference(enabled_preference).value_or(false), std::memory_order_release);
     const auto in_game = mods::board_break_in_play();
     {
         std::lock_guard lock(s.names);
