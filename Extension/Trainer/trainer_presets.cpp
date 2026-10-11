@@ -117,6 +117,7 @@ PresetDial preset_dial(std::string_view name) {
         {"Super Glide", "Glide: gravity (lower falls slower)", f},
         {"Torpedo Boost", "Torpedo and falling: steering", f},
         {"Realistic", "", r},
+        {"Hardcore", "", r},
         {"Mega Pop", "", 0},
         {"No Speed Wobble", "", f},
         {"Auto Push", "", f},
@@ -154,6 +155,26 @@ const std::vector<BuiltinPreset> &builtin_presets() {
           {"physicsmode.maxautobodyspinspeed", true, 0.75}, {"physicsmode.grindlockdist", true, 0.7}, {"jump.basejumpheight", true, 0.85}, {"jump.maxjumpheight", true, 0.85},
           {"locomotion.sprintspeed", true, 0.85}, {"wipeoutfallspeed.", true, 0.8},
           {"physicswipeout.wipeout_ maxspeed", true, 0.8}, {"physicsmode.wipeout_ acceleration", true, 0.8}}},
+        // Realistic with the game's help turned down, for players used to skating games without
+        // it. Every value Realistic changes goes at least as far (Test/presets_tests.cpp). The
+        // rest turn down what Sticky Grinds, Slick Grinds and Hard To Bail turn up, and raise
+        // powerslide friction. Grinds still take a fast drop onto a rail: only the distance and
+        // angle they lock on from shrink. The amounts are a starting point, not measured. Ollie
+        // height is the first rule, so a dial of 0.75 is the preset (`trainer dial <x> hardcore`).
+        {"Hardcore", "Realistic with less help: grinds only take a close, lined-up landing, grinds and powerslides lose speed, slower rotation, earlier bails.",
+         {{"physicsmode.jumpmaxheight", true, 0.75}, {"physicsmode.jumpminheight", true, 0.8},
+          {"physicsmode.grindjump", true, 0.8}, {"physicspush.maxpushablespeed !camera", true, 0.75},
+          {"physicsmode.speedwobblestartspeed", true, 0.7},
+          {"physicsreckoning.flipscalar", true, 0.7}, {"physicsairstates.maxspinspeed", true, 0.6},
+          {"physicsmode.maxautobodyspinspeed", true, 0.5}, {"physicsmode.grindlockdist", true, 0.5}, {"jump.basejumpheight", true, 0.85}, {"jump.maxjumpheight", true, 0.85},
+          {"locomotion.sprintspeed", true, 0.85}, {"wipeoutfallspeed.", true, 0.7},
+          {"physicswipeout.wipeout_ maxspeed", true, 0.7}, {"physicsmode.wipeout_ acceleration", true, 0.7},
+          {"physicstrajectory.grindlandingmaxangle", true, 0.6},
+          {"physicsgrind.commonfrictionscalar", true, 1.3}, {"physicsgrind.curbfrictionscalar", true, 1.3},
+          {"onboard_powerslide.frictionscalar_slide", true, 1.5},
+          {"physicswipeout.wipeout_ force", true, 0.7}, {"physicswipeout.wipeout_ acceleration", true, 0.7},
+          {"physicswipeout.wipeout_ maxdisp", true, 0.7}, {"physicswipeout.wipeout_ relativevel", true, 0.7},
+          {"physicsmode.wipeoutcheckforbadlanding", false, 1.0}}},
         {"Mega Pop", "Ollies and grind pops go about twice as high.",
          {{"physicsmode.jumpmaxheight", true, 2.0}, {"physicsmode.jumpminheight", true, 1.6},
           {"physicsjump.jumpybonusmax", true, 2.0}, {"physicsmode.grindjump", true, 1.6}}},
