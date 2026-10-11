@@ -141,7 +141,9 @@ std::vector<Host::PlayerInfo> Host::player_list() const {
         PlayerInfo p;
         p.id = id;
         p.name = guest_name(*guest);
-        p.admin = is_admin(id);
+        // (Admins are a role now: one whose role has every command.)
+        const auto *role = role_of(id);
+        p.admin = role && role->granted_all;
         p.ping = 0;
         for (const auto &link : links) {
             if (link.id == id && link.measured) {
@@ -1761,10 +1763,6 @@ void Host::tick(std::uint64_t now) {
     for (auto note : transport_.take_direct_notes()) {
         while (!note.empty() && (note.back() == '\n' || note.back() == '\r')) note.pop_back();
         log_("[direct] " + note);
-    }
-    for (auto note : transport_.take_steam_debug_notes()) {
-        while (!note.empty() && (note.back() == '\n' || note.back() == '\r')) note.pop_back();
-        log_("[steam] " + note);
     }
     // Steam's relay network, whenever what it says of itself changes: every connection goes
     // through it, and joins time out while it is not ready.

@@ -147,7 +147,7 @@ bool ServerEngine::load_environment(const std::filesystem::path& folder, const s
         const bool fresh = !std::filesystem::exists(config_file_);
         std::vector<std::string> added;
         config_ = load_config(config_file_, &added);
-        if (fresh) log("Wrote default " + path_utf8(config_file_.filename()) + ". Edit it to name the server and add admins.");
+        if (fresh) log("Wrote default " + path_utf8(config_file_.filename()) + ". Edit it to name the server, then type 'role <SteamID64> admin' to add an admin.");
         if (!added.empty()) {
             std::string names;
             for (const auto &name : added) names += (names.empty() ? "" : ", ") + name;
@@ -331,8 +331,15 @@ void ServerEngine::run_startup() {
                 "one: see steam_token in README.", LogLevel::warning);
         }
         log("Join code: " + host_->invite() + (config_.password.empty() ? "" : " (password required)"), LogLevel::success);
-        log(config_.admins.empty() ? "No admins yet. Type 'admin add <SteamID64>' to add one."
-                                  : std::to_string(config_.admins.size()) + " admin(s) configured.", LogLevel::info);
+        {
+            // Admins are a role now (roles.h): the players whose role has every command.
+            std::size_t admins{};
+            for (const auto &[id, name] : config_.roles.players)
+                if (const auto *role = config_.roles.find(name); role && role->granted_all) ++admins;
+            log(!admins ? "No admins yet. Type 'role <SteamID64> admin' to add one. Roles are in data/roles.json."
+                        : std::to_string(admins) + " admin(s), " + std::to_string(config_.roles.players.size()) +
+                          " player(s) with a role.", LogLevel::info);
+        }
 
         start_time_ = std::chrono::steady_clock::now();
         running_.store(true);

@@ -1347,23 +1347,27 @@ void draw_moderation_tab() {
 
     } else if (g_state.moderation_subtab == 1) {
         // SERVER ADMINISTRATORS
-        const auto& admins = ServerEngine::instance().config().admins;
-        begin_card("card_admins", "SERVER ADMINISTRATORS", "Users with authoritative in-game admin permissions");
+        // Admins are a role now (roles.h): everyone who was given a role is listed with it, and
+        // taking it away leaves them the default role. (A copy: the commands below change the list.)
+        const auto admins = ServerEngine::instance().config().roles.players;
+        begin_card("card_admins", "SERVER ADMINISTRATORS", "Players who were given a role (data/roles.json)");
         if (admins.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, muted);
             ImGui::TextUnformatted("No administrators currently configured.");
             ImGui::PopStyleColor();
         } else {
-            for (const auto admin_id : admins) {
+            for (const auto& [admin_id, role_name] : admins) {
                 ImGui::AlignTextToFramePadding();
                 ImGui::PushFont(g_fonts.mono);
                 ImGui::Text("%llu", admin_id);
                 ImGui::PopFont();
                 ImGui::SameLine(0, S(16));
+                ImGui::TextUnformatted(role_name.c_str());
+                ImGui::SameLine(0, S(16));
                 ImGui::PushID(static_cast<int>(admin_id));
-                if (rough_button("Revoke Admin", ImVec2(S(120), S(24)))) {
-                    ServerEngine::instance().queue_command("admin remove " + std::to_string(admin_id));
-                    show_notification("Revoked admin: " + std::to_string(admin_id), 3.0, warning);
+                if (rough_button("Remove Role", ImVec2(S(120), S(24)))) {
+                    ServerEngine::instance().queue_command("role " + std::to_string(admin_id) + " none");
+                    show_notification("Removed the role of " + std::to_string(admin_id), 3.0, warning);
                 }
                 ImGui::PopID();
             }
@@ -1377,7 +1381,7 @@ void draw_moderation_tab() {
         ImGui::SameLine(0, S(10));
         if (rough_button("GRANT ADMIN", ImVec2(S(140), S(30)))) {
             if (s_new_admin[0]) {
-                ServerEngine::instance().queue_command(std::string("admin add ") + s_new_admin);
+                ServerEngine::instance().queue_command(std::string("role ") + s_new_admin + " admin");
                 show_notification("Added administrator: " + std::string(s_new_admin), 3.5, good);
                 s_new_admin[0] = '\0';
             }
