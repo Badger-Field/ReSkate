@@ -19,7 +19,9 @@ deck's place in the mod list in [mod_catalog.cpp](../Engine/Vfs/mod_catalog.cpp)
   while it is ridden: the nose goes.
 - `boardbreak 0|1`, `boardbreak deck [name|number|next]`, `boardbreak snap [nose|mid|tail]` to look
   at a break (that one stays until `boardbreak mend` or a respawn). The switch and the deck are in
-  the menus beside Road Rash (Mod Options > Player, and the overlay's Skater page). The switch is
+  the menus beside Road Rash (Mod Options > Player, and the overlay's Skater page). The overlay has
+  a card BOARD BREAK DECK with a button for each deck, on the Mods page and under the switch: a
+  press asks for that deck, the mods are applied and the level loads again with it. The switch is
   saved with the profile.
 - A break plays back in the replay editor as it happened.
 - Without a deck pack installed nothing breaks and nothing is changed.
@@ -66,6 +68,18 @@ deck's place in the mod list in [mod_catalog.cpp](../Engine/Vfs/mod_catalog.cpp)
   `light`, `medium`, `heavy`, by the size of the break), played straight to the speakers.
 - **The slam's force** comes through No Bail's existing hooks: the cause it records for the watched
   skater, and the cause collector at the moment the selector chooses Wipeout. Nothing new is hooked.
+- **The trucks' baseplates.** The game's truck model (one for every truck item,
+  `characters/skateboard/unlicensed/truck/generic/default/2022/truck_gen_default_mesh`) has its
+  hangers on the trucks' bones and everything bolted to the deck, the baseplates and their bolts,
+  on the deck's bone. With the deck's bone moved away to hide the real deck, a broken board had
+  hangers and wheels and no baseplates. The decks inside a deck pack bring a copy of the truck
+  model with those vertices on the trucks' effectors instead (`eff_truckBack`, `eff_truckFront`:
+  a bone under each truck's that no model uses), and the hook writes each effector from its
+  truck's bone as the animation left it, so that the truck's bone followed by the effector's is
+  what the two are at rest: on a whole board the baseplate sits on the deck however the truck
+  steers, and a truck that a piece carries off takes its baseplate along
+  (`baseplate_bone`, with a test). That is done on every board that passes the hook. With the
+  game's own truck model nothing is on the effectors and writing them shows nothing.
 - **On foot the grip tape always holds.** A loose piece takes the ground from where the board
   rolled or lies; a board in the skater's hand does not tell where the ground is, and a piece that
   came off there hung in the air at hand height.
@@ -87,7 +101,10 @@ A deck is a content mod's copy of the deck model (no code), and comes in one of 
   what an older ReSkate loads from the pack. ReSkate 2.0.6 knows a deck by its folder's name only,
   so a pack in a folder named `Board_Break_<Name>` (the package `Board_Break_Pack`, installed as
   `Team-Board_Break_Pack`) with a breakable deck as its own layout breaks boards there with that
-  one deck, and brings all its decks from this version on.
+  one deck, and brings all its decks from this version on. The truck model with the baseplates on
+  the effectors belongs in the decks inside the pack only: a ReSkate that does not place those
+  bones would draw the baseplates turning with the hangers, and such a version reads the pack's
+  own layout, never `decks/`.
 
 The name is what the deck goes by. The eight the feature was made with are standard, wide,
 concave, powell, slim, egg, square and shaped, and the console also knows those by number. Any
@@ -104,6 +121,9 @@ other deck that follows the recipe works, with no change to ReSkate:
   deck's own edge faces standing in the gap as the broken end. Push the row itself along the board
   by a jagged line, the same line for both sides of a break, so the pieces fit together.
 - Build the stretches at their own size, in the place they have in the whole deck.
+- The truck model for a deck inside a pack: the game's own, with every vertex that is on the bone
+  Deck moved to `eff_truckBack` (behind the middle of the board) or `eff_truckFront` (ahead of
+  it). Nothing else changes; Studio takes it back as it is.
 - The sounds are `sounds/light|medium|heavy/*.wav` in the folder of any mod that brings a deck.
 
 ## Seen working in game
@@ -126,6 +146,15 @@ with the game's own deck there, and with a breakable deck there in a folder name
 overlay's Skater page turns it off and on. On the
 older build the feature was developed on, a middle break played back in the replay editor.
 
+On main at 8351654, with the pack as the only source of decks (its decks with the truck model
+that has the baseplates on the effectors): a dozen breaks from real slams at the nose, in the
+middle and at the tail, clean and held by the grip, with the baseplates on the pieces, and on the
+whole board in hand and on the ground. The effectors are bones 5 and 9 of the pose, each at
+0.0395 m along its truck's bone and not turned, as the rig has them. A press on Shaped in the
+overlay's deck card: the mods applied in 3.8 s, the level loaded again in 15 s with that deck,
+which then broke. In the game's Mod Options > Player page, on 2.0.6: one press on Board Break
+deck is one deck further and one reload.
+
 ## Not tried yet
 
 - Multiplayer: other players' boards are only handled by the code path (their stretches are moved
@@ -133,6 +162,9 @@ older build the feature was developed on, a middle break played back in the repl
 - The online route: all of the above ran on the offline profile.
 - The replay editor on this branch (the replay was checked on the older build the feature was
   developed on).
-- The rows in Mod Options > Player in the game itself (their view has a test; the overlay's switch
-  was used).
+- The deck card with a deck that is not one of the eight, and with none installed (it draws
+  nothing then).
+- A board that does not pass the render pose hook, with the truck model from a pack: its
+  baseplates would follow the hangers.
+- A mod that brings a truck model of its own beside a deck pack: the pack's is the one that loads.
 - A level change in the middle of a break.
