@@ -311,6 +311,22 @@ void set_map_download_answer(MapDownloadAnswer) noexcept;
 // The card's icon: the package's own picture as PNG bytes, or nothing to show a plain tile.
 // Any thread; decoded here and uploaded when the overlay next draws.
 void set_map_download_icon(const std::string& png) noexcept;
+// The pictures for a dedicated server's vote for the next map (Extension/Assets/map_icons.h):
+// each map's name in the vote and its picture: a mod's icon as PNG bytes, or one of the game's
+// own maps' as pixels (straight-alpha RGBA, a square of `side`). Neither: it has none. Any thread.
+struct MapVoteIcon {
+    std::string name, png;
+    std::vector<unsigned char> rgba;
+    unsigned side{};
+};
+void set_map_vote_icons(const std::vector<MapVoteIcon>& icons) noexcept;
+// That vote's popup (map_download_card.cpp), for the runtime, which reads the controller and
+// holds the game's input while it is up: whether it is, moving the pick, voting for the pick
+// (the popup then closes), and closing it without a vote. Any thread.
+bool map_vote_asking() noexcept;
+void map_vote_move(int by) noexcept;
+void map_vote_take() noexcept;
+void map_vote_dismiss() noexcept;
 // The session's text chat, read by the chat panel every frame (thread-safe, cheap).
 using ChatFeed = MultiplayerChat (*)();
 void set_chat_feed(ChatFeed) noexcept;

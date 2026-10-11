@@ -575,6 +575,7 @@ void draw_announcement(const MultiplayerAnnouncement& announcement, ImFont* head
 
 void draw_vote(const MultiplayerVote& vote, ImFont* heading, ImFont* body, ImVec2 display, float scale, bool clickable) {
     if (!vote.id) return;
+    if (vote.next_map && draw_map_vote(vote)) return;
     if (vote.poll) return draw_poll(vote, heading, body, display, scale, clickable);
     constexpr ImU32 green = skate_theme::good, red = skate_theme::danger;
     const bool running = vote.outcome == 0;

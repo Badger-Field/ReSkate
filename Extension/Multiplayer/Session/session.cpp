@@ -181,6 +181,7 @@ void stop(Session &s, std::string reason) {
     s.announcement_ends = 0;
     server_vote_open_flag.store(false, std::memory_order_relaxed);
     server_poll_answers_flag.store(0, std::memory_order_relaxed);
+    set_next_maps({});
     s.pose_streams.clear();
     s.pose_ack = {};
     s.pose_ack_due = false;

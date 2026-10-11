@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace dingosdk::multiplayer {
 // Commands and tick execute on the game's client thread. model() is thread-safe.
@@ -45,6 +46,15 @@ bool fetching_map() noexcept;
 // How a host learns the package of the map it is on, to tell its guests: the level's asset in,
 // the package (or nothing) out. Called on the client thread, often; it should be quick.
 using MapPackageLookup = std::string (*)(std::string_view asset);
+// The maps a dedicated server's vote for the next map will offer, as it said about a minute
+// before the vote (protocol.h: next_maps): each one's name in the vote and its Thunderstore
+// package (may be empty). None outside such a server, and after the map changed. Thread-safe;
+// the serial changes whenever the list does.
+struct NextMapWanted {
+    std::string name, package;
+};
+std::vector<NextMapWanted> next_maps();
+unsigned next_maps_serial() noexcept;
 void set_map_package_lookup(MapPackageLookup lookup) noexcept;
 // The session's chat lines for the overlay. Thread-safe and cheap: callable every frame.
 MultiplayerChat chat();

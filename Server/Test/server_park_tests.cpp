@@ -112,6 +112,7 @@ struct Game {
     std::optional<Member> server;
     ObjectState park; // the server's objects as this game holds them
     std::vector<std::string> chat;
+    std::vector<std::string> votes; // the roster's: the votes of the server's own that are on
     bool refused{}; // an object update the game would not have taken
     bool joined{};
 
@@ -158,9 +159,12 @@ struct Game {
                 world = p->world;
                 if (p->map) map = p->map;
             }
-            if (p->kind == PacketKind::roster)
+            if (p->kind == PacketKind::roster) {
                 for (const auto &member : p->members)
                     if (member.id == p->source) server = member;
+                votes.clear();
+                for (const auto &v : p->server_custom_votes) votes.push_back(v.name);
+            }
             if (p->kind == PacketKind::chat) chat.push_back(p->text);
             if (p->kind == PacketKind::objects) {
                 if (!server || p->source != server->id || !routed_source(*p, *server, server->id, false, server->id) ||
@@ -512,6 +516,60 @@ int run(const std::filesystem::path &fixtures) {
         d.say("/yes", now);
         run_for(1000000);
         check(said("passed (2 yes, 0 no, 2 needed of 2 votes)") == 1, "A vote nobody could change any more was not decided at once");
+    }
+    // The rotation: the minutes left are announced, the vote's maps are drawn a minute ahead,
+    // and the vote decides: staying adds time, a map changes to it.
+    {
+        const auto said = [&](std::string_view text) {
+            return std::count_if(a.chat.begin(), a.chat.end(), [&](const std::string &line) { return line.find(text) != std::string::npos; });
+        };
+        auto &c = games.at(76561198000000003ULL);
+        auto &d = games.at(76561198000000004ULL);
+        command("rotation vote on");
+        command("rotation stay 2");
+        check(command("rotation 3").find("A vote for the next map") != std::string::npos, "rotation with a vote: " + command("rotation"));
+        run_for(61000000); // two minutes left: nothing of the vote yet
+        check(!said("Vote for the next map"), "The vote for the next map started early");
+        run_for(120000000); // the time is up: the vote runs, its answers three maps, any, and staying
+        check(said("Vote for the next map") == 1 && said("/4 Random map  /5 Stay here") == 1, "The vote for the next map did not start as it should");
+        a.say("/5", now);
+        run_for(1000000);
+        check(!said("The vote keeps"), "The vote ended before everyone had voted");
+        run_for(31000000);
+        check(said("The vote keeps") == 1 && said("for 2 more minutes") == 1, "Staying did not win the vote");
+        check(command("rotation").find("in about 2 min") != std::string::npos, "Staying did not add its time: " + command("rotation"));
+        // "/vote extend": the server's own vote for the same, at any time. It is in the votes games list.
+        command("rotation stay 4");
+        run_for(1000000);
+        check(std::find(a.votes.begin(), a.votes.end(), "extend") != a.votes.end(), "The extend vote is not among the votes games are told of");
+        a.say("/vote extend", now);
+        run_for(1000000);
+        c.say("/yes", now);
+        d.say("/yes", now);
+        run_for(1000000);
+        check(said("more minutes passed (") == 1, "The vote to extend the map did not pass");
+        reply = command("rotation");
+        check(reply.find("in about 5 min") != std::string::npos, "/vote extend did not add its time: " + reply); // a minute was left, and four more
+        command("votes extend off");
+        check(command("vote extend") == "Extend votes are off on this server.", "An extend vote started while it was off: " + command("vote extend"));
+        command("votes extend on");
+        command("rotation stay 2");
+        run_for(180000000);
+        // The next time everyone votes for the first map: the vote ends at once and the map changes.
+        run_for(121000000);
+        check(said("Vote for the next map") == 2, "The vote did not come round again after staying");
+        const auto before = said("Next map: ");
+        a.say("/1", now);
+        c.say("/1", now);
+        d.say("/1", now);
+        run_for(1000000);
+        check(said("Next map: ") == before + 1 || logged("[rotation] Next map: "), "The vote did not change the map once everyone had voted");
+        // "rotation extend" gives the map in play more time and says so.
+        run_for(3000000);
+        reply = command("rotation extend 5");
+        check(reply.find("in about 7 min") != std::string::npos || reply.find("in about 8 min") != std::string::npos, "rotation extend: " + reply);
+        command("rotation off");
+        command("rotation vote off");
     }
     check(!wire().closed.contains(admin_id), "The player was disconnected: " + (wire().closed.contains(admin_id) ? wire().closed[admin_id] : std::string{}));
     return failures;
