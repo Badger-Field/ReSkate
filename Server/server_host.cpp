@@ -115,6 +115,11 @@ void Host::send_permissions(Guest &guest) {
     }
     if (send_packet(guest, p, true, false)) guest.permissions_sent = roles_revision_;
 }
+void Host::send_words(Guest &guest) {
+    auto p = packet(PacketKind::words, now_);
+    p.words = filtered_words_;
+    if (send_packet(guest, p, true, false)) guest.words_sent = words_revision_;
+}
 void Host::roles_changed() {
     ++roles_revision_;
     ++bans_revision_;
@@ -1830,6 +1835,7 @@ void Host::tick(std::uint64_t now) {
             // Whoever may change the map picks from it; with map votes on, everyone completes /vote map from it.
             if (!guest->maps_sent && (can(id, "map") || config_.votes.map.enabled)) send_maps(*guest);
             if (guest->permissions_sent != roles_revision_) send_permissions(*guest);
+            if (guest->words_sent != words_revision_) send_words(*guest);
         }
     const bool loading = std::any_of(guests_.begin(), guests_.end(),
                                      [](const auto &g) { return g.second->handshaken && !g.second->world_ready; });

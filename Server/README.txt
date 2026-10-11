@@ -141,6 +141,11 @@ word_warnings      The ReSkate team keeps a list of words that are not allowed
                    they can join again, and are kicked again at the next.
                    Warnings last until the server restarts. 0: nobody is
                    warned or kicked; the message is still not passed on.
+use_global_word_filter
+                   Use the ReSkate team's chat word lists (default true). Set
+                   false to leave them out: then only the words in this
+                   server's own data/words_blocked.txt are refused in chat.
+                   Console: words global on|off. See "Chat words" below.
 allow_voice_chat   Allow voice chat.
 voice_range        How far proximity voice reaches, 50-1000 m.
 object_placement   everyone, admins (only admins can build), or nobody.
@@ -351,6 +356,30 @@ them moved there the first time the server starts.
 
 Roles
 -----
+Chat words
+----------
+Two files in data/, beside the bans, hold this server's own chat words. Both are
+written with an explanation the first time the server starts. One word to a
+line; a line starting with # is a comment. Edit them and type: words reload
+
+  data/words_filtered.txt  Words this server filters, on top of the team's.
+                           Messages with them are still passed on; the server
+                           sends the list to its players' games, which show
+                           the word as stars to players who have their chat
+                           filter on. The first 256 words of up to 32 letters
+                           are sent.
+  data/words_blocked.txt   Words not allowed in this server's chat at all, on
+                           top of the team's. A message with one is not passed
+                           on and its player is warned (word_warnings).
+
+"use_global_word_filter": false leaves the team's lists out altogether, so only
+words_blocked.txt is refused.
+
+What this does not change: each player's game still stars out the team's
+filtered words for a player who has their chat filter on, and hides a server
+whose name has one of the team's words from the server browser. Those are the
+team's lists in the player's game, whatever a server sets.
+
 Who may do what is in data/roles.json, beside the bans. README-roles.txt has the
 whole of it: every permission and every command a role can be given, with
 examples. In short, the server writes the file the first time it starts, with
@@ -485,6 +514,10 @@ or Travel, and voice, distances, placement and kicks from the Multiplayer menu.
   announcements [list | add <text> | remove <n> | clear | interval <minutes>|off]
                                 The messages posted on a timer.
   activity-log on|off           Log player activity (see activity_log).
+  words [reload | global on|off]
+                                This server's chat words: what is in use, read
+                                the two files again, or use the ReSkate team's
+                                lists or not (see Chat words).
   announce-throwdowns on|off    Chat message when a throwdown is placed.
   parties [on|off]              List the parties, or allow them (off ends them all).
   party-size <2-8>              Most players in one party.

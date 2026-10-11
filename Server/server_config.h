@@ -131,6 +131,9 @@ struct ServerConfig {
     // passed on. Its player is warned; after this many warnings, 1 to 10, the next gets them
     // kicked. 0: nobody is warned or kicked, and the message is still not passed on.
     unsigned word_warnings = 3;
+    // The ReSkate team's chat word lists hold here. Off: only this server's own words
+    // (server_words.h) are filtered and refused.
+    bool global_words = true;
     // Players whose game runs fast (a speedhack; Server/speed_check.h): "warn" takes them out of
     // throwdowns and coop challenges and tells the admins, "kick" also removes them, "off" does not check.
     std::string speed_check = "warn";

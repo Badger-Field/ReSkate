@@ -507,6 +507,7 @@ int run(int argc, char **argv, bool skip_update) {
     auto next_ban_check = next_advertise;
     bool bans_unread{};
     if (!config.global_bans) write_log("Global bans are off (\"use_global_bans\": false): only this server's own bans apply.");
+    write_log(host.command("words")); // reads this server's own chat words
     // Signed in to Steam, as last logged, and when it is looked at again. Players already on stay
     // connected through a lost sign-in, but nobody new can join: Steam carries the first messages
     // of a connection, and theirs time out ("negotiate rendezvous").

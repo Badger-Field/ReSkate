@@ -104,6 +104,10 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
     target_include_directories(dingosdk_global_bans_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     target_link_libraries(dingosdk_global_bans_tests PRIVATE dingosdk_json dingosdk_word_filter $<$<BOOL:${WIN32}>:dingosdk_https>)
     add_test(NAME server_global_bans COMMAND dingosdk_global_bans_tests)
+    add_executable(dingosdk_server_words_tests Server/Test/server_words_tests.cpp Server/server_words.cpp)
+    target_include_directories(dingosdk_server_words_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_link_libraries(dingosdk_server_words_tests PRIVATE dingosdk_word_filter)
+    add_test(NAME server_words COMMAND dingosdk_server_words_tests)
     add_executable(dingosdk_word_filter_tests Engine/Core/Text/Test/word_filter_tests.cpp)
     target_link_libraries(dingosdk_word_filter_tests PRIVATE dingosdk_word_filter)
     add_test(NAME word_filter COMMAND dingosdk_word_filter_tests)
@@ -231,7 +235,7 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS AND WIN32)
     add_executable(dingosdk_server_load_tests Server/Test/server_load_tests.cpp Server/server_host.cpp Server/server_party.cpp
         Extension/Multiplayer/Session/party_book.cpp Server/server_config.cpp
         Server/server_update.cpp Server/server_release.cpp Launcher/updater.cpp
-        Server/global_bans.cpp Extension/Multiplayer/developer_identity.cpp Extension/Multiplayer/word_lists.cpp
+        Server/global_bans.cpp Server/server_words.cpp Extension/Multiplayer/developer_identity.cpp Extension/Multiplayer/word_lists.cpp
         Extension/Multiplayer/Net/protocol.cpp
         Extension/Multiplayer/Net/delta_codec.cpp Extension/Multiplayer/Net/wire_codec.cpp
         Extension/Multiplayer/Remote/playback_buffers.cpp Extension/Multiplayer/Session/password.cpp

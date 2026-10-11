@@ -202,6 +202,7 @@ class Host {
         std::uint64_t next_introduction{};
         bool maps_sent{};          // this player has the server's map list (send_maps)
         std::uint64_t permissions_sent{}; // the roles revision their permissions were sent at
+        std::uint64_t words_sent{};       // the words revision the server's filtered words were sent at
         // The owner's own upload, and what the server shares of it.
         ObjectState objects, shared;
         std::uint64_t shared_from{};
@@ -281,6 +282,10 @@ class Host {
     bool roster_dirty_ = true, running_{};
     std::uint64_t bans_revision_ = 1; // bumped whenever the ban list or the roles change
     std::uint64_t roles_revision_ = 1; // bumped whenever the roles or who has them change
+    // The server's own filtered words as its players have them, and their revision: 0 until
+    // there are any, so a server without the file sends nothing.
+    std::vector<std::string> filtered_words_;
+    std::uint64_t words_revision_{};
     bool role_tags_checked_{};
     std::uint64_t now_{}, last_roster_{}, last_world_state_{}, next_object_update_{}, travel_started_{};
     std::string relay_status_; // Steam's relay network as last logged
@@ -365,6 +370,7 @@ class Host {
         return role ? role->rank : -1;
     }
     void send_permissions(Guest &);    // what their role lets them do
+    void send_words(Guest &);          // the server's own filtered chat words (server_words.h)
     void roles_changed();              // after any change to the roles or who has them
     bool is_banned(std::uint64_t id) const;
     void save();

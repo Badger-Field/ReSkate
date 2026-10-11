@@ -101,6 +101,7 @@ Layout layout(const ServerConfig &c) {
     players.set("party_size", c.party_size);
     players.set("afk_kick_minutes", c.afk_kick);
     players.set("word_warnings", c.word_warnings);
+    players.set("use_global_word_filter", c.global_words);
     players.set("allow_voice_chat", c.voice_chat);
     players.set("voice_range", static_cast<double>(c.voice_range));
     players.set("object_placement", placement_text(c.object_placement));
@@ -325,6 +326,7 @@ ServerConfig load_config(const std::filesystem::path &file, std::vector<std::str
     c.party_size = std::clamp(get("players", "party_size", c.party_size), 2U, 8U);
     c.afk_kick = get("players", "afk_kick_minutes", c.afk_kick);
     c.word_warnings = get("players", "word_warnings", c.word_warnings);
+    c.global_words = get("players", "use_global_word_filter", c.global_words);
     c.voice_chat = get("players", "allow_voice_chat", c.voice_chat, {"voice_chat"});
     c.voice_range = get("players", "voice_range", c.voice_range);
     const auto placement = get("players", "object_placement", placement_text(c.object_placement));

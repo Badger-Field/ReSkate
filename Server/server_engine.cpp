@@ -320,6 +320,7 @@ void ServerEngine::run_startup() {
             cleanup_server_instances();
             return;
         }
+        log(host_->command("words")); // reads this server's own chat words (server_words.h)
 
         log(config_.name + " is up on " + host_->map_name() + " for " + std::to_string(config_.max_players) + " players.", LogLevel::success);
         log("Steam ID " + std::to_string(steam_->steam_id()) +
