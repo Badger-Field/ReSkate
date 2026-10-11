@@ -186,12 +186,13 @@ void draw_map_download() {
     const char* host = card.server ? "server" : "host";
     const auto width_of = [](ImFont* font, float size, const std::string& text) { return font->CalcTextSizeA(size, FLT_MAX, 0, text.c_str()).x; };
 
-    const char* title = asking ? (card.moved ? "MAP CHANGED" : "MAP NEEDED") : downloading ? "DOWNLOADING MAP" : card.stage == 3 ? "INSTALLING MAP"
+    const char* title = asking ? (!card.have.empty() ? "MAP VERSION" : card.moved ? "MAP CHANGED" : "MAP NEEDED") : downloading ? "DOWNLOADING MAP" : card.stage == 3 ? "INSTALLING MAP"
                       : applying ? "APPLYING MAP" : "JOINING";
     // Why it is asked: the session moved here with the player in it, or the player is joining.
     const auto why = card.moved ? std::format("The {} changed to this map, and you need it to stay in the session.", host)
                                 : std::format("The {} is on this map, and you need it to join.", host);
-    const std::string status = asking ? why + (card.installed ? " You have it, switched off. Switch it on?" : " Download it?")
+    const std::string status = asking ? (!card.have.empty() ? std::format("The {} runs version {} of this map and you have {}. Update to its version?", host, card.version, card.have)
+                                                            : why + (card.installed ? " You have it, switched off. Switch it on?" : " Download it?"))
                              : downloading ? (card.total ? megabytes(card.received) + " of " + megabytes(card.total) : megabytes(card.received))
                              : card.stage == 3 ? std::string("Putting it in your Mods folder...")
                              : applying ? (card.step_name.empty() ? std::string("Adding it to the game...") : card.step_name + "...")
@@ -302,7 +303,7 @@ void draw_map_download() {
         const ImU32 fill = yes ? (lit ? sticky : sticky_dim) : (lit ? theme::blue : skate_theme::tile_light);
         skate_theme::rough_rect(draw, a, b, fill, seed, u * 2);
         if (yes && picked) draw->AddRect(a, b, theme::blue, 0, 0, 6 * u);
-        const std::string label = yes ? (card.installed ? "SWITCH ON" : "DOWNLOAD") : "CANCEL";
+        const std::string label = yes ? (!card.have.empty() ? "UPDATE" : card.installed ? "SWITCH ON" : "DOWNLOAD") : "CANCEL";
         const float size = 40 * u;
         draw->AddText(bold, size, ImVec2(a.x + (button_width - width_of(bold, size, label)) * 0.5f, a.y + (tall - size) * 0.5f),
                       yes || lit ? skate_theme::black : theme::paper, label.c_str());

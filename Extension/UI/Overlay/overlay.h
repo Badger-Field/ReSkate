@@ -297,6 +297,7 @@ void set_multiplayer_queue(MultiplayerQueue) noexcept;
 struct MapDownloadCard {
     int stage{};                // 0 none, 1 asking, 2 downloading, 3 installing, 4 applying, 5 joining
     std::string map, package, author, version, description;
+    std::string have;            // the version installed here, when the host's replaces it
     std::size_t step{}, steps{}; // applying: the merge's steps done of all
     std::string step_name;
     bool server{}, installed{}, moved{}, choice{true};

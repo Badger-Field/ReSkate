@@ -35,6 +35,9 @@ struct MapNeed {
     std::string map;     // its name for people
     bool server{};       // a dedicated server's map, not a player's lobby
     bool moved{};        // the session changed to this map with the player in it (else: joining)
+    // The version of it installed here, when that is another than the host's: the host's is
+    // fetched in its place. Empty: the map is not installed.
+    std::string have;
 };
 std::optional<MapNeed> take_map_need();
 // Whether a session is waiting on a map being fetched right now. Thread-safe.

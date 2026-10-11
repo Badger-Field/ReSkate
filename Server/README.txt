@@ -326,8 +326,11 @@ votes              Player votes, each off until turned on:
                      "kick": {"enabled": true, "percent": 60}  /vote kick <player>
                      "time_of_day": {"enabled": true, "percent": 50}  /vote tod <time>
                                                    (needs world_layer_sync)
-                   "percent" is the share of connected players whose yes passes
-                   it. "seconds" (default 30) is how long a vote runs and
+                   "percent" is the share of the votes cast that yes needs to
+                   pass it: players who do not vote count for neither side. A
+                   vote runs its time and is decided then, or sooner once the
+                   players still to vote could not change it. A kick always
+                   needs two yes votes. "seconds" (default 30) is how long a vote runs and
                    "cooldown_seconds" (default 60) how long a player waits before
                    starting another. Players vote with /yes and /no in chat;
                    admins cannot be vote-kicked.
@@ -514,6 +517,8 @@ or Travel, and voice, distances, placement and kicks from the Multiplayer menu.
   ban <player or id> [name]     For good.   unban <id>   bans
   map <name>                    e.g. map San Vansterdam, map grom, map bbcity
   maps                          The maps this server knows.
+  maps reload                   Read the Mods folder again: a map mod copied in
+                                while the server runs can be switched to at once.
   map-pool [add|remove <map>|clear]   The maps players vote between and the
                                 rotation uses (see maps.pool).
   rotation [<minutes>|off]      Change the map on a timer (see maps.rotation_minutes).

@@ -4,6 +4,7 @@
 //
 //   dingosdk_server_park_tests <Server/Test/fixtures/park_mods>
 #include "Server/server_host.h"
+#include "Engine/Game/World/world_names.h"
 #include "Server/server_parks.h"
 #include "Extension/Multiplayer/Net/pose_batch.h"
 #include "Extension/Multiplayer/Net/sound_codec.h"
@@ -458,6 +459,60 @@ int run(const std::filesystem::path &fixtures) {
     const auto &objects = a.park.objects();
     check(std::any_of(objects.begin(), objects.end(), [](const auto &row) { return row.second.scale == 2.5f; }), "A resized object lost its size");
     check(command("park-mod add street").find("belongs on San Vansterdam") != std::string::npos, "A park for the old map was spawned");
+    // A map mod copied in while the server runs is known after "maps reload".
+    {
+        check(command("maps").find("Brand New") == std::string::npos, "A map that is not installed is listed");
+        std::filesystem::create_directories(mods / "someone-Brand_New");
+        std::ofstream(mods / "someone-Brand_New" / "reskate-levels.json", std::ios::binary)
+            << R"({"schema":1,"levels":[{"asset":"levels/game/dingolevel_reskate_brandnew/dingolevel_reskate_brandnew","displayName":"Brand New"}]})";
+        reply = command("maps reload");
+        check(reply.find("new: Brand New") != std::string::npos, "maps reload: " + reply);
+        check(command("maps").find("Brand New") != std::string::npos && find_level("Brand New"), "A map copied in was not known after a reload");
+        check(command("maps reload").find("none new") != std::string::npos, "A second reload found the same map new again");
+        // A custom map goes by its own name: its level is dingolevel_reskate_<map>, and "reskate"
+        // is no part of what is shown or typed (typed the old way, it still means the map).
+        check(dingosdk::world_level_name("levels/game/dingolevel_reskate_brandnew/dingolevel_reskate_brandnew") == "brandnew" &&
+                  dingosdk::world_level_name("Levels/Game/BAM_LevelRoot/BAM_LevelRoot") == "San Vansterdam",
+              "A custom map's name still starts with reskate, or a game map's name changed");
+        const auto *brand_new = find_level("Brand New");
+        check(brand_new && find_level("brandnew") == brand_new && find_level("reskate brandnew") == brand_new &&
+                  find_level("RESKATE brand") == brand_new && !find_level("reskate"),
+              "A custom map was not found by its own name, or by the old one");
+    }
+    // Votes are decided by those who vote, at the end of their time: with three players on, one
+    // yes and nobody else voting passes; a yes and a no fails (60% of the votes cast is needed);
+    // and two yes passes at once, since the third player could not change it.
+    {
+        auto &c = add_game(76561198000000003ULL, "Cee");
+        auto &d = add_game(76561198000000004ULL, "Dee");
+        c.map = d.map = a.map; // the map and world the server is on now
+        c.world = d.world = a.world;
+        c.hello(now);
+        d.hello(now);
+        run_for(2000000);
+        check(c.joined && d.joined, "The players for the votes did not join");
+        const auto said = [&](std::string_view text) {
+            return std::count_if(a.chat.begin(), a.chat.end(), [&](const std::string &line) { return line.find(text) != std::string::npos; });
+        };
+        const auto passed = said("passed ("), failed = said("failed ("), alone = said("passed (1 yes, 0 no, 1 needed of 1 vote)");
+        a.say("/vote unpark street", now);
+        run_for(5000000);
+        check(said("passed (") == passed && said("failed (") == failed, "A vote two players had not voted in was decided before its time");
+        run_for(27000000);
+        check(said("passed (1 yes, 0 no, 1 needed of 1 vote)") == alone + 1, "A vote did not pass on the votes cast");
+        a.say("/vote unpark street", now);
+        run_for(1000000);
+        c.say("/no", now);
+        run_for(5000000);
+        check(said("failed (") == failed && said("passed (") == passed + 1, "A vote a player could still pass was decided before its time");
+        run_for(27000000);
+        check(said("failed (1 yes, 1 no, 2 needed of 2 votes)") == 1, "A vote did not fail on the votes cast");
+        a.say("/vote unpark street", now);
+        run_for(1000000);
+        d.say("/yes", now);
+        run_for(1000000);
+        check(said("passed (2 yes, 0 no, 2 needed of 2 votes)") == 1, "A vote nobody could change any more was not decided at once");
+    }
     check(!wire().closed.contains(admin_id), "The player was disconnected: " + (wire().closed.contains(admin_id) ? wire().closed[admin_id] : std::string{}));
     return failures;
 }

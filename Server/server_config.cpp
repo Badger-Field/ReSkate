@@ -1,4 +1,5 @@
 #include "server_config.h"
+#include <mutex>
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Platform/path_text.h"
 #include "Extension/Multiplayer/Net/protocol.h"
@@ -875,10 +876,20 @@ std::vector<ServerLevel> &level_list() {
     static std::vector<ServerLevel> value;
     return value;
 }
+// The list is the server thread's; the server window reads a copy of it (level_snapshot), and
+// this is held while one is taken or the list is put in place.
+std::mutex level_mutex;
 } // namespace
 std::vector<std::string> load_levels(const std::filesystem::path &mods) {
-    auto &list = level_list();
-    list.clear();
+    // Built aside and put in place at the end: "maps reload" reads the folder while the server runs.
+    std::vector<ServerLevel> list;
+    struct Publish {
+        std::vector<ServerLevel> &fresh;
+        ~Publish() {
+            std::lock_guard lock(level_mutex);
+            level_list() = std::move(fresh);
+        }
+    } publish{list};
     // The retail maps players can skate together; the game names them the same way.
     for (const char *asset : {"Levels/Game/BAM_LevelRoot/BAM_LevelRoot",
                               "Levels/Game/DingoLevel_Isle_of_Grom/DingoLevel_Isle_of_Grom",
@@ -920,10 +931,15 @@ std::vector<std::string> load_levels(const std::filesystem::path &mods) {
     return problems;
 }
 const std::vector<ServerLevel> &levels() { return level_list(); }
+std::vector<ServerLevel> level_snapshot() {
+    std::lock_guard lock(level_mutex);
+    return level_list();
+}
 const ServerLevel *find_level(std::string_view map) {
     if (map.empty()) return nullptr;
     for (const auto &level : level_list())
         if (same(level.asset, map)) return &level;
+    map = world_level_typed_name(map);
     for (const bool exact : {true, false}) {
         const ServerLevel *result{};
         for (const auto &level : level_list()) {

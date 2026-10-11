@@ -196,6 +196,24 @@ bool valid_map_package(std::string_view package) noexcept;
 // zip unpacks by hand. The manifest's version comes before the folder's; one that is not three
 // numbers is left off.
 std::string map_package_name(std::string_view folder, std::string_view version);
+// A package's version ("1.2.3" of "Owner-Name-1.2.3"), or nothing when it names none.
+inline std::string_view map_package_version(std::string_view package) noexcept {
+    const auto first = package.find('-');
+    const auto second = first == std::string_view::npos ? first : package.find('-', first + 1);
+    return second == std::string_view::npos ? std::string_view{} : package.substr(second + 1);
+}
+// The version of a map installed here, when the host's package is the same map at another
+// one: players skate the host's version, so that is fetched first. Nothing when the versions
+// agree, either names none, or they are different packages.
+inline std::string_view other_map_version(std::string_view host, std::string_view mine) noexcept {
+    const auto wanted = map_package_version(host), have = map_package_version(mine);
+    if (wanted.empty() || have.empty() || wanted == have) return {};
+    const auto host_name = host.substr(0, host.size() - wanted.size()), my_name = mine.substr(0, mine.size() - have.size());
+    if (host_name.size() != my_name.size()) return {};
+    for (std::size_t i = 0; i < host_name.size(); ++i)
+        if ((host_name[i] | 0x20) != (my_name[i] | 0x20)) return {};
+    return have;
+}
 struct Transform {
     std::array<float, 3> position{};
     std::array<float, 4> rotation{0, 0, 0, 1};

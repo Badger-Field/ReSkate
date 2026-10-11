@@ -1150,6 +1150,17 @@ void dedicated_server_codec() {
         elsewhere.map_fetching = true;
         check(reject(elsewhere), "A map fetch notice on a map change encoded");
     }
+    // A map installed at another version than the host's is fetched at the host's: only when
+    // both name a version of the same package.
+    check(other_map_version("Sandos-Vancouver_Plaza-2.0.0", "Sandos-Vancouver_Plaza-1.9.0") == "1.9.0" &&
+              other_map_version("Sandos-Vancouver_Plaza-2.0.0", "sandos-vancouver_plaza-1.9.0") == "1.9.0" &&
+              other_map_version("Sandos-Vancouver_Plaza-2.0.0", "Sandos-Vancouver_Plaza-2.0.0").empty() &&
+              other_map_version("Sandos-Vancouver_Plaza", "Sandos-Vancouver_Plaza-1.9.0").empty() &&
+              other_map_version("Sandos-Vancouver_Plaza-2.0.0", "Sandos-Vancouver_Plaza").empty() &&
+              other_map_version("Sandos-Vancouver_Plaza-2.0.0", "Other-Vancouver_Plaza-1.9.0").empty() &&
+              other_map_version("Sandos-Vancouver_Plaza-2.0.0", "").empty() && other_map_version("", "").empty() &&
+              map_package_version("Sandos-Vancouver_Plaza-2.0.0") == "2.0.0" && map_package_version("Sandos-Vancouver_Plaza").empty(),
+          "A map's version is not compared with the host's as it should be");
     check(map_package_name("Sandos-Vancouver_Plaza", "2.0.0") == "Sandos-Vancouver_Plaza-2.0.0" &&
           map_package_name("Sandos-Vancouver_Plaza", "") == "Sandos-Vancouver_Plaza" &&
           map_package_name("Sandos-Vancouver_Plaza", "two") == "Sandos-Vancouver_Plaza" &&

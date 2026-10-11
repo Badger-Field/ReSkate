@@ -412,7 +412,7 @@ class Host {
     multiplayer::ServerPolls enabled_polls() const;
     std::vector<multiplayer::ServerCustomVote> custom_votes() const; // the owner's votes that are on, for the roster
     std::set<std::uint64_t> vote_voters(const Vote &) const;         // who may vote in it
-    unsigned votes_needed(const Vote &, unsigned voters) const;
+    unsigned votes_needed(const Vote &, unsigned cast) const;
     std::vector<unsigned> poll_count(const Vote &) const;
     std::string running_vote_text() const; // what is running, and how to answer it
     // The "votes" and "announcements" commands (server_votes.cpp); the bool: a setting changed.

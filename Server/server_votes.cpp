@@ -317,7 +317,7 @@ std::string Host::start_vote(Guest *starter, VoteKind kind, std::string_view arg
     const auto label = vote.label;
     vote_ = std::move(vote);
     const auto who = starter ? guest_name(*starter) : std::string("The server");
-    send_chat(who + " started a vote to " + label + " (" + std::to_string(setting.percent) + "% needed, " +
+    send_chat(who + " started a vote to " + label + " (" + std::to_string(setting.percent) + "% of the votes cast passes it, " +
               std::to_string(seconds) + " s). Vote on the card at the right of your screen, or type /yes or /no.");
     log_("[vote] " + who + " started a vote to " + label + ".");
     check_vote(false);
@@ -411,10 +411,12 @@ std::set<std::uint64_t> Host::vote_voters(const Vote &vote) const {
         if (guest->handshaken && id != vote.target) voters.insert(id);
     return voters;
 }
-unsigned Host::votes_needed(const Vote &vote, unsigned voters) const {
+// The yes votes that pass a vote in which `cast` players voted: its percentage of them. A vote is
+// decided by those who vote, not by everyone on the server.
+unsigned Host::votes_needed(const Vote &vote, unsigned cast) const {
     const auto percent = std::clamp(vote_setting(vote.kind, vote.custom).percent, 1U, 100U);
     // A kick needs a second player's yes: with only the starter and the target on, it fails.
-    return std::max(vote.kind == VoteKind::kick ? 2U : 1U, (voters * percent + 99) / 100);
+    return std::max(vote.kind == VoteKind::kick ? 2U : 1U, (cast * percent + 99) / 100);
 }
 std::vector<unsigned> Host::poll_count(const Vote &poll) const {
     std::vector<unsigned> count(poll.answers.size());
@@ -436,7 +438,8 @@ void Host::show_vote(const Vote &vote, std::uint8_t outcome) {
     } else {
         shown.yes = capped(static_cast<unsigned>(vote.yes.size()));
         shown.no = capped(static_cast<unsigned>(vote.no.size()));
-        shown.needed = capped(votes_needed(vote, static_cast<unsigned>(vote_voters(vote).size())));
+        // What yes needs of the votes cast so far: where the card's bar tips over.
+        shown.needed = capped(votes_needed(vote, static_cast<unsigned>(vote.yes.size() + vote.no.size())));
     }
     shown.starter = vote.starter;
     shown.target = vote.target;
@@ -486,11 +489,16 @@ void Host::check_vote(bool expired) {
     }
     if (vote.kind == VoteKind::kick && !find(vote.target)) return cancel_vote("the player left");
     const auto eligible = static_cast<unsigned>(voters.size());
-    const auto needed = votes_needed(vote, eligible);
     const auto yes = static_cast<unsigned>(vote.yes.size()), no = static_cast<unsigned>(vote.no.size());
-    const bool passed = yes >= needed;
-    const bool lost = !passed && (expired || yes + (eligible - std::min(eligible, yes + no)) < needed);
-    const auto tally = std::to_string(yes) + " yes, " + std::to_string(no) + " no, " + std::to_string(needed) + " needed";
+    const auto cast = yes + no, waiting = eligible - std::min(eligible, cast);
+    // It runs its time and is then decided by the votes cast. It ends before that once the
+    // players still to vote cannot change it: yes has enough even if they all say no, or not
+    // enough even if they all say yes (which is also how it ends when everyone has voted).
+    const auto needed = votes_needed(vote, cast), of_all = votes_needed(vote, eligible);
+    const bool passed = expired ? cast && yes >= needed : yes >= of_all;
+    const bool lost = !passed && (expired || yes + waiting < of_all);
+    const auto tally = std::to_string(yes) + " yes, " + std::to_string(no) + " no, " + std::to_string(needed) + " needed of " +
+                       std::to_string(cast) + " vote" + (cast == 1 ? "" : "s");
     if (!passed && !lost) {
         // Games show the tally as it changes (the vote card); chat is not filled with it.
         show_vote(vote, multiplayer::vote_running);

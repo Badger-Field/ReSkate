@@ -15,7 +15,7 @@
 #include <vector>
 
 namespace dingosdk::server {
-// One kind of player vote: whether players may start it, and the share of connected players
+// One kind of player vote: whether players may start it, and the share of the votes cast
 // (percent, 1-100) whose yes passes it.
 struct VoteSetting {
     bool enabled{};
@@ -259,6 +259,8 @@ struct ServerLevel {
 // (players' map mods, copied next to the server). Returns why a mod was skipped.
 std::vector<std::string> load_levels(const std::filesystem::path &mods);
 const std::vector<ServerLevel> &levels();
+// A copy of them, for a thread that is not the server's (the server window).
+std::vector<ServerLevel> level_snapshot();
 // Like the game's `load`: a level path, a name or short name, or the unique start of one.
 const ServerLevel *find_level(std::string_view map);
 // Whether the server has this map (a name, level path or destination): one of the game's own,

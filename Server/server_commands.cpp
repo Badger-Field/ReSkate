@@ -17,7 +17,7 @@ namespace dingosdk::server {
 namespace {
 constexpr std::string_view help_text =
     "status | net [player] | players | say <text> | msg <player> <text> | msg-party <player> <text> | msg-admins <text> | kick <player> | ban <player or SteamID64> [name] | unban <SteamID64> | bans\n"
-    "map <name, e.g. San Vansterdam> | maps | name <text> | password <text|off> | welcome <text|off> | listed on|off\n"
+    "map <name, e.g. San Vansterdam> | maps [reload] | name <text> | password <text|off> | welcome <text|off> | listed on|off\n"
     "voice on|off | voice-range <50-1000> | distances <full> <half> <half-return> <low> | crowd <n>|off | rate <KB/s> | bone-scale <1-8>|off | bone-reach <0.5-20>|off\n"
     "placement everyone|admins|nobody | objects <number>|off | object-scaling on|off | effects on|off | clear-objects | noclip on|off | nobail on|off | boosts on|off | tuning on|off\n"
     "tpall [player] | tphere <player> | teleport <player|SteamID64,SteamID64,...> <player|x y z (y is up)>\n"
@@ -179,6 +179,25 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         change_map(argument);
         save();
         return changed("Changing map to " + map_name());
+    }
+    if (name == "maps" && lower(argument) == "reload") {
+        // A map mod copied into Mods while the server runs: its maps can be switched to at once.
+        if (!console && !can(admin, "map")) return "Your role cannot reload the maps.";
+        std::vector<std::string> before;
+        for (const auto &level : levels()) before.push_back(level.asset);
+        const auto problems = load_levels(config_.mods);
+        resend_maps(); // whoever picks maps is sent the list again
+        std::string added;
+        std::size_t gone{};
+        for (const auto &level : levels())
+            if (std::find(before.begin(), before.end(), level.asset) == before.end()) added += (added.empty() ? "" : ", ") + level.name;
+        for (const auto &asset : before)
+            if (!find_level(asset)) ++gone;
+        std::string text = "Maps read again from Mods: " + std::to_string(levels().size()) + " maps" +
+                           (added.empty() ? ", none new" : ", new: " + added) + (gone ? ", " + std::to_string(gone) + " no longer there" : "") + ".";
+        for (const auto &problem : problems) text += "\nMods: skipped " + problem;
+        if (!console) log_(text);
+        return text;
     }
     if (name == "maps") {
         std::string text = std::to_string(levels().size()) + " maps (custom maps come from Mods next to the server)";
