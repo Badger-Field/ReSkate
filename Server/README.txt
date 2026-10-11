@@ -38,8 +38,9 @@ A park built in the game's Park Editor and saved as a mod (a folder with
 manifest.json and parks/<map>.park.json) can be put up by the server for
 everyone. Copy the mod's folder into the Mods folder next to the server, list it
 in maps.park_mods with a name and the map it was built on, and spawn it with
-"park-mod add <name>" while that map runs: from the console, as an admin in chat
-(/park-mod add street 30), or by a player vote (see votes.custom). With minutes
+"park-mod add <name>" while that map runs: from the console, in chat by a player
+whose role has park-mod (/park-mod add street 30; the admin role does, see
+README-roles.txt), or by a player vote (see votes.custom). With minutes
 (1-1440) it goes by itself when the time is up; players are told a minute before
 and when it goes. Without, it stays until removed. Every park goes when the map
 changes, and none come back after a restart.

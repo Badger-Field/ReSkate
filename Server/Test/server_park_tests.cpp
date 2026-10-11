@@ -272,8 +272,10 @@ int run(const std::filesystem::path &fixtures) {
     };
     const auto logged = [&](std::string_view text) { return has(log, text); };
 
+    // Roles (Server/roles.h): the player is an admin, whose "*" gives them park-mod.
     const std::uint64_t admin_id = 76561198000000001ULL;
-    config.admins = {admin_id};
+    config.roles = default_roles();
+    config.roles.players[admin_id] = "admin";
     auto &a = add_game(admin_id, "Robin");
     a.hello(now);
     run_for(2000000);
@@ -306,6 +308,34 @@ int run(const std::filesystem::path &fixtures) {
     check(reply.find("2 of 2 spawned, 16 of 20 objects") != std::string::npos && reply.find("street  \"popular skate 2 street park\" (bam)") != std::string::npos &&
               reply.find("2 min left") != std::string::npos && reply.find("until removed") != std::string::npos,
           "list: " + reply);
+
+    // Roles: a moderator's role does not list park-mod; a role that lists it gives it alone.
+    {
+        const std::uint64_t mod_id = 76561198000000003ULL;
+        config.roles.players[mod_id] = "moderator";
+        auto &m = add_game(mod_id, "Moddy");
+        m.hello(now);
+        run_for(2000000);
+        m.say("/park-mod list", now);
+        run_for(500000);
+        check(has(m.chat, "Your role (moderator) cannot use park-mod."), "A moderator could use park-mod");
+        Role builder;
+        builder.name = "builder";
+        builder.rank = 20;
+        builder.commands = {"park-mod"};
+        config.roles.list.push_back(builder);
+        config.roles.settle();
+        config.roles.players[mod_id] = "builder";
+        m.say("/park-mod", now); // not the same line again: chat turns repeats away
+        run_for(500000);
+        check(has(m.chat, "Park mods (2 of 2 spawned"), "A role listing park-mod could not use it");
+        check(!has(m.chat, "Your role (builder) cannot use"), "A role listing park-mod was refused it");
+        wire().status.peers.erase(std::remove_if(wire().status.peers.begin(), wire().status.peers.end(),
+                                                 [&](const auto &peer) { return peer.id == mod_id; }),
+                                  wire().status.peers.end());
+        games.erase(mod_id);
+        run_for(1000000);
+    }
 
     // An admin in game: by their name.
     a.say("/park-mod remove street2", now);

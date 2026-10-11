@@ -528,6 +528,10 @@ int run() {
         turned_down([](ServerConfig &c) { c.park_limits.objects = 1025; }, "More park objects than one owner can have accepted");
         turned_down([](ServerConfig &c) { c.park_mods.resize(33, c.park_mods[0]); }, "More than 32 park mods accepted");
         check(!custom_command_name_free("park-mod"), "A custom command may be called park-mod");
+        // A command a role can be given: the admin role's "*" has it, the moderator's list does not.
+        const auto roles = default_roles();
+        check(allows(roles.find("admin"), "park-mod") && !allows(roles.find("moderator"), "park-mod") && !allows(roles.find("player"), "park-mod"),
+              "park-mod is not the admin role's alone among the default roles");
         // The vote README.txt shows: "park" is a server command, and still a fine vote name.
         auto voting = parks;
         voting.votes.custom = {{"park", "Spawn a park for 30 min", "park-mod add {arg} 30", {"street", "plaza-2"}, {true, 60}},
