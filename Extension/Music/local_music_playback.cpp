@@ -20,7 +20,6 @@ using namespace dingosdk::game::build::v20260929;
 using local_music::playback_mode_setter_contract;
 using local_music::playback_select_next_contract;
 using local_music::playback_channel_playlist_bind_contract;
-using local_music::playback_candidate_admission_contract;
 using music_playback::CursorPlan;
 
 std::atomic<std::uintptr_t> image_base{};
@@ -29,8 +28,10 @@ std::atomic<bool> playback_available{};
 MusicSelectNext select_next{};
 MusicChannelPlaylistBind bind_channel_playlist{};
 std::array<std::atomic<std::uint64_t>, 256> last_logged_channel_bindings{};
-MusicCandidateAdmission candidate_admission{};
-std::array<std::atomic<std::uint8_t>, 256> logged_candidate_admission_results{};
+// The channels the music player's own queues select for (apply_policy learns them: the game
+// supplies the numbers, they are not written down here). Only those are ever given Favorites
+// for a playlist ID of zero: on any other channel zero is left to mean what the game means.
+std::array<std::atomic<bool>, 256> music_channels{};
 using SetPlaybackMode = void (__fastcall *)(std::uintptr_t manager, std::uint32_t playlist_id,
                                            std::uint32_t mode);
 SetPlaybackMode set_playback_mode{};
@@ -248,6 +249,7 @@ void apply_policy(std::uintptr_t queue, std::uintptr_t playlist_asset) noexcept 
         log_policy_event_once(1u << 2, "{\"event\":\"music_playback_policy_skipped\",\"reason\":\"queue_channel_unavailable\"}");
         return;
     }
+    music_channels[channel].store(true, std::memory_order_relaxed);
 
     std::uintptr_t manager{};
     if (!read_at(base + local_music::asset_manager, manager) || !manager ||
@@ -402,8 +404,7 @@ bool initialize_music_playback(std::uintptr_t base, bool shuffle) noexcept {
     last_binding_by_channel = {};
     for (auto& binding : last_logged_channel_bindings)
         binding.store(std::numeric_limits<std::uint64_t>::max(), std::memory_order_relaxed);
-    for (auto& results : logged_candidate_admission_results)
-        results.store(0, std::memory_order_relaxed);
+    for (auto& known : music_channels) known.store(false, std::memory_order_relaxed);
     logged_policy_events.store(0, std::memory_order_relaxed);
     playback_available.store(false, std::memory_order_release);
     return true;
@@ -433,7 +434,10 @@ std::uintptr_t __fastcall music_channel_playlist_bind_hook(std::uintptr_t channe
         read_at(playlist_id_pointer, requested_playlist_id);
     auto playlist_id = requested_playlist_id;
     bool favorites_remapped{};
-    if (have_binding && requested_playlist_id == 0) {
+    // Zero is Favorites only where the music player asks: a channel it has selected songs for.
+    const bool music_channel = have_binding && channel < music_channels.size() &&
+        music_channels[channel].load(std::memory_order_relaxed);
+    if (music_channel && requested_playlist_id == 0) {
         const auto base = image_base.load(std::memory_order_acquire);
         std::uintptr_t manager{}, ui_manager{};
         const bool have_favorites = base &&
@@ -456,47 +460,20 @@ std::uintptr_t __fastcall music_channel_playlist_bind_hook(std::uintptr_t channe
         ? bind_channel_playlist(channel_pointer, reinterpret_cast<std::uintptr_t>(&playlist_id))
         : bind_channel_playlist(channel_pointer, playlist_id_pointer);
 
-    if (have_binding) {
+    // Said once for each change of a channel's binding. A channel outside the table cannot be
+    // told from its last binding, so it is not said at all rather than every time.
+    if (have_binding && channel < last_logged_channel_bindings.size()) {
         const auto signature = (static_cast<std::uint64_t>(channel) << 32) | playlist_id;
-        bool should_log = true;
-        if (channel < last_logged_channel_bindings.size()) {
-            const auto previous = last_logged_channel_bindings[channel].exchange(
-                signature, std::memory_order_relaxed);
-            should_log = previous != signature;
-        }
-        if (should_log) {
-            char message[224]{};
+        if (last_logged_channel_bindings[channel].exchange(signature, std::memory_order_relaxed) != signature) {
+            char message[256]{};
             std::snprintf(message, sizeof(message),
-                "{\"event\":\"music_channel_playlist_binding\",\"channel\":%u,\"requested_playlist_id\":%u,\"playlist_id\":%u,\"favorites\":%u,\"favorites_remapped\":%s,\"applied\":%s}",
-                channel, requested_playlist_id, playlist_id, favorites_playlist,
+                "{\"event\":\"music_channel_playlist_binding\",\"channel\":%u,\"music_channel\":%s,\"requested_playlist_id\":%u,\"playlist_id\":%u,\"favorites\":%u,\"favorites_remapped\":%s,\"applied\":%s}",
+                channel, music_channel ? "true" : "false", requested_playlist_id, playlist_id, favorites_playlist,
                 favorites_remapped ? "true" : "false", result ? "true" : "false");
             dingosdk::logging::event(dingosdk::logging::Channel::music, message);
         }
     }
     return result;
-}
-
-MusicCandidateAdmission& music_candidate_admission_original() noexcept { return candidate_admission; }
-
-bool __fastcall music_candidate_admission_hook(std::uintptr_t manager,
-    std::uintptr_t candidate_guid, std::uintptr_t context, std::uint32_t channel_key) {
-    if (!candidate_admission) return false;
-    const bool accepted = candidate_admission(manager, candidate_guid, context, channel_key);
-    const auto result_bit = static_cast<std::uint8_t>(accepted ? 2 : 1);
-    bool should_log = true;
-    if (channel_key < logged_candidate_admission_results.size()) {
-        const auto previous = logged_candidate_admission_results[channel_key].fetch_or(
-            result_bit, std::memory_order_relaxed);
-        should_log = (previous & result_bit) == 0;
-    }
-    if (should_log) {
-        char message[128]{};
-        std::snprintf(message, sizeof(message),
-            "{\"event\":\"music_candidate_admission\",\"channel_key\":%u,\"accepted\":%s}",
-            channel_key, accepted ? "true" : "false");
-        dingosdk::logging::event(dingosdk::logging::Channel::music, message);
-    }
-    return accepted;
 }
 
 bool music_shuffle_enabled() noexcept { return shuffle_enabled.load(std::memory_order_acquire); }

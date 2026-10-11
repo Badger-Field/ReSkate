@@ -553,14 +553,6 @@ bool initialize_local_profile(std::uintptr_t base, bool authored_offline,
                     &music_channel_playlist_bind_hook, music_channel_playlist_bind_original());
             else dingosdk::logging::event(dingosdk::logging::Channel::music,
                 "{\"event\":\"music_channel_playlist_binding_contract_mismatch\"}");
-            std::array<unsigned char, 32> admission_bytes{};
-            if (read(base + addr::local_music::playback_candidate_admission_contract.rva,
-                    admission_bytes) &&
-                admission_bytes == addr::local_music::playback_candidate_admission_contract.bytes)
-                hook(addr::local_music::playback_candidate_admission_contract,
-                    &music_candidate_admission_hook, music_candidate_admission_original());
-            else dingosdk::logging::event(dingosdk::logging::Channel::music,
-                "{\"event\":\"music_candidate_admission_contract_mismatch\"}");
             hook(addr::local_music::playback_select_next_contract,
                 &music_select_next_hook, music_select_next_original());
         } else dingosdk::logging::event(dingosdk::logging::Channel::music,
