@@ -688,7 +688,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int cmd_show) {
     for (int i = 1; i < argc; ++i) {
         if (!argvW[i]) continue;
         std::wstring arg = argvW[i];
-        if (arg == L"--headless" || arg == L"--cli" || arg == L"--no-gui" || arg == L"-nogui" || arg == L"-headless" || arg == L"-cli") {
+        // The release build's world layer export (serve) is a console job too: the window would
+        // open instead and nothing would be written.
+        if (arg == L"--headless" || arg == L"--cli" || arg == L"--no-gui" || arg == L"-nogui" || arg == L"-headless" || arg == L"-cli" ||
+            arg == L"--export-world-layers") {
             headless = true;
             break;
         }
