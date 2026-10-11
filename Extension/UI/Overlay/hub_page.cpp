@@ -1098,6 +1098,9 @@ void tools_page(Ui &ui, ImVec2 a, ImVec2 z) {
         if (list.setting("Road Rash", on_off(m.road_rash.enabled), m.road_rash.available && console)) act("road-rash");
         if (list.setting("Road Rash blood", on_off(m.road_rash.blood), m.road_rash.available && m.road_rash.enabled && console)) act("road-rash-blood");
         if (list.setting("Heal Road Rash", {}, m.road_rash.available && m.road_rash.enabled && console)) act("road-rash-heal");
+        if (list.setting("Board Break", on_off(m.board_break.enabled), m.board_break.available && console)) act("board-break");
+        if (list.setting("Board Break deck", m.board_break.deck, m.board_break.available && m.board_break.has_deck && console))
+            act("board-break-deck");
         const auto &wear = m.offline.board_wear;
         if (list.setting("Board wear", on_off(wear.effective), wear.available && cb.queue_offline_feature)) act("board-wear");
         if (list.setting("Reset board wear", {}, wear.available && wear.effective && console)) act("board-wear-reset");
