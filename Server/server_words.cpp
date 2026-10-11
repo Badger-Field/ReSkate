@@ -11,24 +11,13 @@ namespace {
 // As many words of as many bytes as one of the team's lists holds.
 constexpr std::size_t most_words = 5000, longest_word = 64;
 
-constexpr std::string_view filtered_help =
-    "# Words this server filters in chat, beside the ReSkate team's list.\n"
-    "# One word to a line. Messages with them are still passed on: players who have their chat filter on\n"
-    "# see the word as stars. The first 256 words of up to 32 letters are sent to players' games.\n"
-    "# Read when the server starts and by the console command: words reload\n";
-constexpr std::string_view blocked_help =
-    "# Words that are not allowed in this server's chat at all, beside the ReSkate team's list.\n"
-    "# One word to a line. A message with one is not passed on and its player is warned\n"
-    "# (see word_warnings in the README).\n"
-    "# Read when the server starts and by the console command: words reload\n";
-
-std::vector<std::string> read(const std::filesystem::path &file, std::string_view help, std::string &problem) {
+// The words in `file`, which is made empty when it is not there, so an owner finds it to fill in.
+std::vector<std::string> read(const std::filesystem::path &file, std::string &problem) {
     std::vector<std::string> words;
     std::error_code error;
     if (!std::filesystem::exists(file, error)) {
         std::filesystem::create_directories(file.parent_path(), error);
-        std::ofstream out(file, std::ios::binary);
-        if (!(out << help)) problem = "could not write " + file.filename().string();
+        if (!std::ofstream(file, std::ios::binary)) problem = "could not write " + file.filename().string();
         return words;
     }
     std::ifstream in(file, std::ios::binary);
@@ -52,8 +41,8 @@ std::filesystem::path blocked_words_file(const ServerConfig &c) { return c.file.
 
 OwnWords use_own_words(const ServerConfig &config) {
     OwnWords result;
-    const auto filtered = read(filtered_words_file(config), filtered_help, result.problem);
-    const auto blocked = read(blocked_words_file(config), blocked_help, result.problem);
+    const auto filtered = read(filtered_words_file(config), result.problem);
+    const auto blocked = read(blocked_words_file(config), result.problem);
     result.filtered = filtered.size();
     result.blocked = blocked.size();
     for (const auto &word : filtered)

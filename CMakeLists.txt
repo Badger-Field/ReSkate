@@ -98,7 +98,7 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
     # Park mods spawned by the server's host, over a transport that is not Steam's.
     add_executable(dingosdk_server_park_tests Server/Test/server_park_tests.cpp Server/server_host.cpp Server/server_party.cpp
         Extension/Multiplayer/Session/party_book.cpp Server/server_config.cpp Server/server_update.cpp Server/server_release.cpp
-        $<$<BOOL:${WIN32}>:Launcher/updater.cpp> Server/global_bans.cpp Extension/Multiplayer/developer_identity.cpp
+        $<$<BOOL:${WIN32}>:Launcher/updater.cpp> Server/global_bans.cpp Server/server_words.cpp Extension/Multiplayer/developer_identity.cpp
         Extension/Multiplayer/word_lists.cpp Extension/Multiplayer/Net/protocol.cpp Extension/Multiplayer/Net/delta_codec.cpp
         Extension/Multiplayer/Net/wire_codec.cpp Extension/Multiplayer/Remote/playback_buffers.cpp
         Extension/Multiplayer/Session/password.cpp Server/server_activity.cpp Server/server_votes.cpp Server/server_commands.cpp

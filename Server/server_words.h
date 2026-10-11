@@ -21,7 +21,7 @@ struct OwnWords {
     std::vector<std::string> sent;
     std::string problem; // a file that could not be read or written; the words read still apply
 };
-// Reads both files (writing each with its explanation first when it is not there) and puts
+// Reads both files (making each, empty, when it is not there) and puts
 // them, and the config's use_global_word_filter, in use.
 OwnWords use_own_words(const ServerConfig &config);
 // What that did, for the log.

@@ -401,13 +401,11 @@ join, managed with ban / unban. The ReSkate team's own list is separate: see
 use_global_bans. A config from an older version that still has "bans" in it has
 them moved there the first time the server starts.
 
-Roles
------
 Chat words
 ----------
 Two files in data/, beside the bans, hold this server's own chat words. Both are
-written with an explanation the first time the server starts. One word to a
-line; a line starting with # is a comment. Edit them and type: words reload
+made, empty, the first time the server starts. One word to a line; a line
+starting with # is a comment. Edit them and type: words reload
 
   data/words_filtered.txt  Words this server filters, on top of the team's.
                            Messages with them are still passed on; the server
@@ -427,6 +425,8 @@ filtered words for a player who has their chat filter on, and hides a server
 whose name has one of the team's words from the server browser. Those are the
 team's lists in the player's game, whatever a server sets.
 
+Roles
+-----
 Who may do what is in data/roles.json, beside the bans. README-roles.txt has the
 whole of it: every permission and every command a role can be given, with
 examples. In short, the server writes the file the first time it starts, with

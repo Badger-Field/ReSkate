@@ -26,11 +26,12 @@ int main() {
     const std::vector<std::string> filtered{"darn"}, forbidden{"zorblat", "snarf", "snarfing"};
     set_word_lists(filtered, forbidden);
 
-    // A new server: both files are written with their explanation, and hold no words.
+    // A new server: both files are made, empty.
     auto words = use_own_words(config);
     check(words.problem.empty() && !words.filtered && !words.blocked && words.sent.empty() &&
-              std::filesystem::exists(filtered_words_file(config)) && std::filesystem::exists(blocked_words_file(config)),
-          "The word files were not written, or their explanation was read as words");
+              std::filesystem::exists(filtered_words_file(config)) && std::filesystem::file_size(filtered_words_file(config)) == 0 &&
+              std::filesystem::exists(blocked_words_file(config)) && std::filesystem::file_size(blocked_words_file(config)) == 0,
+          "The word files were not made empty");
     check(contains_forbidden_words("you zorblat") && contains_forbidden_words("snarfing") && !contains_forbidden_words("florp"),
           "A server without words of its own does not hold the team's lists");
 
