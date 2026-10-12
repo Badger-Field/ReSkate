@@ -243,39 +243,6 @@ ctest --test-dir build/vs2022-x64 -C Release
 
 The project builds with `/W4 /WX`: warnings are errors.
 
-### Packaging release ZIPs
-
-Stage the complete release contents, including a real `licenses/` directory, then create the ZIP
-with Python 3.9 or newer (no extra packages):
-
-```sh
-python3 contrib/package_release_zip.py path/to/staged-release path/to/ReSkate-release.zip
-python3 contrib/package_release_zip.py --check path/to/ReSkate-release.zip
-```
-
-The output must be outside the staging directory and must not already exist. The packager stores
-forward slashes on Windows as well as Linux, checks the completed ZIP, and rejects unsafe entries
-and symlinks. Use `--check` on the actual upload artifact before publishing: backslashes in ZIP entry
-names can become literal Unix filenames and break Oodle lookup under Proton
-([issue 124](https://github.com/Dingo-Shenanigans/ReSkate/issues/124)). These commands do not change
-the staged binaries or an installed game. Run the packaging tests with
-`python3 -m unittest discover -s contrib/Test -p '*_tests.py'`.
-
-The `oodle_path` CTest (with `DINGOSDK_BUILD_LAUNCHER_TESTS=ON` on Windows) loads a test-only
-codec DLL and decodes a CAS byte without game files. To reproduce the literal-backslash bug on
-Proton, build that test once with the original `cas_codec.cpp` and once with the fix, then run:
-
-```sh
-python3 contrib/Test/run_oodle_proton_test.py --wine path/to/Proton/files/bin/wine \
-  --baseline path/to/original/dingosdk_oodle_path_tests.exe \
-  --patched path/to/patched/dingosdk_oodle_path_tests.exe \
-  --codec path/to/test-fixture/oo2core_9_win64.dll
-```
-
-This creates a temporary fixture and an isolated Wine prefix, requires the original repeated-path
-failure, and checks that the patched loader works both before and after normalizing the filenames.
-It never uses the installed game or its DLL. **Never ship the test codec DLL as a game/release file.**
-
 ## Project layout
 
 The source tree loosely follows Frostbite's own layout.
