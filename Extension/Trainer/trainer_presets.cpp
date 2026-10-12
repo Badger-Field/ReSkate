@@ -174,8 +174,7 @@ const std::vector<BuiltinPreset> &builtin_presets() {
           {"onboard_powerslide.frictionscalar_slide", true, 1.5},
           {"physicswipeout.wipeout_ force", true, 0.7}, {"physicswipeout.wipeout_ acceleration", true, 0.7},
           {"physicswipeout.wipeout_ maxdisp", true, 0.7}, {"physicswipeout.wipeout_ relativevel", true, 0.7},
-          {"wipeout.on forcelimits", true, 0.7}, {"wipeout.runoutwipeoutforcelimits", true, 0.7},
-          {"physicsmode.wipeoutcheckforbadlanding", false, 1.0}}}
+          {"physicsmode.wipeoutcheckforbadlanding", false, 1.0}}},
         {"Mega Pop", "Ollies and grind pops go about twice as high.",
          {{"physicsmode.jumpmaxheight", true, 2.0}, {"physicsmode.jumpminheight", true, 1.6},
           {"physicsjump.jumpybonusmax", true, 2.0}, {"physicsmode.grindjump", true, 1.6}}},
