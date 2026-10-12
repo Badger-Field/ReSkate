@@ -18,10 +18,12 @@ def check_archive(path):
     with zipfile.ZipFile(path) as archive:
         seen = set()
         for entry in archive.infolist():
-            check_name(entry.filename)
-            key = entry.filename.rstrip("/").casefold()
+            # ZipInfo normalizes backslashes on Windows; inspect the stored spelling.
+            name = entry.orig_filename
+            check_name(name)
+            key = name.rstrip("/").casefold()
             if key in seen or stat.S_ISLNK(entry.external_attr >> 16):
-                raise ValueError(f"Duplicate or symlink ZIP entry: {entry.filename!r}")
+                raise ValueError(f"Duplicate or symlink ZIP entry: {name!r}")
             seen.add(key)
         damaged = archive.testzip()
         if damaged is not None:

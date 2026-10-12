@@ -32,8 +32,14 @@ class ReleaseZipTests(unittest.TestCase):
         self.assertEqual((self.root / "extracted/ReSkate.dll").read_bytes(), b"fixture binary")
 
     def test_backslash_archive_is_rejected_without_changes(self):
+        entry = zipfile.ZipInfo("licenses/imgui-LICENSE.txt")
+        # Force the bad stored name; constructing ZipInfo normalizes it on Windows.
+        entry.filename = "licenses\\imgui-LICENSE.txt"
+        entry.orig_filename = entry.filename
         with zipfile.ZipFile(self.output, "w") as archive:
-            archive.writestr("licenses\\imgui-LICENSE.txt", b"license contents\n")
+            archive.writestr(entry, b"license contents\n")
+        with zipfile.ZipFile(self.output) as archive:
+            self.assertIn("\\", archive.infolist()[0].orig_filename)
         before = self.output.read_bytes()
         with self.assertRaises(ValueError):
             release.check_archive(self.output)
