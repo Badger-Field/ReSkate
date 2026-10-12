@@ -3,6 +3,7 @@
 #include "Extension/Multiplayer/Session/peer_slots.h"
 #include "Extension/Multiplayer/Session/object_state.h"
 #include "Extension/Multiplayer/Remote/audio_state.h"
+#include "Extension/Multiplayer/Net/effects.h"
 #include "Extension/Multiplayer/Voice/voice_state.h"
 #include "Engine/Game/Multiplayer/distance_settings.h"
 #include "Engine/Game/Multiplayer/object_placement.h"
@@ -25,12 +26,54 @@ namespace dingosdk::multiplayer {
 constexpr std::size_t max_skater_bones = 512, max_board_bones = 64;
 constexpr std::size_t max_packet = 24576;
 constexpr std::size_t packet_header_size = 64;
-constexpr std::uint16_t protocol_version = 42;
+constexpr std::uint16_t protocol_version = 49;
+// A dedicated server's chat lines unless its owner says otherwise: violet (#8E5CFF) and lavender (#D9C8FF).
+inline constexpr std::uint32_t default_server_chat_badge = 0xffff5c8eU, default_server_chat_text = 0xffffc8d9U;
 constexpr std::size_t max_throwdown_message = 4096;
 // Packet::tuning: the host's SkatePhysicsTuning differences (Extension/Skater/physics_tuning.h).
 constexpr std::size_t max_physics_tuning = 16384;
 // Votes a dedicated server runs (Packet::server_votes).
 constexpr std::uint8_t server_vote_map = 1, server_vote_kick = 2, server_vote_time = 4;
+// What else a running vote can be (ServerVote::kind; never in Packet::server_votes): a poll,
+// a question with answers that runs nothing, and a vote the server's owner defined.
+constexpr std::uint8_t server_vote_poll = 8, server_vote_custom = 16;
+// The vote a dedicated server is running, or has just finished (Packet::vote): games show it
+// with its tally and let the player answer. `id` is 0 when there is none. `kind` is one of the
+// server_vote_* bits; `seconds` is what is left of a running one. A poll has its answers and a
+// count for each instead of yes, no and needed.
+constexpr std::size_t max_vote_label = 120;
+constexpr std::size_t max_vote_answers = 6, max_vote_answer = 48;
+constexpr std::uint8_t vote_running = 0, vote_passed = 1, vote_failed = 2, vote_cancelled = 3;
+struct ServerVote {
+    std::uint32_t id{};
+    std::uint8_t kind{}, outcome{vote_running};
+    std::uint16_t yes{}, no{}, needed{}, seconds{};
+    std::uint64_t starter{}, target{}; // target: the player a kick vote is about, who has no vote in it
+    std::string label;                 // "change the map to ...", or a poll's question
+    std::vector<std::string> answers;  // poll: 2 to max_vote_answers
+    std::vector<std::uint16_t> counts; // poll: one per answer
+    bool operator==(const ServerVote &) const = default;
+};
+// Who may start a poll on a dedicated server (Packet::server_polls).
+enum class ServerPolls : std::uint8_t { off = 0, admins = 1, everyone = 2 };
+// A vote a dedicated server's owner defined: "/vote <name> [choice]" (Packet::server_custom_votes).
+// The name and each choice are valid_server_vote_name; the description is chat text or empty.
+constexpr std::size_t server_custom_vote_limit = 16, server_vote_name_bytes = 16, server_vote_description_bytes = 80,
+                      server_vote_max_choices = 8;
+struct ServerCustomVote {
+    std::string name;                 // "restart"
+    std::string description;          // "Reload the current map"
+    std::vector<std::string> choices; // what the player picks from; empty: the vote takes no argument
+    bool operator==(const ServerCustomVote &) const = default;
+};
+// A dedicated server's announcement, shown as a card for `seconds` (Packet::announcement).
+// `id` tells one from the next; 0 is none. `text` is one chat line.
+struct ServerAnnouncement {
+    std::uint32_t id{};
+    std::uint16_t seconds{};
+    std::string text;
+    bool operator==(const ServerAnnouncement &) const = default;
+};
 enum class PacketKind : std::uint16_t {
     hello = 1,
     welcome = 2,
@@ -73,7 +116,16 @@ enum class PacketKind : std::uint16_t {
     // The host's physics that its tuning does not carry: the trainer's tuning-class values and
     // trick multipliers (Engine/Game/Multiplayer/session_physics.h; opaque here, empty = the
     // game's own). Like physics_tuning, only the host sends it and a dedicated server never does.
-    physics_extras = 30
+    physics_extras = 30,
+    // A player's skater touching the world (effects.h): the game's sparks, dust and puffs for
+    // it, shown on that player's skater by everyone near. Unreliable, relayed like voice.
+    effects = 31,
+    // A dedicated server telling one player what their role lets them do (Server/roles.h):
+    // its name, the server commands they may use and their permissions beyond commands.
+    permissions = 32,
+    // A dedicated server's own filtered chat words (Server/server_words.h), for the chat filter
+    // of each player on it: sent on joining and whenever its owner changes them.
+    words = 33
 };
 // Packet::party_action. Requests go from a player to whoever hosts, a dedicated server or a
 // lobby's host (party_player = the other player involved, 0 for leave/open/close); invited
@@ -108,13 +160,42 @@ inline bool persistent_server_steam_id(std::uint64_t id) noexcept {
 }
 // A player's own name as sent in their hello: at most this many bytes.
 constexpr std::size_t max_member_name = 64;
+// A role's tag (the word before a player's name), a role's name, and the commands a
+// permissions packet may list.
+constexpr std::size_t max_role_tag = 16, max_role_name = 24, max_role_commands = 128, max_role_command = 24;
+// What a role gives beyond commands (permissions packet; the names are in Server/roles.h).
+inline constexpr std::uint32_t role_reserved_slot = 1, role_objects = 2, role_movement = 4, role_afk = 8,
+                               role_vote_immune = 16, role_alerts = 32, role_polls = 64, role_votes = 128,
+                               role_parties = 256, role_whisper = 512, role_chat = 1024, role_permission_bits = 2047;
 constexpr std::size_t max_admin_text = 320;
 constexpr std::size_t max_ban_rows = 256;
 constexpr std::size_t max_server_maps = 128, max_map_asset = 128;
+// Packet::words: as many of a server's own filtered words as it sends, and how long one may be.
+constexpr std::size_t max_server_words = 256, max_server_word = 32;
+inline bool valid_server_word(std::string_view word) noexcept {
+    if (word.empty() || word.size() > max_server_word) return false;
+    for (const unsigned char c : word)
+        if (c < 32 || c == 127) return false;
+    return true;
+}
 // A level asset as a server's map list carries it: printable ASCII, no '|'.
 bool valid_map_asset(std::string_view asset) noexcept;
 bool valid_map_pool(std::span<const std::uint16_t> pool, std::size_t maps) noexcept; // distinct indices below `maps`
 bool valid_map_label(std::string_view label) noexcept; // empty, or a name like a member's
+// How long a host goes on waiting for a player who says they are fetching the map
+// (Packet::map_fetching), from the first time they say so: a large map on a slow line. Past
+// it they are held to the time a load takes again.
+inline constexpr std::uint64_t map_fetch_limit_us = 45ull * 60 * 1000000;
+// The Thunderstore package a map comes from, so a player without it can be offered it:
+// "Owner-Name", or "Owner-Name-1.2.3" when the host knows its version. Empty for the game's own
+// maps and for a map mod that is not from Thunderstore.
+inline constexpr std::size_t max_map_package = 96;
+bool valid_map_package(std::string_view package) noexcept;
+// That name for a mod folder and the version its manifest gives; empty when the folder is not
+// named as a package: "Owner-Name", as the launcher installs one, or "Owner-Name-1.2.3", as its
+// zip unpacks by hand. The manifest's version comes before the folder's; one that is not three
+// numbers is left off.
+std::string map_package_name(std::string_view folder, std::string_view version);
 struct Transform {
     std::array<float, 3> position{};
     std::array<float, 4> rotation{0, 0, 0, 1};
@@ -130,7 +211,7 @@ struct Pose {
 struct Member {
     std::uint64_t id{}, epoch{};
     std::string name;
-    bool admin{}; // roster: may change a dedicated server's settings
+    bool admin{}; // roster: their role on a dedicated server has every command (Server/roles.h)
     // roster: the player's party (0 = none), whether they lead it, and (on the leader) whether
     // anyone may join it. Each party has exactly one leader.
     std::uint32_t party{};
@@ -141,6 +222,10 @@ struct Member {
     // roster: the host or dedicated server found the player's mods change trick scoring: the same
     // as speeding, nobody plays linked throwdowns or coop challenges with them.
     bool scoring{};
+    // roster: the tag their role on a dedicated server gives them and its colour (IM_COL32
+    // layout); empty: none.
+    std::string tag;
+    std::uint32_t tag_color{};
     bool operator==(const Member &) const = default;
 };
 bool valid_roster(std::span<const Member>, unsigned capacity) noexcept;
@@ -155,6 +240,9 @@ struct Packet {
     std::string destination;
     bool map_authorized{};
     bool world_ready{};
+    // map_request, world_ready: the player does not have the map and is downloading it
+    // (never with world_ready). A host gives such a player longer than a load takes.
+    bool map_fetching{};
     Pose pose;
     std::uint32_t pose_interval_us = 50000;
     // pose: the sender has the game's party collision on (the top bit of the pose's rate field)
@@ -171,9 +259,22 @@ struct Packet {
     // lock their editor and native tools from it; the host enforces it by
     // freezing guest layouts (see publish_guest_objects).
     ObjectPlacement object_placement = ObjectPlacement::everyone;
+    // Objects each player may have placed (object_placement.h); 0: no limit.
+    unsigned object_limit{};
+    // Roster: players may place objects at another size than their own. Off: a dedicated server
+    // shares every player's objects at their own size (its admins' excepted).
+    bool object_scaling{true};
+    // Roster: players see each other's skater effects (effects.h, and the trails and fire of
+    // each other's costumes and skateboards). Off: a dedicated server relays none and games
+    // neither send theirs nor show other players'.
+    bool sync_effects{true};
     // Bumped each time the host deletes all guest objects. Guests delete their
     // own session objects when it changes after their first roster.
     std::uint32_t object_clears{};
+    // Roster: the colours of a dedicated server's own chat lines, its badge and name and the
+    // text after them (IM_COL32 layout; the server's owner chooses them).
+    std::uint32_t chat_badge = default_server_chat_badge, chat_text = default_server_chat_text;
+    ServerVote vote; // roster
     bool force_world_layers{};
     WorldLayerState layers = WorldLayerState(world_layers().size()); // all "default"
     ParkChoices parks; // One allowlisted selection byte per shared native park slot.
@@ -189,16 +290,28 @@ struct Packet {
     bool enforce_tuning = true;
     // roster: the votes a dedicated server lets players start (server_vote_* bits)
     std::uint8_t server_votes{};
+    std::uint8_t server_polls{};                       // roster: who may start a poll (ServerPolls)
+    std::vector<ServerCustomVote> server_custom_votes; // roster: the owner's own votes that are on
+    ServerAnnouncement announcement;                   // roster
     std::vector<MultiplayerBan> bans;         // bans: newest first
     std::uint32_t ban_total{};                // bans: how many the server has in all
     std::vector<std::string> maps;            // maps: level assets
     std::vector<std::uint16_t> map_pool;      // maps: the pool as indices into `maps`, rotation order (empty: every map)
     std::uint16_t map_rotation{};             // maps: minutes per map (0: off)
     std::string map_label;                    // map_offer, world_state: the map's name for people (may be empty)
+    std::string map_package;                  // map_offer, world_state: valid_map_package (may be empty)
     std::vector<std::uint8_t> throwdown;      // throwdown: one encoded message (1..max_throwdown_message bytes)
     std::array<float, 3> teleport{};          // teleport: where the receiver goes (world position)
     std::vector<std::uint8_t> tuning;         // physics_tuning: 0..max_physics_tuning bytes
     std::vector<std::uint8_t> extras;         // physics_extras: 0..max_physics_extras bytes
+    std::vector<Impact> impacts;              // effects: 1..max_impacts contacts
+    // permissions: the receiver's role (empty: none), whether it has every command or the ones
+    // listed, and its role_* bits.
+    std::string role;
+    bool role_all_commands{};
+    std::vector<std::string> role_commands;
+    std::vector<std::string> words;           // words: a dedicated server's own filtered chat words
+    std::uint32_t role_permissions{};
     PartyAction party_action = PartyAction::leave; // party: what is asked or told
     std::uint64_t party_player{};                   // party: the other player (see PartyAction)
     // scoring: the sender's scoring fingerprint, 0 for the game's own; `text` names the mods
@@ -215,7 +328,15 @@ bool valid_transform(const Transform &) noexcept;
 bool valid_chat_text(std::string_view) noexcept;
 // A player name in a hello or roster: UTF-8 without control characters.
 bool valid_member_name(std::string_view) noexcept;
+// A role's tag: 1 to max_role_tag bytes of whole characters, no controls, no blank at either
+// end. And a role's name or a command's: lower-case letters, digits, - and _.
+bool valid_role_tag(std::string_view) noexcept;
+bool valid_role_word(std::string_view, std::size_t most) noexcept;
 bool valid_admin_text(std::string_view) noexcept;
+// 1 to server_vote_name_bytes of a-z, 0-9, - and _.
+bool valid_server_vote_name(std::string_view) noexcept;
+bool valid_server_custom_vote(const ServerCustomVote &) noexcept;
+bool valid_server_vote(const ServerVote &) noexcept; // its label and, for a poll, its answers
 // The message a player typed, made valid: control characters and broken UTF-8
 // dropped, surrounding blanks trimmed, cut to the byte limit on a character boundary.
 std::string clean_chat_text(std::string_view);
@@ -223,6 +344,36 @@ std::string clean_chat_text(std::string_view);
 std::string clean_roster_name(std::string_view);
 bool valid_pose(const Pose &) noexcept;
 std::vector<std::uint8_t> encode(const Packet &, bool compact_pose = false);
+// Rounds every rotation in a pose to a multiple of 2^bits in the 16-bit form a compact pose
+// packs it in (the root to at most 2^6). The pose still encodes and decodes as any other;
+// what changes is that a bone turning by less than a step is the same bytes as before, so a
+// difference from a reference leaves it out, and the low bits of the ones that did change are
+// zero and pack away. One step is about 0.0025 degrees times 2^bits: 4 bits is 0.04 degrees,
+// 7 bits a third of a degree.
+void coarsen_rotations(Pose &pose, unsigned bits) noexcept;
+// Keeps every bone's scale within 1/limit to limit on each axis (1: no scaling at all). A mod
+// that resizes part of a skater (a head four times the size) does it with a bone's scale,
+// which travels in the pose and so shows to everyone, mod or not.
+// The skateboard is held closer, to board_scale_limit: nothing in the game resizes one, and a
+// hacked client that does shows everyone a board the size of a car.
+inline constexpr float board_scale_limit = 1.1f;
+// How far from its skater a skateboard still stops other players (remote_collision.cpp). One
+// left lying further off is seen and not felt, so a hacked client that keeps its board on
+// another player cannot knock them about with it.
+inline constexpr float board_solid_reach = 3.f;
+void limit_bone_scale(Pose &pose, float limit) noexcept;
+// Keeps every bone of the body and the board within `limit` metres of the bone it hangs from
+// (0: no limit). A bone's place is relative to its parent and, on the game's rigs, never
+// changes: the longest is a thigh, 0.44 m. A hacked client that moves them stretches its
+// skater across the map for everyone. The skater's few bones that follow the board and the
+// body's place in a fall (free_skater_bones) do move, by metres, and are held to
+// free_bone_reach instead; so is the board's own rig from the board.
+inline constexpr std::array<std::uint16_t, 14> free_skater_bones{3, 50, 283, 375, 376, 377, 378, 379, 380, 390, 391, 392, 393, 394};
+inline constexpr float free_bone_reach = 100.f;
+// What a game holds every pose it is sent to, whatever sent it: twice the server's standard
+// reach, and the most a server may allow a bone to be resized.
+inline constexpr float client_bone_reach = 2.f, client_bone_scale = 8.f;
+void limit_bone_reach(Pose &pose, float limit) noexcept;
 // The same, with a pose encoded at another update interval (a recipient thinned by
 // distance) instead of the packet's own, so the packet need not be copied for it.
 std::vector<std::uint8_t> encode(const Packet &, bool compact_pose, std::uint32_t pose_interval_us);
@@ -320,6 +471,8 @@ class PoseBuffer {
     bool sample(std::uint64_t now_us, Pose &out) const;
     std::optional<Pose> sample(std::uint64_t now_us) const;
     bool sample_remote(std::uint64_t now_us, Pose &out);
+    // Whether a pose arrived within this long: sampling gives up after a second without one.
+    bool heard_within(std::uint64_t now_us, std::uint64_t age_us) const;
     std::optional<Pose> sample_remote(std::uint64_t now_us);
     PosePlayback playback() const { return playback_; }
     void clear();

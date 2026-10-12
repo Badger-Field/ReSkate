@@ -302,6 +302,24 @@ void parks(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) {
              : model.parks.controlled_by_host ? "You are an admin of this server: a layout you load changes for everyone."
                                               : "Choose a layout for each slot. Choices save and are shared when you host.");
         note("Construction controls both the construction site and the Hedgemont park.");
+        const auto park_command = [&](const char* command) {
+            std::array<char, 512> result{};
+            callbacks.queue_console_command(callbacks.user, command, result.data(), result.size());
+            result.back() = '\0'; feedback(menu, result.data());
+        };
+        ImGui::BeginDisabled(!model.parks.available || tools::parks_locked(model) || !callbacks.queue_console_command);
+        if (ImGui::Button("Load Random Parks")) {
+            park_command("park random");
+            menu.park_edit = {}; // Discard staged dropdown edits, including slots that reroll the same layout.
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!model.parks.available || !callbacks.queue_console_command);
+        auto random_on_launch = model.parks.randomize_on_launch;
+        if (ImGui::Checkbox("Randomize on Launch", &random_on_launch))
+            park_command(random_on_launch ? "park random-on-launch 1" : "park random-on-launch 0");
+        ImGui::EndDisabled();
+        note("Pick a random layout for each slot. Randomize on Launch runs once per game launch; multiplayer follows the host.");
         ImGui::BeginDisabled(!model.parks.available || tools::parks_locked(model) || !callbacks.queue_console_command);
         if (ImGui::BeginTable("park-layouts", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
             ImGui::TableSetupColumn("Location", ImGuiTableColumnFlags_WidthStretch, 0.9f);
@@ -353,8 +371,8 @@ void parks(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) {
 }
 
 void world_layers_page(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) {
-    if (model.world.controlled_by_host && model.multiplayer.server_admin)
-        note("The server is syncing world layers. You are an admin, so your changes apply to everyone.");
+    if (model.world.controlled_by_host && server_can(model.multiplayer, "layers"))
+        note("The server is syncing world layers. Your role may change them, so your changes apply to everyone.");
     else if (model.world.controlled_by_host)
         warn("The host is syncing world layers. Your own choices come back when sync ends or you leave.");
     if (model.world.map == WorldMap::none) {
@@ -387,15 +405,16 @@ void world_layers_page(SkateMenu& menu, const Model& model, const CallbacksV3& c
         unsigned visible_layers{};
         for (unsigned i = 0; i < world_layers().size(); ++i) {
             const auto& layer = world_layers()[i];
-            if (layer.map != model.world.map || !model.world.supported[i]) continue;
+            if (layer.map != model.world.map || !model.world.supported[i] || world_layer_kept_off(layer.key)) continue;
             if (menu.world_layer_category && layer.category != categories[menu.world_layer_category]) continue;
-            if (!matches_search(layer.label) && !matches_search(layer.key)) continue;
+            const auto title = world_layer_title(layer.label);
+            if (!matches_search(title) && !matches_search(layer.key)) continue;
             ++visible_layers;
             // Every row owns its checkbox ID, independent of table headers.
             ImGui::PushID(layer.key.data());
             ImGui::TableNextRow(); ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::TextWrapped("%s", layer.label.data());
+            ImGui::TextWrapped("%s", title.c_str());
             if (ImGui::IsItemHovered()) {
                 ImGui::BeginTooltip(); ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30);
                 ImGui::TextUnformatted(layer.detail.data());
@@ -512,8 +531,8 @@ void time_of_day_page(SkateMenu& menu, const Model& model, const CallbacksV3& ca
     int bottom = current >= 4 ? current - 4 : -1;
     if (choice(menu, "tod-bottom", bottom, {"Evening", "Night", "Weather day", "Weather night"}, available))
         apply(static_cast<unsigned>(bottom + 4));
-    if (model.world.controlled_by_host && model.multiplayer.server_admin)
-        note("You are an admin of this server: the time you pick applies to everyone.");
+    if (model.world.controlled_by_host && server_can(model.multiplayer, "tod"))
+        note("Your role on this server sets the time: the one you pick applies to everyone.");
     else if (model.world.controlled_by_host) warn("The lobby host controls world layers, including time of day.");
     else if (model.world.map == WorldMap::none) note("Load a map in Map > Travel to change its time of day.");
     else if (!available) note("Time of day is not available on this map right now.");

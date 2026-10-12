@@ -30,13 +30,7 @@ add_library(dingosdk_console_core STATIC
 add_library(dingosdk_json STATIC
     Engine/Core/Json/json.cpp)
 
-# The bad-word filter (Engine/Core/Text/word_filter.h) with its list built in: editing
-# bad_words.txt re-runs the configure step.
-set(bad_words_path "${PROJECT_SOURCE_DIR}/Engine/Core/Text/bad_words.txt")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${bad_words_path}")
-file(READ "${bad_words_path}" bad_words_source)
-configure_file(cmake/templates/bad_words.h.in
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_bad_words.h" @ONLY)
+# The bad-word filter (Engine/Core/Text/word_filter.h); its words come from the backend.
 add_library(dingosdk_word_filter STATIC Engine/Core/Text/word_filter.cpp)
 
 target_include_directories(dingosdk_json SYSTEM PRIVATE External)
@@ -75,7 +69,9 @@ add_library(dingosdk_frostbite STATIC
     Engine/Resource/bundle_ref_table.cpp
     Engine/Resource/ebx_writer.cpp
     Engine/Resource/toc.cpp
-    Engine/Resource/texture.cpp)
+    Engine/Resource/texture.cpp
+    Engine/Resource/mesh_set.cpp
+    Engine/Resource/skeleton_asset.cpp)
 target_include_directories(dingosdk_frostbite SYSTEM PRIVATE External/bcdec)
 target_link_libraries(dingosdk_frostbite PRIVATE dingosdk_lz4 dingosdk_zstd dingosdk_miniz)
 
@@ -93,7 +89,7 @@ endif()
 
 # Read access to the installed game's cas archives.
 add_library(dingosdk_game_archives STATIC Engine/Vfs/game_archives.cpp Engine/Vfs/game_bundles.cpp
-    Engine/Vfs/item_thumbnails.cpp)
+    Engine/Vfs/item_thumbnails.cpp Engine/Vfs/game_textures.cpp)
 target_link_libraries(dingosdk_game_archives PUBLIC dingosdk_native_db dingosdk_frostbite)
 
 if(WIN32)

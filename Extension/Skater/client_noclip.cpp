@@ -3,6 +3,7 @@
 #include "no_bail.h"
 #include "offboard_flight.h"
 #include "Engine/Core/Hooks/hooks.h"
+#include "Engine/Core/Log/logging.h"
 #include "Engine/Game/Build/20260929/engine.h"
 #include "Engine/Game/Build/20260929/no_bail.h"
 #include "Engine/Game/Build/20260929/offboard_flight.h"
@@ -77,6 +78,11 @@ NoclipBodies debug_noclip_bodies(std::uintptr_t base, std::uintptr_t client, std
     result.seconds = reader.value<float>(result.context, 0x17ec);
     source_require(std::isfinite(result.seconds) && result.seconds >= 0 && result.seconds <= .1f, "Invalid physics timestep.");
     result.offboard = reader.pointer(reader.pointer(result.core, 0x3b0)) == base + addr::offboard_flight::offboard_flight_vtable;
+    // Read the committed native state, not the selector's proposed next state
+    // (which is remapped by its caller and may be stale between selections).
+    const auto physics = reader.value<std::uint32_t>(result.context, 0x1414);
+    result.wipeout = physics == addr::no_bail::wipeout_physics_state ||
+        physics == addr::no_bail::offboard_physics_state;
     source_require(reader.pointer(board) == base + spawn::board_physics_vtable && reader.pointer(rig) == base + spawn::rig_physics_vtable,
         "Unsupported board or skeleton physics.");
     const auto board_parts = reader.pointer(board, 0x20), rig_parts = reader.pointer(rig, 0x20);
@@ -104,41 +110,76 @@ void noclip_apply_velocity(std::uintptr_t core) noexcept {
         state.busy.test_and_set(std::memory_order_acquire)) return;
     SourceBusyScope scope{state.busy};
     auto& debug = state.trial.debug;
-    const auto apply_boost = [&](InteractiveDebug::VelocityRequest& boost, std::uint64_t& updates, bool up) {
+    const auto apply_boost = [&](InteractiveDebug::VelocityRequest& boost, std::uint64_t& updates, bool up, bool offboard = false) {
         if (!boost.valid || boost.core != core) return;
         try {
+            if (offboard && boost.applied && GetTickCount64() >= boost.expires) {
+                boost.valid = false;
+                state.offboard_boost_core.store(0, std::memory_order_release);
+                return;
+            }
             source_require(GetTickCount64() < boost.expires, "Velocity boost timed out.");
             const auto bodies = debug_noclip_bodies(state.trial.base, boost.client, boost.entity);
             source_require(bodies.core == core, "Skater physics was replaced before the velocity boost could apply.");
-            source_require(!bodies.offboard, "Velocity boosts require the skater to be on the board.");
+            source_require(offboard ? (boost.applied || bodies.offboard || bodies.wipeout) : !bodies.offboard,
+                offboard ? "Off-board Up Boost requires walking, falling or gliding." :
+                "Velocity boosts require the skater to be on the board.");
             source_require(!debug.noclip && !debug.park_editor, "Velocity boost cancelled while editing or flying.");
             SourceReader reader;
             source_require(reader.value<std::uint8_t>(boost.entity, 0x7e0) == 0,
                 "Wait for the current teleport before using velocity boosts.");
             std::array<std::array<float, 3>, 32> velocities{};
             std::array<std::uint32_t, 32> flags{};
-            for (std::size_t i = 0; i < bodies.parts.size(); ++i) {
+            const std::size_t first = offboard ? 9 : 0; // Leave the carried/detached board alone.
+            if (offboard && !boost.applied) {
+                const auto current_up = reader.value<float>(bodies.parts[9], 0x74);
+                boost.velocity[1] = std::max(boost.velocity[1], current_up + boost.velocity[1]);
+            }
+            for (std::size_t i = first; i < bodies.parts.size(); ++i) {
                 velocities[i] = reader.value<std::array<float, 3>>(bodies.parts[i], 0x70);
                 flags[i] = reader.value<std::uint32_t>(bodies.parts[i], 0x60);
                 for (std::size_t axis = 0; axis < 3; ++axis) {
-                    velocities[i][axis] += boost.velocity[axis];
+                    if (offboard && axis == 1) velocities[i][axis] = std::max(velocities[i][axis], boost.velocity[1]);
+                    else velocities[i][axis] += boost.velocity[axis];
                     source_require(std::isfinite(velocities[i][axis]) && std::abs(velocities[i][axis]) <= 100000,
                         "Velocity boost produced an invalid physics velocity.");
                 }
             }
             reader.verify();
-            boost.valid = false;
-            for (std::size_t i = 0; i < bodies.parts.size(); ++i) {
+            if (offboard && bodies.offboard)
+                source_require(ensure_offboard_up_velocity(state.trial.base, core, bodies.context,
+                    bodies.rig_wrapper, boost.velocity[1]), "Off-board boost motion ownership changed.");
+            for (std::size_t i = first; i < bodies.parts.size(); ++i) {
                 body_write(bodies.parts[i] + 0x70, velocities[i]);
                 body_write(bodies.parts[i] + 0x60, flags[i] | 8u);
             }
-            ++updates;
-            debug.status = up ? "Up velocity added." : "Forward velocity added.";
-        } catch (const SourceGuard& issue) { boost.valid = false; debug.status = issue.message; }
-          catch (...) { boost.valid = false; debug.status = "Velocity boost failed during the physics update."; }
+            if (offboard) {
+                if (!boost.applied) {
+                    ++updates;
+                    boost.applied = true;
+                    boost.expires = GetTickCount64() + 180;
+                    debug.status = "Off-board up velocity added.";
+                }
+            } else {
+                boost.valid = false;
+                ++updates;
+                debug.status = up ? "Up velocity added." : "Forward velocity added.";
+            }
+        } catch (const SourceGuard& issue) {
+            boost.valid = false;
+            if (offboard) state.offboard_boost_core.store(0, std::memory_order_release);
+            debug.status = issue.message;
+            if (offboard) logging::write(logging::Level::warning, logging::Channel::skater, issue.message);
+        } catch (...) {
+            boost.valid = false;
+            if (offboard) state.offboard_boost_core.store(0, std::memory_order_release);
+            debug.status = "Velocity boost failed during the physics update.";
+            if (offboard) logging::write(logging::Level::warning, logging::Channel::skater, debug.status);
+        }
     };
     apply_boost(debug.forward_velocity, debug.forward_velocity_updates, false);
     apply_boost(debug.up_velocity, debug.up_velocity_updates, true);
+    apply_boost(debug.offboard_up_velocity, debug.offboard_up_velocity_updates, true, true);
     const auto& request = debug.noclip_velocity;
     if (!debug.noclip || !request.valid || request.core != core) return;
     try {
@@ -181,6 +222,8 @@ void noclip_apply_velocity(std::uintptr_t core) noexcept {
     } catch (const SourceGuard& issue) { debug_stop_noclip(debug); debug.status = issue.message; }
       catch (...) { debug_stop_noclip(debug); debug.status = "Flight stopped after a physics error."; }
 }
+// Trainer: called after each physics update (see set_physics_step_callback).
+std::atomic<void (*)() noexcept> physics_step_callback{};
 struct JumpScale {
     std::atomic<bool> pending{};
     std::uintptr_t client{}, entity{}, core{};
@@ -526,14 +569,287 @@ void trainer_revert_boost(std::uintptr_t core) noexcept {
         r.cooldown_until = now + static_cast<ULONGLONG>(std::clamp(t.cooldown, 0.0f, 60.0f) * 1000.0f);
     } catch (...) {}
 }
+// ---- transition assist -------------------------------------------------------------------------
+// Coming off a coping grind, a stall or a handplant back into the ramp. The trainer's client tick says when the
+// skater is on a coping (a grind that began on steep ground), which way the coping runs and which side the ramp is on;
+// the rest happens here, on the physics steps after the grind ends:
+// - carry: the speed the skater had along the coping is put back for a third of a second, and the speed across it
+//   (into the ramp) is capped, so the skater rolls off at about the angle they came in at. Skate 3 never turned the
+//   velocity at the end of a grind: it nudged the board sideways up to 1 m/s and left the rest alone.
+// - unstick: Skate 3's hang-up rule. Slower than 1.1 m/s for more than ten steps after leaving the coping (or after
+//   landing a flight off a transition) is a hang-up: the skater is pushed into the ramp and down until moving again.
+// - plant: when a handplant ends, the skater leaves the lip at least 0.9 m/s into the ramp and without the downward
+//   speed the plant left them with (Skate 3: 0.9 m/s outward, a ballistic arc from above the lip).
+// Everything here is a first build on behaviour not yet measured in this game (2026-10-11): the report is how each
+// is checked in play.
+constexpr std::uint32_t transition_carry_steps = 20, transition_watch_steps = 90, transition_plant_steps = 12;
+constexpr float transition_hang_speed = 1.1f; // m/s, Skate 3's
+constexpr std::uint32_t transition_hang_steps = 10;
+constexpr float transition_kick = 0.12f, transition_kick_down = 0.10f; // m/s a step at strength 1
+constexpr float transition_plant_out = 0.9f; // m/s into the ramp, Skate 3's
+struct TransitionRun {
+    std::atomic<ULONGLONG> expires{};
+    std::uintptr_t client{}, entity{};
+    SRWLOCK lock = SRWLOCK_INIT;
+    TransitionAssist assist;   // under lock
+    TransitionReport report;   // under lock
+    // Physics thread only.
+    int phase{}; // 0 idle, 1 on a coping, 2 just left one, 3 handplanting, 4 just left a handplant, 5 in a flight off a transition, 6 just landed one
+    std::uint32_t steps{}, slow{};
+    std::array<float, 2> edge{}, ramp{};
+    float along{}, top{}, low{};
+    TransitionReport now;
+};
+TransitionRun& transition_run() { static auto* value = new TransitionRun; return *value; }
+void trainer_transition(std::uintptr_t core) noexcept {
+    auto& r = transition_run();
+    if (GetTickCount64() >= r.expires.load(std::memory_order_acquire)) {
+        r.phase = 0;
+        return;
+    }
+    AcquireSRWLockShared(&r.lock);
+    const auto a = r.assist;
+    ReleaseSRWLockShared(&r.lock);
+    const bool acting = a.carry > 0 || a.unstick > 0 || a.plant > 0;
+    if (!acting && !a.measure) {
+        r.phase = 0;
+        return;
+    }
+    const auto watch = watched_physics_state();
+    if (!watch.valid) return;
+    const std::uint32_t state = watch.state;
+    const bool grinding = (state >= 400 && state < 500) || state == 603; // grinds and slides; the lip trick
+    const bool planting = state == 600;
+    const bool flying = state >= 200 && state < 300;
+    const bool gone = state == 300 || (state >= 500 && state < 600); // a wipeout, or off the board
+    if (r.phase == 0 && !(a.coping && grinding) && !planting && !(a.transition && flying)) return;
+    SourceLastError error;
+    auto& source = source_state();
+    if (!source.initialized.load(std::memory_order_acquire) || source.busy.test_and_set(std::memory_order_acquire)) return;
+    SourceBusyScope scope{source.busy};
+    try {
+        const auto bodies = debug_noclip_bodies(source.trial.base, r.client, r.entity);
+        if (bodies.core != core || bodies.parts.empty()) return;
+        SourceReader reader;
+        std::array<std::array<float, 3>, 32> velocities{};
+        std::array<std::uint32_t, 32> flags{};
+        const auto count = std::min<std::size_t>(bodies.parts.size(), velocities.size());
+        for (std::size_t i = 0; i < count; ++i) {
+            velocities[i] = reader.value<std::array<float, 3>>(bodies.parts[i], 0x70);
+            flags[i] = reader.value<std::uint32_t>(bodies.parts[i], 0x60);
+        }
+        reader.verify();
+        const auto v = velocities[0]; // as the game left it this step
+        const float speed = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        if (!std::isfinite(speed) || speed > 300.0f) return;
+        const auto add = [&](float x, float y, float z) {
+            // Like the native velocity writers: XYZ at +70 and the dirty bit 8 at +60.
+            for (std::size_t i = 0; i < count; ++i) {
+                velocities[i][0] += x;
+                velocities[i][1] += y;
+                velocities[i][2] += z;
+                body_write(bodies.parts[i] + 0x70, velocities[i]);
+                body_write(bodies.parts[i] + 0x60, flags[i] | 8u);
+            }
+        };
+        const auto publish = [&] {
+            AcquireSRWLockExclusive(&r.lock);
+            const auto sequence = r.report.sequence + 1;
+            r.report = r.now;
+            r.report.sequence = sequence;
+            ReleaseSRWLockExclusive(&r.lock);
+        };
+        const float height = bodies.root[1];
+        // A hang-up: slower than Skate 3's limit for longer than its ten frames. `x`, `z`: the way to push.
+        const auto hang = [&](float x, float z) {
+            if (speed < transition_hang_speed) {
+                ++r.slow;
+                ++r.now.hung;
+            } else {
+                r.slow = 0;
+            }
+            if (!(a.unstick > 0) || r.slow <= transition_hang_steps) return;
+            add(x * transition_kick * a.unstick, -transition_kick_down * a.unstick, z * transition_kick * a.unstick);
+            ++r.now.kicked;
+        };
+        if (a.coping && grinding && r.phase != 2) {
+            // On the coping: remember how the skater is moving along and across it. Nothing is written.
+            if (r.phase != 1) r.now = {};
+            r.phase = 1;
+            r.edge = a.edge;
+            r.ramp = a.ramp;
+            r.along = v[0] * r.edge[0] + v[2] * r.edge[1];
+            r.now.kind = 1;
+            r.now.from = state;
+            r.now.in_along = r.along;
+            r.now.in_across = v[0] * r.ramp[0] + v[2] * r.ramp[1];
+            r.now.in_down = -v[1];
+            r.top = height;
+            return;
+        }
+        if (r.phase == 1) {
+            // The grind ended. A pop is the player's own way off; a bail or a step off ends it too.
+            r.now.to = state;
+            if (state == 200 || gone || planting) {
+                r.phase = 0;
+                return;
+            }
+            r.phase = 2;
+            r.steps = r.slow = 0;
+        }
+        if (r.phase == 2) {
+            if (gone || state == 200 || planting || (grinding && r.steps > 2)) { // popped, bailed, or locked on again
+                r.now.to_last = state;
+                publish();
+                r.phase = 0;
+                return;
+            }
+            ++r.steps;
+            const float along = v[0] * r.edge[0] + v[2] * r.edge[1], across = v[0] * r.ramp[0] + v[2] * r.ramp[1];
+            if (a.carry > 0 && r.steps <= transition_carry_steps && std::abs(r.along) > 0.5f) {
+                const float wanted = r.along * std::min(a.carry, 1.0f);
+                float change_along = 0, change_across = 0;
+                if (along * wanted < 0 || std::abs(along) < std::abs(wanted)) change_along = wanted - along;
+                if (a.drop_speed > 0 && across > a.drop_speed) change_across = a.drop_speed - across;
+                if (std::abs(change_along) > 0.01f || std::abs(change_across) > 0.01f) {
+                    add(r.edge[0] * change_along + r.ramp[0] * change_across, 0.0f, r.edge[1] * change_along + r.ramp[1] * change_across);
+                    ++r.now.carried;
+                }
+            }
+            hang(r.ramp[0], r.ramp[1]);
+            if (r.steps == transition_carry_steps) {
+                r.now.out_along = velocities[0][0] * r.edge[0] + velocities[0][2] * r.edge[1];
+                r.now.out_across = velocities[0][0] * r.ramp[0] + velocities[0][2] * r.ramp[1];
+                r.now.out_down = -velocities[0][1];
+                r.now.game_along = along;
+                r.now.game_across = across;
+                r.now.drop = r.top - height;
+            }
+            if (r.steps >= transition_watch_steps) {
+                r.now.to_last = state;
+                r.now.fall = r.top - height;
+                publish();
+                r.phase = 0;
+            }
+            return;
+        }
+        if (planting && r.phase != 4) {
+            // On a handplant: how far the plant itself carries the skater down before it lets go.
+            if (r.phase != 3) {
+                r.now = {};
+                r.now.kind = 2;
+                r.now.from = state;
+                r.ramp = a.ramp;
+                r.edge = a.edge;
+                r.top = height;
+            }
+            r.phase = 3;
+            r.top = std::max(r.top, height);
+            r.low = height;
+            return;
+        }
+        if (r.phase == 3) {
+            r.now.to = state;
+            r.now.drop = r.top - r.low; // lost inside the plant
+            r.now.in_across = v[0] * r.ramp[0] + v[2] * r.ramp[1];
+            r.now.in_along = v[0] * r.edge[0] + v[2] * r.edge[1];
+            r.now.in_down = -v[1];
+            if (gone) {
+                publish();
+                r.phase = 0;
+                return;
+            }
+            r.phase = 4;
+            r.steps = r.slow = 0;
+        }
+        if (r.phase == 4) {
+            if (gone || planting) {
+                r.now.to_last = state;
+                publish();
+                r.phase = 0;
+                return;
+            }
+            ++r.steps;
+            const float across = v[0] * r.ramp[0] + v[2] * r.ramp[1];
+            if (a.plant > 0 && r.steps <= transition_plant_steps) {
+                const float blend = std::min(a.plant, 1.0f);
+                const float change_across = across < transition_plant_out ? (transition_plant_out - across) * blend : 0.0f;
+                const float change_up = r.steps == 1 && v[1] < 0 ? -v[1] * blend : 0.0f; // the fall starts from rest, as off the top of an arc
+                if (std::abs(change_across) > 0.01f || change_up > 0.01f) {
+                    add(r.ramp[0] * change_across, change_up, r.ramp[1] * change_across);
+                    ++r.now.carried;
+                }
+            }
+            hang(r.ramp[0], r.ramp[1]);
+            if (r.steps == transition_plant_steps) {
+                r.now.out_across = velocities[0][0] * r.ramp[0] + velocities[0][2] * r.ramp[1];
+                r.now.out_along = velocities[0][0] * r.edge[0] + velocities[0][2] * r.edge[1];
+                r.now.out_down = -velocities[0][1];
+                r.now.game_across = across;
+            }
+            if (r.steps >= transition_watch_steps) {
+                r.now.to_last = state;
+                r.now.fall = r.top - height; // below the plant's highest point a second and a half later
+                publish();
+                r.phase = 0;
+            }
+            return;
+        }
+        if (flying && a.transition && r.phase != 6) {
+            // A flight off a transition: which way it goes over the ground, for a hang-up where it comes down.
+            if (r.phase != 5) {
+                r.now = {};
+                r.now.kind = 3;
+                r.now.from = state;
+            }
+            r.phase = 5;
+            const float over = std::hypot(v[0], v[2]);
+            if (over > 0.3f) r.ramp = {v[0] / over, v[2] / over};
+            r.now.in_along = over;
+            r.now.in_down = -v[1];
+            return;
+        }
+        if (r.phase == 5) {
+            r.now.to = state;
+            if (gone || planting || flying) {
+                r.phase = 0;
+                return;
+            }
+            r.phase = 6;
+            r.steps = r.slow = 0;
+        }
+        if (r.phase == 6) {
+            if (gone || flying || planting) {
+                r.now.to_last = state;
+                if (r.now.hung) publish();
+                r.phase = 0;
+                return;
+            }
+            ++r.steps;
+            // Riding away is not a hang-up however slow (the top of a kick turn): only a skater held on an edge or in
+            // one of the game's in-between states counts here.
+            if (state >= 100 && state < 200) r.slow = 0;
+            else hang(r.ramp[0], r.ramp[1]);
+            if (r.steps >= transition_watch_steps / 2) {
+                r.now.to_last = state;
+                if (r.now.hung) publish(); // only a landing that hung is worth a line
+                r.phase = 0;
+            }
+            return;
+        }
+        r.phase = 0;
+    } catch (...) {}
+}
 void noclip_physics_update(std::uintptr_t core) {
     const auto original = source_state().velocity_update_original.load(std::memory_order_acquire);
     if (original) original(core);
     noclip_apply_velocity(core);
     trainer_apply_jump_scale(core);
+    if (const auto callback = physics_step_callback.load(std::memory_order_acquire)) callback();
     trainer_push_speed(core);
     trainer_pump_power(core);
     trainer_revert_boost(core);
+    trainer_transition(core);
 }
 bool noclip_motion_target(std::uintptr_t rig, std::uintptr_t context,
     const std::array<float,16>* supplied, std::array<float,16>& target) noexcept {
@@ -543,6 +859,36 @@ bool noclip_motion_target(std::uintptr_t rig, std::uintptr_t context,
         state.busy.test_and_set(std::memory_order_acquire)) return false;
     SourceBusyScope scope{state.busy};
     auto& debug = state.trial.debug;
+    auto& boost = debug.offboard_up_velocity;
+    if (!debug.noclip && boost.valid && boost.applied) {
+        try {
+            SourceReader reader;
+            if (reader.pointer(boost.core, 0x438) != rig || reader.pointer(boost.core, 0x3c0) != context)
+                return false;
+            if (GetTickCount64() >= boost.expires) return false;
+            const auto bodies = debug_noclip_bodies(state.trial.base, boost.client, boost.entity);
+            source_require(bodies.core == boost.core && bodies.rig_wrapper == rig && bodies.context == context,
+                "Off-board boost skater changed.");
+            source_require(!debug.park_editor && reader.value<std::uint8_t>(boost.entity, 0x7e0) == 0,
+                "Off-board boost interrupted by editing or teleporting.");
+            source_require(reader.raw(reinterpret_cast<std::uintptr_t>(supplied), target.data(), sizeof(target)) &&
+                valid_flight_transform(target), "Invalid off-board motion target.");
+            // Native off-board movement drives the skeleton toward this target.
+            // Body velocity alone is undone by that drive on the same step.
+            // Lead only Y for the launch; keep native X/Z, rotation and collision flags.
+            target[13] = std::max(target[13], bodies.root[1] + boost.velocity[1] * bodies.seconds);
+            source_require(valid_flight_transform(target), "Off-board boost target is out of bounds.");
+            reader.verify();
+            if (bodies.offboard)
+                source_require(ensure_offboard_up_velocity(state.trial.base, bodies.core, context, rig, boost.velocity[1]),
+                    "Off-board boost motion ownership changed.");
+            return bodies.seconds > 0;
+        } catch (const SourceGuard& issue) { debug.status = issue.message; }
+          catch (...) { debug.status = "Off-board boost motion failed."; }
+        boost.valid = false;
+        state.offboard_boost_core.store(0, std::memory_order_release);
+        return false;
+    }
     const auto& request = debug.noclip_velocity;
     if (!debug.noclip || !request.valid) return false;
     try {
@@ -589,6 +935,12 @@ void noclip_skater_motion(std::uintptr_t rig, std::uintptr_t context,
     alignas(16) std::array<float,16> target{};
     const auto* motion = noclip_motion_target(rig, context, supplied, target) ? &target : supplied;
     if (original) original(rig, context, motion, flags);
+    if (source_state().offboard_boost_core.load(std::memory_order_acquire)) {
+        std::uintptr_t core{};
+        if (memory::peek(rig + 0x4630, core) &&
+            core == source_state().offboard_boost_core.load(std::memory_order_acquire))
+            noclip_apply_velocity(core);
+    }
 }
 }
 }
@@ -596,6 +948,7 @@ void noclip_skater_motion(std::uintptr_t rig, std::uintptr_t context,
 namespace dingosdk {
 using namespace client_source::detail;
 
+void set_physics_step_callback(void (*callback)() noexcept) noexcept { physics_step_callback.store(callback, std::memory_order_release); }
 bool queue_jump_scale(std::uintptr_t client, std::uintptr_t entity, float factor) noexcept {
     SourceLastError error;
     try {
@@ -646,6 +999,22 @@ void set_revert_boost(std::uintptr_t client, std::uintptr_t entity, float streng
     r.entity = entity;
     r.strength.store(std::isfinite(strength) && strength > 0 ? std::min(strength, 1000.0f) : 0.0f, std::memory_order_relaxed);
     r.expires.store(GetTickCount64() + 500, std::memory_order_release);
+}
+void set_transition_assist(std::uintptr_t client, std::uintptr_t entity, const TransitionAssist &assist) noexcept {
+    auto& r = transition_run();
+    r.client = client;
+    r.entity = entity;
+    AcquireSRWLockExclusive(&r.lock);
+    r.assist = assist;
+    ReleaseSRWLockExclusive(&r.lock);
+    r.expires.store(GetTickCount64() + 500, std::memory_order_release);
+}
+TransitionReport transition_report() noexcept {
+    auto& r = transition_run();
+    AcquireSRWLockShared(&r.lock);
+    const auto report = r.report;
+    ReleaseSRWLockShared(&r.lock);
+    return report;
 }
 RevertBoostReport revert_boost_report() noexcept {
     auto& r = revert_boost();

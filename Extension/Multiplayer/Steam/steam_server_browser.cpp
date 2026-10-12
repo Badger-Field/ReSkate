@@ -127,6 +127,30 @@ std::optional<MultiplayerLobby> read_server_tags(std::string_view tags, std::uin
         case 'p': if (!integer(value, row.players)) row.players = 0; break;
         case 'c': if (!integer(value, row.capacity)) row.capacity = 0; break;
         case 'w': row.password_required = value == "1"; break;
+        case 'd': {
+            // A port, or "a.b.c.d:port" when the server is reached at another address than it is listed under.
+            const auto colon = value.find(':');
+            std::uint32_t address{};
+            bool ok = true;
+            if (colon != std::string_view::npos) {
+                auto rest = value.substr(0, colon);
+                unsigned parts{};
+                while (ok && parts < 4) {
+                    const auto dot = rest.find('.');
+                    int part{};
+                    ok = integer(rest.substr(0, dot), part) && part >= 0 && part <= 255;
+                    address = (address << 8) | static_cast<std::uint32_t>(part & 255);
+                    ++parts;
+                    if (dot == std::string_view::npos) break;
+                    rest = rest.substr(dot + 1);
+                }
+                ok = ok && parts == 4 && address;
+            }
+            const auto port = colon == std::string_view::npos ? value : value.substr(colon + 1);
+            if (!ok || !integer(port, row.direct_port) || row.direct_port < 1 || row.direct_port > 65535) row.direct_port = 0;
+            else row.direct_ip = address; // 0: the address the server is listed under
+            break;
+        }
         case 'm': row.map = std::string(value); break;
         // The name is last and may itself contain anything but commas.
         case 'n': row.name = std::string(value) + (tags.empty() ? "" : "," + std::string(tags)); tags = {}; break;
@@ -159,6 +183,10 @@ const MultiplayerLobby *SteamServerBrowser::find(std::uint64_t id) const {
 }
 void SteamServerBrowser::refresh(std::uint64_t now) {
     if (!api().open()) return;
+    // Steam stops answering a game that asks often (an empty list, for minutes): one search at a
+    // time, a quarter of a minute apart, and three quarters after one that came back empty.
+    // Opening or refreshing the browser sooner shows what the last search found.
+    if (started_ && (!searches_.empty() || now - started_ < (internet_listed_ ? 15000000 : 45000000))) return;
     servers_ = api().servers();
     if (!servers_) return;
     release();
@@ -192,6 +220,7 @@ void SteamServerBrowser::read(std::uint64_t now) {
             if (!item) continue;
             auto row = read_server_tags(bounded(item->tags, sizeof item->tags), item->steam_id.value);
             if (!row) continue;
+            if (row->direct_port && !row->direct_ip) row->direct_ip = item->ip; // the address Steam lists the server at
             auto &entry = found_[row->id];
             entry.search = search_;
             entry.listed = now;
@@ -248,11 +277,12 @@ void SteamServerBrowser::tick(std::uint64_t now) {
     if (done) {
         release();
         // An internet list with servers in it is the whole truth: what it left out is gone.
-        // An empty one is Steam not answering (see the header): keep what was listed in the
-        // last two minutes.
+        // An empty one is Steam not answering (see the header), and it has stayed that way for
+        // minutes for a player who searched often: keep what was listed in the last quarter
+        // of an hour. A server that closed meanwhile only fails to join.
         const auto before = found_.size();
         std::erase_if(found_, [&](const auto &entry) {
-            return entry.second.search != search_ && (internet_listed_ || now - entry.second.listed > 120000000);
+            return entry.second.search != search_ && (internet_listed_ || now - entry.second.listed > 900000000);
         });
         if (found_.size() != before) read(now);
         std::string list;

@@ -15,6 +15,8 @@
 #include "Engine/Game/World/world_names.h"
 #include "Engine/Vfs/world_layer_scan.h"
 #ifdef _WIN32
+#include <charconv>
+#include <cstdlib>
 #include <Windows.h>
 #include <timeapi.h>
 #else
@@ -101,17 +103,27 @@ Console &console() {
 }
 void write_log(const std::string &text) {
     std::lock_guard lock(log_mutex);
-    const auto now = std::time(nullptr);
-    std::tm local{};
+    char stamp[64]{};
+    char file_stamp[64]{};
 #ifdef _WIN32
-    localtime_s(&local, &now);
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    if (GetTimeFormatA(LOCALE_USER_DEFAULT, 0, &st, nullptr, stamp, sizeof(stamp)) == 0) {
+        const bool pm = st.wHour >= 12;
+        const int hour12 = (st.wHour % 12 == 0) ? 12 : (st.wHour % 12);
+        std::snprintf(stamp, sizeof(stamp), "%d:%02d:%02d %s", hour12, st.wMinute, st.wSecond, pm ? "PM" : "AM");
+    }
+    std::snprintf(file_stamp, sizeof(file_stamp), "%04d-%02d-%02d %s", st.wYear, st.wMonth, st.wDay, stamp);
 #else
-    localtime_r(&now, &local);
+    const auto now_tp = std::chrono::system_clock::now();
+    const auto now_t = std::chrono::system_clock::to_time_t(now_tp);
+    std::tm local{};
+    localtime_r(&now_t, &local);
+    std::strftime(stamp, sizeof(stamp), "%X", &local);
+    std::strftime(file_stamp, sizeof(file_stamp), "%Y-%m-%d %H:%M:%S", &local);
 #endif
-    char stamp[32]{};
-    std::strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M:%S", &local);
-    if (log_file) log_file << '[' << stamp << "] " << text << std::endl;
-    console().write(std::string("[") + (stamp + 11) + "] " + text + "\n");
+    if (log_file) log_file << '[' << file_stamp << "] " << text << std::endl;
+    console().write(std::string("[") + stamp + "] " + text + "\n");
 }
 std::atomic<bool> finished{};
 #ifdef _WIN32
@@ -247,6 +259,14 @@ int run(int argc, wchar_t **argv, bool skip_update) {
     setvbuf(stdout, nullptr, _IONBF, 0);
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (hOut != INVALID_HANDLE_VALUE) {
+        DWORD dwMode = 0;
+        if (GetConsoleMode(hOut, &dwMode)) {
+            dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+            SetConsoleMode(hOut, dwMode);
+        }
+    }
     SetConsoleCtrlHandler(on_console, TRUE);
     const auto here = folder();
     // Release builds: ReSkateServer --export-world-layers "<Skate folder>" "<file>" writes the
@@ -327,6 +347,12 @@ int run(int argc, char **argv, bool skip_update) {
             map = level->name;
             renamed = true;
         }
+    for (auto &park : config.park_mods) // and so are the maps the park mods belong to
+        if (const auto *level = find_level(park.map); level && level->name != park.map) {
+            park.map = level->name;
+            renamed = true;
+        }
+    config.mods = here / "Mods";
     if (renamed) try { save_config(config); } catch (...) {}
     if (const auto error = config_error(config); !error.empty()) {
         write_log("Config problem: " + error);
@@ -389,6 +415,65 @@ int run(int argc, char **argv, bool skip_update) {
         write_log("Steam networking failed: " + transport.status().detail);
         return 1;
     }
+    // A check of another server's direct connections, from here: RESKATE_PROBE_DIRECT set to
+    // "<its SteamID64>,<its address a.b.c.d>,<its port>". Signs in as this server would, connects
+    // as a game does (the address first, Steam's relays after five seconds), says which it got,
+    // and exits. Run it from a machine outside the other server's network.
+    std::string probe;
+#ifdef _WIN32
+    {
+        char *value{};
+        std::size_t length{};
+        if (!_dupenv_s(&value, &length, "RESKATE_PROBE_DIRECT") && value) probe = value;
+        std::free(value);
+    }
+#else
+    if (const char *value = std::getenv("RESKATE_PROBE_DIRECT")) probe = value;
+#endif
+    if (!probe.empty()) {
+        unsigned long long id{};
+        unsigned port{};
+        const auto first = probe.find(','), second = probe.find(',', first == std::string::npos ? 0 : first + 1);
+        const auto address = first != std::string::npos && second != std::string::npos ? direct_ipv4(std::string_view(probe).substr(first + 1, second - first - 1)) : 0;
+        const bool parsed = address && std::from_chars(probe.data(), probe.data() + first, id).ec == std::errc{} &&
+                            std::from_chars(probe.data() + second + 1, probe.data() + probe.size(), port).ec == std::errc{};
+        if (!parsed || !id || !port || port > 65535) {
+            write_log("RESKATE_PROBE_DIRECT must be <SteamID64>,<a.b.c.d>,<port>.");
+            return 1;
+        }
+        const unsigned a = address >> 24, b = (address >> 16) & 255, c = (address >> 8) & 255, d = address & 255;
+        write_log("Probe: connecting straight to " + std::to_string(a) + "." + std::to_string(b) + "." + std::to_string(c) + "." +
+                  std::to_string(d) + ":" + std::to_string(port) + " as a game would...");
+        if (!transport.join(id, address, static_cast<std::uint16_t>(port))) {
+            write_log("Probe: Steam would not start the connection: " + transport.status().detail);
+            return 1;
+        }
+        std::string said;
+        const auto started = std::chrono::steady_clock::now();
+        while (!stopping && std::chrono::steady_clock::now() - started < std::chrono::seconds(30)) {
+            steam.run_callbacks();
+            transport.poll();
+            if (const auto &detail = transport.status().detail; detail != said) {
+                said = detail;
+                write_log("Probe: " + said);
+            }
+            const auto links = transport.links();
+            if (links.empty()) {
+                write_log("Probe: no connection either way. " + transport.take_closed(id));
+                return 1;
+            }
+            if (links.front().connected && links.front().measured) {
+                write_log(links.front().direct
+                              ? "Probe: CONNECTED DIRECTLY, ping " + std::to_string(links.front().ping_ms) + " ms."
+                              : "Probe: the address did not answer; connected through Steam's relays (" + links.front().relay + "-" +
+                                    links.front().remote_relay + "), ping " + std::to_string(links.front().ping_ms) + " ms.");
+                return 0;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        write_log("Probe: nothing after 30 s.");
+        return 1;
+    }
     Host host(config, transport, write_log);
     if (!host.start(error)) {
         write_log("Could not open the server: " + error);
@@ -403,8 +488,14 @@ int run(int argc, char **argv, bool skip_update) {
         write_log("No steam_token: the server browser can be set to show only servers that have one, and then "
                   "this server is not in it (players can still join with the code). It takes a minute to make "
                   "one: see steam_token in README.");
-    write_log(config.admins.empty() ? "No admins yet: type \"admin add <SteamID64>\" to add one."
-                              : std::to_string(config.admins.size()) + " admin(s). Type help for commands.");
+    {
+        std::size_t admins{};
+        for (const auto &[id, name] : config.roles.players)
+            if (const auto *role = config.roles.find(name); role && role->granted_all) ++admins;
+        write_log(!admins ? "No admins yet: type \"role <SteamID64> admin\" to add one. Roles are in data/roles.json."
+                          : std::to_string(admins) + " admin(s), " + std::to_string(config.roles.players.size()) +
+                            " player(s) with a role. Type help for commands.");
+    }
 
     auto &input = console_input();
 #ifdef _WIN32
@@ -421,9 +512,25 @@ int run(int argc, char **argv, bool skip_update) {
     std::future<BanListCheck> ban_check;
     auto next_ban_check = next_advertise;
     bool bans_unread{};
-    if (!config.global_bans) write_log("Global bans are off (\"global_bans\": false): only this server's own bans apply.");
+    if (!config.global_bans) write_log("Global bans are off (\"use_global_bans\": false): only this server's own bans apply.");
+    write_log(host.command("words")); // reads this server's own chat words
+    // Signed in to Steam, as last logged, and when it is looked at again. Players already on stay
+    // connected through a lost sign-in, but nobody new can join: Steam carries the first messages
+    // of a connection, and theirs time out ("negotiate rendezvous").
+    bool signed_in = true;
+    auto next_sign_in_check = std::chrono::steady_clock::now();
     while (!stopping && !restart) {
         steam.run_callbacks();
+        if (const auto now = std::chrono::steady_clock::now(); now >= next_sign_in_check) {
+            next_sign_in_check = now + std::chrono::seconds(5);
+            if (const bool on = steam.logged_on(); on != signed_in) {
+                signed_in = on;
+                write_log(on ? "[steam] Signed in to Steam again: players can join."
+                             : "[steam] No longer signed in to Steam: players already on stay, but nobody can join until it is back. "
+                               "Steam signs a server out when another one signs in with the same steam_token, and for its own "
+                               "maintenance or a lost connection.");
+            }
+        }
         try {
             host.tick(multiplayer::now_us());
         } catch (const std::exception &e) {
@@ -476,17 +583,23 @@ int run(int argc, char **argv, bool skip_update) {
             }
             update_now = false;
         }
-        if (config.global_bans && !ban_check.valid() && now_time >= next_ban_check)
+        // (The chat word lists come in the same answer, and hold on every server: it is read
+        // for them whether or not the bans are used.)
+        if (!ban_check.valid() && now_time >= next_ban_check)
             ban_check = std::async(std::launch::async, read_global_bans);
         if (ban_check.valid() && ban_check.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
             const auto check = ban_check.get();
             next_ban_check = now_time + (check.ok ? std::chrono::minutes(10) : std::chrono::minutes(1));
             // Said when it changes, not every ten minutes.
-            if (check.ok && (check.changed || bans_unread))
+            if (config.global_bans && check.ok && (check.changed || bans_unread))
                 write_log("Global bans: " + std::to_string(check.banned) + " player(s) banned from ReSkate multiplayer cannot join.");
+            if (check.ok && check.words_changed)
+                write_log("Word lists: " + std::to_string(check.filtered_words) + " filtered and " + std::to_string(check.forbidden_words) +
+                          " not allowed at all, from the ReSkate team's lists." +
+                          (config.word_warnings ? "" : " (\"word_warnings\" is 0: a message with one is not passed on, and nobody is kicked)."));
             else if (!check.ok && !bans_unread)
-                write_log("The global ban list could not be read (" + check.problem + "). Trying again every minute; " +
-                          "until then the bans already read hold.");
+                write_log("The ReSkate team's lists (global bans and chat words) could not be read (" + check.problem +
+                          "). Trying again every minute; until then the ones already read hold.");
             bans_unread = !check.ok;
         }
         if (update_waiting && !restart && host.players() == 0) {
@@ -516,7 +629,7 @@ int run(int argc, char **argv, bool skip_update) {
                 name_allowed = allowed;
             }
             steam.advertise({config.name, host.map_name(), host.players(), config.max_players, !config.password.empty(),
-                             config.listed && allowed, host.secret()});
+                             config.listed && allowed, host.secret(), host.direct_port()});
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
@@ -535,67 +648,92 @@ int run(int argc, char **argv, bool skip_update) {
     return restart ? restart_for_update : 0;
 }
 
+namespace {
+// Both entry points: run the server, and install an update and start it when run() asks.
+int serve(int argc, auto **argv) {
 #ifdef _WIN32
-int wmain(int argc, wchar_t **argv) {
+    constexpr const char *exe = "ReSkateServer.exe";
+#else
+    constexpr const char *exe = "ReSkateServer";
+#endif
     bool skip_update{};
-    int code{};
     for (;;) {
-        code = run(argc, argv, skip_update);
-        if (code != restart_for_update) break;
+        const int code = run(argc, argv, skip_update);
+        if (code != restart_for_update) return code;
         // Steam has shut down, so every server file can be replaced now.
         try {
             write_log("Installing server update " + update_version + "...");
             install_update(folder());
             write_log("Server update " + update_version + " installed; starting it.");
             console().flush(std::chrono::seconds(2));
-            if (relaunch()) {
-                code = 0;
-                break;
-            }
-            write_log("Could not start the updated server; start ReSkateServer.exe again.");
-            code = 1;
-            break;
+            if (relaunch()) return 0;
+            write_log(std::string("Could not start the updated server; start ") + exe + " again.");
+            return 1;
         } catch (const std::exception &e) {
             write_log(std::string("Server update failed (") + e.what() + "); carrying on with this version.");
             skip_update = true;
         }
     }
-    finished = true;
-    // Keep a failure on screen until the host has read it, instead of the window
-    // vanishing with it. Closing the window or Ctrl+C still ends it at once.
-    if (code != 0 && !stopping && own_window()) {
-        auto &input = console_input();
-        input.take();
-        console().write("Press Enter to close.\n");
-        while (!stopping && input.take().empty()) Sleep(50);
+}
+} // namespace
+
+#ifdef _WIN32
+#include "GUI/server_gui.h"
+#include <shellapi.h>
+
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int cmd_show) {
+    int argc = 0;
+    LPWSTR *argvW = CommandLineToArgvW(GetCommandLineW(), &argc);
+    bool headless = false;
+    for (int i = 1; i < argc; ++i) {
+        if (!argvW[i]) continue;
+        std::wstring arg = argvW[i];
+        // The release build's world layer export (serve) is a console job too: the window would
+        // open instead and nothing would be written.
+        if (arg == L"--headless" || arg == L"--cli" || arg == L"--no-gui" || arg == L"-nogui" || arg == L"-headless" || arg == L"-cli" ||
+            arg == L"--export-world-layers") {
+            headless = true;
+            break;
+        }
     }
-    console().flush(std::chrono::seconds(2));
-    return code;
+
+    if (headless) {
+        if (AttachConsole(ATTACH_PARENT_PROCESS) || AllocConsole()) {
+            FILE *fp = nullptr;
+            freopen_s(&fp, "CONOUT$", "w", stdout);
+            freopen_s(&fp, "CONOUT$", "w", stderr);
+            freopen_s(&fp, "CONIN$", "r", stdin);
+            std::ios::sync_with_stdio(true);
+        }
+        const int code = serve(argc, argvW);
+        LocalFree(argvW);
+        finished = true;
+        if (code != 0 && !stopping && own_window()) {
+            auto &input = console_input();
+            input.take();
+            console().write("Press Enter to close.\n");
+            while (!stopping && input.take().empty()) Sleep(50);
+        }
+        console().flush(std::chrono::seconds(2));
+        return code;
+    }
+
+    LocalFree(argvW);
+    try {
+        return dingosdk::server_gui::run_gui(instance, cmd_show);
+    } catch (const std::exception &e) {
+        std::ofstream f("gui_exception.txt");
+        f << "EXCEPTION: " << e.what() << "\n";
+        return 1;
+    } catch (...) {
+        std::ofstream f("gui_exception.txt");
+        f << "UNKNOWN EXCEPTION\n";
+        return 1;
+    }
 }
 #else
 int main(int argc, char **argv) {
-    bool skip_update{};
-    int code{};
-    for (;;) {
-        code = run(argc, argv, skip_update);
-        if (code != restart_for_update) break;
-        try {
-            write_log("Installing server update " + update_version + "...");
-            install_update(folder());
-            write_log("Server update " + update_version + " installed; starting it.");
-            console().flush(std::chrono::seconds(2));
-            if (relaunch()) {
-                code = 0;
-                break;
-            }
-            write_log("Could not start the updated server; start ReSkateServer again.");
-            code = 1;
-            break;
-        } catch (const std::exception &e) {
-            write_log(std::string("Server update failed (") + e.what() + "); carrying on with this version.");
-            skip_update = true;
-        }
-    }
+    const int code = serve(argc, argv);
     finished = true;
     console().flush(std::chrono::seconds(2));
     return code;

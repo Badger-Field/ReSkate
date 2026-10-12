@@ -60,9 +60,19 @@ bool queue_local_park_selection(const EditorSelectionRequest &);
 bool queue_local_park_paste(const EditorPasteRequest &);
 void tick_local_park_editor() noexcept;
 ControllerBindingsModel local_profile_controller_bindings();
+bool set_local_freecam_controller(bool);
+bool local_freecam_controller();
+bool set_local_freecam_controller_binding(std::uint32_t);
+bool set_local_freecam_binding(std::uint32_t);
+bool set_local_tp_to_freecam_binding(std::uint32_t);
+// The player's binding for Yes (or No) in a dedicated server's vote; 0 clears it.
+bool set_local_vote_binding(bool yes, std::uint32_t);
+// One of action_binds (controller_bindings.h), by its place there; 0 clears it.
+bool set_local_action_binding(std::size_t index, std::uint32_t);
 bool set_local_noclip_binding(std::uint32_t);
 bool set_local_forward_velocity_binding(std::uint32_t);
 bool set_local_up_velocity_binding(std::uint32_t);
+bool set_local_offboard_up_velocity_binding(std::uint32_t);
 bool set_local_object_persistence(bool enabled);
 bool clear_local_persisted_objects(std::string_view map);
 bool delete_local_placed_object(std::string_view map, std::uint64_t token);
@@ -70,11 +80,16 @@ bool teleport_to_local_placed_object(std::string_view map, std::uint64_t token);
 // Teleports the local skater to a world position (sent within 5 s, when the skater can be
 // moved). False when the game's teleport is unavailable.
 bool teleport_local_skater(const std::array<float, 3>& position);
+// The highest collision surface straight down at (x, z) between world heights `top` and
+// `bottom`, from the client physics world (the park editor's native ray). Empty when nothing
+// is there yet (collision still streaming) or the query is unavailable. Client update thread.
+std::optional<float> local_ground_height(float x, float z, float top, float bottom);
 // Small allowlisted progression commands, executed on the game update thread.
 bool set_local_progression(const std::vector<std::string>& arguments);
 // Small ReSkate-owned booleans saved beside the profile under a "ReSkate."
 // prefix. Absent until first written; never exposed to the game's own settings.
 namespace profile_runtime {
+bool local_profile_store_ready() noexcept;
 std::optional<bool> local_preference(std::string_view key) noexcept;
 void set_local_preference(std::string_view key, bool value) noexcept;
 // The same "ReSkate." store for numbers and text. A key keeps the type it was
@@ -84,13 +99,25 @@ void set_local_values(const std::vector<std::pair<std::string, Json>>& values) n
 // ReSkate menu scale, clamped to a legible range. Cached so the overlay can
 // read it every frame without touching the database.
 float local_menu_scale() noexcept;
+// One of the game's OWN gameplay options (the ones its Settings menu edits, by the game's key for it), as the local
+// profile holds it: the same value the game's scripts are answered with. Empty while the player never changed it (the
+// game's default applies). Setting it is the same as changing it in the game's menu.
+std::optional<double> local_game_option(std::string_view key) noexcept;
+bool set_local_game_option(std::string_view key, double value, bool boolean) noexcept;
 bool set_local_menu_scale(float value) noexcept;
+// The game's camera height option (UseHighCam, true is the high camera) as the game writes it,
+// which its camera height button does: the listener returns the height to keep instead. Runs on
+// the thread that writes the option.
+using CameraHeightWrite = bool (*)(bool high) noexcept;
+void set_camera_height_write_listener(CameraHeightWrite listener) noexcept;
 }
 PlayerCardModel local_profile_player_card();
 // Renames only the local RIP Card. An empty name restores the Steam name.
 bool set_local_player_card_name(std::string_view name);
 ParksModel local_profile_parks();
 bool set_local_park(std::string_view lot, std::string_view layout);
+bool load_random_local_parks();
+bool set_local_park_randomize_on_launch(bool enabled);
 // Transient lobby authority. Guest choices never overwrite saved preferences.
 void set_lobby_park_mode(bool active, bool guest);
 void apply_host_park_choices(const ParkChoices& choices);
