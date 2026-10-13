@@ -46,6 +46,7 @@ npx wrangler secret put CHALLENGE_SECRET    # any long random string
 npx wrangler deploy
 ```
 
-Without `CHALLENGE_SECRET`, challenges are signed with a development value. Set it before
-players use the service. To use your own domain, add a route or custom domain for `reskate-lobby`
+Until `CHALLENGE_SECRET` is set, the deployed service refuses players (HTTP 503) and
+`/v1/health` reports `{"ok":false}`. A development secret is used only with `DEV=1`, which
+the tests pass and `npm run dev` reads from `.dev.vars`. To use your own domain, add a route or custom domain for `reskate-lobby`
 in the Cloudflare dashboard, for example `lobby.example.com`.

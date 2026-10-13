@@ -20,6 +20,8 @@ const MAX_MESSAGE = 40_000; // characters: a signal is a few KB as hex
 const MAX_LOBBY = 2_000; // characters of a lobby row
 const RATE_WINDOW_MS = 10_000;
 const RATE_MAX = 400; // messages a player may send in a window
+// Local development and tests only (DEV=1 in .dev.vars or --var DEV:1): a deployed service
+// without CHALLENGE_SECRET refuses players rather than sign with a value that is public here.
 const DEV_SECRET = "reskate-local-development-only";
 
 // ---------------------------------------------------------------- identity
@@ -78,8 +80,9 @@ async function verify(key, signature, challenge) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const secret = env.CHALLENGE_SECRET || DEV_SECRET;
-    if (url.pathname === "/v1/health") return Response.json({ ok: true });
+    const secret = env.CHALLENGE_SECRET || (env.DEV === "1" ? DEV_SECRET : null);
+    if (url.pathname === "/v1/health") return Response.json({ ok: Boolean(secret) });
+    if (!secret) return new Response("The service has no CHALLENGE_SECRET yet.", { status: 503 });
     if (url.pathname === "/v1/challenge") return Response.json({ challenge: await makeChallenge(secret, Date.now()) });
     if (url.pathname !== "/v1/connect") return new Response("Not found", { status: 404 });
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return new Response("Expected a WebSocket", { status: 426 });

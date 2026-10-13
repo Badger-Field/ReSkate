@@ -12,10 +12,13 @@ const BASE = `http://127.0.0.1:${PORT}`;
 let dev;
 
 before(async () => {
-  dev = spawn("npx", ["wrangler", "dev", "--port", String(PORT), "--ip", "127.0.0.1"], {
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
+  // Wrangler's own script under this Node, not `npx`, so it starts the same way on Windows.
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const wrangler = fileURLToPath(new URL("../node_modules/wrangler/bin/wrangler.js", import.meta.url));
+  dev = spawn(process.execPath, [wrangler, "dev", "--port", String(PORT), "--ip", "127.0.0.1", "--var", "DEV:1"], {
+    cwd: root,
     stdio: ["ignore", "pipe", "pipe"],
-    detached: true,
+    detached: process.platform !== "win32", // its own process group, to stop it with its children
     // Offline: no usage metrics, and no fetch of Cloudflare's request metadata (request.cf).
     env: { ...process.env, WRANGLER_SEND_METRICS: "false", CLOUDFLARE_CF_FETCH_ENABLED: "false" },
   });
@@ -32,7 +35,10 @@ before(async () => {
 });
 
 after(() => {
-  try { process.kill(-dev.pid); } catch {}
+  try {
+    if (process.platform === "win32") spawn("taskkill", ["/pid", String(dev.pid), "/T", "/F"]);
+    else process.kill(-dev.pid);
+  } catch {}
 });
 
 // A player: an Ed25519 key, and their ID as the game and the service derive it.
@@ -86,6 +92,7 @@ async function connect(p) {
 }
 
 test("health", async () => {
+  // With DEV=1 the development secret stands in; deployed, CHALLENGE_SECRET must be set.
   assert.deepEqual(await (await fetch(`${BASE}/v1/health`)).json(), { ok: true });
 });
 
