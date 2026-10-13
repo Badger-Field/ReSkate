@@ -1,4 +1,5 @@
 #include "gui_internal.h"
+#include "install_here.h"
 
 #include <cmath>
 #include <format>
@@ -377,6 +378,25 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
         ImGui::SameLine();
         ImGui::BeginDisabled(busy);
         if (ImGui::Button("Verify game files")) { open = false; open_sign_in(launcher, ui, true); }
+        ImGui::SameLine();
+        // Takes back what INSTALL added (install_here.h); skate., mods and the profile stay.
+        if (ImGui::Button("Remove ReSkate") &&
+            MessageBoxW(nullptr,
+                        L"Remove ReSkate from this skate. folder?\n\n"
+                        L"Removed: ReSkate's files here, the ReSkate shortcuts and the \"Install as ReSkate mod\" "
+                        L"right-click entry.\nKept: skate. itself, your Mods folder and your ReSkate profile.\n\n"
+                        L"skate. keeps working from Steam as usual.",
+                        L"Remove ReSkate", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND) == IDYES) {
+            try {
+                launcher_app::uninstall_from(paths.directory);
+                MessageBoxW(nullptr, L"ReSkate was removed. The launcher closes now.", L"Remove ReSkate",
+                            MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
+                PostQuitMessage(0);
+            } catch (const std::exception &e) {
+                const auto text = std::string("ReSkate was not removed.\n\n") + e.what();
+                MessageBoxA(nullptr, text.c_str(), "Remove ReSkate", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+            }
+        }
         ImGui::EndDisabled();
         ImGui::Spacing();
         ImGui::Spacing();
