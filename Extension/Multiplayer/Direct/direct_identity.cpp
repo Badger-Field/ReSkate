@@ -100,24 +100,4 @@ std::string to_hex(std::span<const std::uint8_t> bytes) {
     }
     return out;
 }
-
-template <std::size_t N> std::optional<std::array<std::uint8_t, N>> from_hex(std::string_view text) {
-    if (text.size() != N * 2) return std::nullopt;
-    const auto value = [](char c) {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-        return -1;
-    };
-    std::array<std::uint8_t, N> out{};
-    for (std::size_t i = 0; i < N; ++i) {
-        const auto hi = value(text[i * 2]), lo = value(text[i * 2 + 1]);
-        if (hi < 0 || lo < 0) return std::nullopt;
-        out[i] = static_cast<std::uint8_t>(hi << 4 | lo);
-    }
-    return out;
-}
-template std::optional<std::array<std::uint8_t, 1>> from_hex<1>(std::string_view);
-template std::optional<std::array<std::uint8_t, 32>> from_hex<32>(std::string_view);
-template std::optional<std::array<std::uint8_t, 64>> from_hex<64>(std::string_view);
 } // namespace dingosdk::multiplayer

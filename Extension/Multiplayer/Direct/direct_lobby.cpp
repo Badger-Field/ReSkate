@@ -86,6 +86,14 @@ struct Handle {
     explicit Handle(HINTERNET value) : h(value) {}
     Handle(const Handle &) = delete;
     Handle &operator=(const Handle &) = delete;
+    Handle(Handle &&other) noexcept : h(std::exchange(other.h, nullptr)) {}
+    Handle &operator=(Handle &&other) noexcept {
+        if (this != &other) {
+            if (h) WinHttpCloseHandle(h);
+            h = std::exchange(other.h, nullptr);
+        }
+        return *this;
+    }
     ~Handle() { if (h) WinHttpCloseHandle(h); }
     explicit operator bool() const { return h != nullptr; }
 };

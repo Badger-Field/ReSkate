@@ -20,7 +20,8 @@ const MAX_MESSAGE = 40_000; // characters: a signal is a few KB as hex
 const MAX_LOBBY = 2_000; // characters of a lobby row
 const RATE_WINDOW_MS = 10_000;
 const RATE_MAX = 400; // messages a player may send in a window
-const PLAYER_RETENTION_MS = 30 * 24 * 3600_000; // an ID's owner is kept this long after its last connection
+const PLAYER_RETENTION_MS = 30 * 24 * 3600_000; // an ID's owner is kept this long after it was last seen
+const SEEN_REFRESH_MS = 24 * 3600_000; // how often a connected player's `seen` is written again
 const NEW_KEYS_PER_HOUR = 20; // new player keys one address may introduce an hour
 // Local development and tests only (DEV=1 in .dev.vars or --var DEV:1): a deployed service
 // without CHALLENGE_SECRET refuses players rather than sign with a value that is public here.
@@ -155,7 +156,7 @@ export class Hub extends DurableObject {
     const [client, server] = Object.values(new WebSocketPair());
     // Hibernation: idle connections cost nothing while players wait in a lobby.
     this.ctx.acceptWebSocket(server, [id]);
-    server.serializeAttachment({ id, window: Date.now(), count: 0 });
+    server.serializeAttachment({ id, window: now, count: 0, seen: now });
     server.send(JSON.stringify({ op: "hello", id }));
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -169,6 +170,12 @@ export class Hub extends DurableObject {
       ws.serializeAttachment(me);
       if (me.count === RATE_MAX + 1) ws.send(JSON.stringify({ op: "error", error: "Too many messages; slow down." }));
       return;
+    }
+    // A connected player stays seen (their game pings every 30 s), so a connection that lasts
+    // past the retention time does not lose its ID; written at most once a day.
+    if (now - (me.seen ?? 0) > SEEN_REFRESH_MS) {
+      me.seen = now;
+      this.sql.exec("UPDATE players SET seen = ? WHERE id = ?", now, me.id);
     }
     ws.serializeAttachment(me);
     if (message.startsWith("{")) return this.control(ws, me.id, message, now);
