@@ -127,6 +127,7 @@ What it finds:
 | ledges | benches, low walls, retaining walls, kerbs, planters (tags), measured in the points |
 | ledges, pads, boxes | the point cloud alone, if flat-topped, not overhung and not vegetation |
 | banks | planar slopes in the ground |
+| kerbs | where a road meets a sidewalk or plaza 8-30 cm above it (the 12 longest, after everything else) |
 | buildings | footprints, heights measured in the points (or tagged) |
 
 - **Where spots come from:** only public, hard, car-free space: squares, plazas, parks and footways. Grass is left out.

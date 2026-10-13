@@ -136,7 +136,7 @@ def test_untagged_ledge_is_found_in_the_points(model):
 
 
 def test_bank_is_found_in_the_ground(model):
-    (bank,) = [s for s in model.spots if s.source == "ground"]
+    (bank,) = [s for s in model.spots if s.source == "ground" and s.what != "kerb"]
     t = synthcity.TRUTH["bank"]
     assert np.hypot(*(np.array(bank.feature.centre) - t["centre"])) < 1.0
     assert direction_error(bank.feature.yaw, t["yaw"]) < 10
@@ -484,3 +484,31 @@ def test_a_slope_is_not_a_flight_of_steps():
     (stairs,) = [s for s in spots(model, "steps") if s.feature.centre[1] > 10]
     assert stairs.feature.height == pytest.approx(0.8) and stairs.feature.along == pytest.approx(1.5)
     assert stairs.feature.steps == 5
+
+
+def test_kerb_along_the_sidewalk(model):
+    """The street is 15 cm below the sidewalk: its edge there is a kerb, standing on the road. (It
+    breaks where the terrace's 1.2 m edge crosses the street.)"""
+    kerbs = spots(model, "kerb")
+    assert kerbs and sum(k.feature.along for k in kerbs) > 60  # most of the 80 m street
+    for kerb in kerbs:
+        f = kerb.feature
+        assert f.kind == "ledge" and kerb.source == "ground"
+        assert f.height == pytest.approx(synthcity.KERB, abs=0.04)
+        assert f.centre[1] == pytest.approx(29.0, abs=0.5)  # the road's edge
+        assert axis_error(f.yaw, 0.0) < 3
+        assert kerb.ground == pytest.approx(
+            float(synthcity.ground(np.array([f.centre[0]]), np.array([30.0]))[0]), abs=0.05)
+    # Kerbs come after every other spot.
+    assert all(s.what == "kerb" for s in model.spots[-len(kerbs):])
+
+
+def test_no_kerb_where_the_road_meets_no_public_space():
+    items = [i for i in synthcity.map_items() if i.tags.get("footway") != "sidewalk"]
+    model = city.build(synthcity.BOUNDS, items, synthcity.survey())
+    assert spots(model, "kerb") == []
+
+
+def test_kerbs_are_capped():
+    model = city.build(synthcity.BOUNDS, synthcity.map_items(), synthcity.survey(), city.Settings(kerbs=0))
+    assert spots(model, "kerb") == []

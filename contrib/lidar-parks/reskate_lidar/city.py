@@ -116,7 +116,8 @@ class Spot:
 
     @property
     def priority(self) -> int:
-        return PRIORITY.get(self.feature.kind, 3) + (1 if self.source == "lidar" else 0)
+        # Kerbs are everywhere along a street: they come after every other spot.
+        return PRIORITY.get(self.feature.kind, 3) + (1 if self.source == "lidar" else 0) + (3 if self.what == "kerb" else 0)
 
 
 @dataclass
@@ -126,6 +127,7 @@ class Settings:
     private_blur: float = 3.0     # metres: how much the ground outside public space is smoothed
     detect_lidar: bool = True     # look for untagged ledges and boxes in the point cloud
     detect_banks: bool = True     # look for banks in the ground
+    kerbs: int = 12               # at most this many kerbs (road edges along public space), longest first
 
 
 @dataclass
@@ -712,6 +714,55 @@ def merge_sources(spots: list[Spot]) -> list[Spot]:
     return kept
 
 
+def kerbs_from_ground(ground: Grid, roads, walkable, step: float = 0.5, low: float = 0.08, high: float = 0.3,
+                      min_length: float = 2.0) -> list[Spot]:
+    """Kerbs: where a road's edge runs along public walking space (a sidewalk, a plaza) and the
+    ground steps up from the road by a kerb's height. Each straight stretch of at least
+    `min_length` metres is a low ledge, standing on the road."""
+    import shapely
+    from shapely.ops import linemerge
+    if roads is None or walkable is None or walkable.is_empty:
+        return []
+    edge = roads.boundary.intersection(walkable.buffer(0.75))
+    if edge.is_empty:
+        return []
+    lines = edge.geoms if hasattr(edge, "geoms") else [edge]
+    merged = linemerge([g for g in lines if g.geom_type == "LineString"])
+    lines = merged.geoms if hasattr(merged, "geoms") else [merged]
+    shapely.prepare(roads)
+    spots = []
+    for line in lines:
+        if line.is_empty or line.length < min_length:
+            continue
+        count = max(2, int(line.length / step) + 1)
+        points = np.array([line.interpolate(i / (count - 1), normalized=True).coords[0] for i in range(count)])
+        tangent = np.gradient(points, axis=0)
+        tangent /= np.maximum(np.hypot(*tangent.T), 1e-9)[:, None]
+        normal = np.column_stack([-tangent[:, 1], tangent[:, 0]])
+        left, right = points + normal * 0.6, points - normal * 0.6
+        left_is_road = shapely.contains_xy(roads, left[:, 0], left[:, 1])
+        road_side = np.where(left_is_road[:, None], left, right)
+        walk_side = np.where(left_is_road[:, None], right, left)
+        road_z, walk_z = ground.sample(road_side), ground.sample(walk_side)
+        rise = walk_z - road_z
+        kerb = (rise >= low) & (rise <= high)
+        # Consecutive kerb samples, as runs.
+        start = None
+        for i, on in enumerate(np.append(kerb, False)):
+            if on and start is None:
+                start = i
+            elif not on and start is not None:
+                for a, b in straight_runs(points[start:i], min_length=min_length):
+                    ab = (np.hypot(*(points[start:i] - a).T).argmin(), np.hypot(*(points[start:i] - b).T).argmin())
+                    lo, hi = min(ab) + start, max(ab) + start + 1
+                    height = float(np.median(rise[lo:hi]))
+                    floor = float(np.median(road_z[lo:hi]))
+                    feature = _linear_feature("ledge", a, b, height, 0.3, [f"kerb, {height:.2f} m above the road"])
+                    spots.append(Spot(feature, floor, floor, "ground", "kerb"))
+                start = None
+    return spots
+
+
 def _dedupe(tagged: list[Spot], found: list[Spot]) -> list[Spot]:
     """Drop point-cloud features that a tagged one already covers."""
     import shapely
@@ -778,6 +829,14 @@ def build(bounds, items: list[MapItem], lidar: ept.Points | None, settings: Sett
         banks = _dedupe(tagged + found, banks_from_ground(ground, car_free_mask, [t for t in tagged if t.what == "steps"]))
         say(f"  {len(banks)} banks in the ground")
         found += banks
+    if measured and s.kerbs > 0:
+        kerbs = _dedupe(tagged + found, kerbs_from_ground(ground, roads, car_free))
+        kerbs = sorted(kerbs, key=lambda sp: -sp.feature.along)
+        if len(kerbs) > s.kerbs:
+            notes.append(f"{len(kerbs) - s.kerbs} more kerbs left out (the {s.kerbs} longest are kept)")
+        kerbs = kerbs[:s.kerbs]
+        say(f"  {len(kerbs)} kerbs along the roads")
+        found += kerbs
     shapely.prepare(homes_land)
     private = {id(sp) for sp in tagged + found if homes_land.contains(shapely.Point(sp.feature.centre))}
     if private:

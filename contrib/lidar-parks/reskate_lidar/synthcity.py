@@ -8,6 +8,7 @@ it, for testing the city pipeline without the network.
   ledge only the LiDAR shows, and a bank in the ground;
 - things that must not become skate spots: a hedge (rough, multiple returns), a planter on grass,
   and a car on the street north of the square;
+- a sidewalk along that street, 15 cm above it: a kerb;
 - a building west of the square, 12 m tall in the points but untagged.
 Points are what a laser sees from above: the top surface at each spot, a little noise."""
 from __future__ import annotations
@@ -22,6 +23,7 @@ from .mapdata import MapItem
 BOUNDS = (-40.0, -40.0, 40.0, 40.0)
 BASE = 10.0
 STEP_RISE, STEP_TREAD, STEPS = 0.15, 0.375, 8
+KERB = 0.15
 
 TRUTH = {
     "stairs": dict(centre=(11.5, 0.0), yaw=0.0, run=3.0, width=5.0, height=1.2, steps=8),
@@ -40,7 +42,8 @@ def ground(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     k = np.clip(np.floor((x - 10.0) / STEP_TREAD) + 1, 0, STEPS)
     rise = np.where(on_steps, np.where(x < 10.0, 0.0, k * STEP_RISE), np.where(x >= 11.5, STEPS * STEP_RISE, 0.0))
     bank = (x >= -25) & (x < -22) & (y >= -25) & (y <= -18)
-    return z + rise + np.where(bank, 0.8 * (x + 25) / 3, 0.0)
+    road = (y >= 29) & (y <= 41)  # the street, a kerb's height below the sidewalk
+    return z + rise + np.where(bank, 0.8 * (x + 25) / 3, 0.0) - np.where(road, KERB, 0.0)
 
 
 def _rect(centre, yaw, along, across):
@@ -89,6 +92,9 @@ def map_items() -> list[MapItem]:
     return [
         MapItem(shapely.box(-30, -30, 30, 28), {"place": "square", "name": "Synthetic Square"}, "osm", "way/1"),
         MapItem(shapely.LineString([(-40, 35), (40, 35)]), {"highway": "primary", "name": "Main Street"}, "osm", "way/2"),
+        # The sidewalk along the square's side of the street, 2 m wide, its edge at the kerb.
+        MapItem(shapely.LineString([(-40, 28), (40, 28)]), {"highway": "footway", "footway": "sidewalk", "width": "2"},
+                "osm", "way/8"),
         # Drawn top to bottom: the pipeline finds uphill from the ground.
         MapItem(shapely.LineString([(13.5, 0), (9.5, 0)]), {"highway": "steps", "handrail": "yes"}, "osm", "way/3"),
         MapItem(shapely.Point(*TRUTH["bench"]["centre"]), {"amenity": "bench", "backrest": "no"}, "osm", "node/4"),

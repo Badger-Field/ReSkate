@@ -120,19 +120,19 @@ These apply to every phase:
 
 Done since the last list:
 - **The Studio-ready mesh,** for phase 2: `sk8_*` extras, a `spawn` node, grind curves, and `studio_prep.py`.
+- **Kerbs from the ground.** Where a road's edge runs along a sidewalk or plaza and the ground steps 8-30 cm up from the road, each straight stretch of at least 2 m is a low ledge (a slappy curb in the park). Kerbs come after every other spot, at most 12 (`Settings.kerbs`).
 - **Stricter residential handling.** On residential parcels (residential land that is not street, footway or park), no spot is ever placed. Homes (houses, detached, terraces, apartments, and any building on residential land) are their footprint's smallest rectangle, with the height rounded to 2 m.
 
-1. **Kerbs from the ground.** Road edges are 15 cm steps in the DTM: slappy curbs along plazas. Map them only where a footway meets a road, and cap the count.
-2. **Other open LiDAR.**
+1. **Other open LiDAR.**
    - **Readers:** COPC/LAZ tile lists, for the Netherlands' AHN (CC0), the UK Environment Agency (OGL), Denmark and Finland, and OpenTopography datasets.
    - **Reprojection:** EPSG codes other than 3857 and 4326, through `pyproj` (optional).
-3. **Neighbourhoods** (phase 3): tiles, level of detail, and per-tile budgets (triangles, collision parts, objects, file size).
-4. **Surfaces.** Carry `surface=*` (asphalt, paving_stones, concrete, wood, metal) into the mesh extras and the report.
-5. **Better stand-ins for big spots.** A 20 m bench ledge is several boxes end to end. Tune `catalog.json` once the sizes are calibrated in game.
-6. **Street-level imagery** (DATA-SOURCES.md). At Venice, Panoramax and KartaView have nothing within 100 m. Mapillary is unknown until a client token is set. Then:
+2. **Neighbourhoods** (phase 3): tiles, level of detail, and per-tile budgets (triangles, collision parts, objects, file size).
+3. **Surfaces.** Carry `surface=*` (asphalt, paving_stones, concrete, wood, metal) into the mesh extras and the report.
+4. **Better stand-ins for big spots.** A 20 m bench ledge is several boxes end to end. Tune `catalog.json` once the sizes are calibrated in game.
+5. **Street-level imagery** (DATA-SOURCES.md). At Venice, Panoramax and KartaView have nothing within 100 m. Mapillary is unknown until a client token is set. Then:
    - colours for skatepark meshes;
    - facade textures for blocks, kept as separate CC BY-SA parts.
-7. **Leisure=skatepark.** Report mapped skateparks in the area, and point to `convert` (phone scan) for their real shapes.
+6. **Leisure=skatepark.** Report mapped skateparks in the area, and point to `convert` (phone scan) for their real shapes.
 
 ## Known limits
 
