@@ -352,7 +352,7 @@ void Launcher::run_check() {
                 const bool update = fs::is_regular_file(*found / L"ReSkateLauncher.exe", error);
                 set(Phase::install_here, update ? "Update ReSkate" : "Install ReSkate",
                     "Found skate. in your Steam library:\n" + launcher_text::utf8(found->wstring()) +
-                    (update ? "\nAn older ReSkate is installed there. This one replaces it; your mods and settings stay."
+                    (update ? "\nA different ReSkate build is installed there. This one replaces it; your mods and settings stay."
                             : "\nReSkate copies itself there and adds Desktop and Start menu shortcuts."));
                 return;
             }
