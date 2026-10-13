@@ -15,7 +15,8 @@ std::optional<std::filesystem::path> find_steam_skate();
 std::filesystem::path install_into(const std::filesystem::path &game, const std::filesystem::path &from);
 // Takes back what install_into added to `game`: ReSkate's files there, the shortcuts and the
 // right-click entry when they point at this install, and the launcher's settings. The launcher
-// itself is deleted a moment after it exits. The game, mods and the player's profile stay.
+// itself is deleted a moment after it exits. The game, mods, the player's profile and the config,
+// scripts and logs folders ReSkate made in the game folder (which may hold the player's edits) stay.
 // Throws a message for the player (skate. still running, say).
 void uninstall_from(const std::filesystem::path &game);
 // The right-click "Install as ReSkate mod" on .zip files, for this launcher (per user, HKCU; it

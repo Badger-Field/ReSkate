@@ -384,7 +384,9 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
             MessageBoxW(nullptr,
                         L"Remove ReSkate from this skate. folder?\n\n"
                         L"Removed: ReSkate's files here, the ReSkate shortcuts and the \"Install as ReSkate mod\" "
-                        L"right-click entry.\nKept: skate. itself, your Mods folder and your ReSkate profile.\n\n"
+                        L"right-click entry.\nKept: skate. itself, your Mods folder, your ReSkate profile, and the config, "
+                        L"scripts and logs folders ReSkate made here (they can hold your own edits; delete them "
+                        L"yourself if you don't want them).\n\n"
                         L"skate. keeps working from Steam as usual.",
                         L"Remove ReSkate", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND) == IDYES) {
             try {
