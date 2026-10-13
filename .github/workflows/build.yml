@@ -24,7 +24,6 @@ jobs:
     name: Windows (MSVC)
     runs-on: windows-2022
     timeout-minutes: 90
-    steps:
     env:
       # Compiled files are kept between runs (sccache, in a cache below): a change to a few files
       # rebuilds only those.
