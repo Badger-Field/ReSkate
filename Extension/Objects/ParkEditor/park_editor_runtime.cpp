@@ -484,6 +484,7 @@ void update_park_editor() {
             return; // Cancel/no-op preserves autosave and undo/redo history.
         }
         r.document.maps[r.map] = tx.change.after;
+        const auto before_count = tx.change.before.size(), after_count = tx.change.after.size();
         for (const auto &object : tx.change.after)
             r.next_id = std::max(r.next_id, object.id + 1);
         if (tx.history < 0) {
@@ -502,8 +503,14 @@ void update_park_editor() {
         ++e.revision;
         e.status = r.personal_document ? "Park edit applied for this session."
                                       : "Park edit applied. Autosave queued.";
-        if (const auto live = placement_live_entities(r.manager))
-            reconcile_placement_rows(*live);
+        const auto live = placement_live_entities(r.manager);
+        if (live) reconcile_placement_rows(*live);
+        // What a script or a test harness reads back: how many objects the layout holds now.
+        try {
+            logging::log(logging::Level::info, logging::Channel::objects,
+                "Park edit applied on {}: {} object(s) in the layout (was {}); {} placed object(s) live in the world.",
+                r.map, after_count, before_count, live ? std::to_string(live->size()) : std::string("unknown"));
+        } catch (...) {}
         queue_placement_save();
         return;
     }
