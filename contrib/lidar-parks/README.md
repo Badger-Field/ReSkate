@@ -161,6 +161,15 @@ python studio_prep.py venice.glb venice.blend      # Blender's bpy, or: blender 
 | `--tile 64` | mesh ground tile size (metres) |
 | `--turn 30` | turn the whole place before placing it |
 
+## Street-level imagery (`imagery`)
+
+`python -m reskate_lidar imagery --centre 33.9870851,-118.4754707 --radius 100` lists the openly
+licensed street-level photos around a place:
+- **Sources:** Mapillary, Panoramax and KartaView.
+- **What it reports:** how many, when taken, under which licence, and how many come with a point cloud.
+- **Mapillary** needs your own client token in `MAPILLARY_TOKEN`.
+- See DATA-SOURCES.md for what the photos can and can't add, and their licences.
+
 ## Tests
 
 ```

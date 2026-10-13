@@ -78,22 +78,45 @@ page before use: licences differ by tile and year.
 Any EPT dataset already works with `--lidar <url or folder>` if its horizontal SRS is EPSG:3857 or
 EPSG:4326. Credit it yourself: the tool only names the URL.
 
-## Street-level imagery: assessed, not used yet
+## Street-level imagery (a track in progress)
 
-**Google Street View is not allowed.** Google's terms forbid extracting its imagery or deriving 3D
-content from it. Openly licensed street-level imagery exists:
+Street-level photos can add what aerial LiDAR can't see from above. Only openly licensed sources
+are used; **Google Street View is not**, because its terms forbid extracting imagery or deriving
+3-D content from it.
 
-| Source | Licence | What it could add | Catches |
+`python -m reskate_lidar imagery --centre lat,lon --radius 100` reports, for each source, how many
+images lie around a place, their capture dates, their licences, and (for Mapillary) how many carry
+a point cloud. It reads metadata only and downloads no picture.
+
+| Source | Licence | Credit to show | Access |
 |---|---|---|---|
-| [Mapillary](https://www.mapillary.com) (API v4, free access token) | images CC BY-SA 4.0. Faces and number plates are blurred by Mapillary. | <ul><li>facade colour and texture for buildings</li><li>what a ledge or bench is made of</li><li>handrails and kerbs the map lacks</li><li>photos to check a spot by hand</li></ul>Its structure-from-motion reconstructions (per-sequence point clouds) could also give ledge and stair heights at street level, at a few centimetres where coverage is dense. | <ul><li>**Share-alike:** a texture or mesh made from these images is an adaptation and must be shared under CC BY-SA. That is fine for a free mod, but its README must say so.</li><li>**Attribution** names the photographer and links the image (Mapillary's [licence page](https://help.mapillary.com/hc/en-us/articles/115001770409)). The API does not always return the author, so that needs care.</li><li>**Coverage** varies by street, and many images are from cars, so walls and backs of plazas are thin.</li><li>Developer terms and rate limits apply.</li></ul> |
-| [KartaView](https://kartaview.org) | images CC BY-SA 4.0 ([OSM wiki](https://wiki.openstreetmap.org/wiki/KartaView)) | the same, mostly from cars | Bulk download has been limited. The same share-alike and attribution rules apply. |
+| [Mapillary](https://www.mapillary.com) | CC BY-SA 4.0 ([licence page](https://help.mapillary.com/hc/en-us/articles/115001770409-CC-BY-SA-license-for-open-data)) | the photographer and a link to each image used, plus "CC BY-SA 4.0". The API does not always return the author, so keep the image ids. | API v4 at `graph.mapillary.com`. **Every request needs a client token** from a Mapillary developer app, which only the person running the tool can make. Put it in `MAPILLARY_TOKEN`: it is sent in a header and never stored. Searches return at most 2,000 images per box. The `sfm_cluster` field is the URL of Mapillary's reconstructed point cloud. |
+| [Panoramax](https://panoramax.fr) (federated; `api.panoramax.xyz`) | per instance: the OpenStreetMap France instance uses CC BY-SA 4.0, the IGN instance its open licence. Each picture's licence is read at run time (`/api/configuration`). | as the picture's licence asks; the tool records it per picture | open STAC search, no token |
+| [KartaView](https://kartaview.org) | CC BY-SA 4.0 ([OSM wiki](https://wiki.openstreetmap.org/wiki/KartaView)) | "© KartaView contributors, CC BY-SA 4.0" and a link to the images | open, but its API is little documented. The tool uses the long-standing nearby-photos call. |
 
-**Verdict:** worth adding later for facade textures and for checking spots, not for geometry
-first: the LiDAR already gives shape.
-- **If added,** it is an optional source with:
-  - its own licence line in each mod: "Imagery © Mapillary contributors, CC BY-SA 4.0";
-  - a per-image credit list;
-  - a privacy filter. Use only images of public space; never textures of private homes; never anything that shows a person, even blurred.
+**Share-alike.** A texture, colour or mesh made from CC BY-SA photos is an adaptation, and must be
+shared under CC BY-SA 4.0 with the credit above. For a free mod that is fine, but its README must
+say which parts are CC BY-SA. Keep those parts separable from the ODbL and public-domain parts.
+
+**Privacy.**
+- Use photos of public space only.
+- Never make textures of private homes or back yards.
+- Never keep anything that shows a person or a number plate, even blurred.
+- Coverage reports keep counts and dates, not pictures.
+
+### What it could add on top of 3DEP
+
+| | Realistic? | How |
+|---|---|---|
+| **Facades and textures** for building blocks | **yes, where coverage is good** | Project photos onto each block's walls from their camera positions (Mapillary's reconstruction gives them). This takes a texturing step that is not built yet, and the textures are CC BY-SA. |
+| **Colours** (concrete tone, painted coping and curbs, wood benches, graffiti) | **yes** | Sample photo colours onto the mesh's vertices or as a few flat materials. That is cheap, and it is enough for a skatepark. |
+| **Coping and rail edges** at centimetre accuracy | **mostly no** | The point clouds are sparse feature points placed by phone GPS. Skateparks are seldom photographed from inside, and street sequences see them from the road. A dense reconstruction (COLMAP/OpenSfM) needs many overlapping photos inside the park. That is what a ground scan gives directly (CAPTURE.md), and someone who walks a park with a phone could also upload the photos to Mapillary or Panoramax under an open licence. |
+| **Things the map lacks** (handrails, kerbs, benches) | **yes, by a person** | Look at the photos to tag OpenStreetMap, which the city pipeline then reads. |
+
+### Status
+
+- **Built:** the coverage command, tested with answers shaped like each service's.
+- **Not yet measured:** coverage at Venice Beach Skatepark. This cloud environment cannot reach any of the three services, and Mapillary needs a token. Run the command on a machine that can, with `MAPILLARY_TOKEN` set if you have one.
 
 ## Not allowed
 

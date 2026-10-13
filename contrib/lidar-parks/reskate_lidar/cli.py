@@ -97,13 +97,20 @@ def main(argv: list[str] | None = None) -> int:
     city.add_argument("--preview", help="write a top-down PNG of the place")
     city.add_argument("--report", help="write everything found as JSON")
 
+    imagery = commands.add_parser("imagery", help="openly licensed street-level imagery around a place: "
+                                                     "how much, how recent, which licence (metadata only)")
+    imagery.add_argument("--centre", required=True, help="latitude,longitude")
+    imagery.add_argument("--radius", type=float, default=100.0, help="metres (default 100)")
+    imagery.add_argument("--cache", help="download cache folder")
+    imagery.add_argument("--report", help="write the coverage as JSON")
+
     synth = commands.add_parser("synth", help="write a synthetic park scan for trying the tool")
     synth.add_argument("output", help=".ply file to write")
     synth.add_argument("--seed", type=int, default=0)
 
     args = parser.parse_args(argv)
     try:
-        return {"convert": run_convert, "city": run_city, "calibrate": run_calibrate, "mesh": run_mesh,
+        return {"convert": run_convert, "city": run_city, "imagery": run_imagery, "calibrate": run_calibrate, "mesh": run_mesh,
                 "synth": run_synth}[args.command](args)
     except (ValueError, FileNotFoundError) as error:
         print(f"error: {error}", file=sys.stderr)
@@ -439,6 +446,21 @@ def city_readme(name, label, bbox, model, placements, attribution) -> str:
             "## Attribution\n\n" + "\n".join(f"- {line}" for line in attribution) + "\n\n"
             "OpenStreetMap data is available under the Open Database License (ODbL 1.0): "
             "https://www.openstreetmap.org/copyright. This park is a Produced Work from it.\n")
+
+
+def run_imagery(args) -> int:
+    from . import geo, imagery, net
+    lat, lon = geo.parse_latlon(args.centre)
+    if not 1 <= args.radius <= 2000:
+        raise ValueError("--radius: 1 to 2000 metres")
+    found = imagery.survey(lat, lon, args.radius, net.cache_dir(args.cache))
+    print(f"Street-level imagery within {args.radius:.0f} m of {lat:.6f}, {lon:.6f}:")
+    for coverage in found:
+        print(f"  {coverage.summary()}")
+    if args.report:
+        Path(args.report).write_text(json.dumps([c.__dict__ for c in found], indent=2), encoding="utf-8")
+        print(f"Wrote {args.report}")
+    return 0
 
 
 def run_calibrate(args) -> int:

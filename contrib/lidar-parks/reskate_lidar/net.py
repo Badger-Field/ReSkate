@@ -18,7 +18,8 @@ from pathlib import Path
 
 USER_AGENT = "ReSkate-lidar-parks/0.2 (+https://github.com/Badger-Field/ReSkate/tree/main/contrib/lidar-parks)"
 # Hosts whose usage policies set a request rate (seconds between requests).
-MIN_INTERVAL = {"nominatim.openstreetmap.org": 1.0, "overpass-api.de": 1.0}
+MIN_INTERVAL = {"nominatim.openstreetmap.org": 1.0, "overpass-api.de": 1.0, "graph.mapillary.com": 0.2,
+                "api.openstreetcam.org": 1.0, "api.panoramax.xyz": 0.5}
 
 _last_request: dict[str, float] = {}
 _lock = threading.Lock()
@@ -50,9 +51,10 @@ def _wait_turn(host: str) -> None:
 
 
 def fetch(url: str, cache: Path, kind: str, data: bytes | None = None, suffix: str = "",
-          retries: int = 4, timeout: float = 120.0) -> bytes:
+          retries: int = 4, timeout: float = 120.0, headers: dict[str, str] | None = None) -> bytes:
     """GET (or POST `data`) a URL, from the cache when it was fetched before. A local path or a
-    file:// URL is read directly (tests, and mirrors of a dataset on disk)."""
+    file:// URL is read directly (tests, and mirrors of a dataset on disk). `headers` are sent but
+    are not part of the cache key, so a token in them is never written to disk."""
     if "://" not in url or url.startswith("file://"):
         return Path(urllib.parse.urlparse(url).path if url.startswith("file://") else url).read_bytes()
     target = cache_path(cache, kind, url + ("\n" + data.decode("utf-8", "replace") if data else ""), suffix)
@@ -62,7 +64,7 @@ def fetch(url: str, cache: Path, kind: str, data: bytes | None = None, suffix: s
     delay = 2.0
     for attempt in range(retries + 1):
         _wait_turn(host)
-        request = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT})
+        request = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT, **(headers or {})})
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 body = response.read()
