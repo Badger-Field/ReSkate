@@ -21,9 +21,10 @@ These need a human.
    - the national LiDAR portals
 
    So OSM is tested only with saved answers, and the real-place run below used Overture, which carries OSM's data, plus 3DEP. Allowing those hosts in the environment settings would let the OSM path be tried live.
-4. **Sharing real places.**
-   - **The question:** is it fine to publish mods of real places (e.g. on Thunderstore), with the ODbL credit in their README and manifest?
-   - **Why it needs a decision:** a park is a Produced Work under ODbL. That needs credit, not share-alike, but someone should decide the project's policy.
+4. ~~**Sharing real places.**~~ **Answered:** "Yes just credit openstreetmap". This is the repository owner's answer, relayed on PR #3.
+   - Mods of real places may be published.
+   - Each one carries "© OpenStreetMap contributors, ODbL" in its README and manifest. `city` already writes that.
+   - They also carry any other credit required by the licence of data they actually use, such as Overture's.
 
 ## Try in game
 

@@ -9,6 +9,14 @@ that credit into every mod and mesh it makes:
 
 Keep the credit when you share what it made.
 
+## Sharing what it makes
+
+Mods of real places may be published, for example on Thunderstore. This is the repository owner's
+decision, recorded on PR #3: "Yes just credit openstreetmap".
+- Every mod keeps the OpenStreetMap credit, "© OpenStreetMap contributors, ODbL", in its README and manifest.
+- It also keeps any credit its other data requires (the table below).
+- A park is a Produced Work under ODbL: credit is required, share-alike is not.
+
 ## Used now
 
 | Source | What it gives | Licence | Credit to show |
