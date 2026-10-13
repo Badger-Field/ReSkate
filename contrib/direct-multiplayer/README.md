@@ -60,10 +60,11 @@ ICE.
 
 1. Build GNS for Windows x64: vcpkg `gamenetworkingsockets[ice]`, or CMake with protobuf/OpenSSL
    from vcpkg. Ship `GameNetworkingSockets.dll` beside `ReSkate.dll`.
-2. Split `SteamTransport` into a transport interface with a Steam backend and a direct (GNS)
-   backend. The direct one uses custom signaling through the lobby service.
-3. Lobby/signaling service with a `LobbyApi` backend for it.
-4. Identity: profile key, join challenge, player IDs.
-5. Menu: Host / Join by code in offline mode. Re-enable multiplayer and voice when offline.
-6. Linux tests: two `SteamTransport`-backed sessions over GNS through the mock NAT; then a
+2. Done: `SteamTransport::open_direct` runs over GNS with custom signaling, and the lobby
+   service (`contrib/lobby-service`) with its client (`direct_lobby.h`) carries the signals.
+   Still to do: a `LobbyApi` backend on the service, so public lobbies show in the game.
+3. Done: player keys and IDs (`direct_identity.h`), checked by the lobby service. Still to do:
+   keeping the key in the ReSkate profile, and the host checking a joining player's key.
+4. Menu: Host / Join by code in offline mode. Re-enable multiplayer and voice when offline.
+5. Linux tests: two `SteamTransport`-backed sessions over GNS through the mock NAT; then a
    Windows test with two PCs.

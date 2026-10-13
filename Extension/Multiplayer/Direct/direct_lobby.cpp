@@ -523,7 +523,8 @@ class LobbySignaling final : public DirectSignaling {
                     const auto id = json.contains("id") && json.at("id").is_string() ? json.at("id").string() : std::string{};
                     std::lock_guard lock(mutex_);
                     if (id != std::to_string(local_id_)) {
-                        problem_ = "Lobby service: it names this player " + id + ", not " + std::to_string(local_id_);
+                        // In `failure`, so run() reports it rather than a generic close.
+                        failure.why = "Lobby service: it names this player " + id + ", not " + std::to_string(local_id_);
                         break;
                     }
                     greeted = ready_ = true;
