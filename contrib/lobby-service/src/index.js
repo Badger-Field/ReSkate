@@ -97,6 +97,8 @@ export default {
     const id = await playerId(key);
     const forwarded = new Request(request);
     forwarded.headers.set("X-Player", id);
+    forwarded.headers.set("X-Player-Key", hex(key));
+    forwarded.headers.set("X-Challenge", challenge);
     // One hub for everyone: signaling only flows while players connect, and a lobby list is
     // small. Shard by region if it ever gets busy.
     return env.HUB.get(env.HUB.idFromName("hub")).fetch(forwarded);
@@ -110,11 +112,27 @@ export class Hub extends DurableObject {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.sql.exec("CREATE TABLE IF NOT EXISTS lobbies (host TEXT PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL)");
+    // A player ID is 32 bits of the key's hash, so two keys can share one: the first key to
+    // connect as an ID owns it, and another key is refused (its game makes a new key).
+    this.sql.exec("CREATE TABLE IF NOT EXISTS players (id TEXT PRIMARY KEY, key TEXT NOT NULL, seen INTEGER NOT NULL)");
+    // Each challenge signs one connection: one captured with its signature cannot be replayed.
+    this.sql.exec("CREATE TABLE IF NOT EXISTS used_challenges (challenge TEXT PRIMARY KEY, used INTEGER NOT NULL)");
   }
 
   async fetch(request) {
     const id = request.headers.get("X-Player");
-    if (!id) return new Response("No player", { status: 400 });
+    const key = request.headers.get("X-Player-Key");
+    const challenge = request.headers.get("X-Challenge");
+    if (!id || !key || !challenge) return new Response("No player", { status: 400 });
+    const now = Date.now();
+    this.sql.exec("DELETE FROM used_challenges WHERE used < ?", now - 2 * CHALLENGE_LIFETIME_MS);
+    if (this.sql.exec("SELECT 1 FROM used_challenges WHERE challenge = ?", challenge).toArray().length)
+      return new Response("Challenge already used", { status: 401 });
+    this.sql.exec("INSERT INTO used_challenges (challenge, used) VALUES (?, ?)", challenge, now);
+    const owner = this.sql.exec("SELECT key FROM players WHERE id = ?", id).toArray()[0];
+    if (owner && owner.key !== key)
+      return new Response("This key's player ID belongs to another key: make a new key.", { status: 409 });
+    this.sql.exec("INSERT OR REPLACE INTO players (id, key, seen) VALUES (?, ?, ?)", id, key, now);
     // A player has one connection: a new one (a restart, a reconnect) replaces the old.
     for (const old of this.ctx.getWebSockets(id)) {
       try { old.close(4000, "Replaced by a newer connection"); } catch {}
@@ -177,7 +195,8 @@ export class Hub extends DurableObject {
       case "list": {
         this.sql.exec("DELETE FROM lobbies WHERE updated < ?", now - LOBBY_LIFETIME_MS);
         const rows = this.sql.exec("SELECT host, data FROM lobbies ORDER BY updated DESC LIMIT 200").toArray()
-          .map(({ host, data }) => ({ host, ...JSON.parse(data) }));
+          // The host is who published the row, whatever the row itself says.
+          .map(({ host, data }) => ({ ...JSON.parse(data), host }));
         return reply({ op: "lobbies", rows });
       }
       default:

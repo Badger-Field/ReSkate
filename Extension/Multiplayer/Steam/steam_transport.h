@@ -4,6 +4,13 @@
 
 namespace dingosdk::multiplayer {
 class DirectSignaling;
+// Where direct multiplayer finds routes, in the networking library's comma-separated
+// "host:port" lists. STUN tells a player their address as the internet sees it; a TURN server
+// relays for players whose routers allow no direct route (both behind symmetric NAT). The TURN
+// lists go server by server: the Nth user and password are for the Nth server.
+struct DirectRoutes {
+    std::string stun_servers, turn_servers, turn_users, turn_passwords;
+};
 enum class TrafficLane : std::uint16_t { gameplay = 0, control = 1, cosmetics = 2, voice = 3 };
 constexpr TrafficLane traffic_lane(PacketKind kind) {
     return kind == PacketKind::voice ? TrafficLane::voice
@@ -74,12 +81,11 @@ class SteamTransport {
     // Direct multiplayer, without Steam: the standalone GameNetworkingSockets library
     // (`library`, a module handle the caller loaded and keeps loaded) instead of Steam's, as
     // player `local_id`. Players find routes to each other with ICE, exchanging what that takes
-    // through `signaling`, which the transport keeps from then on; `stun_servers` is the
-    // library's comma-separated "host:port" list. Players' IP addresses are shared with each
-    // other, which is what lets them connect without a relay. Once per process: the library
-    // keeps the identity it was started with.
+    // through `signaling`, which the transport keeps from then on, and the servers in `routes`.
+    // Players' IP addresses are shared with each other, which is what lets them connect without
+    // a relay. Once per process: the library keeps the identity it was started with.
     bool open_direct(void *library, std::uint64_t local_id, std::unique_ptr<DirectSignaling> signaling,
-                     const std::string &stun_servers);
+                     const DirectRoutes &routes);
     bool direct() const;
     bool host(unsigned capacity);
     // `direct_ip` and `direct_port` (host byte order; 0 for none): the address a dedicated server

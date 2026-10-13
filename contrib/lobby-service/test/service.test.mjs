@@ -3,7 +3,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { createHash, createHmac, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { fileURLToPath } from "node:url";
 
@@ -51,8 +51,8 @@ function player() {
   return { raw, privateKey, id };
 }
 
-async function connectUrl(p, { badSignature = false } = {}) {
-  const { challenge } = await (await fetch(`${BASE}/v1/challenge`)).json();
+async function connectUrl(p, { badSignature = false, challenge = null } = {}) {
+  challenge ??= (await (await fetch(`${BASE}/v1/challenge`)).json()).challenge;
   let signature = sign(null, Buffer.from(`reskate-lobby-v1:${challenge}`), p.privateKey);
   if (badSignature) signature = Buffer.from(signature.map((b, i) => (i === 0 ? b ^ 1 : b)));
   const query = new URLSearchParams({ key: p.raw.toString("hex"), sig: signature.toString("hex"), challenge });
@@ -110,11 +110,15 @@ test("a wrong signature or a stale challenge is refused", async () => {
   const p = player();
   const url = new URL((await connectUrl(p, { badSignature: true })).replace("ws:", "http:"));
   assert.equal(await upgradeStatus(url), 401);
-  const forged = new URL(url);
-  forged.searchParams.set("challenge", `${Date.now() - 120_000}.00.00`);
-  assert.equal(await upgradeStatus(forged), 401);
+  // A challenge the service did make (right MAC, the development secret), correctly signed,
+  // but two minutes old: refused for its age alone.
+  const body = `${Date.now() - 120_000}.${randomBytes(16).toString("hex")}`;
+  const stale = `${body}.${createHmac("sha256", "reskate-local-development-only").update(body).digest("hex")}`;
+  assert.equal(await upgradeStatus(new URL((await connectUrl(p, { challenge: stale })).replace("ws:", "http:"))), 401);
   const good = new URL((await connectUrl(p)).replace("ws:", "http:"));
   assert.equal(await upgradeStatus(good), 101);
+  // The same signed challenge again: refused, so a captured link cannot take the player over.
+  assert.equal(await upgradeStatus(good), 401);
 });
 
 test("players are who their key says, and signals go between them", async () => {
@@ -138,11 +142,13 @@ test("players are who their key says, and signals go between them", async () => 
 test("public lobbies are listed while their host is here", async () => {
   const host = player(), browser = player();
   const h = await connect(host), v = await connect(browser);
-  h.send({ op: "host", lobby: { name: "Tuesday sesh", map: "bam", players: 2, max: 8, password: false } });
+  // A row naming someone else as host is still listed under who published it.
+  h.send({ op: "host", lobby: { name: "Tuesday sesh", map: "bam", players: 2, max: 8, password: false, host: browser.id } });
   await h.next(h.op("hosted"));
   v.send({ op: "list" });
   let rows = JSON.parse(await v.next(v.op("lobbies"))).rows;
   assert.ok(rows.some((r) => r.host === host.id && r.name === "Tuesday sesh" && r.max === 8));
+  assert.ok(!rows.some((r) => r.host === browser.id));
 
   h.send({ op: "host", lobby: { name: "x".repeat(3000) } });
   await h.next(h.op("error"));
@@ -166,4 +172,22 @@ test("a second connection replaces the first", async () => {
   await second.next(second.op("hello"));
   assert.equal(await first.closed, 4000);
   second.ws.close();
+});
+
+test("two keys that share a player ID: the second is refused", async () => {
+  // 32-bit IDs collide by the birthday bound after about 77,000 keys: make a real collision.
+  const seen = new Map();
+  let pair;
+  while (!pair) {
+    const p = player();
+    const other = seen.get(p.id);
+    if (other) pair = [other, p];
+    else seen.set(p.id, p);
+  }
+  const [first, second] = pair;
+  const a = await connect(first);
+  await a.next(a.op("hello"));
+  const url = new URL((await connectUrl(second)).replace("ws:", "http:"));
+  assert.equal(await upgradeStatus(url), 409);
+  a.ws.close();
 });

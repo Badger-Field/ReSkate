@@ -28,6 +28,7 @@
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <tuple>
 
 namespace dingosdk::multiplayer {
 namespace {
@@ -512,7 +513,7 @@ bool SteamTransport::bind(void *library, void *sockets, void *networking_utils) 
     return true;
 }
 bool SteamTransport::open_direct(void *library, std::uint64_t local_id, std::unique_ptr<DirectSignaling> signaling,
-                                 const std::string &stun_servers) {
+                                 const DirectRoutes &routes) {
     auto &p = *impl_;
     if (p.state.ready)
         return p.direct_mode;
@@ -536,11 +537,15 @@ bool SteamTransport::open_direct(void *library, std::uint64_t local_id, std::uni
         void *utils = symbol<void *(*)()>(module, "SteamNetworkingUtils_LibV4")();
         p.connect_custom = symbol<decltype(p.connect_custom)>(module, "SteamAPI_ISteamNetworkingSockets_ConnectP2PCustomSignaling");
         p.received_signal = symbol<decltype(p.received_signal)>(module, "SteamAPI_ISteamNetworkingSockets_ReceivedP2PCustomSignal");
-        if (!stun_servers.empty() &&
-            !symbol<bool (*)(void *, ESteamNetworkingConfigValue, const char *)>(
-                module, "SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueString")(utils, k_ESteamNetworkingConfig_P2P_STUN_ServerList,
-                                                                                    stun_servers.c_str()))
-            throw std::runtime_error("The networking library did not take the STUN servers.");
+        const auto set_list = symbol<bool (*)(void *, ESteamNetworkingConfigValue, const char *)>(
+            module, "SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueString");
+        for (const auto &[option, value, what] : {
+                 std::tuple{k_ESteamNetworkingConfig_P2P_STUN_ServerList, &routes.stun_servers, "STUN servers"},
+                 std::tuple{k_ESteamNetworkingConfig_P2P_TURN_ServerList, &routes.turn_servers, "TURN servers"},
+                 std::tuple{k_ESteamNetworkingConfig_P2P_TURN_UserList, &routes.turn_users, "TURN users"},
+                 std::tuple{k_ESteamNetworkingConfig_P2P_TURN_PassList, &routes.turn_passwords, "TURN passwords"}})
+            if (!value->empty() && !set_list(utils, option, value->c_str()))
+                throw std::runtime_error(std::string("The networking library did not take the ") + what + ".");
         p.friends = nullptr; // names come from each player's hello
         p.direct_mode = true;
         p.signaling = std::move(signaling);

@@ -146,8 +146,8 @@ int run_side(bool hosting, const char *library_path, std::uint16_t port) {
     if (!library) return fail(who, std::string("cannot load the library: ") + dlerror());
     const auto local = hosting ? host_id : guest_id, peer = hosting ? guest_id : host_id;
     SteamTransport transport;
-    // No STUN here: both sides are on this machine, so their own addresses are enough.
-    if (!transport.open_direct(library, local, make_tcp_signaling("127.0.0.1", port, local), ""))
+    // No STUN or TURN here: both sides are on this machine, so their own addresses are enough.
+    if (!transport.open_direct(library, local, make_tcp_signaling("127.0.0.1", port, local), {}))
         return fail(who, "open_direct: " + transport.status().detail);
     if (!transport.direct() || transport.status().local_id != local) return fail(who, "not in direct mode as the right player");
     if (hosting ? !transport.host(4) : !transport.join(peer)) return fail(who, "host/join: " + transport.status().detail);

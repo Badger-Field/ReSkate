@@ -66,6 +66,8 @@ class TcpSignaling final : public DirectSignaling {
     }
     ~TcpSignaling() override {
         drop("closed");
+        // A lookup still running uses Winsock: let it finish before Winsock goes.
+        if (lookup_.valid()) lookup_.wait();
 #ifdef _WIN32
         if (started_) WSACleanup();
 #endif
@@ -106,6 +108,10 @@ class TcpSignaling final : public DirectSignaling {
     // The name lookup runs on its own thread: getaddrinfo blocks, and send() and receive()
     // must not hold up the game.
     std::future<std::vector<Address>> lookup_;
+    // What the lookup found, and the next of them to try: an address that refuses or times out
+    // is passed over for the next before the name is looked up again.
+    std::vector<Address> addresses_;
+    std::size_t next_address_{};
     std::string host_;
     std::uint16_t port_{};
     std::string identity_;
@@ -146,9 +152,10 @@ class TcpSignaling final : public DirectSignaling {
         });
         state_ = State::resolving;
     }
-    void connect_to(const std::vector<Address> &addresses) {
-        if (addresses.empty()) { drop("cannot find " + host_); return; }
-        for (const auto &a : addresses) {
+    void connect_next() {
+        if (addresses_.empty()) { drop("cannot find " + host_); return; }
+        while (next_address_ < addresses_.size()) {
+            const auto &a = addresses_[next_address_++];
             socket_ = ::socket(a.family, a.type, a.protocol);
             if (socket_ == no_socket) continue;
             if (!set_nonblocking(socket_)) { close_socket(socket_); socket_ = no_socket; continue; }
@@ -158,7 +165,7 @@ class TcpSignaling final : public DirectSignaling {
             close_socket(socket_);
             socket_ = no_socket;
         }
-        if (socket_ == no_socket) { drop("cannot connect to " + host_); return; }
+        if (socket_ == no_socket) { addresses_.clear(); drop("cannot connect to " + host_); return; }
         state_ = State::connecting;
         out_ = identity_ + "\n" + out_;
     }
@@ -167,7 +174,9 @@ class TcpSignaling final : public DirectSignaling {
         if (state_ == State::idle) start();
         if (state_ == State::resolving) {
             if (lookup_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
-            connect_to(lookup_.get());
+            addresses_ = lookup_.get();
+            next_address_ = 0;
+            connect_next();
         }
         if (socket_ == no_socket) return;
         if (state_ == State::connecting) {
@@ -179,7 +188,15 @@ class TcpSignaling final : public DirectSignaling {
             int error = 0;
             socklen_t length = sizeof(error);
             getsockopt(socket_, SOL_SOCKET, SO_ERROR, reinterpret_cast<char *>(&error), &length);
-            if (error) { drop("cannot connect to " + host_); return; }
+            if (error) {
+                // This address did not answer: the next one, or after the last, look up again.
+                close_socket(socket_);
+                socket_ = no_socket;
+                in_.clear();
+                out_.clear();
+                connect_next();
+                return;
+            }
             state_ = State::ready;
             problem_.clear();
         }
