@@ -105,6 +105,11 @@ def main(argv: list[str] | None = None) -> int:
                       help="place spots at their real heights (default: each on the base map's ground)")
     city.add_argument("--turn", type=float, default=0.0, help="turn the whole place (degrees, counter-clockwise "
                                                               "seen from above: east towards north)")
+    city.add_argument("--best-slice", type=float, metavar="METRES",
+                      help="slide the --size area up to this far north and south, and keep the slice with the "
+                           "most skate spots")
+    city.add_argument("--no-scales", action="store_true", help="every object at scale 1, the nearest Build Kit "
+                                                               "size (no object_scales in the park file)")
     city.add_argument("--centre-park", action="store_true", help="move the objects so the middle of their "
                                                                  "footprint is on the anchor")
     city.add_argument("--mesh", help="also write the place as a mesh for a custom map (.glb; a -collision.glb beside it)")
@@ -175,13 +180,18 @@ def main(argv: list[str] | None = None) -> int:
                                                          "park's east on world +x and north on +z (default: the "
                                                          "template's facing, else 0)")
 
+    check_catalog = commands.add_parser("catalog-check", help="check catalog.json's items against the game's "
+                                                              "Build Kit item names")
+    check_catalog.add_argument("names", help="a text file of the game's Build Kit item names, one a line")
+    check_catalog.add_argument("--catalog", default=str(DEFAULT_CATALOG))
+
     synth = commands.add_parser("synth", help="write a synthetic park scan for trying the tool")
     synth.add_argument("output", help=".ply file to write")
     synth.add_argument("--seed", type=int, default=0)
 
     args = parser.parse_args(argv)
     try:
-        return {"convert": run_convert, "city": run_city, "imagery": run_imagery, "anchor": run_anchor, "calibrate": run_calibrate, "mesh": run_mesh,
+        return {"convert": run_convert, "city": run_city, "imagery": run_imagery, "anchor": run_anchor, "catalog-check": run_catalog_check, "calibrate": run_calibrate, "mesh": run_mesh,
                 "synth": run_synth}[args.command](args)
     except (ValueError, FileNotFoundError) as error:
         print(f"error: {error}", file=sys.stderr)
@@ -291,7 +301,12 @@ def _city_area(args, cache):
             lat, lon = found["lat"], found["lon"]
         else:
             lat, lon = geo.parse_latlon(args.centre)
-        bbox = geo.bbox_around(lat, lon, *args.size)
+        width, height = args.size
+        if getattr(args, "best_slice", None):
+            if args.best_slice <= 0:
+                raise ValueError("--best-slice: a positive distance in metres")
+            height += 2 * args.best_slice      # read the whole range once; the slice is chosen after
+        bbox = geo.bbox_around(lat, lon, width, height)
     frame = geo.LocalFrame(*bbox.centre)
     bounds = frame.bounds(bbox)
     area = (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]) / 1e6
@@ -401,6 +416,16 @@ def run_city(args) -> int:
 
     print("Building the model")
     model = city_module.build(bounds, items, lidar, city_module.Settings(ground_cell=args.ground_cell), progress=print)
+    if args.best_slice:
+        offset, counts = city_module.best_slice(model, *args.size, args.best_slice)
+        print(f"\nBest {args.size[0]:g} x {args.size[1]:g} m slice: {offset:+.0f} m north of the centre "
+              f"({counts[offset]} spots; " + ", ".join(f"{o:+.0f} m: {n}" for o, n in
+                                                      sorted(counts.items(), key=lambda kv: -kv[1])[1:4]) + ")")
+        if not args.turn:
+            lat, lon = bbox.centre
+            print(f"  as its own area: --centre {lat + offset / 111_320:.6f},{lon:.6f} --size "
+                  f"{args.size[0]:g}x{args.size[1]:g}")
+        model.spots = [s for s in model.spots if city_module.in_slice(s, *args.size, offset)]
     attribution = attribution_lines(model.sources, survey, usgs=args.lidar == "auto", credit=args.lidar_credit)
 
     print(f"\n{len(model.spots)} skate spots:")
@@ -412,7 +437,8 @@ def run_city(args) -> int:
         print(f"  note: {note}")
 
     cat = catalog_module.load_catalog(args.catalog)
-    chosen, placements, skipped = city_module.park_features(model, args.max_objects, cat, args.keep_elevation)
+    chosen, placements, skipped = city_module.park_features(model, args.max_objects, cat, args.keep_elevation,
+                                                            fixed_scale=args.no_scales)
     print(f"\nPlacing {len(placements)} Build Kit objects for {len(chosen)} spots")
     for line in skipped:
         print(f"  skipped: {line}")
@@ -492,7 +518,15 @@ def _run_skatepark(args, label, bbox, items, lidar, survey) -> int:
     # As a park mod: each bowl a ring of quarter pipes to its depth, the coping on its real line.
     cat = catalog_module.load_catalog(args.catalog)
     features, notes = skatepark.bowl_features(park_result)
-    placements, skipped = catalog_module.place(features, cat)
+    placements, skipped = catalog_module.place(features, cat, fixed_scale=args.no_scales)
+    if args.no_scales:
+        for number, bowl in enumerate(park_result.bowls):
+            built = [p.item.height * p.scale for p in placements if features[p.feature].notes == [f"bowl {number}"]]
+            if built:
+                low, high = min(built), max(built)
+                print(f"  bowl {number}: {bowl.depth:.2f} m deep, built {low:.1f}"
+                      + (f"-{high:.1f}" if high - low > 0.05 else "") + f" m at scale 1: "
+                      + ", ".join(f"{h - bowl.depth:+.2f} m" for h in sorted(set(round(b, 2) for b in built))))
     if len(placements) > args.max_objects:
         skipped.append(f"{len(placements) - args.max_objects} quarter pipes over the {args.max_objects}-object budget")
         placements = placements[:args.max_objects]
@@ -721,6 +755,17 @@ def _anchor_search(args) -> int:
         Path(args.anchor_out).write_text(json.dumps(document, indent=2), encoding="utf-8")
         print(f"Wrote {args.anchor_out}: pass it to city --anchor, then check with anchor probe / anchor check")
     return 0
+
+
+def run_catalog_check(args) -> int:
+    cat = catalog_module.load_catalog(args.catalog)
+    names = {line.strip() for line in Path(args.names).read_text(encoding="utf-8-sig").splitlines() if line.strip()}
+    items = [item.item for item in cat.items] + [cat.marker]
+    missing = [name for name in items if name not in names]
+    print(f"{len(items) - len(missing)} of {len(items)} catalog items are in the game's {len(names)} names")
+    for name in missing:
+        print(f"  not in the game: {name}")
+    return 1 if missing else 0
 
 
 def run_calibrate(args) -> int:

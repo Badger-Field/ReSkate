@@ -248,3 +248,14 @@ def test_deep_bowls_are_capped_and_tiny_ones_reported(park):
     assert all(f.height == pytest.approx(min(2.4, room)) for f in features)
     assert any("3.5 m deep" in n for n in notes) and any("flat bottom" in n for n in notes)
     assert any("bowl 1: too small" in n for n in notes)
+
+
+def test_no_scales_picks_one_size_per_bowl(park):
+    features, _ = skatepark.bowl_features(park)
+    cat = catalog.load_catalog(DEFAULT_CATALOG)
+    placements, _ = catalog.place(features, cat, fixed_scale=True)
+    assert placements and all(p.scale == 1.0 for p in placements)
+    heights = {p.item.height for p in placements}
+    assert len(heights) == 1                                     # the whole ring one height
+    nearest = min((i.height for i in cat.for_kind("quarter")), key=lambda h: abs(h - DEPTH))
+    assert heights == {nearest}

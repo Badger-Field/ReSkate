@@ -255,3 +255,15 @@ def test_bad_up_axis_is_a_clear_error(tmp_path, up):
     grid = np.stack(np.meshgrid(np.arange(50.0), np.arange(50.0)), -1).reshape(-1, 2) * 0.1
     np.savetxt(scan, np.column_stack([grid, np.zeros(len(grid))]))
     assert main(["mesh", str(scan), str(tmp_path / "out.glb"), f"--up={up}"]) == 2
+
+
+def test_catalog_check_against_the_games_names(tmp_path, capsys):
+    from reskate_lidar import catalog as catalog_module
+    cat = catalog_module.load_catalog(DEFAULT_CATALOG)
+    names = tmp_path / "names.txt"
+    names.write_text("\n".join([i.item for i in cat.items] + [cat.marker]) + "\n", encoding="utf-8")
+    assert main(["catalog-check", str(names)]) == 0
+    names.write_text("\n".join(i.item for i in cat.items[1:]) + "\n", encoding="utf-8")
+    assert main(["catalog-check", str(names)]) == 1
+    out = capsys.readouterr().out
+    assert f"not in the game: {cat.items[0].item}" in out and f"not in the game: {cat.marker}" in out

@@ -14,7 +14,14 @@ These need a human.
    - Is there such a spot? `anchor probe` / `anchor check` (README) now measure one in game: they give the share of the footprint that is flat and clear, and which objects would be buried or float.
    - The first Embarcadero try loaded all 33 of 33 objects, but its anchor (627.1, 199.9, 1062.8) is on the NE waterfront promenade or coast road.
    - **Measured:** `anchor check` there gave 6 of 78 probes level (8%), 11 higher (a rooftop 145.7 m up), and 61 lower, mostly beach a few metres down. 11 objects would float. Two runs agreed to 0.05 m.
-   - **Next:** `anchor search` round it, coarse then fine (README), to find the open ground.
+   - **Found:** a settled `anchor search` found a level road at 507.1, 199.5, 1042.8, running along world x (about 130 x 20 m).
+   - **Embarcadero Strip there:** loaded 8 of 8 objects; `anchor check`: 68% level, 2 objects float.
+   - **Venice there:** loaded only with its `object_scales` stripped (the ReSkate side is being debugged). Then all 76 objects loaded; `anchor check`: 71% level, 10 buried, 1 floating. `--no-scales` now builds it at scale 1, with each bowl's depth error reported:
+     - bowl 0: +0.09 m;
+     - bowl 1: +0.30 m;
+     - bowl 2: +0.11 m;
+     - bowl 3: −0.21 m.
+   - **The 130 x 20 m slice with the most spots:** `--best-slice 60` finds it 15 m south of the plaza's centre, with 2 flights of steps and 3 long benches (15 objects).
    - Do Build Kit objects 80 m from the anchor still load and collide?
 3. **Can this environment reach OpenStreetMap?** This cloud environment's network policy blocks:
    - `overpass-api.de`

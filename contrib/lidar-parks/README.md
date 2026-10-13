@@ -62,6 +62,10 @@ Start the game through ReSkate, open **PARK MODS** and load the new park. If obj
 check the object limits. The Object Dropper allows 256 objects by default
 (`config/object-dropper.json`), and a dedicated server spawns 512 across all its parks.
 
+### Check the catalog's items
+
+`python -m reskate_lidar catalog-check <names.txt>` checks every item in `catalog.json` against a list of the game's Build Kit item names, one per line. It lists any the game doesn't have.
+
 ### Check the catalog sizes once
 
 `catalog.json` lists the Build Kit objects the converter may use and how big each one is. The
@@ -243,6 +247,8 @@ python studio_prep.py venice.glb venice.blend      # optional, for ReSkate Studi
 | `--size 130x30` | a rectangle, east-west x north-south, instead of a square |
 | `--turn 30` | turn the whole place before placing it, counter-clockwise from above (east towards north) |
 | `--centre-park` | move the objects so the middle of their footprint is on the anchor |
+| `--best-slice 60` | slide the `--size` area up to 60 m north and south, and keep the slice with the most skate spots |
+| `--no-scales` | every object at scale 1, the nearest Build Kit size, with no `object_scales` in the park. With `--skatepark` it reports each bowl's depth error. |
 
 ## Street-level imagery (`imagery`)
 

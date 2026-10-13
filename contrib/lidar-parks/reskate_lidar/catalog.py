@@ -85,7 +85,10 @@ class Choice:
     score: float
 
 
-def choose(feature: Feature, catalog: Catalog) -> Choice | None:
+def choose(feature: Feature, catalog: Catalog, fixed_scale: bool = False) -> Choice | None:
+    """The catalog object, scale and number of copies that best fit a feature. With
+    `fixed_scale`, every object stays at scale 1 (the nearest size in the catalog), for parks
+    whose loader must not see per-object scales."""
     candidates = catalog.for_kind(feature.kind)
     if feature.kind == "stairs":
         # Handrails found beside stairs are placed on their own; plain stairs are the default.
@@ -97,7 +100,7 @@ def choose(feature: Feature, catalog: Catalog) -> Choice | None:
     for item in candidates:
         target_height = feature.height - (feature.base if feature.kind != "rail" else 0.0)
         scale = float(np.clip(max(target_height, 0.05) / item.height, item.min_scale, item.max_scale))
-        if feature.kind == "rail":
+        if feature.kind == "rail" or fixed_scale:
             scale = 1.0  # a rail's height is where it is placed, not how big it is
         item_fill = (item.along if linear else item.across) * scale
         item_other = (item.across if linear else item.along) * scale
@@ -106,6 +109,10 @@ def choose(feature: Feature, catalog: Catalog) -> Choice | None:
         e_other = abs(item_other - other) / max(other, 0.1)
         e_height = abs(item.height * scale - max(target_height, 0.05)) / max(target_height, 0.05)
         score = e_fill + 0.5 * e_other + e_height + 0.3 * abs(math.log(scale)) + 0.05 * copies
+        if fixed_scale:
+            # Unscaled, the height can only be matched by picking the object: it decides, so that
+            # one feature's neighbours (a bowl's quarters) come out the same height.
+            score += 10 * e_height
         if feature.kind == "rail":
             score = e_fill + 0.05 * copies + abs(item.height - max(feature.height, 0.05))
         if best is None or score < best.score:
@@ -113,7 +120,7 @@ def choose(feature: Feature, catalog: Catalog) -> Choice | None:
     return best
 
 
-def place(features: list[Feature], catalog: Catalog) -> tuple[list[Placement], list[str]]:
+def place(features: list[Feature], catalog: Catalog, fixed_scale: bool = False) -> tuple[list[Placement], list[str]]:
     placements: list[Placement] = []
     skipped: list[str] = []
     for index, feature in enumerate(features):
@@ -121,7 +128,7 @@ def place(features: list[Feature], catalog: Catalog) -> tuple[list[Placement], l
             skipped.append(f"#{index} bowl {feature.along:.1f} x {feature.across:.1f} m, "
                            f"{-feature.base:.1f} m deep: not converted (Build Kit cannot dig)")
             continue
-        choice = choose(feature, catalog)
+        choice = choose(feature, catalog, fixed_scale)
         if choice is None:
             skipped.append(f"#{index} {feature.kind}: no catalog object for it")
             continue

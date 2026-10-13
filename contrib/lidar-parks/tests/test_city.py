@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 import shapely
 
-from reskate_lidar import catalog, city, citymesh, ept, geo, mapdata, osm, overture, park, synthcity
+from reskate_lidar import catalog, city, citymesh, ept, features, geo, mapdata, osm, overture, park, synthcity
 from reskate_lidar.cli import DEFAULT_CATALOG, main
 
 FRAME = geo.LocalFrame(37.7955, -122.3952)
@@ -512,3 +512,14 @@ def test_no_kerb_where_the_road_meets_no_public_space():
 def test_kerbs_are_capped():
     model = city.build(synthcity.BOUNDS, synthcity.map_items(), synthcity.survey(), city.Settings(kerbs=0))
     assert spots(model, "kerb") == []
+
+
+def test_best_slice_finds_the_busy_strip():
+    feature = lambda x, y: city.Spot(features.Feature("ledge", (x, y), 0.0, 2.0, 0.5, 0.4), 10.0, 10.0, "osm", "bench")
+    kerb = lambda x, y: city.Spot(features.Feature("ledge", (x, y), 0.0, 3.0, 0.4, 0.15), 10.0, 10.0, "ground", "kerb")
+    model = city.CityModel.__new__(city.CityModel)
+    model.spots = [feature(x, 30.0) for x in (-40, 0, 40)] + [kerb(x, -30.0) for x in (-40, 0, 40)] + [feature(0, 0)]
+    offset, counts = city.best_slice(model, 130, 20, 40)
+    assert offset == pytest.approx(30.0) and counts[30.0] == 3
+    assert counts[-30.0] == 3                                    # as many, but kerbs: the benches win
+    assert [s.what for s in model.spots if city.in_slice(s, 130, 20, offset)] == ["bench"] * 3

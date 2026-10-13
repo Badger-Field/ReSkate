@@ -856,7 +856,8 @@ def build(bounds, items: list[MapItem], lidar: ept.Points | None, settings: Sett
 
 # ---------------------------------------------------------------- as a park
 
-def park_features(model: CityModel, max_objects: int, catalog, keep_elevation: bool = False):
+def park_features(model: CityModel, max_objects: int, catalog, keep_elevation: bool = False,
+                  fixed_scale: bool = False):
     """The spots as Features for catalog.place, most worthwhile first, within an object budget.
     Each stands on its own ground (z = 0) unless keep_elevation, when it sits at its real
     elevation relative to the frame's origin."""
@@ -864,7 +865,7 @@ def park_features(model: CityModel, max_objects: int, catalog, keep_elevation: b
     chosen, placements, skipped = [], [], []
     for spot in model.spots:
         feature = spot.feature
-        new, why = catalog_module.place([feature], catalog)
+        new, why = catalog_module.place([feature], catalog, fixed_scale)
         if not new:
             skipped += why
             continue
@@ -880,3 +881,24 @@ def park_features(model: CityModel, max_objects: int, catalog, keep_elevation: b
         chosen.append(feature)
         placements += new
     return chosen, placements, skipped
+
+
+def in_slice(spot: Spot, width: float, height: float, offset: float) -> bool:
+    x, y = spot.feature.centre
+    return abs(x) <= width / 2 and abs(y - offset) <= height / 2
+
+
+def best_slice(model: CityModel, width: float, height: float, reach: float,
+               step: float = 5.0) -> tuple[float, dict[float, int]]:
+    """The north-south offset (within `reach` of the centre) of the `width` x `height` slice
+    holding the most spots, and the count at each offset tried. Kerbs count after every other
+    spot: a tie goes to the slice with more of the rest, then to the one whose spots sit nearest
+    its middle line (not on its edge), then to the one nearest the centre."""
+    offsets = np.arange(-reach, reach + 1e-6, step)
+    counts, keys = {}, {}
+    for offset in offsets:
+        inside = [s for s in model.spots if in_slice(s, width, height, offset)]
+        counts[float(offset)] = len(inside)
+        spread = float(np.mean([abs(s.feature.centre[1] - offset) for s in inside])) if inside else 0.0
+        keys[float(offset)] = (len(inside), sum(s.what != "kerb" for s in inside), -round(spread, 1), -abs(offset))
+    return max(keys, key=keys.get), counts

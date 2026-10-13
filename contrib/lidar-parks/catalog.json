@@ -21,7 +21,6 @@
     {"item": "own_bkramps_generic_kickerflatsmall_00001",        "kinds": ["kicker", "bank"], "along": 1.2, "across": 1.2, "height": 0.4, "estimated": true},
     {"item": "own_bkramps_generic_kickerflatmedium_00001",       "kinds": ["kicker", "bank"], "along": 1.8, "across": 1.5, "height": 0.6, "estimated": true},
     {"item": "own_bkramps_generic_kickerflatlarge_00001",        "kinds": ["kicker", "bank"], "along": 2.4, "across": 2.0, "height": 0.9, "estimated": true},
-    {"item": "own_bkramps_generic_wallramp_00001",               "kinds": ["bank"], "along": 2.5, "across": 3.0, "height": 1.8, "estimated": true},
 
     {"item": "own_bkvert_generic_quarterpipesmall_00001",        "kinds": ["quarter"], "along": 1.5, "across": 3.0, "height": 1.0, "estimated": true},
     {"item": "own_bkvert_generic_quarterpipemedium_00001",       "kinds": ["quarter"], "along": 2.2, "across": 4.0, "height": 1.6, "estimated": true},
