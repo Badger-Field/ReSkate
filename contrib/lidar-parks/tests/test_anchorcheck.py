@@ -115,31 +115,72 @@ def test_search_grid_and_batches():
 
 
 def waterfront(x, z):
-    """A shore along x = 600: beach west of it, a 200 m-wide flat plaza east of it from z 900 to
-    1100, a hillside beyond, and a tower at (880, 1000)."""
+    """A shore along x = 600: the sea (exactly 191.0) west of x = 500, a beach rising to it, a
+    200 m-wide plaza east of it from z 900 to 1100 with a gentle fall, a hillside beyond, and a
+    tower at (880, 1000)."""
+    if x < 500:
+        return 191.0
     if x < 600:
-        return 196.0 - (600 - x) * 0.02
+        return 192.0 + (x - 500) * 0.03
     if abs(x - 880) < 15 and abs(z - 1000) < 15:
         return 345.0
     if 900 <= z <= 1100:
-        return 200.0
+        return 200.0 + 0.001 * (x - 600)
     return 200.0 + 0.1 * (abs(z - 1000) - 100)
 
 
 def test_search_ranks_the_open_ground():
-    heights = {(round(x, 1), round(z, 1)): waterfront(x, z) for x, z in anchorcheck.search_points(600, 1000, 300, 20)}
-    best = anchorcheck.rank(heights, size=160, top=3)
+    heights = {(round(x, 1), round(z, 1)): round(waterfront(x, z), 1)
+               for x, z in anchorcheck.search_points(600, 1000, 300, 20)}
+    water = anchorcheck.water_level(heights)
+    assert water == pytest.approx(191.0)
+    best = anchorcheck.rank(heights, size=160, top=3, water=water, reference=200.0)
     top = best[0]
-    assert top.level_share == 1.0 and top.ground == pytest.approx(200.0)
+    assert top.level_share == 1.0 and top.ground == pytest.approx(200.1, abs=0.15) and not top.suspicious
     assert 600 <= top.x - 80 and top.x + 80 < 865                # on the plaza: off the beach, clear of the tower
     assert 900 <= top.z - 80 and top.z + 80 <= 1100
-    assert best[-1].level_share < 1.0
+    assert all(c.ground > 195 for c in best)                     # never the sea
     for a in best:                                               # no two overlap by more than half
         for b in best:
             if a is not b:
                 assert max(abs(a.x - b.x), abs(a.z - b.z)) >= 80
     with pytest.raises(ValueError, match="smaller --size"):
         anchorcheck.rank(heights, size=2000)
+
+
+def test_without_the_water_filter_the_sea_is_flagged():
+    heights = {(round(x, 1), round(z, 1)): round(waterfront(x, z), 1)   # enough sea for whole squares of it
+               for x, z in anchorcheck.search_points(500, 1000, 300, 20)}
+    sea = anchorcheck.rank(heights, size=160, top=40)
+    flat = [c for c in sea if c.spread == 0.0]
+    assert flat and all(c.suspicious and c.ground == pytest.approx(191.0) for c in flat)
+    assert "SUSPICIOUS" in flat[0].line()
+    flags = [c.suspicious for c in sea]
+    assert flags == sorted(flags)                                # flagged ones are ranked last
+
+
+def test_no_water_on_dry_ground():
+    heights = {(float(x), float(z)): 200.0 + 0.01 * x for x in range(0, 400, 20) for z in range(0, 400, 20)}
+    heights[(0.0, 0.0)] = 150.0                                  # one pit is not a sea
+    assert anchorcheck.water_level(heights) is None
+
+
+def test_reference_height_comes_first():
+    # Two level squares: a roof deck 30 m up and the street. The street wins by height, though both are flat.
+    heights = {}
+    for x in range(0, 401, 20):
+        for z in range(0, 201, 20):
+            heights[(float(x), float(z))] = (230.0 if x <= 160 else 200.0) + 0.001 * z
+    best = anchorcheck.rank(heights, size=160, reference=200.0, top=2)
+    assert best[0].ground == pytest.approx(200.1, abs=0.15)
+    assert "-30" in best[1].line() or best[1].ground == pytest.approx(200.1, abs=0.15)
+
+
+def test_skip_radius_widens_without_repeating():
+    inner = anchorcheck.search_points(0, 0, 200, 20)
+    ring = anchorcheck.search_points(0, 0, 400, 20, skip_radius=200)
+    assert len(inner) + len(ring) == len(anchorcheck.search_points(0, 0, 400, 20))
+    assert not {tuple(p) for p in inner} & {tuple(p) for p in ring}
 
 
 def test_cli_search_round_trip(park, tmp_path, capsys):
@@ -150,7 +191,8 @@ def test_cli_search_round_trip(park, tmp_path, capsys):
     for number, batch in enumerate(sorted((tmp_path / "batches").glob("batch-*.txt")), 1):
         probes = [c.split() for c in batch.read_text().strip().split(";") if c.startswith("trainer ground")]
         log = tmp_path / f"batch-{number:02d}.log"
-        log.write_text("\n".join(landed(float(x), waterfront(float(x), float(z)), float(z)) for _, _, x, z in probes))
+        log.write_text("\n".join(landed(float(x), round(waterfront(float(x), float(z)), 1), float(z))
+                                 for _, _, x, z in probes))
         logs += ["--log", str(log)]
     anchor = tmp_path / "best.park.json"
     assert cli.main(["anchor", "search", *logs, "--size", "160", "--anchor-out", str(anchor),
@@ -158,9 +200,10 @@ def test_cli_search_round_trip(park, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "961 probes read from 9 logs" in out
     assert "1. " in out and "100% level" in out and "--around" in out
+    assert "Water at 191.0" in out and "Reference height 200.0" in out
     document = json.loads(anchor.read_text())
     (stick,) = document["maps"]["bam"]
-    assert stick["position"][1] == pytest.approx(200.0) and stick["item"] == "own_bk_box"
+    assert stick["position"][1] == pytest.approx(200.1, abs=0.15) and stick["item"] == "own_bk_box"
 
 
 def test_lower_and_higher_say_relative_to_the_park(park):

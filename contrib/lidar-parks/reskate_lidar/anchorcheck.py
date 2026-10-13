@@ -156,11 +156,14 @@ def check(footprint: Footprint, heights: dict[tuple[float, float], float], missi
 
 # ---------------------------------------------------------------- searching for open ground
 
-def search_points(x: float, z: float, radius: float, spacing: float) -> np.ndarray:
+def search_points(x: float, z: float, radius: float, spacing: float, skip_radius: float = 0.0) -> np.ndarray:
     """A square grid `radius` each way round x, z, nearest the centre first (so a cut-short run
-    still covers the middle)."""
+    still covers the middle). With `skip_radius`, the square already probed that far each way is
+    left out, for widening a search without probing it again."""
     steps = np.arange(-radius, radius + 1e-6, spacing)
     grid = np.array([(x + dx, z + dz) for dz in steps for dx in steps])
+    if skip_radius > 0:
+        grid = grid[np.maximum(np.abs(grid[:, 0] - x), np.abs(grid[:, 1] - z)) > skip_radius + 1e-6]
     return grid[np.argsort(np.hypot(grid[:, 0] - x, grid[:, 1] - z), kind="stable")]
 
 
@@ -178,29 +181,71 @@ def batches(points: np.ndarray, wait: int = 1, limit: int = STARTUP_LIMIT) -> li
     return out
 
 
+WATER_BAND = 0.5          # metres above the lowest probe still counted as that surface
+WATER_FLAT = 0.05         # a water surface reads the same height everywhere, to the log's 0.1 m
+WATER_MIN = 20            # probes: a few low points are a dip, not a sea
+
+
+def water_level(heights: dict[tuple[float, float], float]) -> float | None:
+    """The height of water, if the probes show it: many probes at exactly the lowest height seen.
+    Probes up to WATER_BAND above it then count as water too (wet sand, the shoreline). The sea and lakes read like that; ground never does. None if there is none.
+
+    The game's ground probe gives a height, not what the surface is, so this is a guess from the
+    heights alone. The game also sends the skater back to the start from water and out-of-bounds
+    places; the height logged before that is still the surface."""
+    if not heights:
+        return None
+    ground = np.array(list(heights.values()))
+    low = ground.min()
+    flat = ground <= low + WATER_FLAT + 1e-6       # beach just above it may be in the band; the sea itself is exact
+    if flat.sum() >= max(WATER_MIN, 0.05 * len(ground)):
+        return float(low)
+    return None
+
+
 @dataclass
 class Candidate:
     x: float
     z: float
-    ground: float          # the square's median surface height: where the anchor stands
-    level_share: float     # probes within tolerance of it
+    ground: float          # the square's median land height: where the anchor stands
+    level_share: float     # probes level with that, out of all its probes (water counts against)
     probes: int
-    spread: float          # 10th to 90th percentile of the heights (m)
+    spread: float          # 10th to 90th percentile of the land heights (m)
+    water: int = 0         # probes in the square at the water level
+    from_reference: float | None = None  # ground minus the reference (street) height
+
+    @property
+    def suspicious(self) -> bool:
+        """Perfectly flat over many probes: real ground has kerbs, cambers and slopes."""
+        return self.probes >= WATER_MIN and self.spread <= 0.0 + 1e-6
 
     def line(self) -> str:
+        notes = []
+        if self.from_reference is not None:
+            notes.append(f"{self.from_reference:+.1f} m from the reference height")
+        if self.water:
+            notes.append(f"{self.water} probes on water")
+        if self.suspicious:
+            notes.append("SUSPICIOUS: exactly flat, so maybe water or out of bounds; teleport there and look")
         return (f"{self.x:.1f}, {self.ground:.1f}, {self.z:.1f}: {self.level_share:.0%} level "
-                f"({self.probes} probes, heights spread {self.spread:.1f} m)")
+                f"({self.probes} probes, heights spread {self.spread:.1f} m"
+                + "".join(f"; {n}" for n in notes) + ")")
 
 
 def rank(heights: dict[tuple[float, float], float], size: float, tolerance: float = 0.3, top: int = 5,
-         coverage: float = 0.85) -> list[Candidate]:
-    """Squares `size` across, centred on probed points, ranked by how much of each is level with
-    its own median height. Squares with under `coverage` of their probes read are left out, and
-    the ones returned don't overlap by more than half."""
+         coverage: float = 0.85, water: float | None = None, reference: float | None = None,
+         window: float = 10.0) -> list[Candidate]:
+    """Squares `size` across, centred on probed points, ranked by how much of each is level land
+    at its own median height. Probes at the `water` height are not land: they count against a
+    square. Squares within `window` metres of the `reference` height (the street level round the
+    start) come first. Exactly flat squares (see Candidate.suspicious) come after the rest.
+    Squares with under `coverage` of their probes read are left out, and the ones returned don't
+    overlap by more than half."""
     if not heights:
         raise ValueError("no 'Trainer: landing on the surface' lines in the logs: run the probes first")
     points = np.array(list(heights.keys()))
     ground = np.array(list(heights.values()))
+    wet = ground <= water + WATER_BAND if water is not None else np.zeros(len(ground), bool)
     if len(points) > 1:
         from scipy.spatial import cKDTree
         spacing = float(np.median(cKDTree(points).query(points, k=2)[0][:, 1]))
@@ -213,15 +258,24 @@ def rank(heights: dict[tuple[float, float], float], size: float, tolerance: floa
         inside = (np.abs(points[:, 0] - cx) <= half + 1e-6) & (np.abs(points[:, 1] - cz) <= half + 1e-6)
         if inside.sum() < coverage * expected:
             continue
-        h = ground[inside]
-        median = float(np.median(h))
-        share = float((np.abs(h - median) <= tolerance).mean())
+        land = ground[inside & ~wet]
+        if len(land) == 0:
+            continue
+        median = float(np.median(land))
+        share = float((np.abs(land - median) <= tolerance).sum() / inside.sum())
         found.append(Candidate(float(cx), float(cz), median, share, int(inside.sum()),
-                               float(np.percentile(h, 90) - np.percentile(h, 10))))
+                               float(np.percentile(land, 90) - np.percentile(land, 10)),
+                               int((inside & wet).sum()),
+                               None if reference is None else median - reference))
     if not found:
-        raise ValueError(f"no {size:.0f} m square has {coverage:.0%} of its probes read: probe a wider area, "
-                         "or pass a smaller --size")
-    found.sort(key=lambda c: (-c.level_share, c.spread))
+        raise ValueError(f"no {size:.0f} m square of land has {coverage:.0%} of its probes read: probe a wider "
+                         "area, or pass a smaller --size")
+
+    def order(c: Candidate):
+        far = c.from_reference is not None and abs(c.from_reference) > window
+        return (c.suspicious, far, -round(c.level_share, 2), abs(c.from_reference or 0.0), c.spread)
+
+    found.sort(key=order)
     best: list[Candidate] = []
     for c in found:
         if all(max(abs(c.x - b.x), abs(c.z - b.z)) >= half for b in best):

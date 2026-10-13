@@ -131,11 +131,20 @@ def main(argv: list[str] | None = None) -> int:
     search.add_argument("--radius", type=float, default=200.0, help="metres each way from --around (default 200)")
     search.add_argument("--spacing", type=float, default=20.0, help="metres between probes (default 20)")
     search.add_argument("--wait", type=int, default=1, help="seconds after each probe (default 1)")
+    search.add_argument("--skip-radius", type=float, default=0.0, help="leave out the square already probed this "
+                                                                       "far each way (to widen a search)")
     search.add_argument("--out-dir", help="write each batch here too, one file per batch")
     search.add_argument("--log", action="append", help="a ReSkate.log from a batch run (repeat for several)")
     search.add_argument("--size", type=float, default=160.0, help="the park's size in metres (default 160)")
     search.add_argument("--tolerance", type=float, default=0.3, help="metres still counted level (default 0.3)")
     search.add_argument("--top", type=int, default=5, help="how many places to list (default 5)")
+    search.add_argument("--near-height", type=float, help="the street height to prefer (default: the first probe "
+                                                          "of the first log, the search's centre)")
+    search.add_argument("--height-window", type=float, default=10.0, help="metres from --near-height still "
+                                                                          "preferred (default 10)")
+    search.add_argument("--water-level", type=float, help="treat probes at or near this height as water (default: "
+                                                          "found from the probes)")
+    search.add_argument("--no-water", action="store_true", help="assume there is no water")
     search.add_argument("--anchor-out", help="write the best place as an anchor park file, for city --anchor")
     search.add_argument("--anchor-template", help="the old anchor file: the new stick keeps its facing")
 
@@ -554,14 +563,18 @@ def _anchor_search(args) -> int:
     if bool(args.around) == bool(args.log):
         raise ValueError("anchor search takes either --around X Z (write probes) or --log (rank what they found)")
     if args.around:
-        if args.spacing <= 0 or not 0 < args.radius <= 5000 or args.wait < 0:
-            raise ValueError("--spacing and --radius must be positive (radius up to 5000), --wait at least 0")
-        points = anchorcheck.search_points(*args.around, args.radius, args.spacing)
+        if args.spacing <= 0 or not 0 < args.radius <= 5000 or args.wait < 0 or not 0 <= args.skip_radius < args.radius:
+            raise ValueError("--spacing and --radius must be positive (radius up to 5000), --skip-radius under "
+                             "--radius, --wait at least 0")
+        points = anchorcheck.search_points(*args.around, args.radius, args.spacing, args.skip_radius)
         batches = anchorcheck.batches(points, args.wait)
+        skipped = f", leaving out the {args.skip_radius:g} m already probed" if args.skip_radius else ""
         print(f"{len(points)} probes, {args.spacing:g} m apart, {args.radius:g} m each way round "
-              f"{args.around[0]:g}, {args.around[1]:g} on {args.map}: {len(batches)} batches. For each batch, start "
+              f"{args.around[0]:g}, {args.around[1]:g}{skipped} on {args.map}: {len(batches)} batches. For each batch, start "
               f"the game with RESKATE_STARTUP_COMMANDS set to it, load {args.map} with no park mods, let it run "
               f"(about {len(points) * (args.wait + 1) // len(batches) // 60 + 1} min), and keep ReSkate.log as its own file.")
+        print("Probes over water or out of bounds may be followed by the game resetting the skater to the start: "
+              "that is expected, and the height logged before it is still the surface. Let the batch run on.")
         folder = Path(args.out_dir) if args.out_dir else None
         if folder:
             folder.mkdir(parents=True, exist_ok=True)
@@ -575,18 +588,33 @@ def _anchor_search(args) -> int:
         logs = " ".join(f"--log batch-{n:02d}.log" for n in range(1, len(batches) + 1))
         print(f"\nThen: python -m reskate_lidar anchor search --map {args.map} {logs} --size <park size>")
         return 0
-    heights, missing = {}, []
+    heights, missing, reference = {}, [], args.near_height
     for log in args.log:
         found, lost = anchorcheck.read_heights(Path(log).read_text(encoding="utf-8", errors="replace"))
+        if reference is None and found:
+            reference = next(iter(found.values()))   # the first probe of a batch is the search's centre
         heights.update(found)
         missing += lost
     missing = [p for p in dict.fromkeys(missing) if p not in heights]
     print(f"{len(heights)} probes read from {len(args.log)} logs" +
           (f"; {len(missing)} found no collision yet (not streamed in)" if missing else ""))
-    best = anchorcheck.rank(heights, args.size, args.tolerance, args.top)
+    water = None if args.no_water else args.water_level
+    if water is None and not args.no_water:
+        water = anchorcheck.water_level(heights)
+    if water is not None:
+        wet = sum(h <= water + anchorcheck.WATER_BAND for h in heights.values())
+        print(f"Water at {water:.1f}: {wet} probes at or within {anchorcheck.WATER_BAND} m of it are left out as "
+              "water (--water-level to set it, --no-water if that is land)")
+    print(f"Reference height {reference:.1f} ({'--near-height' if args.near_height is not None else 'the first probe'}); "
+          f"places within {args.height_window:g} m of it come first")
+    best = anchorcheck.rank(heights, args.size, args.tolerance, args.top, water=water, reference=reference,
+                            window=args.height_window)
     print(f"Best places for a {args.size:g} m park on {args.map} (anchor x, y, z), within {args.tolerance:g} m:")
     for number, candidate in enumerate(best, 1):
         print(f"  {number}. {candidate.line()}")
+    if all(c.suspicious or (c.from_reference is not None and abs(c.from_reference) > args.height_window) for c in best):
+        print("None is clearly land near street level: widen the search (--radius, with --skip-radius for what is "
+              "done), or try a smaller --size")
     top = best[0]
     fine = max(2.0, args.size / 16)
     print(f"Refine round the best: python -m reskate_lidar anchor search --map {args.map} --around {top.x:.1f} {top.z:.1f} "
