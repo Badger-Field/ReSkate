@@ -115,12 +115,55 @@ def _grid(points: np.ndarray, bounds, cell: float) -> Grid:
     return Grid(heights, np.array([xmin, ymin]), cell)
 
 
-def _bowls_from_ground(grid: Grid, park, deck: float, depth: float = 0.6, min_area: float = 6.0):
-    """Ground well below the deck, inside the park, as outlines."""
+def filled(heights: np.ndarray) -> np.ndarray:
+    """The grid with every depression filled to its spill level (priority flood from the edges):
+    how deep a spot is relative to where water would stand, so a hillside's slope is no bowl."""
+    import heapq
+    rows, cols = heights.shape
+    out = heights.copy()
+    done = np.zeros(heights.shape, bool)
+    queue = []
+    for r in range(rows):
+        for c in (0, cols - 1):
+            heapq.heappush(queue, (out[r, c], r, c))
+            done[r, c] = True
+    for c in range(1, cols - 1):
+        for r in (0, rows - 1):
+            heapq.heappush(queue, (out[r, c], r, c))
+            done[r, c] = True
+    while queue:
+        level, r, c = heapq.heappop(queue)
+        for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            rr, cc = r + dr, c + dc
+            if 0 <= rr < rows and 0 <= cc < cols and not done[rr, cc]:
+                done[rr, cc] = True
+                out[rr, cc] = max(out[rr, cc], level)
+                heapq.heappush(queue, (out[rr, cc], rr, cc))
+    return out
+
+
+def sunk(grid: Grid, reach: float = 6.0) -> np.ndarray:
+    """How far each spot lies below the ground around it: the deeper of the depression's spill
+    level (filled) and a closing with a disc `reach` metres across in radius, which also catches
+    a bowl that opens downhill. A plain slope is neither."""
+    radius = max(1, int(round(reach / grid.cell)))
+    yy, xx = np.mgrid[-radius:radius + 1, -radius:radius + 1]
+    disc = xx * xx + yy * yy <= radius * radius
+    closed = ndimage.grey_closing(grid.heights, footprint=disc, mode="nearest")
+    return np.maximum(filled(grid.heights), closed) - grid.heights
+
+
+def _bowls_from_ground(grid: Grid, park, depth: float = 0.4, lip: float = 0.25, min_area: float = 6.0):
+    """Depressions in the park at least `depth` deep, grown out to where they are `lip` deep
+    (near the coping), as outlines."""
     import shapely
     from .city import rasterise
-    low = rasterise(park, grid) & (grid.heights < deck - depth)
-    labels, _ = ndimage.label(low)
+    in_park = rasterise(park, grid)
+    sunk_by = sunk(grid)
+    seeds = in_park & (sunk_by >= depth)
+    shallow = in_park & (sunk_by >= lip)
+    grown = ndimage.binary_propagation(seeds, mask=shallow)
+    labels, _ = ndimage.label(grown)
     outlines = []
     for index, slices in enumerate(ndimage.find_objects(labels), start=1):
         rows, cols = np.nonzero(labels[slices] == index)
@@ -155,7 +198,25 @@ def _coping(outline, grid: Grid, spacing: float = 0.25) -> np.ndarray:
         outward.append(n)
     outward = np.array(outward)
     z = np.maximum(grid.sample(points + outward * 0.3), grid.sample(points + outward * 0.6))
-    return np.column_stack([points, z])
+    return np.column_stack([points, z, outward])
+
+
+def _lip_runs(coping: np.ndarray, grid: Grid, steep: float = 25.0, min_length: float = 2.0) -> list[np.ndarray]:
+    """The stretches of an edge that are a lip: where the ground just inside drops at least
+    `steep` degrees. A found bowl's edge also crosses flat deck and the foot of banks."""
+    points, outward = coping[:, :2], coping[:, 3:5]
+    drop = grid.sample(points + outward * 0.25) - grid.sample(points - outward * 0.5)
+    lip = np.degrees(np.arctan2(drop, 0.75)) >= steep
+    runs, start = [], None
+    for i, on in enumerate(np.append(lip, False)):
+        if on and start is None:
+            start = i
+        elif not on and start is not None:
+            run = coping[start:i, :3]
+            if len(run) >= 2 and np.sum(np.hypot(*np.diff(run[:, :2], axis=0).T)) >= min_length:
+                runs.append(run)
+            start = None
+    return runs
 
 
 def build(items: list[MapItem], points: ept.Points, near=(0.0, 0.0), cell: float = 0.25,
@@ -177,7 +238,7 @@ def build(items: list[MapItem], points: ept.Points, near=(0.0, 0.0), cell: float
     deck = float(np.percentile(grid.heights[deck_cells], 70))
     notes = []
     from_map = bool(holes)
-    outlines = holes if holes else _bowls_from_ground(grid, outline, deck)
+    outlines = holes if holes else _bowls_from_ground(grid, outline)
     if not holes:
         notes.append("the map has no bowl outlines (holes in the park); bowls were found in the ground")
     gy, gx = np.gradient(grid.heights, grid.cell)
@@ -192,7 +253,10 @@ def build(items: list[MapItem], points: ept.Points, near=(0.0, 0.0), cell: float
         coping = _coping(shape, grid)
         bowls.append(Bowl(shape, count, float(np.median(coping[:, 2])), float(np.percentile(grid.heights[inside], 2)),
                           float(np.percentile(slope[inside], 98)), from_map))
-        grinds.append(Grind(coping, 0.05, "metal", "coping", closed=True))
+        if from_map:  # the map's outline is the coping, all round
+            grinds.append(Grind(coping[:, :3], 0.05, "metal", "coping", closed=True))
+        else:  # a found outline is coping only where it tops a steep wall
+            grinds += [Grind(run, 0.05, "metal", "coping") for run in _lip_runs(coping, grid)]
     park_cells = rasterise(outline, grid)
     density = int(shapely.contains_xy(outline, tree_xy[:, 0], tree_xy[:, 1]).sum()) / max(outline.area, 1e-6)
     model = CityModel(region.bounds, grid, True, [], [], outline, outline, deck, notes, {"lidar"})

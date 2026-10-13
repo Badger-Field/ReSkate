@@ -110,9 +110,22 @@ def test_bowls_are_found_without_map_holes():
     found = skatepark.build([park_item(with_hole=False)], survey())
     (bowl,) = found.bowls
     assert not bowl.from_map
-    # Ground 0.6 m below the deck: inside r where 2(1 - (r/4)^4) = 0.6, about 3.66 m.
-    assert bowl.outline.area == pytest.approx(math.pi * 3.66 ** 2, rel=0.2)
+    # Grown out to where it is 0.25 m deep: 2(1 - (r/4)^4) = 0.25 at r = 3.87 m, by the coping.
+    assert bowl.outline.area == pytest.approx(math.pi * 3.87 ** 2, rel=0.15)
     assert bowl.depth == pytest.approx(DEPTH, abs=0.25)
+    radii = np.hypot(*(found.model.grinds[0].points[:, :2] - BOWL_CENTRE).T)
+    assert np.median(radii) == pytest.approx(RADIUS, abs=0.3)
+
+
+def test_a_hillside_is_not_a_bowl():
+    """A park on a slope, without a bowl: falling ground towards one side is no depression."""
+    points = survey()
+    keep = np.hypot(points.xyz[:, 0] - BOWL_CENTRE[0], points.xyz[:, 1] - BOWL_CENTRE[1]) > RADIUS + 0.5
+    xyz = points.xyz[keep].copy()
+    xyz[:, 2] += -0.12 * xyz[:, 0]  # 12 % down to the east: 6 m across the area
+    hill = ept.Points(xyz, points.classes[keep], "synthetic", points.layered[keep])
+    found = skatepark.build([park_item(with_hole=False)], hill)
+    assert found.bowls == []
 
 
 def test_spawn_is_on_the_deck(park):
