@@ -183,7 +183,7 @@ python -m reskate_lidar anchor search --map bam --around 627.1 1062.8 --radius 2
 1. **Batches:** this writes the spots as batches. Each batch is one `RESKATE_STARTUP_COMMANDS` value under the launcher's 4,000 characters: about 55 spots, about 9 minutes. `--per-batch` caps it lower.
    - **The route:** the spots run as a serpentine of short hops, so each lands next to ground that has already streamed in.
    - **Two probes a spot:** `trainer ground x z;wait 8;trainer ground x z`. The first answers within milliseconds of the teleport, before a far spot's collision has loaded. On bam an unloaded spot reads 191.0, the same as the sea. The second, 8 s later (`--wait`), reads the loaded ground under the skater.
-   - **One probe a spot:** `--no-settle` is faster but unreliable for far spots.
+   - **`--fast`:** one probe a spot, `trainer ground x z;wait 4`, read from the landing watch's log lines. It takes half the time and fits twice the spots a batch. Keep the default two probes until a fast run and a settled run of the same spots agree.
 2. **Run each batch:** set the value, start the game, load the map with no park mods, and keep each run's `ReSkate.log` as its own file. It can run unattended.
 3. **Rank:**
 
@@ -196,13 +196,14 @@ python -m reskate_lidar anchor search --map bam --around 627.1 1062.8 --radius 2
    - **Squares left out:** those with under 85% of their probes read.
    - **Each spot's height**, most trusted first:
      1. the second probe;
-     2. the trainer's landing watch: the last "landed at" or "landing watch ended at" within 30 m of the spot;
-     3. the first, early reading. It is reported as unsettled, to probe again.
+     2. the landing watch's "sank to … under the surface at H; put back on it", which gives H, the loaded surface, exactly;
+     3. the last "landed at" or "landing watch ended at" within 30 m of the spot, less 1.0 m (the skater's height there, measured on bam). Over water the skater lands below the water level, so the reading is below it;
+     4. the first, early reading. It is reported as unsettled, to probe again.
    - **Water and out of bounds:** the game's probe gives a height, not what the surface is.
      - When the game sends the skater back to the start (a watch line more than 30 m away), the spot is unusable.
      - When many spots settle at exactly the lowest height seen, that height is taken as water.
      - Both count against a square.
-     - `--water-level` (or `--water-height`) sets the water height. On bam it is 191.0. `--no-water` turns this off.
+     - `--water-level` (or `--water-height`) sets the water height. On bam it is 191.0; pass it with `--fast`. `--no-water` turns this off.
    - **Street level first:** places within 10 m (`--height-window`) of a reference height come first. The reference is the median of the land probes within 30 m of the search's centre (the middle of the probed area), or the nearest land probe to it, unless `--near-height` sets it. On bam, street level is about 199.4-199.9.
    - **Suspicious squares:** a square exactly flat over 20 or more probes is flagged and ranked last. Real ground has kerbs and falls; the sea doesn't.
    - **Widening:** search further out without probing the middle again with `--radius 400 --skip-radius 200`.

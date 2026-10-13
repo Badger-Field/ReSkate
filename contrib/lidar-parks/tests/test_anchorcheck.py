@@ -121,7 +121,7 @@ def test_search_grid_and_batches():
 
 def watch(x, y, z, ended=False):
     what = "landing watch ended" if ended else "landed"
-    return f"[info] Trainer: {what} at {x:.1f}, {y + anchorcheck.STAND_HEIGHT:.1f}, {z:.1f}" + \
+    return f"[info] Trainer: {what} at {x:.1f}, {y + anchorcheck.WATCH_HEIGHT:.1f}, {z:.1f}" + \
         (" after 0 correction(s)." if ended else ".")
 
 
@@ -293,3 +293,31 @@ def test_small_squares_and_mixed_grids_have_enough_probes():
             for x, z in anchorcheck.search_points(700, 1000, 500, 30, skip_radius=200)}
     best = anchorcheck.rank(heights | ring, size=160, top=20, reference=200.0)
     assert any(max(abs(c.x - 700), abs(c.z - 1000)) > 250 for c in best)
+
+
+def test_fast_mode_reads_the_landing_watch(tmp_path, capsys):
+    """One probe a spot, as the PC logged them on bam (the surface H, the water at 191.0)."""
+    log = "\n".join([
+        # Loaded already: the watch logs the landing at H + 1.0.
+        landed(100, 205.2, 200), "[info] Skater creation 3 entered", "[info] Trainer: landed at 100.0, 206.2, 200.0.",
+        # Not loaded: the ray reads 191.0, the skater sinks, is put back on H, then lands.
+        landed(120, 191.0, 200), "[info] Trainer: sank to 190.5 under the surface at 199.7; put back on it.",
+        "[info] Trainer: landed at 120.0, 200.7, 200.0.",
+        # Water: lands below the water level.
+        landed(140, 191.0, 200), "[info] Skater creation 4 entered", "[info] Trainer: landed at 140.0, 190.4, 200.0.",
+    ])
+    readings = anchorcheck.read_probes(log)
+    assert readings.heights[(100.0, 200.0)] == pytest.approx(205.2)
+    assert readings.heights[(120.0, 200.0)] == pytest.approx(199.7)        # the sank line's H, exact
+    assert readings.heights[(140.0, 200.0)] < 191.0                         # below the water: water
+    assert not readings.unsettled and not readings.reset
+    heights = {(float(x), float(z)): 200.0 for x in range(0, 201, 20) for z in range(0, 201, 20)}
+    heights.update({(float(x), float(z)): 189.4 for x in range(0, 61, 20) for z in range(0, 201, 20)})
+    best = anchorcheck.rank(heights, size=100, water=191.0, reference=200.0)
+    assert best[0].x - 50 > 60 and best[0].level_share == 1.0
+
+    assert cli.main(["anchor", "search", "--around", "0", "0", "--radius", "200", "--spacing", "20", "--fast",
+                     "--out-dir", str(tmp_path)]) == 0
+    first = (tmp_path / "batch-01.txt").read_text()
+    assert first.startswith("trainer ground -200.0 -200.0;wait 4;trainer ground -180.0 -200.0;wait 4")
+    assert "Each is probed once" in capsys.readouterr().out

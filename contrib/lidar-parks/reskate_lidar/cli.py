@@ -117,8 +117,8 @@ def main(argv: list[str] | None = None) -> int:
     probe.add_argument("--spacing", type=float, default=10.0, help="metres between probes (default 10; "
                                                                     "widened to keep within --limit)")
     probe.add_argument("--limit", type=int, default=50, help="most spots (default 50, which fits one startup value)")
-    probe.add_argument("--wait", type=int, default=8, help="seconds at each spot before the settling second probe "
-                                                       "(default 8)")
+    probe.add_argument("--wait", type=int, help="seconds at each spot (default 8, or 4 with --fast)")
+    probe.add_argument("--fast", action="store_true", help="one probe a spot, read from the landing watch")
     probe.add_argument("--out", help="also write the console lines here, one per probe")
     check = anchor_steps.add_parser("check", help="read the probes' heights from ReSkate.log")
     check.add_argument("--park", required=True, help="the .park.json that was probed")
@@ -132,8 +132,10 @@ def main(argv: list[str] | None = None) -> int:
     search.add_argument("--around", nargs=2, type=float, metavar=("X", "Z"), help="the search's centre on the map")
     search.add_argument("--radius", type=float, default=200.0, help="metres each way from --around (default 200)")
     search.add_argument("--spacing", type=float, default=20.0, help="metres between probes (default 20)")
-    search.add_argument("--wait", type=int, default=8, help="seconds at each spot before the settling second "
-                                                        "probe, for its collision to stream in (default 8)")
+    search.add_argument("--wait", type=int, help="seconds at each spot: before the settling second probe (default "
+                                                 "8), or with --fast before the next spot (default 4)")
+    search.add_argument("--fast", action="store_true", help="one probe a spot, read from the landing watch's log "
+                                                            "lines: half the time and twice the spots a batch")
     search.add_argument("--no-settle", action="store_true", help="probe each spot once (fast, but far spots may "
                                                                  "read before they load)")
     search.add_argument("--per-batch", type=int, help="at most this many spots a batch (default: as many as fit)")
@@ -538,13 +540,15 @@ def run_anchor(args) -> int:
         if args.spacing <= 0 or args.limit < 2:
             raise ValueError("--spacing must be positive and --limit at least 2")
         points = anchorcheck.probe_points(footprint, args.spacing, limit=args.limit)
-        commands = anchorcheck.startup_commands(points, args.wait)
+        wait = args.wait if args.wait is not None else (anchorcheck.FAST_WAIT if args.fast else anchorcheck.SETTLE_WAIT)
+        commands = anchorcheck.startup_commands(points, wait, settle=not args.fast)
         print(f"{len(points)} probes over {len(footprint.items)} objects on {footprint.map}. Load {footprint.map} "
               "without the park, then either set this before starting the game:")
         print(f"  RESKATE_STARTUP_COMMANDS={commands}")
         print("The value alone, to paste:")
         print(commands)
-        print(f"or type each line in the console, twice, {args.wait} s apart (the second reads the loaded ground):")
+        print(f"or type each line in the console, waiting {wait} s after each" +
+              ("" if args.fast else " and typing it again (the second reads the loaded ground)") + ":")
         lines = [f"trainer ground {x:.1f} {z:.1f}" for x, z in points]
         for line in lines:
             print(f"  {line}")
@@ -569,27 +573,31 @@ def _anchor_search(args) -> int:
     if bool(args.around) == bool(args.log):
         raise ValueError("anchor search takes either --around X Z (write probes) or --log (rank what they found)")
     if args.around:
-        if args.spacing <= 0 or not 0 < args.radius <= 5000 or args.wait < 0 or not 0 <= args.skip_radius < args.radius:
+        if args.spacing <= 0 or not 0 < args.radius <= 5000 or (args.wait or 0) < 0 or not 0 <= args.skip_radius < args.radius:
             raise ValueError("--spacing and --radius must be positive (radius up to 5000), --skip-radius under "
                              "--radius, --wait at least 0")
         points = anchorcheck.search_points(*args.around, args.radius, args.spacing, args.skip_radius)
+        settle = not (args.no_settle or args.fast)
+        wait = args.wait if args.wait is not None else (anchorcheck.SETTLE_WAIT if settle else anchorcheck.FAST_WAIT)
         if args.per_batch is not None and args.per_batch < 1:
             raise ValueError("--per-batch must be at least 1")
-        batches = anchorcheck.batches(points, args.wait, settle=not args.no_settle, per_batch=args.per_batch)
-        per_spot = args.wait + (0 if args.no_settle else 1)
+        batches = anchorcheck.batches(points, wait, settle=settle, per_batch=args.per_batch)
+        per_spot = wait + (1 if settle else 0)
         skipped = f", leaving out the {args.skip_radius:g} m already probed" if args.skip_radius else ""
         print(f"{len(points)} probes, {args.spacing:g} m apart, {args.radius:g} m each way round "
               f"{args.around[0]:g}, {args.around[1]:g}{skipped} on {args.map}: {len(batches)} batches. For each batch, start "
               f"the game with RESKATE_STARTUP_COMMANDS set to it, load {args.map} with no park mods, let it run "
               f"(about {len(points) * per_spot // len(batches) // 60 + 1} min), and keep ReSkate.log as its own file.")
-        print("The spots run as a serpentine of short hops. Each is probed twice: the first sends the skater, the "
-              f"second, {args.wait} s later, reads the ground once it has streamed in. Over water or out of bounds the "
-              "game resets the skater to the start: that is expected, and marks the spot as unusable. Let it run on.")
+        how = (f"Each is probed twice: the first sends the skater, the second, {wait} s later, reads the ground once it "
+               "has streamed in." if settle else
+               f"Each is probed once and read from the landing watch's log lines within {wait} s (--fast).")
+        print(f"The spots run as a serpentine of short hops. {how} Over water or out of bounds the game may reset the "
+              "skater to the start: that is expected. Let it run on.")
         folder = Path(args.out_dir) if args.out_dir else None
         if folder:
             folder.mkdir(parents=True, exist_ok=True)
         for number, batch in enumerate(batches, 1):
-            spots = batch.count("trainer ground") // (1 if args.no_settle else 2)
+            spots = batch.count("trainer ground") // (2 if settle else 1)
             print(f"\n# batch {number} of {len(batches)} ({spots} spots)")
             print(batch)
             if folder:

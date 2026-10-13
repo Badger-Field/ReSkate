@@ -33,7 +33,10 @@ NOT_LOADED = re.compile(r"Trainer: no collision at (-?[\d.]+), (-?[\d.]+) yet")
 # The landing watch after each teleport (trainer.cpp update_landing): where the skater ended up.
 NUMBER = r"(-?\d+(?:\.\d+)?)"   # not [\d.]+: "landed at X, Y, Z." ends in a full stop
 SETTLED = re.compile(rf"Trainer: (?:landed|landing watch ended) at {NUMBER}, {NUMBER}, {NUMBER}")
+SANK = re.compile(rf"Trainer: sank to {NUMBER} under the surface at {NUMBER}; put back")
+WATCH_HEIGHT = 1.0        # measured on bam: "landed at" logs the skater's position, the surface + 1.0
 SETTLE_WAIT = 8           # seconds for a far spot's collision to stream in (measured on bam)
+FAST_WAIT = 4             # one probe a spot: the watch logs a landing within ~3 s (measured on bam)
 ARRIVED = 30.0            # metres: the watch's own arrival radius; further away means a reset
 
 
@@ -100,9 +103,11 @@ def read_probes(log: str) -> Readings:
     A spot starts at its first `trainer ground` line. Its height is, in order of trust:
     1. a second `trainer ground` reading at the same spot (the settled run's own ray, taken
        after the collision streamed in);
-    2. the last landing-watch line ("landed at" / "landing watch ended at") within 30 m of it,
-       less the standing height;
-    3. the first, early reading, marked unsettled.
+    2. the landing watch's "sank to ... under the surface at H; put back": H, the loaded surface;
+    3. the last landing-watch line ("landed at" / "landing watch ended at") within 30 m of it,
+       less WATCH_HEIGHT. Over water the skater lands below the water level (190.4-190.5 on
+       bam, water at 191.0), so this reads below it;
+    4. the first, early reading, marked unsettled.
     A watch line further than 30 m away means the game put the skater back at the start: the
     spot is water or out of bounds. The last run of a spot wins."""
     readings = Readings({}, [], set(), set())
@@ -121,6 +126,8 @@ def read_probes(log: str) -> Readings:
             readings.reset.add(key)
         if spot["confirm"] is not None:
             readings.heights[key] = spot["confirm"]
+        elif spot["sank"] is not None:
+            readings.heights[key] = spot["sank"]
         elif spot["watched"] is not None:
             readings.heights[key] = spot["watched"]
         elif spot["first"] is not None:
@@ -141,11 +148,14 @@ def read_probes(log: str) -> Readings:
                     spot["confirm"] = ground
                 continue
             close(spot)
-            spot = {"key": (x, z), "first": ground, "confirm": None, "watched": None, "reset": False, "teleports": 1}
+            spot = {"key": (x, z), "first": ground, "confirm": None, "sank": None, "watched": None, "reset": False,
+                    "teleports": 1}
+        elif (m := SANK.search(line)) and spot is not None:
+            spot["sank"] = float(m.group(2))
         elif (m := SETTLED.search(line)) and spot is not None:
             x, y, z = (float(v) for v in m.groups())
             if math.hypot(x - spot["key"][0], z - spot["key"][1]) <= ARRIVED:
-                spot["watched"] = y - STAND_HEIGHT
+                spot["watched"] = y - WATCH_HEIGHT
             else:
                 spot["reset"] = True
     close(spot)
@@ -263,6 +273,8 @@ WATER_MIN = 20            # probes: a few low points are a dip, not a sea
 
 def water_level(heights: dict[tuple[float, float], float]) -> float | None:
     """The height of water, if the probes show it: many probes at exactly the lowest height seen.
+    With --fast readings, the skater lands just below the water and those heights vary by a
+    decimetre, so pass the level (--water-height; 191.0 on bam) rather than rely on this.
     Probes up to WATER_BAND above it then count as water too (wet sand, the shoreline). The sea and lakes read like that; ground never does. None if there is none.
 
     The game's ground probe gives a height, not what the surface is, so this is a guess from the
