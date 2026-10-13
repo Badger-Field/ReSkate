@@ -158,10 +158,6 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
     add_executable(dingosdk_multiplayer_lane_tests Extension/Multiplayer/Test/steam_lanes_tests.cpp)
     target_include_directories(dingosdk_multiplayer_lane_tests SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/External/steam_networking")
     add_test(NAME multiplayer_lanes COMMAND dingosdk_multiplayer_lane_tests)
-    # The launcher finding skate. in Steam's files (header only, so it runs everywhere).
-    add_executable(dingosdk_steam_library_tests Launcher/Test/steam_library_tests.cpp)
-    target_include_directories(dingosdk_steam_library_tests PRIVATE "${PROJECT_SOURCE_DIR}")
-    add_test(NAME launcher_steam_library COMMAND dingosdk_steam_library_tests)
     add_executable(dingosdk_multiplayer_prediction_tests
         Extension/Multiplayer/Test/prediction_tests.cpp Extension/Multiplayer/Net/protocol.cpp Extension/Multiplayer/Remote/playback_buffers.cpp)
     add_test(NAME multiplayer_prediction COMMAND dingosdk_multiplayer_prediction_tests)

@@ -1,5 +1,6 @@
 #include "install_here.h"
 #include "steam_library.h"
+#include "text_encoding.h"
 #include "Engine/Core/Log/logging.h"
 
 #include <Windows.h>
@@ -21,13 +22,6 @@ constexpr wchar_t skate_app[] = L"3354750";
 // without Steam when it came with them.
 constexpr std::array<const wchar_t *, 3> files{L"ReSkateLauncher.exe", L"ReSkate.dll", L"GameNetworkingSockets.dll"};
 
-std::wstring widen(std::string_view text) {
-    if (text.empty()) return {};
-    const auto n = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
-    std::wstring out(static_cast<std::size_t>(std::max(n, 0)), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), out.data(), n);
-    return out;
-}
 std::string read_text(const fs::path &path) {
     std::ifstream in(path, std::ios::binary);
     return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
@@ -76,13 +70,13 @@ std::optional<fs::path> find_steam_skate() {
     if (!steam) return std::nullopt;
     std::vector<fs::path> libraries{*steam};
     for (const auto &folder : steam_library::library_folders(read_text(*steam / L"steamapps" / L"libraryfolders.vdf")))
-        libraries.emplace_back(widen(folder));
+        libraries.emplace_back(launcher_text::wide(folder));
     std::error_code error;
     for (const auto &library : libraries) {
         const auto manifest = library / L"steamapps" / (std::wstring(L"appmanifest_") + skate_app + L".acf");
         const auto folder = steam_library::manifest_value(read_text(manifest), "installdir");
         if (!folder || !steam_library::plain_folder_name(*folder)) continue;
-        const auto game = library / L"steamapps" / L"common" / widen(*folder);
+        const auto game = library / L"steamapps" / L"common" / launcher_text::wide(*folder);
         if (fs::is_regular_file(game / L"Skate.exe", error)) return game;
     }
     return std::nullopt;
@@ -94,20 +88,47 @@ fs::path install_into(const fs::path &game, const fs::path &from) {
     if (!fs::is_regular_file(from / L"ReSkate.dll", error))
         throw std::runtime_error("ReSkate.dll is not beside the launcher. Unzip the whole ReSkate download first.");
     if (fs::equivalent(game, from, error)) return game / L"ReSkateLauncher.exe";
+    // All or nothing: every file is copied in beside its target first; then each target that
+    // exists is set aside and the new one moved in. If any step fails, what was moved is put
+    // back, so the folder never ends up with a new launcher and an old runtime.
+    struct Step {
+        fs::path target, staged, kept;
+        bool had{}, moved{};
+    };
+    std::vector<Step> steps;
+    const auto undo = [&] {
+        std::error_code ignored;
+        for (auto it = steps.rbegin(); it != steps.rend(); ++it) {
+            if (it->moved) fs::remove(it->target, ignored);
+            if (it->had && fs::exists(it->kept, ignored)) MoveFileExW(it->kept.c_str(), it->target.c_str(), MOVEFILE_REPLACE_EXISTING);
+            fs::remove(it->staged, ignored);
+        }
+    };
     for (const auto *name : files) {
         const auto source = from / name;
         if (!fs::is_regular_file(source, error)) continue;
-        // Copied beside, then moved over, so a failed copy never leaves half a file in the game.
-        const auto target = game / name;
-        auto staged = target;
-        staged += L".new";
-        fs::copy_file(source, staged, fs::copy_options::overwrite_existing, error);
-        if (error || !MoveFileExW(staged.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-            fs::remove(staged, error);
-            throw std::runtime_error("Could not copy " + fs::path(name).string() +
-                                     " into the game folder. Close skate. and try again.");
+        Step step{game / name, game / name, game / name};
+        step.staged += L".new";
+        step.kept += L".old";
+        fs::copy_file(source, step.staged, fs::copy_options::overwrite_existing, error);
+        steps.push_back(step);
+        if (error) {
+            undo();
+            throw std::runtime_error("Could not copy " + launcher_text::utf8(fs::path(name).wstring()) + " into the game folder.");
         }
     }
+    for (auto &step : steps) {
+        step.had = fs::exists(step.target, error);
+        if ((step.had && !MoveFileExW(step.target.c_str(), step.kept.c_str(), MOVEFILE_REPLACE_EXISTING)) ||
+            !MoveFileExW(step.staged.c_str(), step.target.c_str(), MOVEFILE_WRITE_THROUGH)) {
+            step.moved = false;
+            undo();
+            throw std::runtime_error("Could not replace " + launcher_text::utf8(step.target.filename().wstring()) +
+                                     ". Close skate. and try again.");
+        }
+        step.moved = true;
+    }
+    for (const auto &step : steps) fs::remove(step.kept, error);
     const auto launcher = game / L"ReSkateLauncher.exe";
     // Shortcuts: best effort, the install stands without them.
     const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
@@ -145,12 +166,19 @@ void uninstall_from(const fs::path &game) {
     const auto launcher = game / L"ReSkateLauncher.exe";
     if (!fs::is_regular_file(game / L"Skate.exe", error) || !fs::is_regular_file(launcher, error))
         throw std::runtime_error("ReSkate is not installed in a skate. folder here.");
-    // The runtime first: while skate. runs it cannot be removed, and nothing else is touched yet.
-    for (const auto *name : {L"ReSkate.dll", L"GameNetworkingSockets.dll"}) {
-        const auto file = game / name;
-        if (fs::exists(file, error) && !fs::remove(file, error))
-            throw std::runtime_error("Close skate. first: " + fs::path(name).string() + " is in use.");
+    // Nothing is removed while skate. (or anything else) still has ReSkate's files open: each is
+    // opened for exclusive access first, and only when all of them can be are they deleted.
+    const std::array<fs::path, 2> runtime{game / L"ReSkate.dll", game / L"GameNetworkingSockets.dll"};
+    for (const auto &file : runtime) {
+        if (!fs::exists(file, error)) continue;
+        const auto handle = CreateFileW(file.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle == INVALID_HANDLE_VALUE)
+            throw std::runtime_error("Close skate. first: " + launcher_text::utf8(file.filename().wstring()) + " is in use.");
+        CloseHandle(handle);
     }
+    for (const auto &file : runtime)
+        if (fs::exists(file, error) && !fs::remove(file, error))
+            throw std::runtime_error("Close skate. first: " + launcher_text::utf8(file.filename().wstring()) + " is in use.");
     fs::remove(game / L"ReSkateLauncher.settings.json", error);
     // Shortcuts and the right-click entry: only ours, pointing at this install.
     const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
@@ -168,8 +196,11 @@ void uninstall_from(const fs::path &game) {
             ERROR_SUCCESS &&
         std::wstring_view(command.data()).find(launcher.wstring()) != std::wstring_view::npos)
         RegDeleteTreeW(HKEY_CURRENT_USER, verb_key);
-    // The running launcher cannot delete itself: a hidden command does, once it has exited.
-    std::wstring line = L"cmd.exe /c timeout /t 3 /nobreak >nul & del /f /q \"" + launcher.wstring() + L"\"";
+    // The running launcher cannot delete itself: a hidden command does, once it has exited,
+    // trying each second for half a minute (shutdown, or a virus scanner, can hold it a while).
+    const auto quoted = L"\"" + launcher.wstring() + L"\"";
+    std::wstring line = L"cmd.exe /c for /l %i in (1,1,30) do @(del /f /q " + quoted + L" >nul 2>&1 & if not exist " + quoted +
+                        L" (exit /b 0) else (timeout /t 1 /nobreak >nul))";
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};

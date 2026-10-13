@@ -265,6 +265,8 @@ public:
     void restart();
     // install_here: copy ReSkate into the Steam copy of skate., then hand over to the launcher there.
     void install_here();
+    // After Remove ReSkate: the settings file is gone and stays gone (save() does nothing).
+    void forget_settings() { settings_forgotten_ = true; }
 
 private:
     launcher_app::Session session_;
@@ -284,6 +286,7 @@ private:
     std::atomic<bool> cancel_{};
     std::atomic<bool> restart_{};
     std::filesystem::path handoff_; // a launcher to start in this one's place (install_here)
+    bool settings_forgotten_{};
     std::atomic<bool> ignore_mod_problems_{};
     std::atomic<DWORD> game_{};
     std::atomic<bool> launched_{};

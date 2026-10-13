@@ -1,10 +1,12 @@
 #include "gui_internal.h"
 #include "install_here.h"
+#include "text_encoding.h"
 
 #include "depot_output.h"
 
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Log/logging.h"
+#include "Engine/Core/Platform/launcher_support.h"
 #include "Engine/Vfs/mod_catalog.h"
 
 #include <shellapi.h>
@@ -148,6 +150,7 @@ void Launcher::game_exited(bool seen) {
 }
 
 void Launcher::save() {
+    if (settings_forgotten_) return;
     save_settings(settings_path(session_), settings_);
     // The game inherits the launcher's environment, so this reaches the next launch; the
     // launcher's own crash reporting follows the setting from its next start.
@@ -174,13 +177,9 @@ void Launcher::install_here() {
             std::lock_guard lock(mutex_);
             target = state_.install_target;
         }
-        set(Phase::checking, "Installing ReSkate", "Copying it into " + target.string());
-        try {
-            handoff_ = launcher_app::install_into(target, session_.self.parent_path());
-            restart_ = true; // the launcher in the game folder takes over
-        } catch (const std::exception &e) {
-            fail(e.what());
-        }
+        set(Phase::checking, "Installing ReSkate", "Copying it into " + launcher_text::utf8(target.wstring()));
+        handoff_ = launcher_app::install_into(target, session_.self.parent_path()); // start() reports a failure
+        restart_ = true; // the launcher in the game folder takes over
     });
 }
 void Launcher::apply_updates() { start([this] { run_updates(); }); }
@@ -326,13 +325,24 @@ void Launcher::run_check() {
     {
         std::error_code error;
         if (!fs::is_regular_file(session_.paths.game, error)) {
-            if (const auto found = launcher_app::find_steam_skate()) {
+            // Only a Steam copy that is the build ReSkate supports: otherwise the download below
+            // (a copy of its own, here) is the way, and Steam's install is left alone.
+            const auto found = launcher_app::find_steam_skate();
+            bool supported = false;
+            if (found) {
+                try {
+                    launcher::validate_game_file(*found / L"Skate.exe");
+                    supported = true;
+                } catch (...) {
+                }
+            }
+            if (supported) {
                 {
                     std::lock_guard lock(mutex_);
                     state_.install_target = *found;
                 }
                 set(Phase::install_here, "Install ReSkate",
-                    "Found skate. in your Steam library:\n" + found->string() +
+                    "Found skate. in your Steam library:\n" + launcher_text::utf8(found->wstring()) +
                     "\nReSkate copies itself there and adds Desktop and Start menu shortcuts.");
                 return;
             }

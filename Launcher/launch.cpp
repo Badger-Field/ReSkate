@@ -451,14 +451,14 @@ RemoteModule inject_dll(HANDLE process, const fs::path& dll) {
 
 namespace dingosdk::launcher_app {
 
-Session open_session(const std::string& log_level) {
+Session open_session(const std::string& log_level, bool fresh_log) {
     Session session;
     session.self = canonical_file(module_path(), L"ReSkateLauncher.exe");
     session.paths = launcher::sibling_paths(session.self);
     session.paths.logs = logging::log_directory(session.paths.directory);
     logging::Options logging_options;
     logging_options.directory = session.paths.logs;
-    logging_options.truncate_file = true;
+    logging_options.truncate_file = fresh_log;
     logging_options.level = logging::parse_level(log_level).value_or(logging::Level::info);
     if (!logging::initialize(logging_options)) logging::write(logging::Level::warning,
         logging::Channel::launcher, "File logging is unavailable; debugger output remains active.");

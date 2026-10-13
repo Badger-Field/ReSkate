@@ -148,10 +148,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         if (headless) log_level = dingosdk::launcher::parse_launch_options(
             [&] { auto copy = arguments; take_flag(copy, L"--no-update"); take_flag(copy, L"--reskate-updated"); return copy; }()).log_level;
         dingosdk::launcher_gui::apply_crash_report_setting();
-        const auto session = app::open_session(log_level);
+        const auto mod = std::find(arguments.begin(), arguments.end(), L"--install-mod");
+        const bool installing_mod = mod != arguments.end() && mod + 1 != arguments.end();
+        const auto session = app::open_session(log_level, !installing_mod);
         logs = session.paths.logs;
-        if (const auto mod = std::find(arguments.begin(), arguments.end(), L"--install-mod");
-            mod != arguments.end() && mod + 1 != arguments.end())
+        if (installing_mod)
             result = install_mod(session, fs::path(*(mod + 1)));
         else if (headless) run_headless(session, arguments, original);
         else result = dingosdk::launcher_gui::run(session, arguments);

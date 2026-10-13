@@ -389,6 +389,7 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
                         L"Remove ReSkate", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND) == IDYES) {
             try {
                 launcher_app::uninstall_from(paths.directory);
+                launcher.forget_settings(); // closing would write them back
                 MessageBoxW(nullptr, L"ReSkate was removed. The launcher closes now.", L"Remove ReSkate",
                             MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
                 PostQuitMessage(0);
