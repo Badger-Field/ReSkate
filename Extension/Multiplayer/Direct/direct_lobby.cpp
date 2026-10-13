@@ -151,8 +151,9 @@ class WinWebSocket final : public WebSocket {
     ~WinWebSocket() override { abort(); }
     bool send_text(std::string_view text) override {
         std::lock_guard lock(send_mutex_);
-        return !aborted_ && WinHttpWebSocketSend(socket_.h, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE,
-                                                 const_cast<char *>(text.data()), static_cast<DWORD>(text.size())) == NO_ERROR;
+        const HINTERNET h = socket_.load();
+        return h && WinHttpWebSocketSend(h, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, const_cast<char *>(text.data()),
+                                         static_cast<DWORD>(text.size())) == NO_ERROR;
     }
     std::optional<std::string> receive() override {
         std::string message;
@@ -160,7 +161,8 @@ class WinWebSocket final : public WebSocket {
         for (;;) {
             DWORD read = 0;
             WINHTTP_WEB_SOCKET_BUFFER_TYPE type{};
-            if (aborted_ || WinHttpWebSocketReceive(socket_.h, buffer, sizeof(buffer), &read, &type) != NO_ERROR ||
+            const HINTERNET h = socket_.load();
+            if (!h || WinHttpWebSocketReceive(h, buffer, sizeof(buffer), &read, &type) != NO_ERROR ||
                 type == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE)
                 return std::nullopt;
             message.append(buffer, read);
@@ -169,20 +171,20 @@ class WinWebSocket final : public WebSocket {
                 return message;
         }
     }
+    // Takes the handle atomically, so receive() on the worker thread never reads it half
+    // written; closing it ends a receive() already waiting on it, and a later one sees none.
     void abort() override {
-        if (aborted_.exchange(true)) return;
-        // Closing the handle ends a receive() waiting on it.
-        WinHttpWebSocketShutdown(socket_.h, WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS, nullptr, 0);
-        std::lock_guard lock(send_mutex_);
-        HINTERNET h = std::exchange(socket_.h, nullptr);
-        if (h) WinHttpCloseHandle(h);
+        const HINTERNET h = socket_.exchange(nullptr);
+        if (!h) return;
+        WinHttpWebSocketShutdown(h, WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS, nullptr, 0);
+        std::lock_guard lock(send_mutex_); // not while a send_text() is using it
+        WinHttpCloseHandle(h);
     }
 
   private:
     std::unique_ptr<Http> http_;
-    Handle socket_;
+    std::atomic<HINTERNET> socket_;
     std::mutex send_mutex_;
-    std::atomic<bool> aborted_{};
 };
 
 std::optional<std::string> http_get(const Url &url, const std::string &path, Failure &failure) {

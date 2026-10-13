@@ -123,6 +123,12 @@ export class Hub extends DurableObject {
     // New keys per address per hour: every key that connects is kept (for ID ownership), so
     // the number one address can introduce is limited, and old ones are pruned.
     this.sql.exec("CREATE TABLE IF NOT EXISTS admissions (address TEXT NOT NULL, hour INTEGER NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (address, hour))");
+    // Every table is pruned by time on each connection: an index keeps that from reading (and
+    // being billed for) every row.
+    this.sql.exec("CREATE INDEX IF NOT EXISTS players_seen ON players (seen)");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS used_challenges_used ON used_challenges (used)");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS admissions_hour ON admissions (hour)");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS lobbies_updated ON lobbies (updated)");
   }
 
   async fetch(request) {
