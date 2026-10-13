@@ -117,8 +117,14 @@ class SignalingServer {
                 const auto out = name + line.substr(space) + "\n";
                 std::lock_guard lock(mutex_);
                 if (const auto to = clients_.find(line.substr(0, space)); to != clients_.end()) {
-                    send(to->second, out.data(), out.size(), MSG_NOSIGNAL);
-                    ++forwarded_;
+                    // TCP may take only part of it; the whole line goes, or it is not counted.
+                    std::size_t sent = 0;
+                    while (sent < out.size()) {
+                        const auto n = send(to->second, out.data() + sent, out.size() - sent, MSG_NOSIGNAL);
+                        if (n <= 0) break;
+                        sent += static_cast<std::size_t>(n);
+                    }
+                    if (sent == out.size()) ++forwarded_;
                 }
             }
         }

@@ -11,12 +11,16 @@ Steam and no EA app. This is work in progress on the `direct-multiplayer` branch
 - **NAT traversal:** GNS's built-in ICE client, with no external dependencies. It uses public
   STUN to find each player's address. TURN relays a connection only when both routers are
   symmetric NATs.
-- **Signaling and lobbies:** a small stateless service hosted by Badger-Field. It turns a join
-  code into the host, passes ICE messages between peers, and lists public lobbies. On the game
-  side it is a second implementation of `LobbyApi` (`Extension/Multiplayer/Steam/steam_lobbies.h`).
-- **Identity:** each player has an Ed25519 key in their ReSkate profile. The host verifies a signed
-  challenge when a player joins, so no one can pose as another player. The key maps to a 64-bit
-  player ID outside the SteamID range, so the existing roles, bans and party code keep working.
+- **Signaling and lobbies:** the lobby service in `contrib/lobby-service`, hosted by Badger-Field
+  on Cloudflare: a Worker in front of one Durable Object with its own SQLite store. It passes ICE
+  messages between connected players and lists public lobbies. A join code already contains the
+  host's player ID, so the service never has to look one up. The game side, a second
+  implementation of `LobbyApi` (`Extension/Multiplayer/Steam/steam_lobbies.h`), is not written yet.
+- **Identity:** each player has an Ed25519 key (`Extension/Multiplayer/Direct/direct_identity.h`).
+  The lobby service checks a signed challenge when a player connects. The player ID is a valid
+  SteamID in the development universe (4), with the account number taken from the key's SHA-256,
+  because GNS accepts only SteamID identities. The existing roles, bans and party code keep
+  working. Still to come: keeping the key in the ReSkate profile, and the host checking it too.
 - **Steam mode is unchanged.** The direct transport is used when ReSkate runs in offline mode,
   with Steam closed or signed out.
 

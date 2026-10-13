@@ -87,12 +87,14 @@ struct SteamTransport::Impl {
     struct SignalQueue {
         std::mutex mutex;
         std::vector<std::pair<std::uint64_t, std::vector<std::uint8_t>>> out;
-        void push(std::uint64_t to, const void *bytes, int size) {
-            if (!to || !bytes || size <= 0) return;
+        // False when the signal could not be queued (the queue is full).
+        bool push(std::uint64_t to, const void *bytes, int size) {
+            if (!to || !bytes || size <= 0) return false;
             std::lock_guard lock(mutex);
-            if (out.size() < 256)
-                out.emplace_back(to, std::vector<std::uint8_t>(static_cast<const std::uint8_t *>(bytes),
-                                                               static_cast<const std::uint8_t *>(bytes) + size));
+            if (out.size() >= 256) return false;
+            out.emplace_back(to, std::vector<std::uint8_t>(static_cast<const std::uint8_t *>(bytes),
+                                                           static_cast<const std::uint8_t *>(bytes) + size));
+            return true;
         }
     };
     std::shared_ptr<SignalQueue> signal_queue = std::make_shared<SignalQueue>();
@@ -102,8 +104,7 @@ struct SteamTransport::Impl {
         std::uint64_t peer;
         PeerSignals(std::shared_ptr<SignalQueue> q, std::uint64_t id) : queue(std::move(q)), peer(id) {}
         bool SendSignal(HSteamNetConnection, const SteamNetConnectionInfo_t &, const void *message, int size) override {
-            queue->push(peer, message, size);
-            return true;
+            return queue->push(peer, message, size);
         }
         void Release() override { delete this; }
     };
@@ -693,7 +694,8 @@ bool SteamTransport::host(unsigned capacity) {
     auto options = p.options();
     p.listener = p.listen(p.sockets, virtual_port, static_cast<int>(options.size()), options.data());
     p.state.hosting = p.listener != 0;
-    p.state.detail = p.listener ? "Waiting for players to join." : "Steam could not open the P2P listener.";
+    p.state.detail = p.listener ? "Waiting for players to join."
+                   : p.direct_mode ? "Could not open the listener for direct connections." : "Steam could not open the P2P listener.";
     return p.listener != 0;
 }
 bool SteamTransport::join(std::uint64_t id, std::uint32_t direct_ip, std::uint16_t direct_port) {
@@ -702,7 +704,8 @@ bool SteamTransport::join(std::uint64_t id, std::uint32_t direct_ip, std::uint16
         return false;
     auto &p = *impl_;
     if (id == p.state.local_id) {
-        p.state.detail = "Use Local Echo to test on one machine, or join from another Steam account.";
+        p.state.detail = p.direct_mode ? "Use Local Echo to test on one machine, or join from another player."
+                                       : "Use Local Echo to test on one machine, or join from another Steam account.";
         return false;
     }
     p.host_id = id;
@@ -732,7 +735,8 @@ bool SteamTransport::join(std::uint64_t id, std::uint32_t direct_ip, std::uint16
         }
     }
     const bool connected = connect_peer(id);
-    p.state.detail = connected ? "Connecting through Steam..." : "Steam rejected the connection request.";
+    p.state.detail = p.direct_mode ? (connected ? "Connecting directly..." : "The direct connection could not be started.")
+                                   : (connected ? "Connecting through Steam..." : "Steam rejected the connection request.");
     return connected;
 }
 namespace {
@@ -905,7 +909,7 @@ void SteamTransport::poll() {
         if (trying_direct && !(info.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer && info.m_eEndReason >= 1000 && info.m_eEndReason < 2000) &&
             (info.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
              info.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally)) {
-            p.fall_back(id, link, "Steam reason " + std::to_string(info.m_eEndReason));
+            p.fall_back(id, link, std::string(p.direct_mode ? "reason " : "Steam reason ") + std::to_string(info.m_eEndReason));
             continue;
         }
         if (info.m_eState == k_ESteamNetworkingConnectionState_Connected) {
@@ -915,7 +919,7 @@ void SteamTransport::poll() {
             }
             if (!link.connected && !link.prioritized) link.prioritized = p.lanes.setup(p.sockets, link.handle);
             link.connected = true;
-            p.state.detail = "Steam connected.";
+            p.state.detail = p.direct_mode ? "Connected directly." : "Steam connected.";
         } else if (info.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
                    info.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally) {
             const auto detail = bounded(info.m_szEndDebug, sizeof(info.m_szEndDebug));
@@ -924,11 +928,11 @@ void SteamTransport::poll() {
             if (p.closed.size() >= 256) p.closed.clear();
             p.closed[id] = std::string(info.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ? "closed by their game"
                                                                                                     : "connection lost") +
-                           ", Steam reason " + std::to_string(info.m_eEndReason) + (detail.empty() ? std::string{} : " \"" + detail + "\"") +
+                           (p.direct_mode ? ", reason " : ", Steam reason ") + std::to_string(info.m_eEndReason) + (detail.empty() ? std::string{} : " \"" + detail + "\"") +
                            "; last " + Impl::measured(link);
-            disconnect(id, detail.empty() ? "Steam connection closed." : detail.c_str());
+            disconnect(id, !detail.empty() ? detail.c_str() : p.direct_mode ? "Connection closed." : "Steam connection closed.");
         } else if (now - link.connecting_since > 20000)
-            disconnect(id, "Steam connection timed out.");
+            disconnect(id, p.direct_mode ? "Connection timed out." : "Steam connection timed out.");
     }
     if (now >= p.next_measure) {
         p.next_measure = now + 250;
