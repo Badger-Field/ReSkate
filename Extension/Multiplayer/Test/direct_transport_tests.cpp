@@ -4,7 +4,11 @@
 // GameNetworkingSockets' trivial signaling server), connect, and trade reliable and unreliable
 // messages both ways.
 //
-//   dingosdk_direct_transport_tests <path to libGameNetworkingSockets.so>
+//   dingosdk_direct_transport_tests <path to libGameNetworkingSockets.so> [lobby url]
+//
+// With a lobby url (a running `wrangler dev` of contrib/lobby-service), the two players sign in
+// to the lobby service with keys of their own and signal through it instead.
+#include "Extension/Multiplayer/Direct/direct_lobby.h"
 #include "Extension/Multiplayer/Direct/direct_signaling.h"
 #include "Extension/Multiplayer/Steam/steam_transport.h"
 
@@ -31,6 +35,9 @@ using namespace std::chrono_literals;
 
 namespace {
 constexpr std::uint64_t host_id = direct_player_id(0x1234), guest_id = direct_player_id(0xabcd);
+// Lobby mode: each side's key, made before the processes split.
+const char *lobby_url{};
+PlayerKey host_key, guest_key;
 static_assert(is_direct_player_id(host_id) && !is_direct_player_id(76561197960287930ull)); // a real (public) Steam ID
 
 // The trivial signaling server: the first line names the client, then "<to> <hex>" lines go
@@ -140,14 +147,26 @@ std::vector<std::uint8_t> bytes(const std::string &text) { return {text.begin(),
 std::string text(const std::vector<std::uint8_t> &data) { return {data.begin(), data.end()}; }
 
 // One side of the test, in its own process (the library runs once a process, as one identity).
+std::unique_ptr<DirectSignaling> signaling_for(bool hosting, std::uint16_t port, std::uint64_t local) {
+    if (!lobby_url) return make_tcp_signaling("127.0.0.1", port, local);
+    auto signaling = make_lobby_signaling(lobby_url, hosting ? host_key : guest_key);
+    for (int i = 0; i < 500 && !signaling->connected(); ++i) std::this_thread::sleep_for(20ms);
+    return signaling;
+}
+
 int run_side(bool hosting, const char *library_path, std::uint16_t port) {
     const char *who = hosting ? "host" : "guest";
     void *library = dlopen(library_path, RTLD_NOW | RTLD_LOCAL);
     if (!library) return fail(who, std::string("cannot load the library: ") + dlerror());
-    const auto local = hosting ? host_id : guest_id, peer = hosting ? guest_id : host_id;
+    const auto host = lobby_url ? player_id_of(host_key.public_key) : host_id;
+    const auto guest = lobby_url ? player_id_of(guest_key.public_key) : guest_id;
+    const auto local = hosting ? host : guest, peer = hosting ? guest : host;
     SteamTransport transport;
     // No STUN or TURN here: both sides are on this machine, so their own addresses are enough.
-    if (!transport.open_direct(library, local, make_tcp_signaling("127.0.0.1", port, local), {}))
+    auto signaling = signaling_for(hosting, port, local);
+    // (The plain TCP channel connects on first use; the lobby one is up before the transport starts.)
+    if (lobby_url && !signaling->connected()) return fail(who, "lobby: " + signaling->problem());
+    if (!transport.open_direct(library, local, std::move(signaling), {}))
         return fail(who, "open_direct: " + transport.status().detail);
     if (!transport.direct() || transport.status().local_id != local) return fail(who, "not in direct mode as the right player");
     if (hosting ? !transport.host(4) : !transport.join(peer)) return fail(who, "host/join: " + transport.status().detail);
@@ -205,9 +224,14 @@ int run_side(bool hosting, const char *library_path, std::uint16_t port) {
 } // namespace
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        std::fprintf(stderr, "usage: %s <libGameNetworkingSockets.so>\n", argv[0]);
+    if (argc != 2 && argc != 3) {
+        std::fprintf(stderr, "usage: %s <libGameNetworkingSockets.so> [lobby url]\n", argv[0]);
         return 2;
+    }
+    if (argc == 3) {
+        lobby_url = argv[2];
+        host_key = generate_player_key().value();
+        guest_key = generate_player_key().value();
     }
     if (signal_identity_id(signal_identity(host_id)) != host_id || signal_identity_id("steamid:12x") || signal_identity_id("str:1"))
         return fail("test", "identity strings");
@@ -225,7 +249,7 @@ int main(int argc, char **argv) {
             _exit(result);
         }
     }
-    server.run();
+    if (!lobby_url) server.run();
     int failures = 0;
     for (const auto pid : sides) {
         int status = 0;
@@ -233,6 +257,11 @@ int main(int argc, char **argv) {
         failures += !(WIFEXITED(status) && WEXITSTATUS(status) == 0);
     }
     const auto forwarded = server.forwarded();
+    if (lobby_url) {
+        close(server.listener());
+        std::printf("%s: through the lobby service at %s\n", failures ? "FAILED" : "passed", lobby_url);
+        return failures ? 1 : 0;
+    }
     server.stop();
     if (!forwarded) return fail("test", "no signals went through the signaling server");
     std::printf("%s: %u signals relayed\n", failures ? "FAILED" : "passed", forwarded);

@@ -54,6 +54,8 @@ add_library(dingosdk_runtime SHARED
     Extension/Multiplayer/Hud/native_indicators.cpp
     Extension/Multiplayer/Steam/steam_transport.cpp
     Extension/Multiplayer/Direct/direct_signaling.cpp
+    Extension/Multiplayer/Direct/direct_identity.cpp
+    Extension/Multiplayer/Direct/direct_lobby.cpp
     Extension/Multiplayer/Steam/steam_social.cpp
     Extension/Multiplayer/Steam/steam_friend_join.cpp
     Extension/Multiplayer/Steam/steam_lobbies.cpp
@@ -227,7 +229,7 @@ add_library(dingosdk_runtime SHARED
 
 target_link_libraries(dingosdk_runtime PRIVATE dingosdk_logging dingosdk_profiler dingosdk_supported_build dingosdk_overlay dingosdk_console_core dingosdk_steam_restart_guard
     dingosdk_startup_interventions dingosdk_fast_travel_unlock dingosdk_local_profile dingosdk_initfs dingosdk_mods dingosdk_mod_list dingosdk_launcher_support dingosdk_miniz shell32 dingosdk_startup_window dingosdk_custom_scripts dingosdk_world_layer_scan bcrypt
-    dingosdk_https winhttp ws2_32 xaudio2 ole32 dingosdk_game_archives dingosdk_word_filter)
+    dingosdk_https winhttp ws2_32 xaudio2 ole32 dingosdk_game_archives dingosdk_word_filter dingosdk_monocypher dingosdk_json)
 
 add_library(dingosdk_custom_level_manifest STATIC
     Engine/Game/World/custom_level_manifest.cpp)

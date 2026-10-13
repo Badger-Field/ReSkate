@@ -162,15 +162,35 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
         # Direct multiplayer over the standalone GameNetworkingSockets library, which the test
         # loads at run time: pass its path in DINGOSDK_TEST_GNS_LIBRARY to run it.
         add_executable(dingosdk_direct_transport_tests Extension/Multiplayer/Test/direct_transport_tests.cpp
-            Extension/Multiplayer/Direct/direct_signaling.cpp Extension/Multiplayer/Steam/steam_transport.cpp
+            Extension/Multiplayer/Direct/direct_signaling.cpp Extension/Multiplayer/Direct/direct_identity.cpp
+            Extension/Multiplayer/Direct/direct_lobby.cpp Extension/Multiplayer/Steam/steam_transport.cpp
             Extension/Multiplayer/Net/protocol.cpp Extension/Multiplayer/Net/delta_codec.cpp Extension/Multiplayer/Net/wire_codec.cpp)
         target_include_directories(dingosdk_direct_transport_tests PRIVATE "${PROJECT_SOURCE_DIR}")
         target_include_directories(dingosdk_direct_transport_tests SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/External/steam_networking")
-        target_link_libraries(dingosdk_direct_transport_tests PRIVATE dingosdk_launcher_support dingosdk_lz4 dingosdk_zstd dl pthread)
+        target_link_libraries(dingosdk_direct_transport_tests PRIVATE dingosdk_launcher_support dingosdk_lz4 dingosdk_zstd
+            dingosdk_monocypher dingosdk_json OpenSSL::Crypto dl pthread)
         if(DINGOSDK_TEST_GNS_LIBRARY)
             add_test(NAME multiplayer_direct_transport COMMAND dingosdk_direct_transport_tests "${DINGOSDK_TEST_GNS_LIBRARY}")
+            if(DINGOSDK_TEST_LOBBY_URL)
+                add_test(NAME multiplayer_direct_transport_lobby
+                    COMMAND dingosdk_direct_transport_tests "${DINGOSDK_TEST_GNS_LIBRARY}" "${DINGOSDK_TEST_LOBBY_URL}")
+            endif()
         endif()
     endif()
+    # Direct multiplayer's identity always; the live lobby checks against the service named by
+    # DINGOSDK_TEST_LOBBY_URL (a `wrangler dev` of contrib/lobby-service, or a deployed one; on
+    # Windows https works too, through WinHTTP).
+    add_executable(dingosdk_direct_lobby_tests Extension/Multiplayer/Test/direct_lobby_tests.cpp
+        Extension/Multiplayer/Direct/direct_identity.cpp Extension/Multiplayer/Direct/direct_lobby.cpp
+        Extension/Multiplayer/Direct/direct_signaling.cpp)
+    target_include_directories(dingosdk_direct_lobby_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    if(WIN32)
+        target_link_libraries(dingosdk_direct_lobby_tests PRIVATE dingosdk_monocypher dingosdk_json winhttp ws2_32 bcrypt)
+        dingosdk_configure_target(dingosdk_direct_lobby_tests)
+    else()
+        target_link_libraries(dingosdk_direct_lobby_tests PRIVATE dingosdk_monocypher dingosdk_json OpenSSL::Crypto pthread)
+    endif()
+    add_test(NAME multiplayer_direct_lobby COMMAND dingosdk_direct_lobby_tests ${DINGOSDK_TEST_LOBBY_URL})
     add_executable(dingosdk_multiplayer_prediction_tests
         Extension/Multiplayer/Test/prediction_tests.cpp Extension/Multiplayer/Net/protocol.cpp Extension/Multiplayer/Remote/playback_buffers.cpp)
     add_test(NAME multiplayer_prediction COMMAND dingosdk_multiplayer_prediction_tests)

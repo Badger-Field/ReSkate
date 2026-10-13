@@ -28,6 +28,9 @@ class DirectSignaling {
     virtual bool connected() const = 0;
     // What is wrong, for the menu and the log; empty when connected.
     virtual std::string problem() const = 0;
+    // The lobby service refused this player's key because another key already owns the same
+    // player ID: the game should make a new key and connect with that.
+    virtual bool needs_new_key() const { return false; }
 };
 
 // Over a plain TCP connection, one line a message: the protocol of GameNetworkingSockets'
