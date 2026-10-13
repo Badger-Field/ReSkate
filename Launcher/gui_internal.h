@@ -369,13 +369,10 @@ struct Ui {
     // Cleared by leaving the page or by an install that failed.
     bool play_after_install{};
     double mods_checked{-100};
-    // Steam display name for the name plate, re-read every few seconds.
+    // Steam display name for the name plate, re-read every few seconds. Empty
+    // without Steam, which is fine: ReSkate does not need it.
     std::string steam_name;
     double steam_checked{-100};
-    // One-time notice that Skate will start offline because Steam is not
-    // running or not signed in. Decided on the first Steam check.
-    bool steam_offline{};
-    bool steam_offline_seen{};
 };
 
 // The Thunderstore listing, fetched in the background when the launcher
@@ -551,7 +548,6 @@ void open_sign_in(Launcher& launcher, Ui& ui, bool validate);
 void sign_in_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui);
 void prompt_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, const update::Prompt& prompt, Ui& ui);
 void qr_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, const std::vector<std::string>& rows);
-void steam_offline_window(const Fonts& fonts, ImVec2 size, Ui& ui);
 // What the newest release changed: its notes on GitHub.
 void changelog_window(const Fonts& fonts, ImVec2 size, Ui& ui);
 void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, HWND window);

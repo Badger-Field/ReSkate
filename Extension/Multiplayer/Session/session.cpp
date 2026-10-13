@@ -24,6 +24,10 @@
 #include "Engine/Core/Text/word_filter.h"
 #include "Engine/Game/Multiplayer/session_tools.h"
 #include "Engine/Game/UI/game_view.h"
+#include "Engine/Core/Platform/launcher_support.h"
+#include "Extension/Multiplayer/Direct/direct_lobby_api.h"
+#include "Engine/Core/Json/json.h"
+#include "Extension/Multiplayer/Direct/direct_play.h"
 #include <Windows.h>
 #include <bcrypt.h>
 #include <algorithm>
@@ -36,6 +40,49 @@
 namespace dingosdk::multiplayer {
 using namespace session_detail;
 namespace session_detail {
+std::string direct_display_name(std::string_view name) {
+    auto shown = text::mask_bad_words(name);
+    if (reserved_name(shown)) shown += " (player)";
+    while (!shown.empty() && (shown.size() > max_member_name || !valid_member_name(shown))) shown.pop_back();
+    return shown.empty() ? std::string("Skater") : shown;
+}
+std::vector<MultiplayerLobby> lan_lobbies(const Session &s) {
+    std::vector<MultiplayerLobby> rows;
+    for (const auto &found : s.lan.found()) {
+        try {
+            const auto row = Json::parse(found.row);
+            if (!row.is_object()) continue;
+            const auto get = [&](const char *key) {
+                return row.contains(key) && row.at(key).is_string() ? row.at(key).string() : std::string{};
+            };
+            const auto code = parse_invite(get("rs_code"));
+            // Only direct players host on a home network; the code names the host.
+            if (!code || !is_direct_player_id(code->steam_id)) continue;
+            auto lobby = read_lobby(code->steam_id, code->steam_id, get);
+            if (!lobby || text::contains_bad_words(lobby->name)) continue;
+            lobby->nearby = true;
+            if (std::none_of(rows.begin(), rows.end(), [&](const auto &r) { return r.id == lobby->id; }))
+                rows.push_back(std::move(*lobby));
+        } catch (...) {
+        }
+    }
+    return rows;
+}
+std::optional<MultiplayerLobby> lan_lobby(const Session &s, std::uint64_t id) {
+    for (auto &lobby : lan_lobbies(s))
+        if (lobby.id == id) return lobby;
+    return std::nullopt;
+}
+std::unique_ptr<LobbyApi> session_lobby_api(SteamTransport &transport) {
+    if (!launcher::offline_mode()) return make_steam_lobby_api();
+    LobbyChannel channel;
+    channel.request = [&transport](std::string_view json) { return transport.lobby_request(json); };
+    channel.replies = [&transport] { return transport.lobby_replies(); };
+    channel.local_id = [&transport] { return transport.status().local_id; };
+    channel.name = [] { return direct_player_name(); };
+    channel.now_ms = [] { return static_cast<std::uint64_t>(GetTickCount64()); };
+    return make_direct_lobby_api(std::move(channel));
+}
 std::uint64_t nonce() {
     std::uint64_t value{};
     if (BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(&value), sizeof(value),
@@ -134,6 +181,10 @@ void stop(Session &s, std::string reason) {
     erase_key(s.password);
     erase_password(s.lobby_password);
     s.lobbies.stop();
+    s.transport.set_admission_token(0); // no session: no signals in or out
+    s.transport.set_admission_filter({});
+    s.lan_host = false;
+    s.lan.announce({});
     s.joined_public_lobby = 0;
     s.transport.stop();
     // Slots at or above used_slots were never used, or were reset when they were freed.
@@ -143,7 +194,7 @@ void stop(Session &s, std::string reason) {
     s.object_owners_valid = false;
     reset_audio();
     reset_effects();
-    s.public_host = s.started_map = s.roster_dirty = false;
+    s.public_host = s.listed_host = s.started_map = s.roster_dirty = false;
     s.awaiting_map = s.join_map_authorized = s.map_load_submitted = false;
     s.join_started = s.last_map_request = s.last_map_load_check = 0;
     s.join_destination.clear();
@@ -880,6 +931,7 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool ready, std::string_vi
         // Commands start asynchronous lobby timers using the current clock.
         s.lobbies.tick(now_us());
         s.servers.tick(now_us());
+        if (s.lan_host || s.lan_searched) s.lan.poll(GetTickCount64());
         if (const auto lobby = s.lobbies.take_join()) {
             PrivateRequest input;
             input.password = s.lobby_password;

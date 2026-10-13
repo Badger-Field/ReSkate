@@ -527,8 +527,14 @@ void Launcher::run_play() {
     launched_ = false;
     launcher_app::start_game(session_, options, [this](DWORD id) { game_ = id; });
     launched_ = true;
-    set(Phase::launching, "Skate is starting", options.offline || !launcher_app::steam_signed_in() ?
-        "Offline mode: playing without Steam as Unknown Player; multiplayer is hidden." :
+    // Without Steam is a normal way to play, not a fault: say so only when
+    // multiplayer would be missing because its library is.
+    std::error_code ignored;
+    const bool without_steam = options.offline || !launcher_app::steam_signed_in();
+    const bool direct_play = std::filesystem::is_regular_file(
+        session_.paths.dll.parent_path() / L"GameNetworkingSockets.dll", ignored);
+    set(Phase::launching, "Skate is starting", without_steam && !direct_play ?
+        "Playing without Steam. Multiplayer needs GameNetworkingSockets.dll beside ReSkate.dll." :
         settings_.keep_open_after_launch ? "The launcher hides while you play and returns when Skate closes." :
         "The launcher closes now; Skate keeps starting on its own.");
 }

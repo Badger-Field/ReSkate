@@ -1,4 +1,5 @@
 #include "throwdown_wire.h"
+#include "Extension/Multiplayer/Direct/direct_signaling.h"
 #include <cmath>
 #include <bit>
 #include <algorithm>
@@ -6,8 +7,9 @@
 
 namespace dingosdk::multiplayer {
 namespace {
+// A player: a Steam account, or a direct player playing without Steam.
 bool individual(std::uint64_t id) noexcept {
-    return (id >> 56) == 1 && ((id >> 52) & 15) == 1 && (id & 0xffffffffULL);
+    return ((id >> 56) == 1 && ((id >> 52) & 15) == 1 && (id & 0xffffffffULL)) || is_direct_player_id(id);
 }
 bool valid_series(const std::string &series) noexcept {
     return !series.empty() && series.size() <= max_throwdown_series &&

@@ -404,8 +404,9 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
         ImGui::Spacing();
         ImGui::Spacing();
         section_caption(fonts, "PLAY");
-        setting_check("Offline mode", "Play without Steam as Unknown Player; multiplayer is hidden. "
-                      "Used automatically whenever Steam isn't running.", settings.offline);
+        setting_check("Always without Steam", "Start without Steam even when it is running. Without Steam is how "
+                      "ReSkate starts anyway when Steam is closed: you choose your name in game, and multiplayer runs "
+                      "on join codes, your home network and ReSkate's own lobbies.", settings.offline);
         setting_check("Loose files", "Export the game's scripts/ and config/ beside Skate.exe so you can edit them.",
                       settings.loose_files);
         setting_check("Discord status", "Show on your Discord profile where you are skating: the map, the server or lobby "

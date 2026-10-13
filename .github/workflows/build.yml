@@ -1,0 +1,80 @@
+# Builds every push to main and every pull request: the launcher, runtime and server on Windows
+# (MSVC, as releases are built), and the dedicated server with the regression tests on Linux.
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows (MSVC)
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # crash reports name the build by git describe
+      - name: Configure
+        # No crash uploads from CI builds.
+        run: cmake --preset vs2022-x64 -DDINGOSDK_BACKTRACE_URL= -DDINGOSDK_BUILD_LAUNCHER_TESTS=ON
+      - name: Build
+        run: cmake --build --preset release --parallel
+      - name: Test
+        run: ctest --test-dir build/vs2022-x64 -C Release --output-on-failure
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reskate-windows-${{ github.sha }}
+          path: |
+            build/vs2022-x64/Release/ReSkateLauncher.exe
+            build/vs2022-x64/Release/ReSkate.dll
+            build/vs2022-x64/Release/ReSkateServer.exe
+          retention-days: 14
+
+  linux:
+    name: Linux (server and tests)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure
+        run: >
+          cmake -S . -B build/linux -DCMAKE_BUILD_TYPE=Release
+          -DDINGOSDK_BUILD_TESTS=ON -DDINGOSDK_BUILD_MULTIPLAYER_TESTS=ON
+          -DDINGOSDK_BUILD_PARK_EDITOR_TESTS=ON -DDINGOSDK_BUILD_TRAINER_TESTS=ON
+          -DDINGOSDK_BUILD_ROUTE_TESTS=ON -DDINGOSDK_BUILD_ROAD_RASH_TESTS=ON
+          -DDINGOSDK_BUILD_BOARD_BREAK_TESTS=ON -DDINGOSDK_BUILD_HALL_OF_MEAT_TESTS=ON
+          -DDINGOSDK_BUILD_LAUNCHER_TESTS=ON
+      - name: Build
+        run: cmake --build build/linux --parallel
+      - name: Test
+        run: ctest --test-dir build/linux --output-on-failure
+
+  lidar-parks:
+    name: LiDAR parks (Python)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - id: present
+        run: test -f contrib/lidar-parks/requirements.txt && echo "yes=true" >> "$GITHUB_OUTPUT" || true
+      - if: steps.present.outputs.yes
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: steps.present.outputs.yes
+        working-directory: contrib/lidar-parks
+        run: |
+          python -m pip install -r requirements.txt pytest
+          python -m pytest -q tests

@@ -158,6 +158,53 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
     add_executable(dingosdk_multiplayer_lane_tests Extension/Multiplayer/Test/steam_lanes_tests.cpp)
     target_include_directories(dingosdk_multiplayer_lane_tests SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/External/steam_networking")
     add_test(NAME multiplayer_lanes COMMAND dingosdk_multiplayer_lane_tests)
+    if(NOT WIN32)
+        # Direct multiplayer over the standalone GameNetworkingSockets library, which the test
+        # loads at run time: pass its path in DINGOSDK_TEST_GNS_LIBRARY to run it.
+        add_executable(dingosdk_direct_transport_tests Extension/Multiplayer/Test/direct_transport_tests.cpp
+            Extension/Multiplayer/Direct/direct_signaling.cpp Extension/Multiplayer/Direct/direct_identity.cpp
+            Extension/Multiplayer/Direct/direct_lobby.cpp Extension/Multiplayer/Steam/steam_transport.cpp
+            Extension/Multiplayer/Net/protocol.cpp Extension/Multiplayer/Net/delta_codec.cpp Extension/Multiplayer/Net/wire_codec.cpp)
+        target_include_directories(dingosdk_direct_transport_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+        target_include_directories(dingosdk_direct_transport_tests SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/External/steam_networking")
+        target_link_libraries(dingosdk_direct_transport_tests PRIVATE dingosdk_launcher_support dingosdk_lz4 dingosdk_zstd
+            dingosdk_monocypher dingosdk_json OpenSSL::Crypto dl pthread)
+        if(DINGOSDK_TEST_GNS_LIBRARY)
+            add_test(NAME multiplayer_direct_transport COMMAND dingosdk_direct_transport_tests "${DINGOSDK_TEST_GNS_LIBRARY}")
+            if(DINGOSDK_TEST_LOBBY_URL)
+                add_test(NAME multiplayer_direct_transport_lobby
+                    COMMAND dingosdk_direct_transport_tests "${DINGOSDK_TEST_GNS_LIBRARY}" "${DINGOSDK_TEST_LOBBY_URL}")
+            endif()
+        endif()
+    endif()
+    # Direct multiplayer's identity always; the live lobby checks against the service named by
+    # DINGOSDK_TEST_LOBBY_URL (a `wrangler dev` of contrib/lobby-service, or a deployed one; on
+    # Windows https works too, through WinHTTP).
+    add_executable(dingosdk_direct_lobby_tests Extension/Multiplayer/Test/direct_lobby_tests.cpp
+        Extension/Multiplayer/Direct/direct_identity.cpp Extension/Multiplayer/Direct/direct_lobby.cpp
+        Extension/Multiplayer/Direct/direct_signaling.cpp)
+    target_include_directories(dingosdk_direct_lobby_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    if(WIN32)
+        target_link_libraries(dingosdk_direct_lobby_tests PRIVATE dingosdk_monocypher dingosdk_json winhttp ws2_32 bcrypt)
+        dingosdk_configure_target(dingosdk_direct_lobby_tests)
+    else()
+        target_link_libraries(dingosdk_direct_lobby_tests PRIVATE dingosdk_monocypher dingosdk_json OpenSSL::Crypto pthread)
+    endif()
+    add_test(NAME multiplayer_direct_lobby COMMAND dingosdk_direct_lobby_tests ${DINGOSDK_TEST_LOBBY_URL})
+    # Lobbies without Steam: the lobby service's LobbyApi under SteamLobbies.
+    add_executable(dingosdk_direct_lobby_api_tests Extension/Multiplayer/Test/direct_lobby_api_tests.cpp
+        Extension/Multiplayer/Direct/direct_lobby_api.cpp Extension/Multiplayer/Steam/steam_lobbies.cpp
+        Extension/Multiplayer/Net/protocol.cpp)
+    target_include_directories(dingosdk_direct_lobby_api_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_link_libraries(dingosdk_direct_lobby_api_tests PRIVATE dingosdk_json dingosdk_word_filter)
+    add_test(NAME multiplayer_direct_lobby_api COMMAND dingosdk_direct_lobby_api_tests)
+    add_executable(dingosdk_lan_discovery_tests Extension/Multiplayer/Test/lan_discovery_tests.cpp
+        Extension/Multiplayer/Direct/lan_discovery.cpp)
+    target_include_directories(dingosdk_lan_discovery_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    if(WIN32)
+        target_link_libraries(dingosdk_lan_discovery_tests PRIVATE ws2_32)
+    endif()
+    add_test(NAME multiplayer_lan_discovery COMMAND dingosdk_lan_discovery_tests)
     add_executable(dingosdk_multiplayer_prediction_tests
         Extension/Multiplayer/Test/prediction_tests.cpp Extension/Multiplayer/Net/protocol.cpp Extension/Multiplayer/Remote/playback_buffers.cpp)
     add_test(NAME multiplayer_prediction COMMAND dingosdk_multiplayer_prediction_tests)
@@ -239,8 +286,9 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS AND WIN32)
         Extension/Multiplayer/Net/wire_codec.cpp Extension/Multiplayer/Net/delta_codec.cpp
         Extension/Multiplayer/Session/password.cpp Extension/Multiplayer/Session/party_book.cpp
         Extension/Multiplayer/Steam/steam_lobbies.cpp Extension/Multiplayer/Steam/steam_server_browser.cpp
-        Extension/Multiplayer/word_lists.cpp)
-    target_link_libraries(dingosdk_multiplayer_mesh_tests PRIVATE dingosdk_logging dingosdk_launcher_support dingosdk_lz4 dingosdk_zstd bcrypt
+        Extension/Multiplayer/word_lists.cpp Extension/Multiplayer/Direct/direct_lobby_api.cpp
+        Extension/Multiplayer/Direct/lan_discovery.cpp)
+    target_link_libraries(dingosdk_multiplayer_mesh_tests PRIVATE dingosdk_logging dingosdk_launcher_support dingosdk_lz4 dingosdk_zstd bcrypt ws2_32
         dingosdk_word_filter dingosdk_json)
     add_test(NAME multiplayer_mesh COMMAND dingosdk_multiplayer_mesh_tests)
     add_executable(dingosdk_developer_identity_tests
@@ -307,7 +355,10 @@ if(DINGOSDK_BUILD_TRAINER_TESTS)
     target_include_directories(dingosdk_trainer_tuning_dump PRIVATE "${PROJECT_SOURCE_DIR}")
     target_link_libraries(dingosdk_trainer_tuning_dump PRIVATE dingosdk_game_archives)
     # Fails when the game's data stops naming a tuning value (the trainer's table comes from those names).
-    add_test(NAME trainer_tuning_names COMMAND dingosdk_trainer_tuning_dump "${DINGOSDK_TEST_GAME_ROOT}")
+    # It reads the game's own files: pass the Skate folder in DINGOSDK_TEST_GAME_ROOT to run it.
+    if(DINGOSDK_TEST_GAME_ROOT)
+        add_test(NAME trainer_tuning_names COMMAND dingosdk_trainer_tuning_dump "${DINGOSDK_TEST_GAME_ROOT}")
+    endif()
     # What a session's host shares beyond its tuning: the encoding, and what a guest refuses.
     add_executable(dingosdk_trainer_session_tests Extension/Trainer/Test/session_extras_tests.cpp Extension/Trainer/trainer_session.cpp)
     target_include_directories(dingosdk_trainer_session_tests PRIVATE "${PROJECT_SOURCE_DIR}")
@@ -344,16 +395,19 @@ if(DINGOSDK_BUILD_HALL_OF_MEAT_TESTS)
         Extension/HallOfMeat/hall_of_meat_model.cpp Extension/HallOfMeat/hall_of_meat_card.cpp)
     target_include_directories(dingosdk_hall_of_meat_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     add_test(NAME hall_of_meat COMMAND dingosdk_hall_of_meat_tests)
-    # skate.'s own skeleton mesh, read from the game's data and posed (with a Skate folder).
-    add_executable(dingosdk_hall_of_meat_skeleton_tests Extension/HallOfMeat/Test/hall_of_meat_skeleton_tests.cpp
-        Extension/HallOfMeat/hall_of_meat_skeleton.cpp)
-    target_include_directories(dingosdk_hall_of_meat_skeleton_tests PRIVATE "${PROJECT_SOURCE_DIR}")
-    target_link_libraries(dingosdk_hall_of_meat_skeleton_tests PRIVATE dingosdk_game_archives dingosdk_logging)
-    add_test(NAME hall_of_meat_skeleton COMMAND dingosdk_hall_of_meat_skeleton_tests "${DINGOSDK_TEST_GAME_ROOT}")
+    # skate.'s own skeleton mesh, read from the game's data and posed: on Windows (its logging is
+    # Windows-only), with the Skate folder in DINGOSDK_TEST_GAME_ROOT.
+    if(WIN32 AND DINGOSDK_TEST_GAME_ROOT)
+        add_executable(dingosdk_hall_of_meat_skeleton_tests Extension/HallOfMeat/Test/hall_of_meat_skeleton_tests.cpp
+            Extension/HallOfMeat/hall_of_meat_skeleton.cpp)
+        target_include_directories(dingosdk_hall_of_meat_skeleton_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+        target_link_libraries(dingosdk_hall_of_meat_skeleton_tests PRIVATE dingosdk_game_archives dingosdk_logging)
+        add_test(NAME hall_of_meat_skeleton COMMAND dingosdk_hall_of_meat_skeleton_tests "${DINGOSDK_TEST_GAME_ROOT}")
+    endif()
 endif()
 get_property(project_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(target IN LISTS project_targets)
-    if(NOT target MATCHES "^(dingosdk_imgui|dingosdk_detours|dingosdk_sqlite|dingosdk_lz4|dingosdk_zstd|dingosdk_miniz|dingosdk_spotify_device)$")
+    if(NOT target MATCHES "^(dingosdk_imgui|dingosdk_detours|dingosdk_sqlite|dingosdk_lz4|dingosdk_zstd|dingosdk_miniz|dingosdk_monocypher|dingosdk_spotify_device)$")
         dingosdk_configure_target(${target})
     endif()
 endforeach()
