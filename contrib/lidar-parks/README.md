@@ -11,7 +11,9 @@ server can spawn it for everyone (`park-mod add`).
 This is the first of two routes. The other route keeps the park's real shape, bowls included,
 as a custom map. See [CUSTOM-MAPS.md](CUSTOM-MAPS.md); `mesh` below produces its starting point.
 
-No scan yet? See [CAPTURE.md](CAPTURE.md) for scanning a park with a phone.
+No scan yet? See [CAPTURE.md](CAPTURE.md) for scanning a park with a phone. Or skip scanning, and
+build a real plaza or city block from open map data and aerial LiDAR: see
+[Real places](#real-places-city).
 
 ## Install
 
@@ -98,11 +100,64 @@ Load **LiDAR Calibration**. Where an object doesn't fill the gap between its sti
   exported as meshes are usually smoother than that. Noisier scans start to lose thin rails
   first: use a smaller `--cell`, or a denser export.
 
+## Real places (`city`)
+
+`city` builds a real public place from open data:
+- OpenStreetMap and Overture Maps for footprints, steps, benches, walls and public space;
+- USGS 3DEP aerial LiDAR for the ground and heights.
+
+It writes the place as a park mod, as meshes for a custom map, or both:
+
+```
+python -m reskate_lidar city --place "Embarcadero Plaza, San Francisco" --size 160 \
+    --anchor "<Skate>/Mods/Marker/parks/bam.park.json" --mods "<Skate>/Mods" \
+    --preview plaza.png --mesh plaza.glb --report plaza.json
+```
+
+Give the area one of three ways:
+- `--place` (looked up with Nominatim);
+- `--centre lat,lon` and `--size` metres;
+- `--bbox=west,south,east,north`. Write it with `=`, because the bounds start with a minus sign west of Greenwich.
+
+What it finds:
+
+| Spot | From |
+|---|---|
+| stairs, handrails | `highway=steps` (+ `handrail*`); length, rise and width measured in the ground |
+| ledges | benches, low walls, retaining walls, kerbs, planters (tags), measured in the points |
+| ledges, pads, boxes | the point cloud alone, if flat-topped, not overhung and not vegetation |
+| banks | planar slopes in the ground |
+| buildings | footprints, heights measured in the points (or tagged) |
+
+- **Where spots come from:** only public, hard, car-free space: squares, plazas, parks and footways. Grass is left out.
+- **Park objects:** they follow the anchor, as with `convert`. Real north is 90° to the left of the stick's facing (its facing is east). Each spot sits on the base map's ground; `--keep-elevation` keeps real heights.
+- **Budget:** `--max-objects` (default 256) keeps the mod within the Object Dropper's default. Stairs and rails go first.
+- **Meshes:** `--mesh` writes the visual GLB and a `-collision.glb`, for a custom map ([CUSTOM-MAPS.md](CUSTOM-MAPS.md)).
+- **Attribution:** every output carries the data's credit. Keep it when you share. See [DATA-SOURCES.md](DATA-SOURCES.md) for licences and server rules.
+- **Limits:** areas are capped at 4 km². Downloads are cached in `~/.cache/reskate-lidar`, which `--cache` changes.
+- **Plans:** what's next, and what to check in game, is in [ROADMAP.md](ROADMAP.md).
+
+| Option | |
+|---|---|
+| `--sources osm` / `overture` | use only one map source (default both) |
+| `--lidar none` / `<EPT url or folder>` | skip LiDAR, or read another EPT survey |
+| `--overpass <url or file>` | another Overpass server, or a saved answer |
+| `--ground-cell 0.5` | ground grid size (metres) |
+| `--tile 64` | mesh ground tile size (metres) |
+| `--turn 30` | turn the whole place before placing it |
+
 ## Tests
 
 ```
 python -m pytest tests
 ```
+
+`test_city.py` builds a synthetic city block from a known scene and runs the city pipeline on it,
+offline:
+- what it reads: a small EPT survey, an Overpass answer and an Overture Parquet file, all written by the tests;
+- what it checks: buildings, stairs, rails, benches, walls, ledges and banks come back where they are;
+- what it rules out: no car, hedge or grass becomes a spot;
+- what it writes: the park and meshes, both valid.
 
 The tests build a synthetic park with a known ledge, manual pad, rail, kicker, quarter pipe and
 stairs. They scan it Y-up and Z-up, tilted, turned and noisy, and check that every obstacle comes
