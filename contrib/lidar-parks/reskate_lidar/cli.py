@@ -116,7 +116,9 @@ def main(argv: list[str] | None = None) -> int:
     probe.add_argument("--park", required=True, help="the .park.json to check")
     probe.add_argument("--spacing", type=float, default=10.0, help="metres between probes (default 10; "
                                                                     "widened to keep within --limit)")
-    probe.add_argument("--limit", type=int, default=100, help="most probes (default 100)")
+    probe.add_argument("--limit", type=int, default=50, help="most spots (default 50, which fits one startup value)")
+    probe.add_argument("--wait", type=int, default=8, help="seconds at each spot before the settling second probe "
+                                                       "(default 8)")
     probe.add_argument("--out", help="also write the console lines here, one per probe")
     check = anchor_steps.add_parser("check", help="read the probes' heights from ReSkate.log")
     check.add_argument("--park", required=True, help="the .park.json that was probed")
@@ -130,7 +132,11 @@ def main(argv: list[str] | None = None) -> int:
     search.add_argument("--around", nargs=2, type=float, metavar=("X", "Z"), help="the search's centre on the map")
     search.add_argument("--radius", type=float, default=200.0, help="metres each way from --around (default 200)")
     search.add_argument("--spacing", type=float, default=20.0, help="metres between probes (default 20)")
-    search.add_argument("--wait", type=int, default=1, help="seconds after each probe (default 1)")
+    search.add_argument("--wait", type=int, default=8, help="seconds at each spot before the settling second "
+                                                        "probe, for its collision to stream in (default 8)")
+    search.add_argument("--no-settle", action="store_true", help="probe each spot once (fast, but far spots may "
+                                                                 "read before they load)")
+    search.add_argument("--per-batch", type=int, help="at most this many spots a batch (default: as many as fit)")
     search.add_argument("--skip-radius", type=float, default=0.0, help="leave out the square already probed this "
                                                                        "far each way (to widen a search)")
     search.add_argument("--out-dir", help="write each batch here too, one file per batch")
@@ -532,13 +538,13 @@ def run_anchor(args) -> int:
         if args.spacing <= 0 or args.limit < 2:
             raise ValueError("--spacing must be positive and --limit at least 2")
         points = anchorcheck.probe_points(footprint, args.spacing, limit=args.limit)
-        commands = anchorcheck.startup_commands(points)
+        commands = anchorcheck.startup_commands(points, args.wait)
         print(f"{len(points)} probes over {len(footprint.items)} objects on {footprint.map}. Load {footprint.map} "
               "without the park, then either set this before starting the game:")
         print(f"  RESKATE_STARTUP_COMMANDS={commands}")
         print("The value alone, to paste:")
         print(commands)
-        print("or type each line in the console (the park need not be loaded):")
+        print(f"or type each line in the console, twice, {args.wait} s apart (the second reads the loaded ground):")
         lines = [f"trainer ground {x:.1f} {z:.1f}" for x, z in points]
         for line in lines:
             print(f"  {line}")
@@ -567,19 +573,24 @@ def _anchor_search(args) -> int:
             raise ValueError("--spacing and --radius must be positive (radius up to 5000), --skip-radius under "
                              "--radius, --wait at least 0")
         points = anchorcheck.search_points(*args.around, args.radius, args.spacing, args.skip_radius)
-        batches = anchorcheck.batches(points, args.wait)
+        if args.per_batch is not None and args.per_batch < 1:
+            raise ValueError("--per-batch must be at least 1")
+        batches = anchorcheck.batches(points, args.wait, settle=not args.no_settle, per_batch=args.per_batch)
+        per_spot = args.wait + (0 if args.no_settle else 1)
         skipped = f", leaving out the {args.skip_radius:g} m already probed" if args.skip_radius else ""
         print(f"{len(points)} probes, {args.spacing:g} m apart, {args.radius:g} m each way round "
               f"{args.around[0]:g}, {args.around[1]:g}{skipped} on {args.map}: {len(batches)} batches. For each batch, start "
               f"the game with RESKATE_STARTUP_COMMANDS set to it, load {args.map} with no park mods, let it run "
-              f"(about {len(points) * (args.wait + 1) // len(batches) // 60 + 1} min), and keep ReSkate.log as its own file.")
-        print("Probes over water or out of bounds may be followed by the game resetting the skater to the start: "
-              "that is expected, and the height logged before it is still the surface. Let the batch run on.")
+              f"(about {len(points) * per_spot // len(batches) // 60 + 1} min), and keep ReSkate.log as its own file.")
+        print("The spots run as a serpentine of short hops. Each is probed twice: the first sends the skater, the "
+              f"second, {args.wait} s later, reads the ground once it has streamed in. Over water or out of bounds the "
+              "game resets the skater to the start: that is expected, and marks the spot as unusable. Let it run on.")
         folder = Path(args.out_dir) if args.out_dir else None
         if folder:
             folder.mkdir(parents=True, exist_ok=True)
         for number, batch in enumerate(batches, 1):
-            print(f"\n# batch {number} of {len(batches)} ({batch.count('trainer ground')} probes)")
+            spots = batch.count("trainer ground") // (1 if args.no_settle else 2)
+            print(f"\n# batch {number} of {len(batches)} ({spots} spots)")
             print(batch)
             if folder:
                 (folder / f"batch-{number:02d}.txt").write_text(batch + "\n", encoding="utf-8")
@@ -588,28 +599,38 @@ def _anchor_search(args) -> int:
         logs = " ".join(f"--log batch-{n:02d}.log" for n in range(1, len(batches) + 1))
         print(f"\nThen: python -m reskate_lidar anchor search --map {args.map} {logs} --size <park size>")
         return 0
-    heights, missing, reference = {}, [], args.near_height
+    heights, missing, reset, unsettled, reference = {}, [], set(), set(), args.near_height
     for log in args.log:
-        found, lost = anchorcheck.read_heights(Path(log).read_text(encoding="utf-8", errors="replace"))
-        heights.update(found)
-        missing += lost
+        readings = anchorcheck.read_probes(Path(log).read_text(encoding="utf-8", errors="replace"))
+        for key in readings.heights.keys() | set(readings.missing):     # a later log's run of a spot wins
+            reset.discard(key)
+            unsettled.discard(key)
+        heights.update(readings.heights)
+        missing += readings.missing
+        reset |= readings.reset
+        unsettled |= readings.unsettled
     missing = [p for p in dict.fromkeys(missing) if p not in heights]
-    print(f"{len(heights)} probes read from {len(args.log)} logs" +
-          (f"; {len(missing)} found no collision yet (not streamed in)" if missing else ""))
+    print(f"{len(heights)} spots read from {len(args.log)} logs" +
+          (f"; {len(missing)} with no reading" if missing else ""))
+    if reset:
+        print(f"{len(reset)} spots reset the skater to the start (water or out of bounds): left out as unusable")
+    if unsettled:
+        print(f"warning: {len(unsettled)} spots have only the first, early reading, which may come before the "
+              "ground loads (an unloaded spot reads as the sea). Probe them again with the settling second probe.")
     water = None if args.no_water else args.water_level
     if water is None and not args.no_water:
         water = anchorcheck.water_level(heights)
     if water is not None:
-        wet = sum(h <= water + anchorcheck.WATER_BAND for h in heights.values())
-        print(f"Water at {water:.1f}: {wet} probes at or within {anchorcheck.WATER_BAND} m of it are left out as "
-              "water (--water-level to set it, --no-water if that is land)")
+        wet = sum(h <= water + anchorcheck.WATER_FLAT for h in heights.values())
+        print(f"Water at {water:.1f}: {wet} spots settled at exactly that height are left out as water "
+              "(--water-level to set it, --no-water if that is land)")
     if reference is None:
-        reference, how = anchorcheck.reference_height(heights, water)
+        reference, how = anchorcheck.reference_height(heights, water, wet_spots=reset)
     else:
         how = "--near-height"
     print(f"Reference height {reference:.1f}, from {how}; places within {args.height_window:g} m of it come first")
     best = anchorcheck.rank(heights, args.size, args.tolerance, args.top, water=water, reference=reference,
-                            window=args.height_window)
+                            window=args.height_window, wet_spots=reset)
     print(f"Best places for a {args.size:g} m park on {args.map} (anchor x, y, z), within {args.tolerance:g} m:")
     for number, candidate in enumerate(best, 1):
         print(f"  {number}. {candidate.line()}")

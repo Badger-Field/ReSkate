@@ -30,6 +30,11 @@ STAND_HEIGHT = 0.5         # Extension/Trainer/trainer_landing.h: the log's heig
 STARTUP_LIMIT = 4000       # characters of RESKATE_STARTUP_COMMANDS the launcher passes on
 LANDED = re.compile(r"Trainer: landing on the surface at (-?[\d.]+), (-?[\d.]+), (-?[\d.]+)\.")
 NOT_LOADED = re.compile(r"Trainer: no collision at (-?[\d.]+), (-?[\d.]+) yet")
+# The landing watch after each teleport (trainer.cpp update_landing): where the skater ended up.
+NUMBER = r"(-?\d+(?:\.\d+)?)"   # not [\d.]+: "landed at X, Y, Z." ends in a full stop
+SETTLED = re.compile(rf"Trainer: (?:landed|landing watch ended) at {NUMBER}, {NUMBER}, {NUMBER}")
+SETTLE_WAIT = 8           # seconds for a far spot's collision to stream in (measured on bam)
+ARRIVED = 30.0            # metres: the watch's own arrival radius; further away means a reset
 
 
 @dataclass
@@ -50,7 +55,7 @@ def read_park(path: str | Path) -> Footprint:
                      [o["item"] for o in objects])
 
 
-def probe_points(footprint: Footprint, spacing: float = 10.0, margin: float = 3.0, limit: int = 100) -> np.ndarray:
+def probe_points(footprint: Footprint, spacing: float = 10.0, margin: float = 3.0, limit: int = 50) -> np.ndarray:
     """A grid over the footprint (its objects' bounding box plus `margin`), widened until it has at
     most `limit` points, plus the box's centre."""
     lo = footprint.xz.min(axis=0) - margin
@@ -65,31 +70,94 @@ def probe_points(footprint: Footprint, spacing: float = 10.0, margin: float = 3.
     return np.vstack([(lo + hi) / 2, grid])
 
 
-def _probe(x: float, z: float, wait: int) -> str:
-    return f"trainer ground {x:.1f} {z:.1f};wait {wait}"
+def _probe(x: float, z: float, wait: int, settle: bool = True) -> str:
+    """One spot's commands. A first `trainer ground` sends the skater there; its reading can come
+    before the spot's collision has streamed in (an unloaded spot on bam reads as the sea). With
+    `settle`, a second one after `wait` seconds reads the loaded surface under the skater."""
+    first = f"trainer ground {x:.1f} {z:.1f};wait {wait}"
+    return f"{first};trainer ground {x:.1f} {z:.1f};wait 1" if settle else first
 
 
-def startup_commands(points: np.ndarray, wait: int = 1) -> str:
-    text = ";".join(_probe(x, z, wait) for x, z in points)
+def startup_commands(points: np.ndarray, wait: int = SETTLE_WAIT, settle: bool = True) -> str:
+    text = ";".join(_probe(x, z, wait, settle) for x, z in points)
     if len(text) > STARTUP_LIMIT:
         raise ValueError(f"{len(points)} probes make {len(text)} characters of startup commands, over the "
                          f"launcher's {STARTUP_LIMIT}: use a wider --spacing")
     return text
 
 
-def read_heights(log: str) -> tuple[dict[tuple[float, float], float], list[tuple[float, float]]]:
-    """Surface heights by (x, z) from a ReSkate.log, the last reading of each point winning; and the
-    points whose collision had not loaded."""
-    heights: dict[tuple[float, float], float] = {}
-    missing = []
+@dataclass
+class Readings:
+    heights: dict[tuple[float, float], float]   # settled surface height by spot
+    missing: list[tuple[float, float]]          # spots with no reading at all
+    reset: set[tuple[float, float]]             # spots the game sent the skater away from (water, out of bounds)
+    unsettled: set[tuple[float, float]]         # spots read only by the first, early ray
+
+
+def read_probes(log: str) -> Readings:
+    """Each probed spot's settled height from a ReSkate.log.
+
+    A spot starts at its first `trainer ground` line. Its height is, in order of trust:
+    1. a second `trainer ground` reading at the same spot (the settled run's own ray, taken
+       after the collision streamed in);
+    2. the last landing-watch line ("landed at" / "landing watch ended at") within 30 m of it,
+       less the standing height;
+    3. the first, early reading, marked unsettled.
+    A watch line further than 30 m away means the game put the skater back at the start: the
+    spot is water or out of bounds. The last run of a spot wins."""
+    readings = Readings({}, [], set(), set())
+    spot = None
+
+    def close(spot):
+        if spot is None:
+            return
+        key = spot["key"]
+        for found in (readings.heights, readings.reset, readings.unsettled):
+            if isinstance(found, dict):
+                found.pop(key, None)
+            else:
+                found.discard(key)
+        if spot["reset"]:
+            readings.reset.add(key)
+        if spot["confirm"] is not None:
+            readings.heights[key] = spot["confirm"]
+        elif spot["watched"] is not None:
+            readings.heights[key] = spot["watched"]
+        elif spot["first"] is not None:
+            readings.heights[key] = spot["first"]
+            readings.unsettled.add(key)
+        else:
+            readings.missing.append(key)
+
     for line in log.splitlines():
-        if m := LANDED.search(line):
+        if m := LANDED.search(line) or NOT_LOADED.search(line):
+            landed = m.re is LANDED
+            x = round(float(m.group(1)), 1)
+            z = round(float(m.group(3 if landed else 2)), 1)
+            ground = float(m.group(2)) - STAND_HEIGHT if landed else None
+            if spot is not None and spot["key"] == (x, z) and spot["teleports"] == 1:
+                spot["teleports"] = 2               # the settling second look at the same spot
+                if ground is not None:
+                    spot["confirm"] = ground
+                continue
+            close(spot)
+            spot = {"key": (x, z), "first": ground, "confirm": None, "watched": None, "reset": False, "teleports": 1}
+        elif (m := SETTLED.search(line)) and spot is not None:
             x, y, z = (float(v) for v in m.groups())
-            heights[(round(x, 1), round(z, 1))] = y - STAND_HEIGHT
-        elif m := NOT_LOADED.search(line):
-            missing.append((round(float(m.group(1)), 1), round(float(m.group(2)), 1)))
-    missing = [p for p in missing if p not in heights]
-    return heights, missing
+            if math.hypot(x - spot["key"][0], z - spot["key"][1]) <= ARRIVED:
+                spot["watched"] = y - STAND_HEIGHT
+            else:
+                spot["reset"] = True
+    close(spot)
+    readings.missing = [p for p in dict.fromkeys(readings.missing) if p not in readings.heights]
+    return readings
+
+
+def read_heights(log: str) -> tuple[dict[tuple[float, float], float], list[tuple[float, float]]]:
+    """Settled surface heights by (x, z) from a ReSkate.log (read_probes), and the spots with no
+    reading."""
+    readings = read_probes(log)
+    return readings.heights, readings.missing
 
 
 @dataclass
@@ -157,25 +225,32 @@ def check(footprint: Footprint, heights: dict[tuple[float, float], float], missi
 # ---------------------------------------------------------------- searching for open ground
 
 def search_points(x: float, z: float, radius: float, spacing: float, skip_radius: float = 0.0) -> np.ndarray:
-    """A square grid `radius` each way round x, z, nearest the centre first (so a cut-short run
-    still covers the middle). With `skip_radius`, the square already probed that far each way is
-    left out, for widening a search without probing it again."""
+    """A square grid `radius` each way round x, z, as a serpentine: row by row, each row the other
+    way, so each hop is short and lands next to ground that has already streamed in. With
+    `skip_radius`, the square already probed that far each way is left out, for widening a
+    search without probing it again."""
     steps = np.arange(-radius, radius + 1e-6, spacing)
-    grid = np.array([(x + dx, z + dz) for dz in steps for dx in steps])
-    if skip_radius > 0:
-        grid = grid[np.maximum(np.abs(grid[:, 0] - x), np.abs(grid[:, 1] - z)) > skip_radius + 1e-6]
-    return grid[np.argsort(np.hypot(grid[:, 0] - x, grid[:, 1] - z), kind="stable")]
+    rows = []
+    for i, dz in enumerate(steps):
+        row = [(x + dx, z + dz) for dx in (steps if i % 2 == 0 else steps[::-1])]
+        if skip_radius > 0:
+            row = [p for p in row if max(abs(p[0] - x), abs(p[1] - z)) > skip_radius + 1e-6]
+        rows += row
+    return np.array(rows)
 
 
-def batches(points: np.ndarray, wait: int = 1, limit: int = STARTUP_LIMIT) -> list[str]:
-    """The probes as RESKATE_STARTUP_COMMANDS values, each within the launcher's limit."""
-    out, current = [], ""
+def batches(points: np.ndarray, wait: int = SETTLE_WAIT, limit: int = STARTUP_LIMIT, settle: bool = True,
+            per_batch: int | None = None) -> list[str]:
+    """The probes as RESKATE_STARTUP_COMMANDS values, each within the launcher's limit (and at
+    most `per_batch` spots), in the points' order."""
+    out, current, count = [], "", 0
     for x, z in points:
-        probe = _probe(x, z, wait)
-        if current and len(current) + 1 + len(probe) > limit:
+        probe = _probe(x, z, wait, settle)
+        if current and (len(current) + 1 + len(probe) > limit or (per_batch and count >= per_batch)):
             out.append(current)
-            current = ""
+            current, count = "", 0
         current = f"{current};{probe}" if current else probe
+        count += 1
     if current:
         out.append(current)
     return out
@@ -234,10 +309,11 @@ class Candidate:
 
 def rank(heights: dict[tuple[float, float], float], size: float, tolerance: float = 0.3, top: int = 5,
          coverage: float = 0.85, water: float | None = None, reference: float | None = None,
-         window: float = 10.0) -> list[Candidate]:
+         window: float = 10.0, band: float = WATER_FLAT,
+         wet_spots: set[tuple[float, float]] = frozenset()) -> list[Candidate]:
     """Squares `size` across, centred on probed points, ranked by how much of each is level land
-    at its own median height. Probes at the `water` height are not land: they count against a
-    square. Squares within `window` metres of the `reference` height (the street level round the
+    at its own median height. Probes at the `water` height (within `band`), and `wet_spots` the
+    game reset the skater from, are not land: they count against a square. Squares within `window` metres of the `reference` height (the street level round the
     start) come first. Exactly flat squares (see Candidate.suspicious) come after the rest.
     Squares with under `coverage` of their probes read are left out, and the ones returned don't
     overlap by more than half."""
@@ -245,7 +321,8 @@ def rank(heights: dict[tuple[float, float], float], size: float, tolerance: floa
         raise ValueError("no 'Trainer: landing on the surface' lines in the logs: run the probes first")
     points = np.array(list(heights.keys()))
     ground = np.array(list(heights.values()))
-    wet = ground <= water + WATER_BAND if water is not None else np.zeros(len(ground), bool)
+    wet = ground <= water + band + 1e-6 if water is not None else np.zeros(len(ground), bool)
+    wet |= np.array([tuple(p) in wet_spots for p in heights.keys()], bool)
     if len(points) > 1:
         from scipy.spatial import cKDTree
         gaps = cKDTree(points).query(points, k=2)[0][:, 1]   # each probe's spacing: grids may be mixed
@@ -306,16 +383,18 @@ def anchor_park(map_name: str, x: float, y: float, z: float, item: str, template
 
 
 def reference_height(heights: dict[tuple[float, float], float], water: float | None,
-                     reach: float = 30.0) -> tuple[float, str]:
-    """The street height round the search's centre: the median of the land probes within `reach`
-    of the first probe (a batch probes its centre first), else the nearest land probe. Returns
+                     reach: float = 30.0, wet_spots: set[tuple[float, float]] = frozenset(),
+                     centre: tuple[float, float] | None = None) -> tuple[float, str]:
+    """The street height round the search's centre (by default the middle of the probed area): the
+    median of the land probes within `reach` of it, else the nearest land probe. Returns
     the height and how it was found."""
     points = np.array(list(heights.keys()))
     ground = np.array(list(heights.values()))
-    land = ground > water + WATER_BAND if water is not None else np.ones(len(ground), bool)
+    land = ground > water + WATER_FLAT + 1e-6 if water is not None else np.ones(len(ground), bool)
+    land &= np.array([tuple(p) not in wet_spots for p in heights.keys()], bool)
     if not land.any():
         raise ValueError("every probe is water: probe somewhere else, or pass --near-height")
-    centre = points[0]
+    centre = np.array(centre) if centre is not None else (points.min(axis=0) + points.max(axis=0)) / 2
     distance = np.hypot(*(points - centre).T)
     near = land & (distance <= reach + 1e-6)
     if near.any():

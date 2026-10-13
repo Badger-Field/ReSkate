@@ -40,7 +40,7 @@ def test_probes_cover_the_footprint_within_the_limit(park):
     few = anchorcheck.probe_points(footprint, spacing=1, limit=20)
     assert len(few) <= 20
     commands = anchorcheck.startup_commands(points)
-    assert commands.startswith("trainer ground 600.0 1000.0;wait 1;trainer ground")
+    assert commands.startswith("trainer ground 600.0 1000.0;wait 8;trainer ground 600.0 1000.0;wait 1;trainer ground")
     assert len(commands) <= anchorcheck.STARTUP_LIMIT
     with pytest.raises(ValueError, match="spacing"):
         anchorcheck.startup_commands(np.zeros((200, 2)))
@@ -93,7 +93,7 @@ def test_cli_probe_then_check(park, tmp_path, capsys):
     lines = tmp_path / "probes.txt"
     assert cli.main(["anchor", "probe", "--park", str(park), "--out", str(lines)]) == 0
     out = capsys.readouterr().out
-    assert "RESKATE_STARTUP_COMMANDS=trainer ground 600.0 1000.0;wait 1" in out
+    assert "RESKATE_STARTUP_COMMANDS=trainer ground 600.0 1000.0;wait 8;trainer ground 600.0 1000.0;wait 1" in out
     probes = lines.read_text().splitlines()
     log = tmp_path / "ReSkate.log"
     log.write_text("\n".join(landed(float(x), 200.0, float(z)) for _, _, x, z in (p.split() for p in probes)))
@@ -106,12 +106,61 @@ def test_cli_probe_then_check(park, tmp_path, capsys):
 def test_search_grid_and_batches():
     points = anchorcheck.search_points(600, 1000, 200, 20)
     assert len(points) == 21 * 21
-    assert points[0] == pytest.approx([600, 1000])               # the centre first
+    hops = np.hypot(*np.diff(points, axis=0).T)
+    assert hops.max() == pytest.approx(20)                       # a serpentine: every hop is one step
     batches = anchorcheck.batches(points)
     assert all(len(b) <= anchorcheck.STARTUP_LIMIT for b in batches)
-    assert sum(b.count("trainer ground") for b in batches) == len(points)
+    assert sum(b.count("trainer ground") for b in batches) == 2 * len(points)
     assert all(not b.startswith(";") and not b.endswith(";") for b in batches)
-    assert batches[0].startswith("trainer ground 600.0 1000.0;wait 1;trainer ground")
+    assert batches[0].startswith("trainer ground 400.0 800.0;wait 8;trainer ground 400.0 800.0;wait 1;"
+                                 "trainer ground 420.0 800.0;wait 8")
+    assert all(b.count("trainer ground") <= 2 * 30 for b in anchorcheck.batches(points, per_batch=30))
+    quick = anchorcheck.batches(points, wait=1, settle=False)
+    assert sum(b.count("trainer ground") for b in quick) == len(points)
+
+
+def watch(x, y, z, ended=False):
+    what = "landing watch ended" if ended else "landed"
+    return f"[info] Trainer: {what} at {x:.1f}, {y + anchorcheck.STAND_HEIGHT:.1f}, {z:.1f}" + \
+        (" after 0 correction(s)." if ended else ".")
+
+
+def test_settled_readings():
+    start = (627.1, 1062.8)
+    log = "\n".join([
+        # Not loaded yet: the first ray reads the sea; the settling probe reads the street.
+        landed(100, 191.0, 200), watch(100.2, 200.0, 199.5), landed(100, 200.3, 200),
+        # No second probe logged, but the watch saw it land.
+        landed(120, 191.0, 200), watch(120.1, 206.8, 200.4),
+        # Water: the game puts the skater back at the start.
+        landed(140, 191.0, 200), watch(start[0], 199.9, start[1], ended=True), landed(140, 191.0, 200),
+        # Only the early reading.
+        landed(160, 199.6, 200),
+        # Nothing at all.
+        "[info] Trainer: no collision at 180.0, 200.0 yet; going to height 202.0 and waiting for the ground.",
+    ])
+    readings = anchorcheck.read_probes(log)
+    assert readings.heights[(100.0, 200.0)] == pytest.approx(200.3)       # the second probe wins
+    assert readings.heights[(120.0, 200.0)] == pytest.approx(206.8)       # then the watch
+    assert readings.reset == {(140.0, 200.0)}
+    assert readings.unsettled == {(160.0, 200.0)}
+    assert readings.missing == [(180.0, 200.0)]
+    heights, missing = anchorcheck.read_heights(log)
+    assert heights == readings.heights and missing == readings.missing
+
+
+def test_a_later_run_of_a_spot_wins():
+    log = "\n".join([landed(100, 191.0, 200), landed(100, 191.0, 200),
+                     landed(100, 191.0, 200), watch(100, 205.0, 200), landed(100, 205.0, 200)])
+    assert anchorcheck.read_probes(log).heights == {(100.0, 200.0): pytest.approx(205.0)}
+
+
+def test_reset_spots_count_as_water():
+    heights = {(float(x), float(z)): 200.0 + 0.001 * x for x in range(0, 401, 20) for z in range(0, 401, 20)}
+    reset = {k for k in heights if k[0] <= 160}                  # the west part reset the skater
+    best = anchorcheck.rank(heights, size=160, top=3, wet_spots=reset)
+    assert best[0].x - 80 > 160 and best[0].level_share == 1.0
+    assert best[0].water == 0
 
 
 def waterfront(x, z):
@@ -198,7 +247,7 @@ def test_cli_search_round_trip(park, tmp_path, capsys):
     assert cli.main(["anchor", "search", *logs, "--size", "160", "--anchor-out", str(anchor),
                      "--anchor-template", str(park)]) == 0
     out = capsys.readouterr().out
-    assert "961 probes read from 9 logs" in out
+    assert "961 spots read from" in out
     assert "1. " in out and "100% level" in out and "--around" in out
     assert "Water at 191.0" in out and "Reference height 200.0" in out
     document = json.loads(anchor.read_text())
@@ -216,7 +265,7 @@ def test_lower_and_higher_say_relative_to_the_park(park):
 def test_probe_prints_the_bare_value(park, capsys):
     assert cli.main(["anchor", "probe", "--park", str(park)]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert any(line.startswith("trainer ground 600.0 1000.0;wait 1;") for line in lines)
+    assert any(line.startswith("trainer ground 600.0 1000.0;wait 8;") for line in lines)
 
 
 def test_reference_height_skips_water_at_the_centre():
