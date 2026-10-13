@@ -17,6 +17,12 @@ inline constexpr Fingerprint remove_databases{0x3f5fbc0, {
 // database (crash reports of 2026-10-08 to 2026-10-11, always on leaving one custom map).
 inline constexpr std::uintptr_t mesh_hash_read = 0x3f5fc52;
 inline constexpr std::array<unsigned char, 6> mesh_hash_read_bytes{0x8b, 0x90, 0xc8, 0x00, 0x00, 0x00};
+// Right after that read: the key's low half from the entry (mov eax, [rbx + 0x20]) and the
+// shift of the name hash into the high half (shl rdx, 0x20), then the call that removes the
+// entry from the registry (0x3f5a200). It needs only the key, never the mesh: when the guard
+// finds the name hash again (Extension/World/mesh_registry.h) it puts it in edx and goes on here.
+inline constexpr std::uintptr_t key_low_read = 0x3f5fc58;
+inline constexpr std::array<unsigned char, 7> key_low_read_bytes{0x8b, 0x43, 0x20, 0x48, 0xc1, 0xe2, 0x20};
 // The step to the next entry (add rbx, 0x30), after the call that takes one out: where an entry
 // without a mesh goes on from.
 inline constexpr std::uintptr_t next_entry = 0x3f5fc67;
