@@ -26,6 +26,9 @@ ReSkate menu's skater page, or the console (`~`) with `grindexit exits on|off`).
   grind, the stick's left / right reaches the game at the pop instead of before it (it cannot
   lean-balance the grind meanwhile), so the game's own lean exit cannot drag the board toward the
   spin and into the rail (`grindexit leanguard on|off`).
+- **Pop-out strength** (`grindexit strength 10-100`, kept): how far to the side a trigger exit
+  pops, as a share of the full exit (100%, the default, is the game's own sideways speed). Lower it
+  for rails next to a wall. Very low values leave little clearance on exits over the rail.
 - **Multiplayer**: works in any session or server, whatever the host's settings, throwdowns
   included. It adds no speed or height (the sideways speed is the game's own); it only changes which
   input picks the exit side. Server checks do not see it, since it changes no game data.
