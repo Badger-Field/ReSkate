@@ -1030,7 +1030,8 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             continue;
         }
         // Grey dots above the sender. Not a chat line. "On" is held to a few a second so a
-        // modified client cannot flood the relay; "off" always goes through.
+        // modified client cannot flood the relay, and "off" only clears dots that are up, so
+        // it cannot outpace "on".
         if (p.kind == PacketKind::typing) {
             auto *sender = find_peer(s, p.source);
             if (direct_link || !sender || !sender->handshaken) continue;
@@ -1041,6 +1042,7 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
                 sender->typing_notice = now;
                 sender->typing_until = now + typing_hold_us;
             } else {
+                if (!sender->typing_until) continue;
                 sender->typing_until = 0;
             }
             sender->last_packet = now;

@@ -274,7 +274,8 @@ bool is_emote_text(std::string_view text, std::string_view before, std::string_v
 }
 
 // The session relays this. Dots mean the input changed in the last three seconds, not that
-// the box is merely open. A failed queue is tried again next frame.
+// the box is merely open. A failed queue is tried again next frame. A "/" line is a command,
+// a private message or party chat: not everyone's business, so it shows no dots.
 void note_typing(ChatState& c, bool open) {
     const auto now = Clock::now();
     if (!open) {
@@ -284,6 +285,13 @@ void note_typing(ChatState& c, bool open) {
         return;
     }
     const std::string_view text(c.input.data());
+    if (const auto first = text.find_first_not_of(' '); first != std::string_view::npos && text[first] == '/') {
+        if (c.typing_on && queue_multiplayer_action("typing", "0")) c.typing_on = false;
+        c.typing_seen.assign(text);
+        c.typing_watch = true;
+        c.typing_changed_valid = false;
+        return;
+    }
     if (!c.typing_watch) {
         c.typing_seen.assign(text);
         c.typing_watch = true;

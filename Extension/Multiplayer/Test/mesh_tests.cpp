@@ -2291,6 +2291,12 @@ void typing_checks() {
     sim.run(4);
     check(until(host, id(first)) == 0 && until(second, id(first)) == 0 && first.local_typing_until == 0,
           "Stopping typing left the dots up");
+    // A stop with no dots up is not passed on: the other guest would lose this marker if it were.
+    find_peer(second, id(first))->typing_until = sim.now + typing_hold_us;
+    send_typing(first, false);
+    sim.run(4);
+    check(until(second, id(first)) != 0, "A stop notice with no dots up was relayed");
+    find_peer(second, id(first))->typing_until = 0;
     send_typing(host, true);
     sim.run(4);
     check(until(first, id(host)) > sim.now && until(second, id(host)) > sim.now && host.local_typing_until != 0,
