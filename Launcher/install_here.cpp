@@ -82,6 +82,21 @@ std::optional<fs::path> find_steam_skate() {
     return std::nullopt;
 }
 
+bool installed_copy_matches(const fs::path &game, const fs::path &from) {
+    std::error_code error;
+    if (!fs::is_regular_file(from / L"ReSkate.dll", error) || !fs::is_regular_file(game / L"ReSkateLauncher.exe", error))
+        return false;
+    for (const auto *name : files) {
+        const auto source = from / name;
+        if (!fs::is_regular_file(source, error)) continue;
+        const auto target = game / name;
+        if (!fs::is_regular_file(target, error) || fs::file_size(source, error) != fs::file_size(target, error) || error)
+            return false;
+        if (read_text(source) != read_text(target)) return false;
+    }
+    return true;
+}
+
 fs::path install_into(const fs::path &game, const fs::path &from) {
     std::error_code error;
     if (!fs::is_regular_file(game / L"Skate.exe", error)) throw std::runtime_error("That folder has no Skate.exe.");

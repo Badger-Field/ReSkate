@@ -337,13 +337,23 @@ void Launcher::run_check() {
                 }
             }
             if (supported) {
+                // This very build is already there (started again from the download, say): open
+                // the installed launcher instead of asking to install it once more.
+                if (launcher_app::installed_copy_matches(*found, session_.self.parent_path())) {
+                    set(Phase::checking, "Opening ReSkate", "ReSkate is already installed in your Steam copy of skate.");
+                    handoff_ = *found / L"ReSkateLauncher.exe";
+                    restart_ = true;
+                    return;
+                }
                 {
                     std::lock_guard lock(mutex_);
                     state_.install_target = *found;
                 }
-                set(Phase::install_here, "Install ReSkate",
+                const bool update = fs::is_regular_file(*found / L"ReSkateLauncher.exe", error);
+                set(Phase::install_here, update ? "Update ReSkate" : "Install ReSkate",
                     "Found skate. in your Steam library:\n" + launcher_text::utf8(found->wstring()) +
-                    "\nReSkate copies itself there and adds Desktop and Start menu shortcuts.");
+                    (update ? "\nAn older ReSkate is installed there. This one replaces it; your mods and settings stay."
+                            : "\nReSkate copies itself there and adds Desktop and Start menu shortcuts."));
                 return;
             }
         } else {
