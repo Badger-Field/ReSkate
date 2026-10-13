@@ -215,12 +215,13 @@
   "steam_networking": {
     "repository": "https://github.com/ValveSoftware/GameNetworkingSockets",
     "commit": "a424b7db649438acafb60c99cae6667587c42732",
-    "configuration": "Unmodified public ABI headers only. Dynamically uses the original game steam_api64.dll; no standalone networking library is linked.",
+    "configuration": "Unmodified public ABI headers only. Dynamically uses the original game steam_api64.dll, or in offline mode the standalone library (GameNetworkingSockets, loaded at run time, not linked). steamnetworkingcustomsignaling.h is from commit d534c19, whose other headers differ from a424b7d only in comments.",
     "files": {
       "isteamnetworkingsockets.h": "d541a5980a6a1fce001872e277a26e6748a00d9bac67e237071f96f4ec2351db",
       "LICENSE": "6fedd796d51d7f996e0b3dc7c1c9f6a67603bec7a2cfb9f418e0c6607a1ca647",
       "steam_api_common.h": "bd194ce9fcd6cfd4d224858fdd6f226dc12bc1dcfa4e623e757f04a60597707a",
       "steamclientpublic.h": "13689df4b4a5ec27952b25859502fab67b6214f424b5672c82a7d7ceaa58e3d7",
+      "steamnetworkingcustomsignaling.h": "99599ba645fb4dcb5aaab9c66fe2bf27426af4ae48b37c896f0a4fce648c62de",
       "steamnetworkingtypes.h": "b41b53c6ff505705d7a9faa8a2b1ce09b7e7870411475b6e627ff475acb4f5a2",
       "steamtypes.h": "f0949266c8f80d1cfa68fd992bdd5582431f316c494e423db218dca02898fef5",
       "steamuniverse.h": "2b9c0834ae5a71eac07e6d415ded853c0d0ce3bd91f3e6991597973ed3dee394"

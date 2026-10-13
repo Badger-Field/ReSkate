@@ -158,6 +158,19 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
     add_executable(dingosdk_multiplayer_lane_tests Extension/Multiplayer/Test/steam_lanes_tests.cpp)
     target_include_directories(dingosdk_multiplayer_lane_tests SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/External/steam_networking")
     add_test(NAME multiplayer_lanes COMMAND dingosdk_multiplayer_lane_tests)
+    if(NOT WIN32)
+        # Direct multiplayer over the standalone GameNetworkingSockets library, which the test
+        # loads at run time: pass its path in DINGOSDK_TEST_GNS_LIBRARY to run it.
+        add_executable(dingosdk_direct_transport_tests Extension/Multiplayer/Test/direct_transport_tests.cpp
+            Extension/Multiplayer/Direct/direct_signaling.cpp Extension/Multiplayer/Steam/steam_transport.cpp
+            Extension/Multiplayer/Net/protocol.cpp Extension/Multiplayer/Net/delta_codec.cpp Extension/Multiplayer/Net/wire_codec.cpp)
+        target_include_directories(dingosdk_direct_transport_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+        target_include_directories(dingosdk_direct_transport_tests SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/External/steam_networking")
+        target_link_libraries(dingosdk_direct_transport_tests PRIVATE dingosdk_launcher_support dingosdk_lz4 dingosdk_zstd dl pthread)
+        if(DINGOSDK_TEST_GNS_LIBRARY)
+            add_test(NAME multiplayer_direct_transport COMMAND dingosdk_direct_transport_tests "${DINGOSDK_TEST_GNS_LIBRARY}")
+        endif()
+    endif()
     add_executable(dingosdk_multiplayer_prediction_tests
         Extension/Multiplayer/Test/prediction_tests.cpp Extension/Multiplayer/Net/protocol.cpp Extension/Multiplayer/Remote/playback_buffers.cpp)
     add_test(NAME multiplayer_prediction COMMAND dingosdk_multiplayer_prediction_tests)

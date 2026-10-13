@@ -53,6 +53,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Throwdowns/throwdown_wire.cpp
     Extension/Multiplayer/Hud/native_indicators.cpp
     Extension/Multiplayer/Steam/steam_transport.cpp
+    Extension/Multiplayer/Direct/direct_signaling.cpp
     Extension/Multiplayer/Steam/steam_social.cpp
     Extension/Multiplayer/Steam/steam_friend_join.cpp
     Extension/Multiplayer/Steam/steam_lobbies.cpp

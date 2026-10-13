@@ -58,7 +58,9 @@ public-domain notice is retained in `sqlite/LICENSE.txt`.
 
 `steam_networking` contains unmodified public headers for the v012 Steam
 Networking Sockets ABI. ReSkate resolves flat exports from the game's verified
-original `steam_api64.dll`. It does not link the standalone networking library, and the
+original `steam_api64.dll`, or, for direct multiplayer in offline mode, from the standalone
+`GameNetworkingSockets` library loaded at run time (`steamnetworkingcustomsignaling.h` comes
+from its commit `d534c19`). It does not link the standalone networking library, and the
 client package carries no Steam DLL; the dedicated server package carries the Steam files
 it signs in with (see `Server/README.txt`). Keep `steam_networking/LICENSE` with distributions.
 

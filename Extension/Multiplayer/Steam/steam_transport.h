@@ -3,6 +3,7 @@
 #include <memory>
 
 namespace dingosdk::multiplayer {
+class DirectSignaling;
 enum class TrafficLane : std::uint16_t { gameplay = 0, control = 1, cosmetics = 2, voice = 3 };
 constexpr TrafficLane traffic_lane(PacketKind kind) {
     return kind == PacketKind::voice ? TrafficLane::voice
@@ -70,6 +71,15 @@ class SteamTransport {
     // Dedicated server: the logged-on Steam game server's networking, from the
     // steam_api64.dll module handle it was started with.
     bool open_game_server(void *steam_api);
+    // Direct multiplayer, without Steam: the standalone GameNetworkingSockets library
+    // (`library`, a module handle the caller loaded and keeps loaded) instead of Steam's, as
+    // player `local_id`. Players find routes to each other with ICE, exchanging what that takes
+    // through `signaling` (which the caller keeps alive until stop()); `stun_servers` is the
+    // library's comma-separated "host:port" list. Players' IP addresses are shared with each
+    // other, which is what lets them connect without a relay. Once per process: the library
+    // keeps the identity it was started with.
+    bool open_direct(void *library, std::uint64_t local_id, DirectSignaling *signaling, const std::string &stun_servers);
+    bool direct() const;
     bool host(unsigned capacity);
     // `direct_ip` and `direct_port` (host byte order; 0 for none): the address a dedicated server
     // listens on for direct connections. It is tried first, and the connection goes through
