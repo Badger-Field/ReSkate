@@ -341,6 +341,9 @@ def run_city(args) -> int:
         anchor = park.read_anchor(args.anchor, cat.marker) if args.anchor else park.Anchor()
         map_name = args.map or anchor.map or "bam"
         document = park.build_park(placements, map_name, anchor)
+        written = len(document["maps"][map_name])
+        if written < len(placements):
+            print(f"note: {len(placements) - written} placements were exact duplicates and were written once")
         if not args.anchor:
             print("note: no --anchor, so the place sits at the map's origin; see README for placing it")
         if args.park:

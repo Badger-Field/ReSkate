@@ -435,3 +435,38 @@ def test_a_house_off_residential_land_is_still_a_home():
     item = mapdata.MapItem(shapely.box(0, 0, 5, 5), {"building": "detached"}, "osm")
     assert city.is_home(item, None)
     assert not city.is_home(mapdata.MapItem(shapely.box(0, 0, 5, 5), {"building": "office"}, "osm"), None)
+
+
+def test_a_spot_mapped_by_both_sources_is_placed_once():
+    """Overture repeats OpenStreetMap: the same steps, bench and wall from both are one spot each."""
+    items = synthcity.map_items()
+    repeated = [mapdata.MapItem(i.geometry, dict(i.tags), "overture", "o-" + i.id) for i in items
+                if i.tags.get("highway") == "steps" or i.tags.get("amenity") == "bench" or i.tags.get("barrier")]
+    model = city.build(synthcity.BOUNDS, items + repeated, synthcity.survey())
+    for what in ("steps", "bench", "wall"):
+        (spot,) = spots(model, what)
+        assert spot.source == "osm+overture"
+    assert len(spots(model, "handrail")) == 2
+
+
+def test_the_writer_never_writes_the_same_object_twice():
+    cat = catalog.load_catalog(DEFAULT_CATALOG)
+    one = catalog.Placement(cat.items[6], 1.0, 2.0, 0.0, 0.3, 0.0, 1.2, 0)
+    twin = catalog.Placement(cat.items[6], 1.0, 2.0, 0.0, 0.3, 0.0, 1.2, 1)
+    other = catalog.Placement(cat.items[6], 4.0, 2.0, 0.0, 0.3, 0.0, 1.2, 2)
+    document = park.build_park([one, twin, other], "bam", park.Anchor())
+    assert len(document["maps"]["bam"]) == 2
+
+
+def test_a_slope_is_not_a_flight_of_steps():
+    """Steps mapped where the ground only climbs a plaza's 2 %: left out, unless the map counts them."""
+    line = shapely.LineString([(-20, 20), (-12, 20)])
+    plain = mapdata.MapItem(line, {"highway": "steps"}, "osm", "way/30")
+    model = city.build(synthcity.BOUNDS, synthcity.map_items() + [plain], synthcity.survey())
+    assert not [s for s in spots(model, "steps") if s.feature.centre[1] > 10]
+    assert any("not like a flight" in n for n in model.notes)
+    counted = mapdata.MapItem(line, {"highway": "steps", "step_count": "5"}, "osm", "way/31")
+    model = city.build(synthcity.BOUNDS, synthcity.map_items() + [counted], synthcity.survey())
+    (stairs,) = [s for s in spots(model, "steps") if s.feature.centre[1] > 10]
+    assert stairs.feature.height == pytest.approx(0.8) and stairs.feature.along == pytest.approx(1.5)
+    assert stairs.feature.steps == 5

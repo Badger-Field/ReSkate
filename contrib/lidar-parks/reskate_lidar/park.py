@@ -123,8 +123,15 @@ def build_park(placements: list[Placement], map_name: str, anchor: Anchor, mirro
         objects += [dict(o) for o in anchor.others]
         scales.update(anchor.scales)
     next_id = max([int(o["id"]) for o in objects], default=0) + 1
+    placed: set[tuple] = set()
     for placement in placements:
         position, rotation = to_game(placement, anchor, mirror)
+        # The same object in the same place twice is a mistake upstream: write it once.
+        key = (placement.item.item, tuple(round(v, 2) for v in position), tuple(round(v, 3) for v in rotation),
+               round(float(placement.scale), 3))
+        if key in placed:
+            continue
+        placed.add(key)
         objects.append({"id": next_id, "item": placement.item.item, "position": position, "rotation": rotation})
         if abs(placement.scale - 1.0) > 1e-4:
             scales[str(next_id)] = round(float(placement.scale), 4)

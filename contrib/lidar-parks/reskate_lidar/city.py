@@ -48,6 +48,10 @@ SOFT = {("landuse", "grass"), ("landuse", "meadow"), ("leisure", "garden"), ("na
 RESIDENTIAL = {("landuse", "residential"), ("overture:subtype", "residential"), ("overture:class", "residential")}
 HOMES = {"house", "detached", "residential", "semidetached_house", "terrace", "bungalow", "cabin",
          "farm", "static_caravan", "houseboat", "apartments"}
+# Rise per metre of run. Outdoor steps climb about 0.4-0.7; the ground grid smooths a flight to a
+# gentler slope, so anything above STAIR_MIN_GRADE counts and is pulled in to STAIR_GRADE.
+STAIR_MIN_GRADE = 0.08
+STAIR_GRADE = 0.4
 PUBLIC_AREAS = {("place", "square"), ("leisure", "park"), ("leisure", "skatepark"), ("leisure", "playground"),
                 ("leisure", "pitch"), ("highway", "pedestrian"), ("amenity", "marketplace"),
                 ("overture:class", "pedestrian"), ("overture:class", "plaza"), ("overture:class", "park"),
@@ -471,14 +475,26 @@ def _steps(item: MapItem, measure: Measure, ground: Grid, notes: list[str]) -> l
         rise = float(ends[1] - ends[0])
         if rise >= 0.25:
             a, b, rise = _flight_extent(ground, a, b, u, rise)
-        elif count:
-            rise = count * 0.16
-        if rise < 0.25:
-            notes.append(f"steps {item.id or ''} at ({(a[0] + b[0]) / 2:.0f}, {(a[1] + b[1]) / 2:.0f}): "
-                         f"no rise in the ground model, left out")
-            continue
-        width = mapdata.length_tag(tags.get("width")) or _stair_width(ground, a, b, u, rise)
         run = float(np.hypot(*(b - a)))
+        # A flight climbs about 0.4-0.7 m per metre of run; far less is a plaza's slope or a
+        # terrace edge read along the line, not steps.
+        if rise >= 0.25 and STAIR_MIN_GRADE <= rise / max(run, 0.1) < STAIR_GRADE:
+            middle, run = (a + b) / 2, rise / STAIR_GRADE
+            a, b = middle - u * run / 2, middle + u * run / 2
+            ends = ground.sample(np.array([a - u * 0.25, b + u * 0.25]))
+        if rise < 0.25 or rise / max(run, 0.1) < STAIR_MIN_GRADE:
+            if count:  # the map says how many steps: build them at a standard pitch on the line
+                rise = count * 0.16
+                middle = (a + b) / 2
+                run = min(count * 0.3, max(run, 0.6))
+                a, b = middle - u * run / 2, middle + u * run / 2
+                ends = ground.sample(np.array([a - u * 0.25, b + u * 0.25]))
+            else:
+                where = f"({(a[0] + b[0]) / 2:.0f}, {(a[1] + b[1]) / 2:.0f})"
+                notes.append(f"steps {item.id or ''} at {where}: the ground there climbs {rise:.2f} m over "
+                             f"{run:.1f} m, not like a flight; left out (a step_count tag would place it)")
+                continue
+        width = mapdata.length_tag(tags.get("width")) or _stair_width(ground, a, b, u, rise)
         steps = count or max(2, int(round(rise / 0.16)))
         yaw = math.atan2(u[1], u[0])
         centre = (a + b) / 2
@@ -648,6 +664,31 @@ def banks_from_ground(ground: Grid, car_free_mask: np.ndarray, avoid: list[Spot]
     return spots
 
 
+def same_spot(a: Spot, b: Spot, distance: float = 0.5, length: float = 0.1, turn: float = 10.0) -> bool:
+    """Two spots that are one thing mapped twice (OpenStreetMap, and Overture repeating it)."""
+    fa, fb = a.feature, b.feature
+    if fa.kind != fb.kind or a.what != b.what:
+        return False
+    if math.hypot(fa.centre[0] - fb.centre[0], fa.centre[1] - fb.centre[1]) > distance:
+        return False
+    if abs(fa.along - fb.along) > length * max(fa.along, fb.along):
+        return False
+    d = math.degrees(abs(fa.yaw - fb.yaw)) % (180 if fa.kind in ("ledge", "rail") and not fa.pitch else 360)
+    return min(d, (180 if fa.kind in ("ledge", "rail") and not fa.pitch else 360) - d) <= turn
+
+
+def merge_sources(spots: list[Spot]) -> list[Spot]:
+    """One spot for each thing mapped by both sources: OpenStreetMap's is kept, credited to both."""
+    kept: list[Spot] = []
+    for spot in sorted(spots, key=lambda sp: sp.source != "osm"):
+        twin = next((k for k in kept if k.source != spot.source and same_spot(k, spot)), None)
+        if twin is None:
+            kept.append(spot)
+        elif spot.source not in twin.source.split("+"):
+            twin.source = f"{twin.source}+{spot.source}"
+    return kept
+
+
 def _dedupe(tagged: list[Spot], found: list[Spot]) -> list[Spot]:
     """Drop point-cloud features that a tagged one already covers."""
     import shapely
@@ -703,7 +744,7 @@ def build(bounds, items: list[MapItem], lidar: ept.Points | None, settings: Sett
     say(f"  {len(buildings)} buildings" + (f", {homes} of them homes (plain blocks)" if homes else ""))
 
     car_free_mask = rasterise(car_free, ground)
-    tagged = [sp for sp in spots_from_tags(items, measure, ground, notes)
+    tagged = [sp for sp in merge_sources(spots_from_tags(items, measure, ground, notes))
               if car_free.buffer(1.0).intersects(shapely.Point(sp.feature.centre)) or sp.what in ("steps", "handrail")]
     say(f"  {len(tagged)} skate spots from map tags")
     found: list[Spot] = []
