@@ -10,6 +10,9 @@
 namespace dingosdk::launcher_app {
 // skate.'s folder in the Steam library (holding Skate.exe), when Steam has it installed.
 std::optional<std::filesystem::path> find_steam_skate();
+// Whether `game` already holds exactly ReSkate's files from `from` (each one `from` has, byte for
+// byte): then there is nothing to install, and the launcher there can simply be started.
+bool installed_copy_matches(const std::filesystem::path &game, const std::filesystem::path &from);
 // Copies ReSkate's files from `from` into `game` and makes the shortcuts. Returns the installed
 // launcher. Throws a message for the player.
 std::filesystem::path install_into(const std::filesystem::path &game, const std::filesystem::path &from);
