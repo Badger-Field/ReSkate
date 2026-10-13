@@ -732,8 +732,8 @@ DWORD start_game(const Session& session, const launcher::LaunchOptions& options,
     set_environment(L"RESKATE_OFFLINE_STEAM_ID", steam_id ? std::to_wstring(*steam_id).c_str() : nullptr);
     if (offline)
         logging::write(logging::Level::info, logging::Channel::launcher, options.offline ?
-            std::wstring(L"Offline mode: requested; Steam is not used") :
-            L"Offline mode: Steam is not running or not signed in: " + steam_reason);
+            std::wstring(L"Without Steam: chosen in Settings or on the command line") :
+            L"Without Steam: Steam is not running or not signed in: " + steam_reason);
     logging::write(logging::Level::info, logging::Channel::launcher, std::wstring(L"Graphics options: DRED=") +
         (options.gpu_diagnostics ? L"enabled" : L"default"));
     if (options.force_windowed)

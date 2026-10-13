@@ -8,8 +8,9 @@ the launcher, the runtime that loads into the game, and the dedicated server.
 
 ## Features
 
-- **Offline play.** No EA servers needed. Your skater, outfits, unlocks and progress are saved on your PC,
-  and the game runs even with Steam closed.
+- **No Steam or EA servers needed to play.** Your skater, outfits, unlocks and progress are saved on your
+  PC. With Steam closed, the game starts without it: you pick your own name, and multiplayer runs on join
+  codes, your home network and ReSkate's own lobbies (`contrib/direct-multiplayer`).
 - **Multiplayer.**
   - Host a Steam lobby for up to 32 players: public, or joined with a code, with an optional password.
   - Join dedicated servers from the in-game server browser.
@@ -212,7 +213,7 @@ Useful launcher flags:
 |---|---|
 | `--no-gui` | start the game straight away, without the launcher window; with no other launch flags it uses the launcher's saved settings |
 | `--no-update` | skip the update check |
-| `--offline`, `-offline` | play offline, without Steam running |
+| `--offline`, `-offline` | start without Steam even when it is running (without Steam is the default whenever Steam is closed) |
 | `--windowed`, `--width=N`, `--height=N` | windowed mode and its size |
 | `--log-level=<trace\|debug\|info\|warning\|error\|critical\|off>` | how much `ReSkate.log` records (`warn` works too) |
 | `--log-trace` | the same as `--log-level=trace`; an explicit `--log-level` wins |

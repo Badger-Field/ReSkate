@@ -34,7 +34,8 @@ voice chat still need Steam.
    built as one Windows x64 DLL with ICE on and everything linked in (vcpkg triplet
    `x64-windows-static`, static CRT): it needs nothing but Windows. ReSkate loads only the
    build whose SHA-256 is in `direct_play.cpp`.
-2. Start ReSkate in offline mode. The Multiplayer pages appear as they do with Steam.
+2. Start ReSkate with Steam closed (or tick **Always without Steam** in the launcher's Settings).
+   The Multiplayer pages appear as they do with Steam.
 3. Multiplayer, then **Your name**: the name other skaters see. Until it is set it is "Skater"
    and four digits.
 4. The host: **Host**, then **Home network** (anyone on the same network sees it in Servers) or
