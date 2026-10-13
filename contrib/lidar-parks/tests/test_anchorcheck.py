@@ -1,5 +1,6 @@
 """The anchor check: probes over a park's footprint, and the game's ground heights read back."""
 import json
+import math
 
 import numpy as np
 import pytest
@@ -321,3 +322,25 @@ def test_fast_mode_reads_the_landing_watch(tmp_path, capsys):
     first = (tmp_path / "batch-01.txt").read_text()
     assert first.startswith("trainer ground -200.0 -200.0;wait 4;trainer ground -180.0 -200.0;wait 4")
     assert "Each is probed once" in capsys.readouterr().out
+
+
+def test_anchor_yaw_and_the_frame():
+    from reskate_lidar import catalog as catalog_module, park as park_module
+    document = anchorcheck.anchor_park("bam", 507.1, 199.5, 1042.8, "own_bkprops_generic_measuringstick_00001",
+                                       yaw_degrees=90)
+    (stick,) = document["maps"]["bam"]
+    assert stick["rotation"] == pytest.approx([0, math.sin(math.pi / 4), 0, math.cos(math.pi / 4)], abs=1e-6)
+    # A stick at yaw 0: the park's east is world +x, its north world +z.
+    item = catalog_module.CatalogItem("own_bk_box", ["box"], 1.0, 1.0, 1.0)
+    anchor = park_module.Anchor(np.array([507.1, 199.5, 1042.8]), 0.0, "bam", [], {})
+    east = park_module.to_game(catalog_module.Placement(item, 10.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0), anchor)[0]
+    north = park_module.to_game(catalog_module.Placement(item, 0.0, 10.0, 0.0, 0.0, 0.0, 1.0, 0), anchor)[0]
+    assert east == pytest.approx([517.1, 199.5, 1042.8]) and north == pytest.approx([507.1, 199.5, 1052.8])
+
+
+def test_size_takes_a_rectangle():
+    assert cli._size("160") == (160.0, 160.0)
+    assert cli._size("130x30") == (130.0, 30.0)
+    import argparse
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli._size("130x")

@@ -208,7 +208,7 @@ python -m reskate_lidar anchor search --map bam --around 627.1 1062.8 --radius 2
    - **Suspicious squares:** a square exactly flat over 20 or more probes is flagged and ranked last. Real ground has kerbs and falls; the sea doesn't.
    - **Widening:** search further out without probing the middle again with `--radius 400 --skip-radius 200`.
    - **Next:** it prints a finer `--around` search round the best one.
-   - **The anchor file:** `--anchor-out` writes the best place as an anchor file, keeping the old stick's facing. Pass it to `city --anchor`, then confirm with `anchor probe` and `anchor check`.
+   - **The anchor file:** `--anchor-out` writes the best place as an anchor file, keeping the old stick's facing. `--anchor-yaw` sets the facing instead. At yaw 0 the park's east is world +x and its north world +z, so a place's east-west axis runs along world x. Pass it to `city --anchor`, then confirm with `anchor probe` and `anchor check`.
 
 ### A skatepark's real shape (`--skatepark`)
 
@@ -240,7 +240,9 @@ python studio_prep.py venice.glb venice.blend      # optional, for ReSkate Studi
 | `--overpass <url or file>` | another Overpass server, or a saved answer |
 | `--ground-cell 0.5` | ground grid size (metres) |
 | `--tile 64` | mesh ground tile size (metres) |
-| `--turn 30` | turn the whole place before placing it |
+| `--size 130x30` | a rectangle, east-west x north-south, instead of a square |
+| `--turn 30` | turn the whole place before placing it, counter-clockwise from above (east towards north) |
+| `--centre-park` | move the objects so the middle of their footprint is on the anchor |
 
 ## Street-level imagery (`imagery`)
 

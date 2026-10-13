@@ -376,9 +376,11 @@ def rank(heights: dict[tuple[float, float], float], size: float, tolerance: floa
     return best
 
 
-def anchor_park(map_name: str, x: float, y: float, z: float, item: str, template: str | Path | None = None) -> dict:
+def anchor_park(map_name: str, x: float, y: float, z: float, item: str, template: str | Path | None = None,
+                yaw_degrees: float | None = None) -> dict:
     """A park file holding one measuring stick at x, y, z, for `city --anchor`. With a template
-    (the old anchor), its stick keeps its item and facing and only moves."""
+    (the old anchor), its stick keeps its item and facing and only moves. `yaw_degrees` sets the
+    facing instead: 0 puts the park's east on world +x and its north on world +z."""
     from .park import validate_park
     stick = {"id": 1, "item": item, "rotation": [0.0, 0.0, 0.0, 1.0]}
     if template:
@@ -388,6 +390,9 @@ def anchor_park(map_name: str, x: float, y: float, z: float, item: str, template
             raise ValueError(f"{template} is on {template_map}, not {map_name}")
         old = ([o for o in objects if o.get("item") == item] or objects[:1])[0]
         stick.update(item=old["item"], rotation=old["rotation"])
+    if yaw_degrees is not None:
+        half = math.radians(yaw_degrees) / 2
+        stick["rotation"] = [0.0, round(math.sin(half), 6), 0.0, round(math.cos(half), 6)]
     stick["position"] = [round(x, 3), round(y, 3), round(z, 3)]
     park = {"format": "reskate-park", "schema_version": 1, "revision": 0, "maps": {map_name: [stick]}}
     validate_park(park)

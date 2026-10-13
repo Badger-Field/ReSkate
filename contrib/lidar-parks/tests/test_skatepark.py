@@ -162,13 +162,16 @@ def test_skatepark_command(tmp_path):
                  "--lidar", str(tmp_path / "ept"), "--sources", "osm", "--overpass", str(answer),
                  "--cache", str(tmp_path / "cache"), "--mesh", str(tmp_path / "park.glb"),
                  "--preview", str(tmp_path / "park.png"), "--report", str(tmp_path / "park.json"),
-                 "--mods", str(tmp_path / "Mods"), "--name", "Synthetic Bowl", "--author", "tests"])
+                 "--mods", str(tmp_path / "Mods"), "--name", "Synthetic Bowl", "--author", "tests",
+                 "--centre-park"])
     assert code == 0
     mod = tmp_path / "Mods" / "Synthetic Bowl"
     document = json.loads((mod / "parks" / "bam.park.json").read_text())
     park_module.validate_park(document)
     objects = document["maps"]["bam"]
     assert objects and all("quarterpipe" in o["item"] for o in objects)
+    xz = np.array([[o["position"][0], o["position"][2]] for o in objects])
+    assert (xz.min(axis=0) + xz.max(axis=0)) / 2 == pytest.approx([0, 0], abs=1.5)   # centred (positions are bases)
     readme = (mod / "README.md").read_text()
     assert "quarter pipes" in readme and "OpenStreetMap contributors" in readme
     report = json.loads((tmp_path / "park.json").read_text())

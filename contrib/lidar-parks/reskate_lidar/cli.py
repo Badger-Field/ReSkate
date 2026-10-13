@@ -16,6 +16,18 @@ HERE = Path(__file__).resolve().parent.parent
 DEFAULT_CATALOG = HERE / "catalog.json"
 
 
+def _size(text: str) -> tuple[float, float]:
+    """`160` (a square) or `130x30` (east-west x north-south), in metres."""
+    parts = text.lower().replace("×", "x").split("x")
+    try:
+        values = [float(v) for v in parts]
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r}: a size in metres, like 160 or 130x30") from None
+    if len(values) not in (1, 2) or min(values) <= 0:
+        raise argparse.ArgumentTypeError(f"{text!r}: a size in metres, like 160 or 130x30")
+    return (values[0], values[-1])
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="reskate_lidar", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -65,8 +77,9 @@ def main(argv: list[str] | None = None) -> int:
     where.add_argument("--place", help="a place name, looked up with OpenStreetMap's Nominatim")
     where.add_argument("--centre", help="latitude,longitude of the middle of the area")
     where.add_argument("--bbox", help="west,south,east,north in degrees")
-    city.add_argument("--size", type=float, default=160.0,
-                      help="width of the square around --place or --centre, metres (default 160)")
+    city.add_argument("--size", type=_size, default=(160.0, 160.0),
+                      help="metres round --place or --centre: a square (160, the default) or east-west x "
+                           "north-south (130x30)")
     city.add_argument("--lidar", default="auto", help="auto (USGS 3DEP), none, an EPT url or folder (ept.json), "
                                                       "or LAS/LAZ/COPC tiles: a file or a folder of them")
     city.add_argument("--lidar-crs", help="the tiles' CRS (EPSG:<code>) where their headers give none")
@@ -90,7 +103,10 @@ def main(argv: list[str] | None = None) -> int:
                       help=f"Build Kit object budget (default {park.DEFAULT_DROPPER_LIMIT}, at most {park.MAX_OBJECTS_PER_MAP})")
     city.add_argument("--keep-elevation", action="store_true",
                       help="place spots at their real heights (default: each on the base map's ground)")
-    city.add_argument("--turn", type=float, default=0.0, help="turn the whole place (degrees, counter-clockwise)")
+    city.add_argument("--turn", type=float, default=0.0, help="turn the whole place (degrees, counter-clockwise "
+                                                              "seen from above: east towards north)")
+    city.add_argument("--centre-park", action="store_true", help="move the objects so the middle of their "
+                                                                 "footprint is on the anchor")
     city.add_argument("--mesh", help="also write the place as a mesh for a custom map (.glb; a -collision.glb beside it)")
     city.add_argument("--tile", type=float, default=64.0, help="ground mesh tile size, metres (default 64)")
     city.add_argument("--skatepark", action="store_true",
@@ -155,6 +171,9 @@ def main(argv: list[str] | None = None) -> int:
     search.add_argument("--no-water", action="store_true", help="assume there is no water")
     search.add_argument("--anchor-out", help="write the best place as an anchor park file, for city --anchor")
     search.add_argument("--anchor-template", help="the old anchor file: the new stick keeps its facing")
+    search.add_argument("--anchor-yaw", type=float, help="the new stick's facing in degrees about up; 0 puts the "
+                                                         "park's east on world +x and north on +z (default: the "
+                                                         "template's facing, else 0)")
 
     synth = commands.add_parser("synth", help="write a synthetic park scan for trying the tool")
     synth.add_argument("output", help=".ply file to write")
@@ -272,7 +291,7 @@ def _city_area(args, cache):
             lat, lon = found["lat"], found["lon"]
         else:
             lat, lon = geo.parse_latlon(args.centre)
-        bbox = geo.bbox_around(lat, lon, args.size)
+        bbox = geo.bbox_around(lat, lon, *args.size)
     frame = geo.LocalFrame(*bbox.centre)
     bounds = frame.bounds(bbox)
     area = (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]) / 1e6
@@ -426,6 +445,15 @@ def _write_place_park(args, cat, name, placements, attribution, readme_text) -> 
         return
     anchor = park.read_anchor(args.anchor, cat.marker) if args.anchor else park.Anchor()
     map_name = args.map or anchor.map or "bam"
+    if getattr(args, "centre_park", False) and placements:
+        xy = np.array([(p.x, p.y) for p in placements])
+        middle = (xy.min(axis=0) + xy.max(axis=0)) / 2
+        for p in placements:
+            p.x -= float(middle[0])
+            p.y -= float(middle[1])
+        size = np.ptp(xy, axis=0)
+        print(f"Centred the objects on the anchor: moved {middle[0]:+.1f} m east, {middle[1]:+.1f} m north; they "
+              f"span {size[0]:.0f} m along the anchor's x (east, unturned) and {size[1]:.0f} m along its z")
     document = park.build_park(placements, map_name, anchor)
     written = len(document["maps"][map_name])
     if written < len(placements):
@@ -688,7 +716,8 @@ def _anchor_search(args) -> int:
           f"--radius {args.size / 2 + fine:g} --spacing {fine:g}")
     if args.anchor_out:
         cat = catalog_module.load_catalog(DEFAULT_CATALOG)
-        document = anchorcheck.anchor_park(args.map, top.x, top.ground, top.z, cat.marker, args.anchor_template)
+        document = anchorcheck.anchor_park(args.map, top.x, top.ground, top.z, cat.marker, args.anchor_template,
+                                           args.anchor_yaw)
         Path(args.anchor_out).write_text(json.dumps(document, indent=2), encoding="utf-8")
         print(f"Wrote {args.anchor_out}: pass it to city --anchor, then check with anchor probe / anchor check")
     return 0
