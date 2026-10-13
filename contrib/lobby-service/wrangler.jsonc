@@ -3,6 +3,9 @@
   "name": "reskate-lobby",
   "main": "src/index.js",
   "compatibility_date": "2026-09-01",
+  // One public address: the workers.dev URL (and a custom domain added in the dashboard).
+  // No per-version preview URLs.
+  "preview_urls": false,
   "durable_objects": {
     "bindings": [{ "name": "HUB", "class_name": "Hub" }]
   },
