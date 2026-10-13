@@ -53,7 +53,8 @@ struct LaunchOptions {
     unsigned console_key{0xC0};  // VK_OEM_3, the key left of 1
     std::string log_level{"info"};
     // -map <name>: the map the game loads once it is up, named as the console's "load" names
-    // one (a map's name, short name or asset path, or the start of one). Empty: none.
+    // one (a map's name, short name or asset path, the start of one, or a part of its asset path no
+    // other map has). Empty: none.
     std::wstring map;
     std::vector<std::wstring> game_arguments;
 };
