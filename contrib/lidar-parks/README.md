@@ -170,6 +170,16 @@ licensed street-level photos around a place:
 - **Mapillary** needs your own client token in `MAPILLARY_TOKEN`.
 - See DATA-SOURCES.md for what the photos can and can't add, and their licences.
 
+**The Mapillary token.** Keep it in a password manager, not in a file or the repo. With 1Password's
+CLI, the token is injected only for the one command:
+
+```
+op run --env MAPILLARY_TOKEN="op://Private/Mapillary/client_token" -- \
+    python -m reskate_lidar imagery --centre 33.9870851,-118.4754707 --radius 100 --verbose
+```
+
+The tool sends the token only in a request header. It never goes in a URL, the cache, or the report.
+
 ## Tests
 
 ```
