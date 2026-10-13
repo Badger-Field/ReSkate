@@ -312,7 +312,8 @@ void update_model(std::uintptr_t client, TickState& frame) {
     // RESKATE_STARTUP_COMMANDS="load skate1map;noclip 1" (development, and the launcher's
     // -map <name>, which is a "load" at the front of it): console commands
     // queued in order once the world is up and can accept them, so a build can be exercised
-    // without anyone driving the overlay. A load waits for its destination to be listed.
+    // without anyone driving the overlay. A load waits for its destination to be listed, and an
+    // editor command for the park editor to be ready.
     {
         static std::optional<std::vector<std::string>> startup_commands;
         if (!startup_commands) {
@@ -359,6 +360,17 @@ void update_model(std::uintptr_t client, TickState& frame) {
                     return level.can_load && (lower(level.asset).find(wanted) != std::string::npos ||
                                               lower(level.display_name) == wanted);
                 });
+            }
+            // An "editor ..." command waits until the park editor can take it (it is not ready
+            // until some seconds after the world is), but not forever: after two minutes it is
+            // queued anyway, so the console reports why it was refused instead of the list stalling.
+            static std::optional<std::chrono::steady_clock::time_point> editor_since;
+            if (ready && lower(text).starts_with("editor ")) {
+                const auto now = std::chrono::steady_clock::now();
+                if (!editor_since) editor_since = now;
+                const auto& editor = r.model.editor;
+                ready = (editor.available && !editor.busy && !editor.failed) || now - *editor_since >= std::chrono::minutes(2);
+                if (ready) editor_since.reset();
             }
             if (ready && r.requests.enqueue(ConsoleRequest{text}, request_context(r), GetCurrentThreadId())) {
                 dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::level,
