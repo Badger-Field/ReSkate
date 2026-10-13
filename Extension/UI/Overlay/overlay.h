@@ -529,7 +529,8 @@ extern "C" void DingoSDKOverlayReadControllerInput(dingosdk::ControllerInput* in
 // Installs (or, with nullptr, removes) the one gamepad filter. Any thread.
 extern "C" void DingoSDKOverlaySetGamepadFilter(dingosdk::overlay::GamepadFilter filter);
 // Holds XInput buttons down on the first pad for a moment, as if pressed (the `press` command).
-extern "C" void DingoSDKOverlayPressGamepad(unsigned short buttons, unsigned milliseconds);
+// 0x10000 and 0x20000 pull the left and right triggers.
+extern "C" void DingoSDKOverlayPressGamepad(unsigned buttons, unsigned milliseconds);
 
 // Optional direct integration for a host that already knows its exact pair.
 struct IDXGISwapChain;

@@ -46,6 +46,7 @@ struct InputCaptureHooks {
     std::map<HANDLE, PlayStationPad> hid_devices;
     std::map<OVERLAPPED*, HidRead> hid_reads;
     Hook register_raw;
+    Hook foreground, active, focus;
     Hook async_key, key, keyboard, raw_data, raw_buffer, capture, release_capture, cursor, show_cursor, physical_cursor, cursor_position;
     std::array<Hook, 5> xinput_state, xinput_extended, xinput_keystroke;
     // Hooks other programs put in front of those, hooked in turn (keep_xinput_capture_first).
@@ -292,7 +293,7 @@ void filter_pad(bool outer, DWORD user, XINPUT_STATE* output) noexcept {
 // With no pad connected, the first pad reads as a connected, idle one while the press lasts and
 // for a second after it, so the game also sees the buttons come up again.
 struct VirtualPress {
-    std::atomic<WORD> buttons{};
+    std::atomic<unsigned> buttons{}; // XInput button bits; 0x10000 and 0x20000 are the triggers
     std::atomic<std::uint64_t> down_until{}, up_until{};
 };
 VirtualPress& virtual_press() { static auto* value = new VirtualPress; return *value; }
@@ -306,7 +307,10 @@ void apply_virtual_press(bool outer, DWORD user, DWORD& result, XINPUT_STATE* ou
         result = ERROR_SUCCESS;
     }
     if (now < press.down_until.load(std::memory_order_acquire)) {
-        output->Gamepad.wButtons |= press.buttons.load(std::memory_order_relaxed);
+        const auto buttons = press.buttons.load(std::memory_order_relaxed);
+        output->Gamepad.wButtons |= static_cast<WORD>(buttons);
+        if (buttons & 0x10000) output->Gamepad.bLeftTrigger = 255;
+        if (buttons & 0x20000) output->Gamepad.bRightTrigger = 255;
         output->dwPacketNumber ^= 0x40000000u;
     }
 }
@@ -366,6 +370,21 @@ SHORT WINAPI captured_async_key(int key) {
 SHORT WINAPI captured_key(int key) {
     const auto value = original<SHORT(WINAPI*)(int)>(input_hooks().key)(key);
     return block_polled_input() ? 0 : value;
+}
+HWND assumed_window() {
+    return assume_focus() ? state().window.load() : nullptr;
+}
+HWND WINAPI captured_foreground() {
+    if (const auto window = assumed_window()) return window;
+    return original<HWND(WINAPI*)()>(input_hooks().foreground)();
+}
+HWND WINAPI captured_active() {
+    if (const auto window = assumed_window()) return window;
+    return original<HWND(WINAPI*)()>(input_hooks().active)();
+}
+HWND WINAPI captured_focus() {
+    if (const auto window = assumed_window()) return window;
+    return original<HWND(WINAPI*)()>(input_hooks().focus)();
 }
 BOOL WINAPI captured_keyboard(PBYTE keys) {
     const auto result = original<BOOL(WINAPI*)(PBYTE)>(input_hooks().keyboard)(keys);
@@ -878,6 +897,13 @@ bool install_input_capture() {
         return okay;
     };
     add(h.register_raw, "RegisterRawInputDevices", reinterpret_cast<void*>(captured_register_raw));
+    if (assume_focus()) {
+        add(h.foreground, "GetForegroundWindow", reinterpret_cast<void*>(captured_foreground));
+        add(h.active, "GetActiveWindow", reinterpret_cast<void*>(captured_active));
+        add(h.focus, "GetFocus", reinterpret_cast<void*>(captured_focus));
+        dingosdk::logging::write(dingosdk::logging::Level::info, dingosdk::logging::Channel::input,
+            "RESKATE_ASSUME_FOCUS: the game is told its window is in front and active.");
+    }
     if (!add(h.async_key, "GetAsyncKeyState", reinterpret_cast<void*>(captured_async_key)) ||
         !add(h.key, "GetKeyState", reinterpret_cast<void*>(captured_key)) ||
         !add(h.keyboard, "GetKeyboardState", reinterpret_cast<void*>(captured_keyboard)) ||
@@ -932,7 +958,17 @@ bool install_input_capture() {
 extern "C" void DingoSDKOverlaySetGamepadFilter(dingosdk::overlay::GamepadFilter filter) {
     dingosdk::overlay::detail::gamepad_filter().store(filter, std::memory_order_release);
 }
-extern "C" void DingoSDKOverlayPressGamepad(unsigned short buttons, unsigned milliseconds) {
+namespace dingosdk::overlay::detail {
+bool assume_focus() {
+    static const bool value = [] {
+        wchar_t text[8]{};
+        const auto length = GetEnvironmentVariableW(L"RESKATE_ASSUME_FOCUS", text, 8);
+        return length == 1 && text[0] == L'1';
+    }();
+    return value;
+}
+}
+extern "C" void DingoSDKOverlayPressGamepad(unsigned buttons, unsigned milliseconds) {
     auto& press = dingosdk::overlay::detail::virtual_press();
     const auto now = GetTickCount64();
     press.buttons.store(buttons, std::memory_order_relaxed);
