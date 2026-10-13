@@ -48,5 +48,39 @@ npx wrangler deploy
 
 Until `CHALLENGE_SECRET` is set, the deployed service refuses players (HTTP 503) and
 `/v1/health` reports `{"ok":false}`. A development secret is used only with `DEV=1`, which
-the tests pass and `npm run dev` reads from `.dev.vars`. To use your own domain, add a route or custom domain for `reskate-lobby`
-in the Cloudflare dashboard, for example `lobby.example.com`.
+the tests pass and `npm run dev` reads from `.dev.vars`.
+
+The service answers only on a custom domain added in the Cloudflare dashboard
+(`skate.ops.rodeo`); `wrangler.jsonc` turns the `workers.dev` and preview URLs off. Deploy
+that change only once the custom domain answers `/v1/health`, or the service has no address.
+
+## Keeping scanners off it
+
+Every request that reaches the Worker counts against its request allowance, and the Worker
+already refuses anything but a signed connection before the Durable Object sees it. A custom
+domain is published in certificate transparency logs, so scanners will find it. Cloudflare's
+firewall rules run before the Worker, so a request they block never reaches the Worker. Add
+these on the zone (Security, then WAF). Both rules name the lobby's host, so nothing else on
+the zone is affected.
+
+1. **Custom rule** "ReSkate lobby: game only", action **Block**:
+
+   ```
+   (http.host eq "skate.ops.rodeo"
+    and http.request.uri.path ne "/v1/health"
+    and not (http.request.method eq "GET"
+             and http.user_agent eq "ReSkate-Lobby/1"
+             and http.request.uri.path in {"/v1/challenge" "/v1/connect"}))
+   ```
+
+   The game sends that User-Agent (`lobby_user_agent` in
+   `Extension/Multiplayer/Direct/direct_lobby.h`); change both together. `/v1/health` stays
+   open for checking the service from a browser.
+
+2. **Rate limiting rule** "ReSkate lobby: per address", for
+   `(http.host eq "skate.ops.rodeo" and http.request.uri.path in {"/v1/challenge" "/v1/connect"})`,
+   counted per IP: 30 requests in 10 seconds, then block for 10 seconds. A game makes two
+   requests per connection and waits at least a second between attempts, so this leaves room
+   for a dozen players behind one address.
+
+The free plan allows 5 custom rules and 1 rate limiting rule per zone.

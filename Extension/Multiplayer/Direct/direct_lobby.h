@@ -15,6 +15,10 @@
 // threads and reconnects by itself, with a growing pause, until the transport is destroyed.
 namespace dingosdk::multiplayer {
 inline constexpr char default_lobby_url[] = "https://skate.ops.rodeo";
+// Every request to the service carries this User-Agent. Cloudflare's firewall in front of the
+// service blocks anything without it (contrib/lobby-service/README.md), so scanners and bots
+// never reach the Worker.
+inline constexpr char lobby_user_agent[] = "ReSkate-Lobby/1";
 
 std::unique_ptr<DirectSignaling> make_lobby_signaling(std::string url, PlayerKey key);
 } // namespace dingosdk::multiplayer

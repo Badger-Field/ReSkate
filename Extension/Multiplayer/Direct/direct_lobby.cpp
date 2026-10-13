@@ -93,7 +93,7 @@ struct Handle {
 class Http {
   public:
     explicit Http(const Url &url) : url_(url) {
-        session_.h = WinHttpOpen(L"ReSkate", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        session_.h = WinHttpOpen(widen(lobby_user_agent).c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
         if (session_) {
             WinHttpSetTimeouts(session_.h, 10000, 10000, 10000, 10000);
             connection_.h = WinHttpConnect(session_.h, widen(url.host).c_str(), url.port, 0);
@@ -231,7 +231,8 @@ bool send_all(int fd, const void *data, std::size_t size) {
 // Sends the request and reads the response head; `rest` keeps what came after it.
 std::optional<int> http_exchange(int fd, const Url &url, const std::string &path, const std::string &extra, std::string &rest,
                                  std::string &head) {
-    const auto request = "GET " + path + " HTTP/1.1\r\nHost: " + url.host + ":" + std::to_string(url.port) + "\r\n" + extra + "\r\n";
+    const auto request = "GET " + path + " HTTP/1.1\r\nHost: " + url.host + ":" + std::to_string(url.port) + "\r\nUser-Agent: " +
+                         lobby_user_agent + "\r\n" + extra + "\r\n";
     if (!send_all(fd, request.data(), request.size())) return std::nullopt;
     char buffer[4096];
     std::size_t end;
