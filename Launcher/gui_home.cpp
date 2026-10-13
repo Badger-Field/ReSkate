@@ -389,18 +389,13 @@ void frame(Launcher& launcher, const Fonts& fonts, HWND window, Ui& ui, ModsPane
         }
         g_dropped.clear();
     }
-    // The Steam name for the plate, and the one-time offline notice, both come
-    // from the first Steam check; steam_offline_seen keeps it to one decision.
+    // The Steam name for the plate, when Steam happens to be running.
     if (time - ui.steam_checked > 5) {
         ui.steam_name = launcher_app::steam_persona_name();
         ui.steam_checked = time;
-        if (!ui.steam_offline_seen) {
-            ui.steam_offline_seen = true;
-            ui.steam_offline = !launcher.settings().offline && !launcher_app::steam_signed_in();
-        }
     }
     const bool modal = ui.settings || ui.changelog || ui.mods || ui.sign_in || qr_open || state.prompt.has_value() ||
-        ui.steam_offline || state.phase == Phase::mods_broken || ui.mods_update_prompt;
+        state.phase == Phase::mods_broken || ui.mods_update_prompt;
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(size);
@@ -536,7 +531,6 @@ void frame(Launcher& launcher, const Fonts& fonts, HWND window, Ui& ui, ModsPane
     else if (state.phase == Phase::mods_broken)
         mods_broken_window(launcher, fonts, size, ui, mods_panel, state.mod_problems);
     else if (ui.mods_update_prompt) mods_outdated_window(launcher, fonts, size, ui, mods_panel);
-    else if (ui.steam_offline) steam_offline_window(fonts, size, ui);
 }
 
 } // namespace dingosdk::launcher_gui::detail

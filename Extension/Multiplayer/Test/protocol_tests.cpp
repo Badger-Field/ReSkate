@@ -321,6 +321,16 @@ void matrices_and_invites() {
               !parse_invite("76561198000000001-123456789abcdef0 extra") &&
               !parse_invite("76561198000000001-x23456789abcdef0"),
           "Malformed invite accepted");
+    // A direct player (no Steam) hosts with an ID of their own key: their code works too, and
+    // other universes and account types still do not.
+    const Invite direct{direct_player_id(0x01234567u), 0x0fedcba987654321ull};
+    const auto direct_parsed = parse_invite(format_invite(direct));
+    check(valid_player_id(direct.steam_id) && direct_parsed && direct_parsed->steam_id == direct.steam_id,
+          "A direct player's join code does not round trip");
+    check(!valid_player_id((std::uint64_t{2} << 56) | (std::uint64_t{1} << 52) | (std::uint64_t{1} << 32) | 5) &&
+              !valid_player_id((std::uint64_t{4} << 56) | (std::uint64_t{4} << 52) | (std::uint64_t{1} << 32) | 5) &&
+              !valid_player_id(direct_player_id(1) & ~0xffffffffull),
+          "A non-player ID passes as a player");
 }
 void malformed_input() {
     std::mt19937 random(42);

@@ -266,7 +266,8 @@ struct Model {
     ObjectPersistenceModel object_persistence;
     ParkEditorModel editor;
     float menu_scale = default_menu_scale;
-    // Offline mode: no Steam, so every multiplayer page and control is hidden.
+    // Offline mode without direct multiplayer (Extension/Multiplayer/Direct/direct_play.h): no
+    // Steam and no networking library, so every multiplayer page and control is hidden.
     bool steam_offline = false;
     ControllerBindingsModel bindings;
     GraphicsControlsModel graphics;

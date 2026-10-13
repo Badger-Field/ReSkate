@@ -37,6 +37,8 @@ struct MultiplayerLobby {
     bool dedicated{};
     // A dedicated server the ReSkate team runs (developer_identity.h): first in the browser.
     bool official{};
+    // Listed by the lobby service as on this player's own home network (direct multiplayer).
+    bool nearby{};
     int ping = -1; // ms, when the server answered directly
     // A dedicated server that takes direct connections: its address (host byte order) and UDP
     // port, 0 for none.
@@ -280,6 +282,10 @@ struct MultiplayerModel {
     std::string peer_name, player_ui_status;
     std::uint64_t player_map_updates{};
     bool public_host{}, lobby_listed{}, lobby_searching{}, lobby_joining{}, lobby_searched{};
+    // Playing without Steam (Extension/Multiplayer/Direct/direct_play.h): lobbies come from
+    // the ReSkate lobby service, and local_name is the name this player chose.
+    bool direct{};
+    bool home_host{}; // hosting for this home network (direct)
     std::uint64_t public_lobby{}; // Verified public listing, never a private invitation.
     std::string lobby_status, browser_status = "Refresh to find public ReSkate lobbies.";
     std::vector<MultiplayerLobby> lobbies;

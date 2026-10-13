@@ -1,4 +1,5 @@
 #pragma once
+#include "Extension/Multiplayer/Direct/direct_signaling.h"
 #include "Extension/Multiplayer/Remote/cosmetics.h"
 #include "Extension/Multiplayer/Session/peer_slots.h"
 #include "Extension/Multiplayer/Session/object_state.h"
@@ -169,12 +170,26 @@ bool valid_party_request(PartyAction action, std::uint64_t player) noexcept;
 inline bool individual_steam_id(std::uint64_t id) noexcept {
     return (id >> 56) == 1 && ((id >> 52) & 15) == 1 && (id & 0xffffffffULL);
 }
+// A player in a session: a Steam account, or a direct player, who plays without Steam and has
+// an ID of their own key (is_direct_player_id). Dedicated servers run on Steam and take only
+// Steam accounts.
+inline bool valid_player_id(std::uint64_t id) noexcept { return individual_steam_id(id) || is_direct_player_id(id); }
 inline bool game_server_steam_id(std::uint64_t id) noexcept {
     const auto type = (id >> 52) & 15;
     return (id >> 56) == 1 && (type == 3 || type == 4) && (id & 0xffffffffULL);
 }
 inline bool persistent_server_steam_id(std::uint64_t id) noexcept {
     return game_server_steam_id(id) && ((id >> 52) & 15) == 3;
+}
+// Names no player may take: what the game's own messages are signed with ("ReSkate", "Server"),
+// ignoring case and spaces.
+inline bool reserved_name(std::string_view name) noexcept {
+    std::string folded;
+    for (const auto c : name)
+        if (c != ' ') folded.push_back(static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c));
+    for (const auto *reserved : {"reskate", "server", "host", "admin", "system"})
+        if (folded == reserved) return true;
+    return false;
 }
 // A player's own name as sent in their hello: at most this many bytes.
 constexpr std::size_t max_member_name = 64;

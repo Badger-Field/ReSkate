@@ -1,8 +1,17 @@
 #pragma once
 #include "Extension/Multiplayer/Net/protocol.h"
+#include <functional>
 #include <memory>
 
 namespace dingosdk::multiplayer {
+class DirectSignaling;
+// Where direct multiplayer finds routes, in the networking library's comma-separated
+// "host:port" lists. STUN tells a player their address as the internet sees it; a TURN server
+// relays for players whose routers allow no direct route (both behind symmetric NAT). The TURN
+// lists go server by server: the Nth user and password are for the Nth server.
+struct DirectRoutes {
+    std::string stun_servers, turn_servers, turn_users, turn_passwords;
+};
 enum class TrafficLane : std::uint16_t { gameplay = 0, control = 1, cosmetics = 2, voice = 3 };
 constexpr TrafficLane traffic_lane(PacketKind kind) {
     return kind == PacketKind::voice ? TrafficLane::voice
@@ -70,6 +79,15 @@ class SteamTransport {
     // Dedicated server: the logged-on Steam game server's networking, from the
     // steam_api64.dll module handle it was started with.
     bool open_game_server(void *steam_api);
+    // Direct multiplayer, without Steam: the standalone GameNetworkingSockets library
+    // (`library`, a module handle the caller loaded and keeps loaded) instead of Steam's, as
+    // player `local_id`. Players find routes to each other with ICE, exchanging what that takes
+    // through `signaling`, which the transport keeps from then on, and the servers in `routes`.
+    // Players' IP addresses are shared with each other, which is what lets them connect without
+    // a relay. Once per process: the library keeps the identity it was started with.
+    bool open_direct(void *library, std::uint64_t local_id, std::unique_ptr<DirectSignaling> signaling,
+                     const DirectRoutes &routes);
+    bool direct() const;
     bool host(unsigned capacity);
     // `direct_ip` and `direct_port` (host byte order; 0 for none): the address a dedicated server
     // listens on for direct connections. It is tried first, and the connection goes through
@@ -103,6 +121,25 @@ class SteamTransport {
     void send_batch(std::span<TransportSend> messages);
     std::vector<TransportMessage> receive();
     std::string name(std::uint64_t id);
+    // Direct mode has no friends list: the name each player gives (this player's own, their
+    // hello to a host, a host's roster to a guest) is kept here for name() to answer with.
+    void remember_name(std::uint64_t id, std::string_view name);
+    // Direct mode: a request to the lobby service and its answers (DirectSignaling::request).
+    bool lobby_request(std::string_view json);
+    std::vector<std::string> lobby_replies();
+    // Direct mode: called once if the lobby service says this player's key belongs to another
+    // player, so a new key can be made for the next start.
+    void on_key_taken(std::function<void()> replace);
+    // Direct mode: the session's admission token (direct_join_token of its secret, which only
+    // its players and holders of its join code know). Every signal carries it, and signals
+    // without it are dropped before the networking library sees them. 0: no session, nothing in
+    // or out.
+    void set_admission_token(std::uint64_t token);
+    // Direct mode, hosting: who may connect at all (not kicked, not banned). Asked before the
+    // networking library takes a connection, so a refused player never learns an address.
+    void set_admission_filter(std::function<bool(std::uint64_t)> admit);
+    // The status line, when the transport could not be opened for a reason of the caller's.
+    void set_detail(std::string detail);
     const TransportStatus &status() const;
     // For a host's log. How Steam says a connection it closed ended, once (empty when this
     // side closed it, or it is still open): who closed it, Steam's reason code and words, and

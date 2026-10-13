@@ -1,0 +1,14 @@
+{
+  "name": "reskate-lobby-service",
+  "private": true,
+  "description": "ReSkate direct multiplayer: signaling between players and the public lobby list, on Cloudflare Workers with a Durable Object.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --var DEV:1",
+    "deploy": "wrangler deploy",
+    "test": "node --test test/service.test.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.141.0"
+  }
+}

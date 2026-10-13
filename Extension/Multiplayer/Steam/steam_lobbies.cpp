@@ -12,9 +12,14 @@ bool safe_text(std::string_view value, std::size_t limit) {
     return !value.empty() && value.size() <= limit &&
            std::none_of(value.begin(), value.end(), [](unsigned char c) { return c < 32 || c == 127; });
 }
-void require(bool value, const char *why) {
+void require(bool value, const std::string &why) {
     if (!value)
         throw std::runtime_error(why);
+}
+// "Steam" or "the lobby service" at the start of a sentence.
+std::string capital(std::string text) {
+    if (!text.empty() && text[0] >= 'a' && text[0] <= 'z') text[0] = static_cast<char>(text[0] - 'a' + 'A');
+    return text;
 }
 } // namespace
 std::optional<MultiplayerLobby> read_lobby(std::uint64_t id, std::uint64_t owner,
@@ -43,6 +48,20 @@ std::optional<MultiplayerLobby> read_lobby(std::uint64_t id, std::uint64_t owner
     row.password_required = password == "1";
     row.owner = code->steam_id;
     return row;
+}
+std::vector<std::pair<const char *, std::string>> listing_fields(std::string_view name, std::string_view map,
+                                                                 std::string_view code, unsigned players,
+                                                                 unsigned capacity, bool password_required, bool open) {
+    return {{"rs_kind", "reskate-co-skate"},
+            {"rs_protocol", std::to_string(protocol_version)},
+            {"rs_build", std::string(supported_build::game_sha256)},
+            {"rs_name", std::string(name)},
+            {"rs_map", std::string(map)},
+            {"rs_code", std::string(code)},
+            {"rs_players", std::to_string(players)},
+            {"rs_capacity", std::to_string(capacity)},
+            {"rs_password", password_required ? "1" : "0"},
+            {"rs_open", open ? "1" : "0"}};
 }
 void SteamLobbies::close_lobby() {
     if (const auto lobby = std::exchange(lobby_, 0)) {
@@ -79,35 +98,24 @@ void SteamLobbies::host(const std::string &code, unsigned capacity, bool passwor
 void SteamLobbies::publish_host() {
     if (!lobby_)
         return;
-    require(api_->owner(lobby_) == local_id_, "Steam lobby ownership changed. Restart hosting.");
+    require(api_->owner(lobby_) == local_id_, "Lobby ownership changed. Restart hosting.");
     const bool open = ready_ && players_ < capacity_;
     const auto signature = map_ + code_ + std::to_string(players_) + "/" + std::to_string(capacity_) +
                            (open ? "open" : "closed");
     if (signature == published_)
         return;
     // Hide first, then publish a complete compatible record before exposing it.
-    require(api_->joinable(lobby_, false), "Steam could not close the lobby listing.");
+    require(api_->joinable(lobby_, false), capital(api_->service()) + " could not close the lobby listing.");
     state_.listed = false;
-    const std::pair<const char *, std::string> values[]{
-        {"rs_kind", "reskate-co-skate"},
-        {"rs_protocol", std::to_string(protocol_version)},
-        {"rs_build", std::string(supported_build::game_sha256)},
-        {"rs_name", host_name_},
-        {"rs_map", map_},
-        {"rs_code", code_},
-        {"rs_players", std::to_string(players_)},
-        {"rs_capacity", std::to_string(capacity_)},
-        {"rs_password", password_required_ ? "1" : "0"},
-        {"rs_open", open ? "1" : "0"}};
-    for (const auto &[key, value] : values)
-        require(api_->data(lobby_, key, value), "Steam could not publish the lobby details.");
-    require(api_->visibility(lobby_, true), "Steam could not make the lobby public.");
+    for (const auto &[key, value] : listing_fields(host_name_, map_, code_, players_, capacity_, password_required_, open))
+        require(api_->data(lobby_, key, value), capital(api_->service()) + " could not publish the lobby details.");
+    require(api_->visibility(lobby_, true), capital(api_->service()) + " could not make the lobby public.");
     if (open)
-        require(api_->joinable(lobby_, true), "Steam could not open the lobby listing.");
+        require(api_->joinable(lobby_, true), capital(api_->service()) + " could not open the lobby listing.");
     state_.listed = open;
     state_.hosting = !ready_ ? "Host is changing maps; the public listing will reopen after loading."
                     : !open ? "Public lobby is full; it will reopen when a player leaves."
-                           : "Public lobby is listed on Steam.";
+                           : "Public lobby is listed on " + api_->service() + ".";
     published_ = signature;
 }
 void SteamLobbies::update_host(bool ready, unsigned players, std::string_view map, std::uint64_t now) {
@@ -125,8 +133,8 @@ void SteamLobbies::update_host(bool ready, unsigned players, std::string_view ma
     try {
         if (!ready_) {
             if (lobby_ && (state_.listed || !published_.empty())) {
-                require(api_->joinable(lobby_, false), "Steam could not pause the lobby listing.");
-                require(api_->data(lobby_, "rs_open", "0"), "Steam could not pause lobby discovery.");
+                require(api_->joinable(lobby_, false), capital(api_->service()) + " could not pause the lobby listing.");
+                require(api_->data(lobby_, "rs_open", "0"), capital(api_->service()) + " could not pause lobby discovery.");
                 state_.listed = false;
                 published_.clear();
                 state_.hosting = "Host is changing maps; existing players stay connected.";
@@ -140,8 +148,8 @@ void SteamLobbies::update_host(bool ready, unsigned players, std::string_view ma
             if (!safe_text(host_name_, 128))
                 host_name_ = "ReSkate session";
             creating_ = {api_->create(capacity_), now, false};
-            require(creating_.call != 0, "Steam could not create a lobby.");
-            state_.hosting = "Creating a public Steam lobby...";
+            require(creating_.call != 0, capital(api_->service()) + " could not create a lobby.");
+            state_.hosting = "Creating a lobby on " + api_->service() + "...";
         }
         publish_host();
         owner_checked_ = now;
@@ -157,11 +165,11 @@ void SteamLobbies::refresh(std::uint64_t now) {
     try {
         api_->open();
         searching_ = {api_->search(), now, false};
-        require(searching_.call != 0, "Steam could not request the lobby list.");
+        require(searching_.call != 0, capital(api_->service()) + " could not request the lobby list.");
         last_search_ = now;
         state_.searching = true;
         state_.rows.clear();
-        state_.browser = "Searching Steam for open ReSkate lobbies...";
+        state_.browser = "Searching " + api_->service() + " for open ReSkate lobbies...";
     } catch (const std::exception &e) {
         state_.browser = e.what();
     }
@@ -180,13 +188,13 @@ void SteamLobbies::join(std::uint64_t id, std::uint64_t local_id, std::uint64_t 
     join_code_ = row->code;
     join_id_ = id;
     joining_ = {api_->join(id), now, false};
-    require(joining_.call != 0, "Steam could not join the lobby.");
+    require(joining_.call != 0, capital(api_->service()) + " could not join the lobby.");
     state_.joining = true;
     state_.browser = "Checking that the lobby is still open...";
 }
 void SteamLobbies::join_friend(std::uint64_t id, std::uint64_t local_id, std::uint64_t now) {
     require(!joining_.call, "A previous lobby request is still finishing.");
-    require(id && local_id, "That Steam lobby is unavailable.");
+    require(id && local_id, "That lobby is unavailable.");
     api_->open();
     friend_join_ = true;
     local_id_ = local_id;
@@ -194,7 +202,7 @@ void SteamLobbies::join_friend(std::uint64_t id, std::uint64_t local_id, std::ui
     join_owner_ = 0;
     join_map_.clear(); join_code_.clear();
     joining_ = {api_->join(id), now, false};
-    require(joining_.call != 0, "Steam could not join the lobby.");
+    require(joining_.call != 0, capital(api_->service()) + " could not join the lobby.");
     state_.joining = true;
     state_.browser = "Checking your friend's lobby...";
 }
@@ -219,7 +227,7 @@ void SteamLobbies::tick(std::uint64_t now) {
             } else {
                 state_.searching = kind == LobbyCall::list ? false : state_.searching;
                 state_.joining = kind == LobbyCall::join ? false : state_.joining;
-                state_.browser = "Steam lobby request timed out. Waiting for Steam to finish cleanup.";
+                state_.browser = "The lobby request timed out. Waiting for " + api_->service() + " to finish cleanup.";
             }
         }
     };
@@ -232,7 +240,7 @@ void SteamLobbies::tick(std::uint64_t now) {
         if (!result.ok || !result.lobby) {
             failed_ = true;
             state_.hosting =
-                "Steam lobby creation failed (" + std::to_string(result.result) + "). Join code still works.";
+                "Lobby creation failed (" + std::to_string(result.result) + "). Join code still works.";
             return;
         }
         lobby_ = result.lobby;
@@ -246,7 +254,7 @@ void SteamLobbies::tick(std::uint64_t now) {
         state_.searched = true;
         state_.rows.clear();
         if (!result.ok) {
-            state_.browser = "Steam lobby search failed. Refresh to retry.";
+            state_.browser = "Lobby search failed. Refresh to retry.";
             return;
         }
         // Lobbies named with bad words are never listed, like dedicated servers; the host

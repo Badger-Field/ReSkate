@@ -46,6 +46,9 @@ struct SkateMenu {
     std::array<char,96> multiplayer_join_code{};
     std::array<char,128> multiplayer_lobby_search{};
     std::array<char,129> multiplayer_lobby_name{};
+    // Playing without Steam: the name other players see, as typed (seeded from the model once).
+    std::array<char,33> multiplayer_direct_name{};
+    bool multiplayer_direct_name_seeded{};
     MultiplayerDistances multiplayer_distance_draft, multiplayer_distance_applied;
     bool multiplayer_distance_initialized{}, multiplayer_distance_hosting{};
     int voice_bind_capture{};

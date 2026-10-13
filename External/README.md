@@ -12,6 +12,7 @@
 | bcdec | `80859ed3b7afb1c527a2a99d70c61457bea72d0c` | MIT or Unlicense | [iOrange/bcdec](https://github.com/iOrange/bcdec/tree/80859ed3b7afb1c527a2a99d70c61457bea72d0c) |
 | LZ4 | `1.10.0` | BSD-2-Clause | [lz4/lz4](https://github.com/lz4/lz4/releases/tag/v1.10.0) |
 | Zstandard | `1.5.7` | BSD-3-Clause (dual-licensed with GPLv2; used under BSD) | [facebook/zstd](https://github.com/facebook/zstd/releases/tag/v1.5.7) |
+| Monocypher | `4.0.2` (`0d85f98c9d9b0227e42cf795cb527dff372b40a4`) | CC0-1.0 or BSD-2-Clause (used under BSD-2-Clause) | [LoupVaillant/Monocypher](https://github.com/LoupVaillant/Monocypher/tree/4.0.2) |
 | Montserrat font | `fonts/Montserrat-*.ttf` | SIL Open Font License 1.1 | [JulietaUla/Montserrat](https://github.com/JulietaUla/Montserrat) |
 | Permanent Marker font | `fonts/PermanentMarker-Regular.ttf` | Apache 2.0 | [Google Fonts](https://fonts.google.com/specimen/Permanent+Marker) |
 
@@ -58,7 +59,9 @@ public-domain notice is retained in `sqlite/LICENSE.txt`.
 
 `steam_networking` contains unmodified public headers for the v012 Steam
 Networking Sockets ABI. ReSkate resolves flat exports from the game's verified
-original `steam_api64.dll`. It does not link the standalone networking library, and the
+original `steam_api64.dll`, or, for direct multiplayer in offline mode, from the standalone
+`GameNetworkingSockets` library loaded at run time (`steamnetworkingcustomsignaling.h` comes
+from its commit `d534c19`). It does not link the standalone networking library, and the
 client package carries no Steam DLL; the dedicated server package carries the Steam files
 it signs in with (see `Server/README.txt`). Keep `steam_networking/LICENSE` with distributions.
 
@@ -76,3 +79,7 @@ zlib compatibility, stdio and timestamp APIs are disabled. Extraction writes onl
 the expected file to a fixed temporary path, bounds its size, and checks the
 uncompressed SHA-256 before replacing the cache. Keep `miniz/LICENSE.txt` with
 binary packages. Builds do not fetch the library.
+
+Monocypher 4.0.2 (`monocypher/`) supplies Ed25519 (RFC 8032, `monocypher-ed25519.c`) for direct
+multiplayer: a player's key signs the lobby service's challenge. The files are unmodified;
+`monocypher/LICENCE.md` is kept with them.

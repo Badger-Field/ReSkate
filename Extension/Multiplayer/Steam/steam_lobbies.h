@@ -27,8 +27,15 @@ struct LobbyApi {
     virtual bool joinable(std::uint64_t, bool) = 0;
     virtual bool visibility(std::uint64_t, bool) = 0;
     virtual std::string name() = 0;
+    // Who keeps the lobbies, for messages: "Steam", or "the lobby service".
+    virtual std::string service() { return "Steam"; }
 };
 std::unique_ptr<LobbyApi> make_steam_lobby_api();
+// A listing's fields, as read_lobby reads them: a Steam lobby's, the lobby service's, and the
+// answer a host gives its own network (lan_discovery.h).
+std::vector<std::pair<const char *, std::string>> listing_fields(std::string_view name, std::string_view map,
+                                                                 std::string_view code, unsigned players,
+                                                                 unsigned capacity, bool password_required, bool open);
 std::optional<MultiplayerLobby> read_lobby(std::uint64_t id, std::uint64_t owner,
                                            const std::function<std::string(const char *)> &get);
 struct LobbyStatus {

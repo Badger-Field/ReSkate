@@ -2,6 +2,7 @@
 #include "native_menu_internal.h"
 #include "native_menu_dump.h"
 #include "ui_sound.h"
+#include "Extension/Multiplayer/Direct/direct_play.h"
 #include "Extension/Multiplayer/Session/session.h"
 #include "Extension/Multiplayer/Hud/game_ui_state.h"
 #include "Engine/Core/Log/logging.h"
@@ -259,7 +260,9 @@ void insert(const Context& context) {
     }
     bool has_tools{};
     { std::lock_guard callbacks_lock(callbacks_mutex); has_tools = tools_callbacks.read_model != nullptr; }
-    const bool offline = launcher::offline_mode();
+    // Offline without direct multiplayer (direct_play.h) there is no Multiplayer tab; with it,
+    // the pages are the same as with Steam.
+    const bool offline = launcher::offline_mode() && !multiplayer::direct_play_installed();
     const auto missing = menu_view::missing_tabs(keys, our_key, has_tools, !offline);
     // Offline, the Multiplayer tab whose key ends the scan above never exists.
     if (offline && missing.empty()) return;

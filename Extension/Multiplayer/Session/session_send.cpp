@@ -184,7 +184,7 @@ void begin_host_world(Session &s, std::string_view destination, std::uint64_t no
     s.travel_started = now;
     s.status = "Changing maps. Players remain connected while loading...";
     send_world_state(s, now);
-    if (s.public_host)
+    if (s.listed_host)
         s.lobbies.update_host(false, static_cast<unsigned>(s.transport.status().peers.size()) + 1,
                               s.map_name, now);
 }
