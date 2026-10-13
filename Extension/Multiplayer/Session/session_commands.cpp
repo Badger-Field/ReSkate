@@ -630,7 +630,7 @@ bool queue_command(std::string_view action, std::string_view argument, std::stri
          action != "chat-bubbles-duration" && action != "chat-bubbles-history" &&
          !own_mark_command(action) &&
          action != "voice" && action != "voice-mute" &&
-         action != "voice-volume" && action != "voice-allow" && action != "voice-range" && action != "chat" && action != "ban" && action != "unban" &&
+         action != "voice-volume" && action != "voice-allow" && action != "voice-range" && action != "chat" && action != "typing" && action != "ban" && action != "unban" &&
          action != "world-layer-sync" && action != "noclip-allow" && action != "nobail-allow" && action != "boosts-allow" &&
          action != "tuning-enforce" && action != "tp" &&
          action != "tpall" && action != "tphere" && action != "browse" &&
@@ -716,6 +716,11 @@ std::string command(std::string_view action, std::string_view argument, std::str
             }
             if (!result.empty() && (s.mode == Mode::host || s.mode == Mode::join)) add_chat(s, 0, "ReSkate", result);
             return result.empty() ? "Command sent." : result;
+        }
+        if (action == "typing") {
+            if (argument != "0" && argument != "1") return "Invalid typing notice.";
+            send_typing(s, argument == "1");
+            return {};
         }
         if (action == "chat") {
             // The overlay queues chat and never sees this result, so a refusal

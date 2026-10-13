@@ -71,6 +71,7 @@ void reset_peer(Session &s, std::size_t slot) {
     s.peers[slot] = {};
 }
 void stop(Session &s, std::string reason) {
+    s.local_typing_until = 0;
     // A join that ends before the host's map was ready never got in.
     if (s.mode == Mode::join && s.awaiting_map && !s.travelling && s.join_started)
         trace::record("multiplayer.join", "app.join", std::chrono::milliseconds((now_us() - s.join_started) / 1000), false);
@@ -487,6 +488,17 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
         std::reverse(result.begin(), result.end()); // oldest first
         return result;
     };
+    // Grey discs while they typed recently. The step is local, about three a second.
+    // ".", "..", "..." is one, two, then three discs; the overlay draws them.
+    const auto typing_bubble = [&](std::uint64_t until) {
+        NametagBubble line;
+        if (!until || now >= until) return line;
+        static constexpr const char *steps[] = {".", "..", "..."};
+        line.text = steps[(now / 333000) % 3];
+        line.hint = true;
+        line.appear = line.fade = 1.f;
+        return line;
+    };
     // Who is talking, as last published for the UI (10 Hz), without copying the voice model.
     const auto &voices = s.view.voice.players;
     const auto label = [&](const Peer &p) {
@@ -500,6 +512,8 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
         tag.nameless = s.nametags_friends && !std::binary_search(s.friend_ids.begin(), s.friend_ids.end(), p.member.id);
         tag.talking = std::any_of(voices.begin(), voices.end(), [&](const auto &v) { return v.id == p.member.id && v.speaking; });
         tag.bubbles = recent_bubbles(p.member.id);
+        if (bubbles)
+            if (auto hint = typing_bubble(p.typing_until); !hint.text.empty()) tag.bubbles.push_back(std::move(hint));
         nametags.push_back(std::move(tag));
     };
     // Creating a player's actor (skater, skateboard and both recipes) or re-applying a
@@ -682,9 +696,12 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
             }
         }
     });
-    // The local player's own lines, above their own skater, when asked for.
-    if (labels && bubbles && s.chat_bubbles_own && local.ready) {
-        auto own = recent_bubbles(s.transport.status().local_id);
+    // The local player's own lines, above their own skater, when asked for. The typing
+    // preview uses the same three-second window other players see, and shows even when
+    // own chat lines are hidden.
+    if (labels && bubbles && local.ready) {
+        auto own = s.chat_bubbles_own ? recent_bubbles(s.transport.status().local_id) : std::vector<NametagBubble>{};
+        if (auto hint = typing_bubble(s.local_typing_until); !hint.text.empty()) own.push_back(std::move(hint));
         if (!own.empty()) {
             NametagPlayer tag;
             tag.head = local.pose.root.position;
