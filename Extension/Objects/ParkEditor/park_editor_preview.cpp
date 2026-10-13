@@ -90,6 +90,27 @@ bool queue_local_park_paste(const EditorPasteRequest &request) {
         return false;
     }
 }
+bool queue_local_park_delete(const EditorDeleteRequest &request) {
+    std::lock_guard lock(local_runtime().native_mutex);
+    auto &e = editor_state();
+    auto &r = placements_runtime();
+    try {
+        if (!lobby_object_placement_allowed() || !local_runtime().active || !placement_session_ready() || !idle() ||
+            request.generation != e.generation || request.revision != e.revision || request.objects.empty() ||
+            request.objects.size() > 1024)
+            return false;
+        auto target = r.document.maps[r.map];
+        const std::set<std::uint64_t> ids(request.objects.begin(), request.objects.end());
+        const auto before = target.size();
+        std::erase_if(target, [&](const auto &object) { return ids.contains(object.id); });
+        if (before - target.size() != ids.size())
+            return false; // A selected object is gone: the selection is stale.
+        // One validated layout change gives the whole selection one undo step.
+        return begin(std::move(target), 0);
+    } catch (...) {
+        return false;
+    }
+}
 bool queue_local_park_preview(const EditorPreviewRequest &request) {
     std::lock_guard lock(local_runtime().native_mutex);
     auto &e = editor_state();

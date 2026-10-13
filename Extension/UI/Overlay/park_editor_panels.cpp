@@ -245,6 +245,12 @@ void inspector(ParkEditorUI &ui, const Model &model, const CallbacksV3 &callback
         if (ImGui::Button("Delete", {-1, 0}))
             send(ui, model, callbacks, "delete");
         ImGui::PopStyleColor();
+    } else if (ui.selection.size() > 1) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(skate_theme::danger));
+        const auto label = "Delete " + std::to_string(ui.selection.size()) + " objects";
+        if (ImGui::Button(label.c_str(), {-1, 0}))
+            delete_selection(ui, model.editor);
+        ImGui::PopStyleColor();
     }
     ImGui::EndDisabled();
     ImGui::Spacing();

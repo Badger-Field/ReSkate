@@ -131,6 +131,23 @@ void paste_objects(ParkEditorUI &ui, const ParkEditorModel &model) {
     ui.inspector_dirty = false;
     ui.feedback.clear();
 }
+bool delete_selection(ParkEditorUI &ui, const ParkEditorModel &model) {
+    const auto queue = delete_queue.load();
+    if (ui.selection.empty() || !queue || !queue({model.generation, model.revision, ui.selection})) {
+        ui.feedback = "Delete unavailable. Wait for the current edit or check the status.";
+        ui.feedback_until = ImGui::GetTime() + 5;
+        return false;
+    }
+    ui.selection.clear();
+    ui.selected = 0;
+    ui.pending = true;
+    ui.queued_at = ImGui::GetTime();
+    ui.queued_revision = model.revision;
+    ui.queued_status = model.status;
+    ui.inspector_dirty = false;
+    ui.feedback.clear();
+    return true;
+}
 void select_pasted(ParkEditorUI &ui, const ParkEditorModel &model) {
     std::vector<std::uint64_t> ids;
     for (const auto &copy : ui.paste_expected) {

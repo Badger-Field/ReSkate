@@ -13,6 +13,7 @@ inline std::atomic<ParkSurfaceQueue> surface_queue{};
 inline std::atomic<ParkPreviewQueue> preview_queue{};
 inline std::atomic<ParkSelectionQueue> selection_queue{};
 inline std::atomic<ParkPasteQueue> paste_queue{};
+inline std::atomic<ParkDeleteQueue> delete_queue{};
 using theme::blue;
 using theme::paper;
 inline constexpr ImU32 accent = skate_theme::blue, muted = skate_theme::grey_text;
@@ -31,6 +32,8 @@ void capture_drag(ParkEditorUI &ui, const ParkEditorModel &model);
 void copy_selection(ParkEditorUI &ui, const ParkEditorModel &model);
 void paste_objects(ParkEditorUI &ui, const ParkEditorModel &model);
 void select_pasted(ParkEditorUI &ui, const ParkEditorModel &model);
+// Deletes every selected object as one edit; with one selected, `send` "delete" does the same.
+bool delete_selection(ParkEditorUI &ui, const ParkEditorModel &model);
 bool preview(ParkEditorUI &ui, const Model &model, EditorPreviewAction action);
 void cancel_drag(ParkEditorUI &ui, const Model &model);
 bool send(ParkEditorUI &ui, const Model &model, const CallbacksV3 &callbacks, std::string_view operation,

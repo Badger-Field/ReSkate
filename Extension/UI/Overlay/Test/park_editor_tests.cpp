@@ -60,8 +60,15 @@ struct Fixture {
     std::vector<EditorPreviewRequest> previews;
     std::vector<EditorSelectionRequest> selections;
     std::vector<EditorPasteRequest> pastes;
+    std::vector<EditorDeleteRequest> deletes;
     Fixture() {
         active = this;
+        set_park_delete_queue([](const EditorDeleteRequest &request) {
+            active->deletes.push_back(request);
+            active->model.editor.busy = true;
+            ++active->model.editor.revision;
+            return true;
+        });
         set_park_paste_queue([](const EditorPasteRequest &request) {
             active->pastes.push_back(request);
             active->model.editor.busy = true;
@@ -593,6 +600,22 @@ int main(int argc, char **argv) {
         fixture.model.editor.objects.resize(2);
         fixture.model.editor.objects[0].position = {0, 0, 0};
         fixture.ui.selection.clear();
+        {
+            // The Delete key removes a whole multi-selection in one request (one undo step).
+            fixture.ui.selection = {1, 2};
+            fixture.ui.selected = 2;
+            io.AddMousePosEvent(700, 420);
+            io.AddKeyEvent(ImGuiKey_Delete, true);
+            fixture.frame();
+            io.AddKeyEvent(ImGuiKey_Delete, false);
+            fixture.frame();
+            check(fixture.deletes.size() == 1 && fixture.deletes[0].objects == std::vector<std::uint64_t>{1, 2} &&
+                      fixture.ui.selection.empty(),
+                  "Delete with several objects selected did not delete them all");
+            fixture.model.editor.busy = false;
+            ++fixture.model.editor.revision;
+            fixture.frame();
+        }
         // With the game's thumbnails loaded, show real items, titled from the
         // installed content cache when there is one.
         if (argc > 2 && std::filesystem::exists(argv[2])) {

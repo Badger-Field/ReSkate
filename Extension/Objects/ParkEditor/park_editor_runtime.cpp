@@ -312,6 +312,10 @@ bool park_editor_owns_placements() {
     // permanently starved the regular place/delete updater.
     return editor_state().transaction.has_value();
 }
+const profile::ObjectLayout *park_editor_pending_layout() {
+    const auto &e = editor_state();
+    return e.transaction ? &e.transaction->change.after : nullptr;
+}
 void park_editor_external_change() {
     auto &e = editor_state();
     if (park_editor_owns_placements())
@@ -557,6 +561,15 @@ void update_park_editor() {
             }
             if (tx.preview && !tx.preview->ending)
                 return; // Live poses remain temporary until mouse release.
+            if (step.kind == Kind::create && step.object.scale != 1.0f) {
+                // The create recipe has no scale, so the object spawned at 1x (a paste, a set, an
+                // undo or a loaded park). Resize it with a move, verified by the server tick's
+                // readback before the object is committed, as a placement preview does.
+                step = {Kind::move, step.object, step.entity};
+                tx.sent = false;
+                tx.waiting_since = GetTickCount64();
+                return;
+            }
             if (step.kind == Kind::erase) {
                 r.tracked.erase(step.entity);
                 std::erase_if(r.rows, [&](const auto &row) { return row.entity == step.entity; });

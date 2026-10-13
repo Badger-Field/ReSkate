@@ -50,6 +50,9 @@ void set_park_selection_queue(ParkSelectionQueue queue) noexcept {
 void set_park_paste_queue(ParkPasteQueue queue) noexcept {
     paste_queue.store(queue);
 }
+void set_park_delete_queue(ParkDeleteQueue queue) noexcept {
+    delete_queue.store(queue);
+}
 bool draw_park_editor(ParkEditorUI &ui, const Model &model, const CallbacksV3 &callbacks, bool console_open,
                       bool exit_requested, bool &visible) {
     const auto &state = model.editor;
@@ -522,6 +525,8 @@ bool draw_park_editor(ParkEditorUI &ui, const Model &model, const CallbacksV3 &c
                 send(ui, model, callbacks, "redo");
             if (ui.selected && ui.selection.size() <= 1 && ImGui::IsKeyPressed(ImGuiKey_Delete))
                 send(ui, model, callbacks, "delete");
+            else if (ui.selection.size() > 1 && ImGui::IsKeyPressed(ImGuiKey_Delete, false))
+                delete_selection(ui, state);
         }
     }
     ImGui::End();

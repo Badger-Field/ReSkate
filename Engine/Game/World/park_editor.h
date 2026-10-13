@@ -53,6 +53,11 @@ struct EditorPasteRequest {
     std::uint64_t generation{}, revision{};
     std::vector<EditorObject> objects;
 };
+// Removes several objects in one edit (one undo step), as a paste adds several.
+struct EditorDeleteRequest {
+    std::uint64_t generation{}, revision{};
+    std::vector<std::uint64_t> objects;
+};
 // A mod with a parks/ folder (Mods/<folder>/parks/<map>.park.json).
 struct EditorParkMod {
     std::string folder, title, author, version, description;
