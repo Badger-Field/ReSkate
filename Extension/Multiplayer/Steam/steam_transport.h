@@ -1,5 +1,6 @@
 #pragma once
 #include "Extension/Multiplayer/Net/protocol.h"
+#include <functional>
 #include <memory>
 
 namespace dingosdk::multiplayer {
@@ -120,6 +121,14 @@ class SteamTransport {
     void send_batch(std::span<TransportSend> messages);
     std::vector<TransportMessage> receive();
     std::string name(std::uint64_t id);
+    // Direct mode has no friends list: the name each player gives (this player's own, their
+    // hello to a host, a host's roster to a guest) is kept here for name() to answer with.
+    void remember_name(std::uint64_t id, std::string_view name);
+    // Direct mode: called once if the lobby service says this player's key belongs to another
+    // player, so a new key can be made for the next start.
+    void on_key_taken(std::function<void()> replace);
+    // The status line, when the transport could not be opened for a reason of the caller's.
+    void set_detail(std::string detail);
     const TransportStatus &status() const;
     // For a host's log. How Steam says a connection it closed ended, once (empty when this
     // side closed it, or it is still open): who closed it, Steam's reason code and words, and

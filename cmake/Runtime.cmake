@@ -56,6 +56,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Multiplayer/Direct/direct_signaling.cpp
     Extension/Multiplayer/Direct/direct_identity.cpp
     Extension/Multiplayer/Direct/direct_lobby.cpp
+    Extension/Multiplayer/Direct/direct_play.cpp
     Extension/Multiplayer/Steam/steam_social.cpp
     Extension/Multiplayer/Steam/steam_friend_join.cpp
     Extension/Multiplayer/Steam/steam_lobbies.cpp

@@ -256,6 +256,10 @@ void apply_roster(Session &s, const Packet &p, std::uint64_t now) {
     if (s.roster_sequence && !newer_sequence(p.sequence, s.roster_sequence))
         return;
     s.roster_sequence = p.sequence;
+    // Without Steam the host's roster is where a guest learns everyone's name.
+    if (s.transport.direct())
+        for (const auto &m : p.members)
+            if (m.id != s.transport.status().local_id && !m.name.empty()) s.transport.remember_name(m.id, m.name);
     s.own_tag.clear();
     s.own_tag_color = 0;
     for (const auto &m : p.members)
@@ -825,6 +829,9 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
                 }
             }
             const bool joined = !link->handshaken;
+            // Without Steam a guest's name is the one in their hello (checked by greeting_error).
+            if (s.transport.direct() && p.kind == PacketKind::hello && !p.text.empty())
+                s.transport.remember_name(message.peer, p.text);
             link->member.epoch = p.epoch;
             link->handshaken = true;
             link->world_ready = true;

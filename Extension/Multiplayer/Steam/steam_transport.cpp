@@ -24,6 +24,7 @@
 #include <deque>
 #include <unordered_map>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <map>
 #include <set>
@@ -131,8 +132,17 @@ struct SteamTransport::Impl {
             return connect_custom(sockets, new PeerSignals(signal_queue, id), &identity, virtual_port, count, options);
         return connect(sockets, &identity, virtual_port, count, options);
     }
+    // Called once when the lobby service says this player's key belongs to another player
+    // (offline mode: a new key is kept for the next start).
+    std::function<void()> key_taken;
+    bool key_taken_reported{};
     void pump_signals() {
         if (!direct_mode || !signaling) return;
+        if (!key_taken_reported && signaling->needs_new_key()) {
+            key_taken_reported = true;
+            if (key_taken) key_taken();
+            state.detail = "Your player ID matched another player's. A new one is ready: restart ReSkate to use it.";
+        }
         for (auto &message : signaling->receive()) {
             ArrivedSignal context(this, message.from);
             received_signal(sockets, message.bytes.data(), static_cast<int>(message.bytes.size()), &context);
@@ -567,8 +577,10 @@ bool SteamTransport::open() {
         return true;
 #ifdef _WIN32
     try {
+        // Offline there is no Steam: the game opens direct mode first (open_direct_play in
+        // Extension/Multiplayer/Direct/direct_play.h), and then this is already ready.
         if (launcher::offline_mode())
-            throw std::runtime_error("Multiplayer is unavailable in offline mode. Start Steam and relaunch ReSkate.");
+            throw std::runtime_error("Multiplayer without Steam did not start.");
         const auto module = GetModuleHandleW(L"steam_api64.dll");
         if (!module)
             throw std::runtime_error("Steam DLL is not loaded. Start ReSkate with Steam running.");
@@ -1023,6 +1035,10 @@ std::vector<TransportLink> SteamTransport::links() {
 }
 std::string SteamTransport::name(std::uint64_t id) {
     auto &p = *impl_;
+    if (p.direct_mode) {
+        const auto known = p.names.find(id);
+        return known == p.names.end() ? std::string{} : known->second.text;
+    }
     if (!p.friends || !id)
         return {};
     // Each lookup is two calls into the Steam client. Names change rarely: ask again
@@ -1052,6 +1068,14 @@ std::string SteamTransport::name(std::uint64_t id) {
         p.names.clear();
     p.names[id] = {text, now + (text.empty() ? 1000U : 10000U)};
     return text;
+}
+void SteamTransport::set_detail(std::string detail) { impl_->state.detail = std::move(detail); }
+void SteamTransport::on_key_taken(std::function<void()> replace) { impl_->key_taken = std::move(replace); }
+void SteamTransport::remember_name(std::uint64_t id, std::string_view name) {
+    auto &p = *impl_;
+    if (!p.direct_mode || !id) return;
+    if (p.names.size() >= 1024 && !p.names.contains(id)) p.names.clear();
+    p.names[id] = {std::string(name.substr(0, max_member_name)), 0};
 }
 bool SteamTransport::send(std::uint64_t id, std::span<const std::uint8_t> bytes, bool reliable, bool fresh,
                           TrafficLane lane) {

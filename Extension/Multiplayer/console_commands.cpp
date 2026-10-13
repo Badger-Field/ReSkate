@@ -49,7 +49,8 @@ void register_multiplayer_commands(Commands &registry) {
                                                  "coop challenges (on, off, toggle; on by default)"},
                           Command{"retry", "Retry remote skater creation after an error"},
                           Command{"test", "Test a Steam socket-pair round trip"},
-                          Command{"status", "Show multiplayer connection and animation status"}}) {
+                          Command{"status", "Show multiplayer connection and animation status"},
+                          Command{"name", "Without Steam: the name other players see (no name: show it)"}}) {
         std::vector<Argument> args;
         if (std::string_view(c.name) == "join")
             args.push_back(argument("join_code"));
@@ -74,6 +75,11 @@ void register_multiplayer_commands(Commands &registry) {
             args.push_back(argument("metres"));
         if (std::string_view(c.name) == "chat-bubbles-history")
             args.push_back(argument("lines"));
+        if (std::string_view(c.name) == "name") {
+            auto name = argument("name", Type::text, true);
+            name.rest = true;
+            args.push_back(std::move(name));
+        }
         if (std::string_view(c.name) == "chat" || std::string_view(c.name) == "server" || std::string_view(c.name) == "party" ||
             std::string_view(c.name) == "tp" || std::string_view(c.name) == "tphere") {
             auto message = argument("message");

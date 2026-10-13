@@ -7,6 +7,7 @@
 #include "Extension/Objects/network_object_runtime.h"
 #include "Extension/Objects/ParkEditor/park_editor_runtime.h"
 #include "Engine/Core/Platform/launcher_support.h"
+#include "Extension/Multiplayer/Direct/direct_play.h"
 #include "Engine/Core/Text/word_filter.h"
 #include "Engine/Game/Multiplayer/session_tools.h"
 #include <algorithm>
@@ -613,9 +614,17 @@ std::string send_admin(Session &s, std::string text) {
 bool own_mark_command(std::string_view action) {
     return action == "mark-tag" || action == "mark-items" || action == "mark-style";
 }
+// Offline, players connect straight to each other (direct_play.h): hosting and joining by code
+// work, and the session's own settings and chat. Lobby lists and friends' lobbies are Steam's.
+bool steam_only_command(std::string_view action) {
+    return action == "browse" || action == "join-lobby" || action == "join-friend-lobby";
+}
+bool offline_command(std::string_view action) {
+    return own_mark_command(action) || (direct_play_installed() && !steam_only_command(action));
+}
 } // namespace
 bool queue_command(std::string_view action, std::string_view argument, std::string_view password) {
-    if (launcher::offline_mode() && !own_mark_command(action)) return false;
+    if (launcher::offline_mode() && !offline_command(action)) return false;
     if ((action != "host" && action != "host-config" && action != "join" && action != "rejoin" && action != "join-lobby" && action != "join-friend-lobby" && action != "stop" &&
          action != "distances" && action != "object-placement" && action != "object-limit" && action != "kick" && action != "clear-objects" &&
          action != "nametags" && action != "chat-visible" && action != "chat-filter" &&
@@ -628,7 +637,7 @@ bool queue_command(std::string_view action, std::string_view argument, std::stri
          action != "world-layer-sync" && action != "noclip-allow" && action != "nobail-allow" && action != "boosts-allow" &&
          action != "tuning-enforce" && action != "tp" &&
          action != "tpall" && action != "tphere" && action != "browse" &&
-         action != "server" && action != "party") ||
+         action != "server" && action != "party" && action != "name") ||
         argument.size() > (action == "host" || action == "host-config" ? 160U : action == "chat" ? 4 * multiplayer_chat_max_bytes
                            : action == "server" ? max_admin_text : 128U) ||
         password.size() > 64)
@@ -653,8 +662,20 @@ std::vector<NextMapWanted> next_maps() {
 }
 unsigned next_maps_serial() noexcept { return session_detail::next_maps_serial_value.load(std::memory_order_relaxed); }
 std::string command(std::string_view action, std::string_view argument, std::string_view password) {
-    if (launcher::offline_mode() && !own_mark_command(action))
-        return "Multiplayer is unavailable in offline mode. Start Steam and relaunch ReSkate.";
+    if (launcher::offline_mode() && !offline_command(action))
+        return !direct_play_installed()
+            ? "Multiplayer without Steam needs GameNetworkingSockets.dll beside ReSkate.dll."
+            : "The lobby browser needs Steam. Without Steam, host with a code and share it, or join with one.";
+    // The name other players see without Steam (with Steam, it is the Steam name).
+    if (action == "name") {
+        if (!launcher::offline_mode()) return "With Steam, other players see your Steam name.";
+        if (argument.empty()) return "Your name is " + direct_player_name() + ". Change it with: mp name <name>";
+        if (auto problem = set_direct_player_name(argument); !problem.empty()) return problem;
+        auto &named = session();
+        if (named.transport.direct())
+            named.transport.remember_name(named.transport.status().local_id, direct_player_name());
+        return "Other players now see you as " + direct_player_name() + ".";
+    }
     const bool configured_host = action == "host-config";
     if (configured_host) action = "host";
     PrivateRequest input;
@@ -969,6 +990,8 @@ std::string command(std::string_view action, std::string_view argument, std::str
             }
             if (!visibility.empty() && visibility != "code" && visibility != "public")
                 return refuse("Use mp host code <limit> [lobby name] or mp host public <limit> [lobby name].");
+            if (launcher::offline_mode() && visibility == "public")
+                return refuse("Public lobbies need Steam for now. Host with a code and share it instead.");
             if (configured_host) {
                 const auto split = lobby_name.find(' ');
                 const auto rate = lobby_name.substr(0, split);
@@ -996,6 +1019,9 @@ std::string command(std::string_view action, std::string_view argument, std::str
             if (blocked_server(invitation->steam_id)) return refuse(std::string(blocked_server_notice));
             if (banned_host(invitation->steam_id)) return refuse(std::string(banned_host_lobby_notice));
         }
+        // Without Steam, the transport runs on the networking library and the lobby service.
+        if (launcher::offline_mode() && action != "echo" && !open_direct_play(s.transport))
+            return refuse(s.transport.status().detail);
         stop(s, "Starting multiplayer...");
         s.chat.clear(); // A new session starts with an empty chat.
         s.tps = tps;
@@ -1053,6 +1079,11 @@ std::string command(std::string_view action, std::string_view argument, std::str
             s.roster_dirty = true;
             save_host_preferences(s);
             s.status = "Hosting for up to " + std::to_string(capacity) + " players at " + std::to_string(s.tps) + " TPS.";
+            // Without Steam there is no friends list or lobby browser: the code is how others join.
+            if (s.transport.direct()) {
+                s.status += " Join code: " + s.invite;
+                add_chat(s, 0, "ReSkate", "Share this join code: " + s.invite);
+            }
         } else {
             // A server that listens on its own address is connected to directly, with Steam's
             // relays as the fallback (steam_transport.h). The server sees the address of a

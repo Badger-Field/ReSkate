@@ -1,4 +1,5 @@
 #pragma once
+#include "Extension/Multiplayer/Direct/direct_signaling.h"
 #include "Extension/Multiplayer/Remote/cosmetics.h"
 #include "Extension/Multiplayer/Session/peer_slots.h"
 #include "Extension/Multiplayer/Session/object_state.h"
@@ -169,6 +170,10 @@ bool valid_party_request(PartyAction action, std::uint64_t player) noexcept;
 inline bool individual_steam_id(std::uint64_t id) noexcept {
     return (id >> 56) == 1 && ((id >> 52) & 15) == 1 && (id & 0xffffffffULL);
 }
+// A player in a session: a Steam account, or a direct player, who plays without Steam and has
+// an ID of their own key (is_direct_player_id). Dedicated servers run on Steam and take only
+// Steam accounts.
+inline bool valid_player_id(std::uint64_t id) noexcept { return individual_steam_id(id) || is_direct_player_id(id); }
 inline bool game_server_steam_id(std::uint64_t id) noexcept {
     const auto type = (id >> 52) & 15;
     return (id >> 56) == 1 && (type == 3 || type == 4) && (id & 0xffffffffULL);

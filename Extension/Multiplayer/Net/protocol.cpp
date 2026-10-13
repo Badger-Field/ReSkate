@@ -178,7 +178,7 @@ bool valid_roster(std::span<const Member> members, unsigned capacity) noexcept {
         const auto &m = members[i];
         // The host comes first, and may be a dedicated server rather than a player.
         const bool server = i == 0 && game_server_steam_id(m.id);
-        const bool identity = individual_steam_id(m.id) || server;
+        const bool identity = valid_player_id(m.id) || server;
         if (!identity || !m.epoch || m.name.size() > 128 || (i == 0 && m.admin))
             return false;
         // Only a dedicated server gives out tags, and never to itself.
@@ -218,7 +218,7 @@ bool valid_party_request(PartyAction action, std::uint64_t player) noexcept {
     case PartyAction::kick:
     case PartyAction::promote:
     case PartyAction::invited:
-    case PartyAction::withdrawn: return individual_steam_id(player);
+    case PartyAction::withdrawn: return valid_player_id(player);
     case PartyAction::leave:
     case PartyAction::open:
     case PartyAction::close: return player == 0;
@@ -230,7 +230,7 @@ bool valid_routes(std::span<const Member> members) noexcept {
         return false;
     for (std::size_t i = 0; i < members.size(); ++i) {
         const auto &m = members[i];
-        if (!individual_steam_id(m.id) || !m.epoch || !m.name.empty() || m.admin)
+        if (!valid_player_id(m.id) || !m.epoch || !m.name.empty() || m.admin)
             return false;
         for (std::size_t j = 0; j < i; ++j)
             if (members[j].id == m.id)
@@ -422,7 +422,7 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
     if (p.kind == PacketKind::bans &&
         (!p.source || p.bans.size() > max_ban_rows || p.ban_total < p.bans.size() ||
          std::any_of(p.bans.begin(), p.bans.end(), [](const auto &ban) {
-             return !individual_steam_id(ban.id) || !valid_member_name(ban.name);
+             return !valid_player_id(ban.id) || !valid_member_name(ban.name);
          })))
         throw std::invalid_argument("Invalid ban list");
     if (p.kind == PacketKind::maps &&
@@ -1089,7 +1089,7 @@ std::optional<Packet> decode(std::span<const std::uint8_t> bytes) noexcept {
                 if (length > max_member_name || length > bytes.size() - r.at) return {};
                 ban.name.assign(reinterpret_cast<const char *>(bytes.data() + r.at), static_cast<std::size_t>(length));
                 r.at += static_cast<std::size_t>(length);
-                if (!individual_steam_id(ban.id) || !valid_member_name(ban.name)) return {};
+                if (!valid_player_id(ban.id) || !valid_member_name(ban.name)) return {};
                 p.bans.push_back(std::move(ban));
             }
         } else if (p.kind == PacketKind::roster) {
@@ -1519,7 +1519,7 @@ std::optional<Invite> parse_invite(std::string_view text) noexcept {
     const auto b = std::from_chars(text.data() + split + 1, text.data() + text.size(), i.secret, 16);
     if (a.ec != std::errc{} || a.ptr != text.data() + split || b.ec != std::errc{} ||
         b.ptr != text.data() + text.size() || !i.secret ||
-        (!individual_steam_id(i.steam_id) && !game_server_steam_id(i.steam_id)))
+        (!valid_player_id(i.steam_id) && !game_server_steam_id(i.steam_id)))
         return {};
     return i;
 }

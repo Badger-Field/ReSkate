@@ -21,9 +21,34 @@ Steam and no EA app. This is work in progress on the `direct-multiplayer` branch
   SteamID in the development universe (4), with the account number taken from the key's SHA-256,
   because GNS accepts only SteamID identities. The existing roles, bans and party code keep
   working. Still to come: keeping the key in the ReSkate profile, and the host checking it too.
-- **Steam mode is unchanged.** The plan is for the direct transport to be used when ReSkate runs
-  in offline mode, with Steam closed or signed out. That game integration is not written yet:
-  so far `open_direct` is used only by the tests.
+- **Steam mode is unchanged.** The direct transport is used when ReSkate runs in offline mode
+  and `GameNetworkingSockets.dll` is beside `ReSkate.dll` (see "Playing without Steam").
+
+## Playing without Steam
+
+Work in progress: hosting and joining by code work; public lobbies, the lobby browser, Steam
+friends and voice chat still need Steam.
+
+1. Put `GameNetworkingSockets.dll` beside `ReSkate.dll` in the skate. folder. It is Valve's
+   [GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets) at `d534c19`,
+   built as one Windows x64 DLL with ICE on (vcpkg triplet `x64-windows-static-md`, so
+   protobuf and OpenSSL are inside it). It needs the Microsoft Visual C++ 2015-2022
+   runtime, which the game already uses.
+2. Start ReSkate in offline mode. The Multiplayer pages appear as they do with Steam.
+3. Pick a name other players see: `mp name <name>` in the console. Until then it is "Skater"
+   and four digits.
+4. The host: Multiplayer, host with a code (or `mp host code 8`). The join code shows in the
+   status and in chat.
+5. Everyone else: join with that code (or `mp join <code>`).
+
+Where things are kept:
+
+- The player's key and name: `%LOCALAPPDATA%\ReSkate\profiles\offline\direct-player.txt`.
+  The key is who the player is to the lobby service: keep it private.
+- The lobby service: `default_lobby_url` in `Extension/Multiplayer/Direct/direct_lobby.h`; the
+  environment variable `RESKATE_LOBBY_URL` overrides it (a local `wrangler dev`, for one).
+- STUN: Cloudflare's and Google's public servers. There is no TURN relay yet, so two players
+  who are both behind strict (symmetric) NAT cannot connect.
 
 ## Spike results
 
@@ -66,5 +91,9 @@ ICE.
 3. Done: player keys and IDs (`direct_identity.h`), checked by the lobby service. Still to do:
    keeping the key in the ReSkate profile, and the host checking a joining player's key.
 4. Menu: Host / Join by code in offline mode. Re-enable multiplayer and voice when offline.
-5. Linux tests: two `SteamTransport`-backed sessions over GNS through the mock NAT; then a
+5. Done: offline mode opens the direct transport (`direct_play.h`), host and join by code, names
+   from each player's hello and the host's roster, and the Multiplayer pages. Still to do: a
+   menu field for the name, the lobby browser over the lobby service, voice without Steam,
+   TURN, and shipping the DLL in releases.
+6. Linux tests: two `SteamTransport`-backed sessions over GNS through the mock NAT; then a
    Windows test with two PCs.
