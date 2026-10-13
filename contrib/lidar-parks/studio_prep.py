@@ -1,5 +1,8 @@
 """A `city --mesh` GLB as a .blend laid out for ReSkate Studio's Blender add-on.
 
+Not pursued: this project avoids third-party tools such as Studio (CUSTOM-MAPS.md), and real places
+reach the game as park mods. Kept working, but nothing more is built on it.
+
     blender -b -P studio_prep.py -- place.glb place.blend
     python studio_prep.py place.glb place.blend      (with Blender's `bpy` module installed)
 

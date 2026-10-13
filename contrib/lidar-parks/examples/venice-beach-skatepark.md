@@ -1,7 +1,10 @@
 # Example: Venice Beach Skatepark, Los Angeles
 
-A public, much-skated park of bowls and a snake run, built as its real shape for a custom map from
-open data alone.
+A public, much-skated park of bowls and a snake run, measured as its real shape from open data alone.
+
+> The mesh was made for the custom-map route, which this project no longer pursues: it needs
+> ReSkate Studio, a third-party tool (CUSTOM-MAPS.md). The measurements below are kept as data for
+> building the park from Build Kit objects (ROADMAP.md, *Next*).
 
 ```
 python -m reskate_lidar city --centre 33.9870851,-118.4754707 --size 120 --skatepark \
@@ -51,7 +54,7 @@ warm cache.
   - `Map`: 2 ground tiles, each `sk8_collision_mode = triangle_mesh`;
   - `Grind curves`: 4 coping curves, each `sk8_grind_curve`;
   - `Markers`: `spawn`, on the deck.
-- **Not yet done:** compiling it with ReSkate Studio (`reskate_cli compile-map`) and skating it. That needs Studio (CUSTOM-MAPS.md).
+- **Not pursued:** compiling it with ReSkate Studio. As a park mod, it is next on the roadmap.
 
 ## Credits
 

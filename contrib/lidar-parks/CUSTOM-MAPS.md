@@ -1,4 +1,16 @@
-# Route 2: the real park as a custom map
+# Route 2: the real park as a custom map (not pursued)
+
+> **Not pursued by this project.** The owner decided: "Lets avoid dependencies on third party tools
+> like the map thing from discord". Building a custom map needs ReSkate Studio, which is a
+> third-party tool from the ReSkate Discord: its Blender add-on and `reskate_cli compile-map`.
+> So real places reach the game as **park mods** (Build Kit objects on a base map), which need
+> only this repository and the game.
+>
+> Kept here as reference:
+> - what the loader expects;
+> - what was learned about Studio.
+>
+> `city --mesh`, `--skatepark` and `studio_prep.py` still work. Their GLBs are useful as data, such as previews and measured shapes, but nothing more is built on this route.
 
 The Build Kit route places stand-in objects. A custom map keeps the scanned shape itself: bowls,
 pools, odd transitions, curved ledges, the actual ground. ReSkate can already load custom maps
@@ -67,7 +79,7 @@ So a real place becomes a map in two steps: meshes from this tool, then Studio t
    add proper coping and rails where the scan was thin, and decimate. Hundreds of thousands of
    triangles is fine for drawing, too many for collision. A simplified copy should be the
    collision mesh.
-3. **Build the level with ReSkate Studio**: visible mesh, collision mesh, spawn points, a level
+3. *(Not pursued: needs Studio.)* **Build the level with ReSkate Studio**: visible mesh, collision mesh, spawn points, a level
    name. This needs Studio, or its documentation, from the ReSkate maintainers or map authors.
    That is the next thing to get.
 4. **Real places: done up to Studio.** `python -m reskate_lidar city ... --mesh place.glb` writes:
@@ -77,10 +89,10 @@ So a real place becomes a map in two steps: meshes from this tool, then Studio t
 
    Its collision copy, `place-collision.glb`, has a coarser ground and simplified buildings.
    Both are in the game frame, and node extras name each part's surface. See README, *Real places*.
-5. **Automate** steps 2 and 3 once the manual route works: decimation, a separate collision mesh,
+5. *(Not pursued.)* **Automate** steps 2 and 3 once the manual route works: decimation, a separate collision mesh,
    and the parts (deck, coping, rails) as Build Kit objects on top, using `convert --merge`.
 
-## How ReSkate Studio builds a map (researched)
+## How ReSkate Studio builds a map (researched; reference only)
 
 Nobody here has run Studio yet. What follows comes from public sources, not from Studio's own
 documentation, so check it against Studio once someone has it.

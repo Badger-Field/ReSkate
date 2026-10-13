@@ -133,7 +133,7 @@ What it finds:
 - **Where spots come from:** only public, hard, car-free space: squares, plazas, parks and footways. Grass is left out.
 - **Park objects:** they follow the anchor, as with `convert`. Real north is 90° to the left of the stick's facing (its facing is east). Each spot sits on the base map's ground; `--keep-elevation` keeps real heights.
 - **Budget:** `--max-objects` (default 256) keeps the mod within the Object Dropper's default. Stairs and rails go first.
-- **Meshes:** `--mesh` writes the visual GLB and a `-collision.glb`, for a custom map ([CUSTOM-MAPS.md](CUSTOM-MAPS.md)).
+- **Meshes:** `--mesh` writes the visual GLB and a `-collision.glb`, as data for viewing and checking a place. They were meant for custom maps, which this project no longer builds ([CUSTOM-MAPS.md](CUSTOM-MAPS.md)). Places reach the game as park mods.
 - **Attribution:** every output carries the data's credit. Keep it when you share. See [DATA-SOURCES.md](DATA-SOURCES.md) for licences and server rules.
 - **Limits:** areas are capped at 4 km². Downloads are cached in `~/.cache/reskate-lidar`, which `--cache` changes.
 - **Plans:** what's next, and what to check in game, is in [ROADMAP.md](ROADMAP.md).
@@ -180,13 +180,13 @@ For a park of bowls and transitions, which the Build Kit can't make:
 
 ```
 python -m reskate_lidar city --centre 33.9870851,-118.4754707 --size 120 --skatepark --mesh venice.glb
-python studio_prep.py venice.glb venice.blend      # Blender's bpy, or: blender -b -P studio_prep.py -- ...
+python studio_prep.py venice.glb venice.blend      # optional, for ReSkate Studio (not pursued)
 ```
 
 - **The park:** it finds the mapped skatepark at the centre (`leisure=skatepark`, or `sport=skateboard`).
 - **The surface:** builds it from the LiDAR's ground at 0.25 m (`--park-cell`), with skaters and trees left out.
 - **The coping:** grind curves along each bowl's coping, from the bowl outlines OpenStreetMap maps as holes in the park. Where there are none, it finds bowls in the ground.
-- **The output:** a Studio-ready mesh. Then `studio_prep.py` lays it out as a `.blend` for ReSkate Studio (CUSTOM-MAPS.md).
+- **The output:** a mesh with the bowls' measured shapes, depths and coping lines. It was made for ReSkate Studio custom maps, a route this project no longer pursues (CUSTOM-MAPS.md). It is kept as data for building skateparks from Build Kit objects.
 - **Limits:** aerial LiDAR gets bowl shapes and depths, but not the coping lip: see [examples/venice-beach-skatepark.md](examples/venice-beach-skatepark.md).
 
 | Option | |

@@ -7,10 +7,9 @@ human with the game.
 
 These need a human.
 
-1. **ReSkate Studio.** **Partly answered by research:** see CUSTOM-MAPS.md, *How ReSkate Studio builds a map*.
-   - Studio is in the ReSkate Discord, pinned in `#general`.
-   - It builds maps from Blender with its add-on and `reskate_cli compile-map`. Other tools already feed it GLBs this way.
-   - **Still needed:** someone with Studio confirms the add-on's collision, surface and grind-curve settings, and how `compile-map` is called.
+1. ~~**ReSkate Studio.**~~ **Answered: not pursued.** The owner said: "Lets avoid dependencies on third party tools like the map thing from discord".
+   - Real places reach the game as park mods: Build Kit objects that need only this repository and the game.
+   - The custom-map research stays in CUSTOM-MAPS.md as reference.
 2. **Where should city parks go on San Vansterdam (`bam`)?** A 160 m square of real plaza needs open, flat ground at least that big.
    - Is there such a spot? `anchor probe` / `anchor check` (README) now measure one in game: they give the share of the footprint that is flat and clear, and which objects would be buried or float.
    - The first Embarcadero try loaded all 33 of 33 objects, but its anchor (627.1, 199.9, 1062.8) is on the NE waterfront promenade or coast road. A probe run there, and at candidates inland, would settle it.
@@ -52,16 +51,16 @@ The anchor is a measuring stick on open ground, as in README step 1. Before load
 
 ## First real target: Venice Beach Skatepark
 
-Built as a custom map from open data; see [examples/venice-beach-skatepark.md](examples/venice-beach-skatepark.md).
+Measured from open data; see [examples/venice-beach-skatepark.md](examples/venice-beach-skatepark.md). It was built as a custom-map mesh before the custom-map route was dropped.
 - **The data:**
   - 4 bowls, 0.9-2.6 m deep, at 10-12 points/m²;
   - coping placed from the map's bowl outlines;
   - 90k triangles, 2 collision parts.
-- **Next:** someone with ReSkate Studio opens `venice.blend` (from `studio_prep.py`), runs `reskate_cli compile-map`, and checks:
-  1. Does it compile? What did Studio ask for that is missing?
-  2. In game: do the bowls' depths feel right, and does the coping grind?
-  3. Is the map mirrored? The frame should be right since this change, but it is unchecked in game.
-- **A phone scan of each bowl** would add the lip and vertical walls (CAPTURE.md). Merging scans into the aerial mesh is the next step after that.
+- **As a park mod:**
+  - **The limit:** Build Kit objects stand on the base map and cannot dig, so a bowl cannot be sunk into the ground.
+  - **What could work:** the nearest park mod raises the deck instead. Quarter pipes and banks would ring each bowl at its measured depth, with coping rails along the map's outlines. That is *Next*, item 2.
+  - **The GLB stays useful as data:** bowl outlines, depths and wall angles.
+- **A phone scan of each bowl** would add the lip and vertical walls (CAPTURE.md).
 
 ## What works
 
@@ -100,15 +99,15 @@ Built as a custom map from open data; see [examples/venice-beach-skatepark.md](e
 
 From a park of real spots to skating anywhere:
 1. **Real spots as a park mod.** Done; see *What works*. It needs the in-game check above.
-2. **One real block as a custom map:** ground, building massing and spots, built with ReSkate Studio.
-   - **Depends on:** Studio importing our mesh.
-   - **Next:** make `city --mesh` Studio-ready (`sk8_*` properties, spawn, grind curves; CUSTOM-MAPS.md), then build one block with Studio.
-3. **A district of about 1 km².** Measure what it costs in game:
-   - **Static bodies:** stock skate. has 8,200. ReSkate raises that to 65,000 (`Extension/World/physics_world_size.h`), and Studio makes one body per collision part.
-   - **Memory and load time.**
-   - **What it needs:** tiles with level of detail, and few collision parts per tile.
-4. **A city in tiles,** each its own map. `reskate-levels.json` allows 64 levels per mod and 256 in total.
-5. **Skate anywhere.** A place picker: Leaflet with OSM tiles, in plain JS. Pick a spot, and the tile for it is generated on request.
+2. **Parks that fit their ground:**
+   - `anchor probe` / `anchor check` (done);
+   - stand-in sizes calibrated in game;
+   - budgets up to the loader's 1,024 objects per map.
+3. **Skateparks as park mods:** bowls and transitions approximated from Build Kit ramps, from the measured shapes (`--skatepark` data).
+4. **Several places per map:** park mods for different real places on different open ground of a base map, or across base maps.
+5. **Skate anywhere.** A place picker: Leaflet with OSM tiles, in plain JS. Pick a spot, and a park mod for it is generated on request.
+
+*Dropped:* custom maps of whole blocks, districts and cities. Those need ReSkate Studio, a third-party tool (CUSTOM-MAPS.md).
 
 ### Rules for places people live
 
@@ -121,7 +120,8 @@ These apply to every phase:
 ## Next
 
 Done since the last list:
-- **The Studio-ready mesh,** for phase 2: `sk8_*` extras, a `spawn` node, grind curves, and `studio_prep.py`.
+- **The Studio-ready mesh:** `sk8_*` extras, a `spawn` node, grind curves, and `studio_prep.py`. Since then, the custom-map route has been dropped (Questions, 1).
+- **Anchor check:** `anchor probe` / `anchor check` measure the base map under a park with the trainer's ground probe.
 - **Kerbs from the ground.** Where a road's edge runs along a sidewalk or plaza and the ground steps 8-30 cm up from the road, each straight stretch of at least 2 m is a low ledge (a slappy curb in the park). Kerbs come after every other spot, at most 12 (`Settings.kerbs`).
 - **LiDAR outside the US.** `--lidar` reads LAS, LAZ and COPC tiles on disk (AHN, the UK Environment Agency, Denmark, Finland), and EPT, in any CRS. Reprojection goes through `pyproj`. `--lidar-credit` carries the survey's credit into every output. It is tested on the synthetic block placed in Amsterdam, written as AHN-style tiles in the Dutch RD grid.
 - **Stricter residential handling.** On residential parcels (residential land that is not street, footway or park), no spot is ever placed. Homes (houses, detached, terraces, apartments, and any building on residential land) are their footprint's smallest rectangle, with the height rounded to 2 m.
@@ -132,12 +132,15 @@ Done since the last list:
    - Denmark, Finland, and OpenTopography.
 
    These hosts are blocked from this cloud environment, so it needs a run on the PC to record their answers first.
-2. **Neighbourhoods** (phase 3): tiles, level of detail, and per-tile budgets (triangles, collision parts, objects, file size).
-3. **Surfaces.** Carry `surface=*` (asphalt, paving_stones, concrete, wood, metal) into the mesh extras and the report.
+2. **Skatepark bowls as park mods** (phase 3). Turn `--skatepark`'s measured bowls into Build Kit objects:
+   - a raised deck;
+   - quarter pipes or banks at each bowl's depth and wall angle;
+   - coping rails along the outlines.
+3. **Surfaces.** Carry `surface=*` (asphalt, paving_stones, concrete, wood, metal) into the report, and into the choice of stand-in where the catalog has variants.
 4. **Better stand-ins for big spots.** A 20 m bench ledge is several boxes end to end. Tune `catalog.json` once the sizes are calibrated in game.
 5. **Street-level imagery** (DATA-SOURCES.md). At Venice, Panoramax and KartaView have nothing within 100 m. Mapillary is unknown until a client token is set. Then:
-   - colours for skatepark meshes;
-   - facade textures for blocks, kept as separate CC BY-SA parts.
+   - check the stand-ins against photos;
+   - see what aerial LiDAR misses (rails, under canopies).
 6. **Leisure=skatepark.** Report mapped skateparks in the area, and point to `convert` (phone scan) for their real shapes.
 
 ## Known limits
