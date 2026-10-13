@@ -200,7 +200,7 @@ inline constexpr std::array<const char*, 7> log_levels{"trace", "debug", "info",
 
 // ---------------------------------------------------------------- state
 
-enum class Phase { checking, update_available, updating, game_missing, game_outdated, downloading,
+enum class Phase { checking, install_here, update_available, updating, game_missing, game_outdated, downloading,
                    merging, mods_broken, ready, launching, failed };
 
 // A mod the pre-launch merge could not use, named so nobody has to guess which
@@ -221,6 +221,8 @@ struct State {
     std::optional<update::Config> config;
     // Set when a merge before launch left mods out; PLAY waits on an answer.
     std::vector<ModProblem> mod_problems;
+    // install_here: skate.'s folder in the Steam library, where ReSkate can put itself.
+    std::filesystem::path install_target;
 };
 
 // Update checks, the Steam download and the game launch, one at a time on a worker thread.
@@ -261,6 +263,10 @@ public:
     void answer(std::optional<std::string> value);
 
     void restart();
+    // install_here: copy ReSkate into the Steam copy of skate., then hand over to the launcher there.
+    void install_here();
+    // After Remove ReSkate: the settings file is gone and stays gone (save() does nothing).
+    void forget_settings() { settings_forgotten_ = true; }
 
 private:
     launcher_app::Session session_;
@@ -279,6 +285,8 @@ private:
     std::atomic<bool> busy_{};
     std::atomic<bool> cancel_{};
     std::atomic<bool> restart_{};
+    std::filesystem::path handoff_; // a launcher to start in this one's place (install_here)
+    bool settings_forgotten_{};
     std::atomic<bool> ignore_mod_problems_{};
     std::atomic<DWORD> game_{};
     std::atomic<bool> launched_{};

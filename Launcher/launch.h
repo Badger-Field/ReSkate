@@ -16,7 +16,9 @@ struct Session {
 };
 
 // Resolves ReSkateLauncher.exe and its sibling game files and opens ReSkate.log.
-Session open_session(const std::string& log_level);
+// `fresh_log`: start ReSkate.log over (a launch); off for a side job such as installing a mod,
+// which may run while the game is still writing to the same log.
+Session open_session(const std::string& log_level, bool fresh_log = true);
 // Skate.exe and steam_api64.dll are present and exactly the supported build.
 bool game_files_supported(const launcher::SiblingPaths& paths);
 // The config's depot/manifest ships the build this launcher was compiled for.

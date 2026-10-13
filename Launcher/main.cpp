@@ -2,11 +2,13 @@
 #include "crash_reporter.h"
 #include "gui.h"
 #include "launch.h"
+#include "mod_manager.h"
 
 #include <Windows.h>
 #include <shellapi.h>
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <optional>
 #include <stdexcept>
@@ -67,6 +69,37 @@ bool apply_headless_updates(const app::Session& session, const update::Config& c
     }
 }
 
+// "Install as ReSkate mod" on a .zip's right-click menu (install_here.h): `--install-mod <file>`.
+// Asks first, installs into the Mods folder this launcher's game reads, and says what happened.
+int install_mod(const app::Session& session, const fs::path& file) {
+    const auto title = L"ReSkate";
+    std::wstring ask = L"Install \"" + file.filename().wstring() + L"\" as a ReSkate mod?\n\n"
+                       L"Only install mods from people you trust: a mod changes the game's data.";
+    if (MessageBoxW(nullptr, ask.c_str(), title, MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND) != IDYES) return 0;
+    const auto root = dingosdk::launcher_mods::mods_root(session.paths.directory);
+    std::atomic<bool> cancel{};
+    dingosdk::launcher_mods::InstallOptions options;
+    options.require_content = true; // a zip with nothing the game loads is not installed
+    std::string name;
+    try {
+        try {
+            name = dingosdk::launcher_mods::install(root, file, false, {}, cancel, options);
+        } catch (const dingosdk::launcher_mods::AlreadyInstalled& installed) {
+            const auto again = L"\"" + widen(installed.name) + L"\" is already installed. Replace it with this one?";
+            if (MessageBoxW(nullptr, again.c_str(), title, MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND) != IDYES) return 0;
+            name = dingosdk::launcher_mods::install(root, file, true, {}, cancel, options);
+        }
+    } catch (const std::exception& exception) {
+        const auto text = L"The mod was not installed.\n\n" + widen(exception.what());
+        MessageBoxW(nullptr, text.c_str(), title, MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+        return 1;
+    }
+    const auto done = L"Installed \"" + widen(name) + L"\".\n\nIt is on the next time you play, and in the game's "
+                      L"Mods tab (Insert) you can switch it on right away.";
+    MessageBoxW(nullptr, done.c_str(), title, MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
+    return 0;
+}
+
 void run_headless(const app::Session& session, std::vector<std::wstring> arguments,
                   const std::vector<std::wstring>& original) {
     const bool relaunched = take_flag(arguments, L"--reskate-updated");
@@ -115,9 +148,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         if (headless) log_level = dingosdk::launcher::parse_launch_options(
             [&] { auto copy = arguments; take_flag(copy, L"--no-update"); take_flag(copy, L"--reskate-updated"); return copy; }()).log_level;
         dingosdk::launcher_gui::apply_crash_report_setting();
-        const auto session = app::open_session(log_level);
+        const auto mod = std::find(arguments.begin(), arguments.end(), L"--install-mod");
+        const bool installing_mod = mod != arguments.end() && mod + 1 != arguments.end();
+        const auto session = app::open_session(log_level, !installing_mod);
         logs = session.paths.logs;
-        if (headless) run_headless(session, arguments, original);
+        if (installing_mod)
+            result = install_mod(session, fs::path(*(mod + 1)));
+        else if (headless) run_headless(session, arguments, original);
         else result = dingosdk::launcher_gui::run(session, arguments);
     } catch (const std::exception& exception) {
         const auto message = widen(exception.what());
