@@ -22,6 +22,9 @@ std::uintptr_t empty_buffer{};
 std::atomic<std::uint64_t> bad_buffers{};
 std::atomic<bool> installed{};
 std::atomic<std::uint64_t> skips{}, recoveries{};
+// This thread's count in the unload it is running: several job workers unload at once, so the
+// shared totals cannot tell one unload's entries from another's.
+thread_local std::uint64_t call_skips{}, call_recoveries{};
 
 // Only the read of a mesh that is gone (a null one: rax is the entry's mesh). rbx is the entry,
 // rdi the registry, whose lock this thread holds. When the mesh's name hash is found again, it
@@ -43,36 +46,38 @@ int ours(EXCEPTION_POINTERS* info) noexcept {
             context.Rdx = *hash;
             context.Rip = key_at;
             recoveries.fetch_add(1, std::memory_order_relaxed);
+            ++call_recoveries;
             return EXCEPTION_CONTINUE_EXECUTION;
         }
     }
     context.Rip = resume_at;
     skips.fetch_add(1, std::memory_order_relaxed);
+    ++call_skips;
     return EXCEPTION_CONTINUE_EXECUTION;
 }
 // Said once per unload that had any, with how many: a map can have hundreds.
-__declspec(noinline) void note(std::uint64_t skipped_before, std::uint64_t recovered_before) noexcept {
+__declspec(noinline) void note(std::uint64_t skipped, std::uint64_t recovered) noexcept {
     const auto skipped_now = skips.load(std::memory_order_relaxed), recovered_now = recoveries.load(std::memory_order_relaxed);
     try {
-        if (recovered_now != recovered_before)
+        if (recovered)
             logging::log(logging::Level::info, logging::Channel::runtime,
                 "Level unload: {} mesh variation(s) had lost their mesh before their database was unloaded; they were taken "
-                "out of the registry by their key ({} since the game started).", recovered_now - recovered_before, recovered_now);
-        if (skipped_now != skipped_before)
+                "out of the registry by their key ({} since the game started).", recovered, recovered_now);
+        if (skipped)
             logging::log(logging::Level::warning, logging::Channel::runtime,
                 "Level unload: {} mesh variation(s) had lost their mesh before their database was unloaded and could not be "
-                "found in the registry; they were passed over ({} since the game started).", skipped_now - skipped_before, skipped_now);
+                "found in the registry; they were passed over ({} since the game started).", skipped, skipped_now);
     } catch (...) {}
 }
 std::uint64_t guarded(void* registry, void* second, void* list, std::uint64_t fourth) {
-    const auto skipped_before = skips.load(std::memory_order_relaxed), recovered_before = recoveries.load(std::memory_order_relaxed);
+    call_skips = call_recoveries = 0;
     std::uint64_t result{};
     __try {
         result = original(registry, second, list, fourth);
     } __except (ours(GetExceptionInformation())) {
         // (Never entered: the filter either goes on in the function or passes the fault up.)
     }
-    note(skipped_before, recovered_before);
+    note(call_skips, call_recoveries);
     return result;
 }
 // Whether `value` can be a heap block the game allocated: in user space, and aligned.
