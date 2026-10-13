@@ -32,6 +32,7 @@ constexpr std::string_view help_text =
     "park-mod config add <name> | <mod folder> | <map> [| <key>] | park-mod config remove <name>\n"
     "activity-log on|off | announce-throwdowns on|off | parties [on|off] | party-size <2-8> | afk-kick <minutes>|off | speed-check off|warn|kick | board-check off|warn|kick\n"
     "score-check [off|warn|kick] | score-allow [<fingerprint>|remove <fingerprint>] | words [reload | global on|off]\n"
+    "lock <player|SteamID64> <noclip,nobail,boosts,tuning|all> | unlock <player|SteamID64> [<tools>|all] | locks | throwdown-locks [<tools>|off]\n"
     "reserved [slots <n> | add|remove <SteamID64>] | roles [reload] | role <player or SteamID64> <role>|none | update | quit";
 } // namespace
 
@@ -489,7 +490,8 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         const auto value = on_off(argument);
         if (!value) return std::string("activity-log on|off (now ") + (config_.activity_log ? "on" : "off") + ")";
         config_.activity_log = *value;
-        if (!*value) activity_.clear();
+        if (!*value && !config_.throwdown_locks) activity_.clear(); // throwdown_locks still follows them
+        update_throwdown_locks();
         return changed(*value ? "Player activity (throwdowns, objects, loading) is logged."
                               : "Player activity is no longer logged.");
     }
@@ -897,7 +899,94 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         return changed(role ? label + " is now " + role->name + "."
                             : label + (config_.roles.default_role.empty() ? " no longer has a role." : " is " + config_.roles.default_role + " again."));
     }
+    if (name == "lock" || name == "unlock") {
+        // lock <player|SteamID64> <tools>; unlock <player|SteamID64> [<tools>]. The tools are the
+        // last word, so a name may have spaces in it.
+        const bool lock = name == "lock";
+        auto who = trim(argument);
+        std::optional<std::uint8_t> tools = lock ? std::nullopt : std::optional<std::uint8_t>(lock_all);
+        if (const auto space = who.find_last_of(" \t"); space != std::string_view::npos)
+            if (const auto named = parse_lock_tools(who.substr(space + 1))) {
+                tools = named;
+                who = trim(who.substr(0, space));
+            }
+        if (who.empty() || !tools)
+            return lock ? "lock <player|SteamID64> <tool[,tool...]|all> (tools: noclip, nobail, boosts, tuning)"
+                        : "unlock <player|SteamID64> [<tool[,tool...]|all>]";
+        auto *guest = target(who);
+        if (!guest || !guest->handshaken) return "No single connected player matches \"" + std::string(who) + "\".";
+        if (!outranks(guest->member.id)) return std::string("You cannot ") + (lock ? "lock" : "unlock") + " tools of a player of your rank or above.";
+        const auto *by = console ? nullptr : find(admin);
+        const auto label = guest_name(*guest);
+        const auto done = change_locks(*guest, *tools, lock, false, console ? std::string("console") : by ? guest_name(*by) : std::to_string(admin));
+        if (!done) return label + (lock ? " already has " : " has none of ") + lock_tools_text(*tools) + " locked.";
+        return (lock ? "Locked for " : "Unlocked for ") + label + ": " + lock_tools_text(done) + ".";
+    }
+    if (name == "locks") {
+        std::string text;
+        unsigned count{};
+        for (const auto &[id, locks] : locks_) {
+            const auto *guest = find(id);
+            if (!locks.all() || !guest) continue;
+            ++count;
+            text += "\n  " + std::to_string(id) + "  " + guest_name(*guest) + ": " +
+                    (locks.manual ? lock_tools_text(locks.manual) : std::string{}) +
+                    (locks.automatic ? std::string(locks.manual ? " " : "") + "(throwdown: " + lock_tools_text(locks.automatic) + ")" : std::string{});
+        }
+        return std::to_string(count) + (count == 1 ? " player has" : " players have") + " locked tools" +
+               (config_.throwdown_locks ? " (throwdown-locks: " + lock_tools_text(config_.throwdown_locks) + ")" : std::string{}) + text;
+    }
+    if (name == "throwdown-locks") {
+        if (argument.empty())
+            return "throwdown-locks <tool[,tool...]|all>|off (now " + (config_.throwdown_locks ? lock_tools_text(config_.throwdown_locks) : std::string("off")) + ")";
+        const auto tools = lower(argument) == "off" ? std::optional<std::uint8_t>(0) : parse_lock_tools(argument);
+        if (!tools) return "throwdown-locks <tool[,tool...]|all>|off (tools: noclip, nobail, boosts, tuning)";
+        // The players of a running throwdown get the new set at once.
+        for (const auto id : std::exchange(in_throwdown_, {}))
+            if (auto *guest = find(id)) change_locks(*guest, lock_all, false, true, "throwdown");
+        config_.throwdown_locks = *tools;
+        update_throwdown_locks();
+        return changed(*tools ? "The players of a throwdown have " + lock_tools_text(*tools) + " locked while it runs."
+                              : "Throwdowns lock nothing.");
+    }
     return "Unknown command \"" + std::string(action) + "\". Type help.";
+}
+std::uint8_t Host::change_locks(Guest &guest, std::uint8_t tools, bool lock, bool automatic, const std::string &source) {
+    const auto id = guest.member.id;
+    auto &locks = locks_[id];
+    const auto before = locks.all();
+    if (lock) (automatic ? locks.automatic : locks.manual) |= tools;
+    else {
+        // The throwdown ending takes back its own; an admin's unlock takes back both.
+        locks.automatic &= static_cast<std::uint8_t>(~tools);
+        if (!automatic) locks.manual &= static_cast<std::uint8_t>(~tools);
+    }
+    const auto after = locks.all();
+    if (!after) locks_.erase(id);
+    const auto changed = static_cast<std::uint8_t>(before ^ after);
+    if (!changed) return 0;
+    const auto list = lock_tools_text(changed);
+    log_("[lock] " + guest_name(guest) + " (" + std::to_string(id) + "): " + list + (lock ? " locked by " : " unlocked by ") + source);
+    roster_dirty_ = true;
+    if (changed & lock_movement) guest.permissions_sent = 0; // with or without "movement" (send_permissions)
+    if (guest.handshaken)
+        send_chat(lock ? (automatic ? "Locked for you while your throwdown runs: " : "The server locked for you: ") + list + "."
+                       : (automatic ? "Your throwdown is over, unlocked: " : "The server unlocked for you: ") + list + ".", &guest);
+    return changed;
+}
+void Host::update_throwdown_locks() {
+    if (!config_.throwdown_locks && in_throwdown_.empty()) return;
+    std::set<std::uint64_t> playing;
+    if (config_.throwdown_locks)
+        for (const auto id : activity_.playing())
+            if (const auto *guest = find(id); guest && guest->handshaken) playing.insert(id);
+    for (auto it = in_throwdown_.begin(); it != in_throwdown_.end();) {
+        if (playing.contains(*it)) { ++it; continue; }
+        if (auto *guest = find(*it)) change_locks(*guest, lock_all, false, true, "throwdown");
+        it = in_throwdown_.erase(it);
+    }
+    for (const auto id : playing)
+        if (in_throwdown_.insert(id).second) change_locks(*find(id), config_.throwdown_locks, true, true, "throwdown");
 }
 unsigned Host::teleport_ring(const std::vector<Guest *> &movers, const std::array<float, 3> &at, float radius) {
     unsigned sent{};

@@ -384,6 +384,25 @@ class Host {
         return role ? role->rank : -1;
     }
     void send_permissions(Guest &);    // what their role lets them do
+    // Tools taken from single players (lock_*, server_config.h): by an admin or the console
+    // (`manual`), or for a throwdown they play in (`automatic`, config throwdown_locks). In
+    // memory only: they end when the player leaves. A locked player's roster says the tool is
+    // off for them, and while noclip, No Bail or the boosts are locked their permissions go
+    // without "movement", so their role cannot give the tool back.
+    struct Locks {
+        std::uint8_t manual{}, automatic{};
+        std::uint8_t all() const noexcept { return manual | automatic; }
+    };
+    std::map<std::uint64_t, Locks> locks_;
+    std::set<std::uint64_t> in_throwdown_; // the players throwdown_locks were applied to, while theirs runs
+    std::uint8_t locks_of(std::uint64_t id) const {
+        const auto found = locks_.find(id);
+        return found == locks_.end() ? 0 : found->second.all();
+    }
+    // Locks (`lock`) or unlocks (otherwise) `tools` for a player, as `source` ("console", an
+    // admin's name, "throwdown"); `automatic`: the throwdown's own. Returns the tools that changed.
+    std::uint8_t change_locks(Guest &, std::uint8_t tools, bool lock, bool automatic, const std::string &source);
+    void update_throwdown_locks(); // after the throwdowns or the setting change
     void send_words(Guest &);          // the server's own filtered chat words (server_words.h)
     void send_next_maps(Guest &);      // the maps the vote for the next one will offer
     void roles_changed();              // after any change to the roles or who has them
@@ -394,7 +413,9 @@ class Host {
     bool send_packet(Guest &, const Packet &, bool reliable, bool fresh, std::span<const std::uint8_t> raw = {},
                      std::span<const std::uint8_t> wire = {});
     void send_required(Guest &, const std::vector<std::uint8_t> &bytes);
-    void broadcast(const Packet &, bool reliable, bool fresh, std::uint64_t except = 0);
+    // `only`: to these players alone; `skip`: not to these.
+    void broadcast(const Packet &, bool reliable, bool fresh, std::uint64_t except = 0,
+                   const std::set<std::uint64_t> *only = nullptr, const std::set<std::uint64_t> *skip = nullptr);
     void send_roster();
     void send_world_state();
     void send_chat(std::string_view text, Guest *only = nullptr);
