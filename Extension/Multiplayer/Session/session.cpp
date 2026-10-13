@@ -42,7 +42,6 @@ namespace session_detail {
 std::unique_ptr<LobbyApi> session_lobby_api(SteamTransport &transport) {
     if (!launcher::offline_mode()) return make_steam_lobby_api();
     LobbyChannel channel;
-    channel.ready = [&transport] { return transport.direct(); };
     channel.request = [&transport](std::string_view json) { return transport.lobby_request(json); };
     channel.replies = [&transport] { return transport.lobby_replies(); };
     channel.local_id = [&transport] { return transport.status().local_id; };

@@ -42,7 +42,6 @@ struct Player {
     bool connected = true;
     LobbyChannel channel() {
         LobbyChannel c;
-        c.ready = [this] { return connected; };
         c.request = [this](std::string_view text) {
             if (!connected) return false;
             const auto request = Json::parse(text);
@@ -89,12 +88,17 @@ int main() {
     SteamLobbies browsing(make_direct_lobby_api(son.channel()));
     SteamLobbies away(make_direct_lobby_api(stranger.channel()));
 
-    // Dad hosts with a code: listed for his home network, not publicly.
+    // Dad hosts with a code: listed for his home network, not publicly. His connection to the
+    // service is still opening when he starts; the listing goes out once it is there.
     const auto code = format_invite({dad_id, 0x0123456789abcdefull});
     std::uint64_t now = 1'000'000;
+    dad.connected = false;
     hosting.host(code, 8, false, "Dad's park", false);
     hosting.update_host(true, 1, "levels/park/bam", now);
     hosting.tick(now += 200'000);
+    hosting.update_host(true, 1, "levels/park/bam", now += 1'100'000);
+    check(!service.listings.contains(dad_id), "nothing is listed before the connection is there");
+    dad.connected = true;
     hosting.update_host(true, 1, "levels/park/bam", now += 1'100'000);
     check(service.listings.contains(dad_id) && !service.listings[dad_id].everyone, "the game is listed, not publicly");
     check(hosting.status().listed && hosting.hosted_lobby() == dad_id, "the host sees it listed");
@@ -128,12 +132,20 @@ int main() {
     hosting.stop();
     check(!service.listings.contains(dad_id) && service.unhosts >= 1, "stopping unlists the game");
 
-    // Not connected to the service: browsing says so rather than hanging.
+    // Browsing before the connection is there: the search waits for it, then finds the game.
+    hosting.host(code, 8, false, "Dad's park", false);
+    hosting.update_host(true, 1, "levels/park/bam", now += 1'100'000);
+    hosting.tick(now += 200'000);
+    hosting.update_host(true, 1, "levels/park/bam", now += 1'100'000);
     son.connected = false;
-    SteamLobbies offline(make_direct_lobby_api(son.channel()));
-    offline.refresh(now += 6'000'000);
-    check(!offline.status().searching && offline.status().browser.find("lobby service") != std::string::npos,
-          "an unconnected browser says the lobby service is not reachable");
+    SteamLobbies early(make_direct_lobby_api(son.channel()));
+    early.refresh(now += 6'000'000);
+    early.tick(now += 200'000);
+    check(early.status().searching && early.status().browser.find("lobby service") != std::string::npos,
+          "the search waits, and says where it is looking");
+    son.connected = true;
+    early.tick(now += 200'000);
+    check(!early.status().searching && early.status().rows.size() == 1, "once connected the search finds the game");
 
     std::printf("%s\n", failures ? "FAILED" : "Direct lobbies: home listing, browsing, joining and refresh passed.");
     return failures ? 1 : 0;

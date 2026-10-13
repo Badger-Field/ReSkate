@@ -17,6 +17,7 @@ namespace {
 constexpr char stun_servers[] = "stun.cloudflare.com:3478,stun.l.google.com:19302";
 
 std::mutex player_mutex;
+std::string known_name; // direct_player_name's, once read
 
 std::filesystem::path module_folder() {
     HMODULE module{};
@@ -159,10 +160,12 @@ void replace_direct_player_key() {
 
 std::string direct_player_name() {
     std::lock_guard lock(player_mutex);
+    // Shown every menu frame: read from the file once, then kept here.
+    if (!known_name.empty()) return known_name;
     auto stored = read_player();
-    if (!stored.name.empty()) return stored.name;
+    if (!stored.name.empty()) return known_name = stored.name;
     const auto key = kept_key(stored);
-    return key ? default_name(player_id_of(key->public_key)) : std::string("Skater");
+    return known_name = key ? default_name(player_id_of(key->public_key)) : std::string("Skater");
 }
 
 std::string set_direct_player_name(std::string_view name) {
@@ -176,6 +179,7 @@ std::string set_direct_player_name(std::string_view name) {
     auto stored = read_player();
     const auto key = kept_key(stored);
     if (!key || !write_player(key->seed, std::string(name))) return "Could not save the name.";
+    known_name = name;
     return {};
 }
 } // namespace dingosdk::multiplayer

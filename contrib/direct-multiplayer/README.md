@@ -26,20 +26,22 @@ Steam and no EA app. This is work in progress on the `direct-multiplayer` branch
 
 ## Playing without Steam
 
-Work in progress: hosting and joining by code work; public lobbies, the lobby browser, Steam
-friends and voice chat still need Steam.
+Work in progress: hosting, the Servers list and join codes work; Steam friends and voice chat
+still need Steam.
 
 1. Put `GameNetworkingSockets.dll` beside `ReSkate.dll` in the skate. folder. It is Valve's
    [GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets) at `d534c19`,
-   built as one Windows x64 DLL with ICE on (vcpkg triplet `x64-windows-static-md`, so
-   protobuf and OpenSSL are inside it). It needs the Microsoft Visual C++ 2015-2022
-   runtime, which the game already uses.
+   built as one Windows x64 DLL with ICE on and everything linked in (vcpkg triplet
+   `x64-windows-static`, static CRT): it needs nothing but Windows.
 2. Start ReSkate in offline mode. The Multiplayer pages appear as they do with Steam.
-3. Pick a name other players see: `mp name <name>` in the console. Until then it is "Skater"
+3. Multiplayer, then **Your name**: the name other skaters see. Until it is set it is "Skater"
    and four digits.
-4. The host: Multiplayer, host with a code (or `mp host code 8`). The join code shows in the
-   status and in chat.
-5. Everyone else: join with that code (or `mp join <code>`).
+4. The host: **Host**, then **Home + join code** (players on the same home network see it in
+   Servers; anyone else gets the code from Session) or **Public lobby** (everyone sees it).
+5. Everyone else: **Servers**, then Join. A game on your own network is marked
+   **ON YOUR NETWORK**. A friend elsewhere pastes the host's code into the join box.
+
+The console does the same: `mp name <name>`, `mp host code 8`, `mp join <code>`.
 
 Where things are kept:
 

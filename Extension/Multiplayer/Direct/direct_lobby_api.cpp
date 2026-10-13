@@ -14,10 +14,8 @@ class DirectLobbyApi final : public LobbyApi {
   public:
     explicit DirectLobbyApi(LobbyChannel channel) : ch_(std::move(channel)) {}
 
-    void open() override {
-        if (!ch_.ready || !ch_.ready())
-            throw std::runtime_error("Not connected to the ReSkate lobby service yet. Try again in a moment.");
-    }
+    // The connection to the service may still be opening: requests wait for it (poll, owner).
+    void open() override {}
     std::uint64_t create(unsigned) override {
         own_ = ch_.local_id();
         own_data_.clear();
@@ -25,8 +23,9 @@ class DirectLobbyApi final : public LobbyApi {
         return finished(LobbyCall::create, {true, own_, 0, 1});
     }
     std::uint64_t search() override {
-        if (list_call_ || !ch_.request(R"({"op":"list"})")) return 0;
+        if (list_call_) return 0;
         list_call_ = next_++;
+        list_sent_ = ch_.request(R"({"op":"list"})");
         return *list_call_;
     }
     std::uint64_t join(std::uint64_t lobby) override {
@@ -34,6 +33,7 @@ class DirectLobbyApi final : public LobbyApi {
         return finished(LobbyCall::join, {find(lobby) != nullptr, lobby, 0, 1});
     }
     std::optional<LobbyResult> poll(std::uint64_t call, LobbyCall kind) override {
+        if (list_call_ && !list_sent_) list_sent_ = ch_.request(R"({"op":"list"})");
         take_replies();
         const auto done = done_.find(call);
         if (done == done_.end() || done->second.first != kind) return std::nullopt;
@@ -44,7 +44,7 @@ class DirectLobbyApi final : public LobbyApi {
     void leave(std::uint64_t lobby) override {
         if (!lobby || lobby != own_) return;
         if (hosted_) ch_.request(R"({"op":"unhost"})");
-        hosted_ = false;
+        hosted_ = listed_ = false;
         own_ = 0;
         own_data_.clear();
     }
@@ -54,7 +54,7 @@ class DirectLobbyApi final : public LobbyApi {
     std::uint64_t owner(std::uint64_t lobby) override {
         // Asked about once a second while hosting: the listing is kept fresh from here.
         if (lobby && lobby == own_) {
-            if (hosted_ && ch_.now_ms() - published_ >= republish_ms) publish();
+            if (listed_ && (!hosted_ || ch_.now_ms() - published_ >= republish_ms)) publish();
             return own_;
         }
         return find(lobby) ? lobby : 0;
@@ -73,10 +73,16 @@ class DirectLobbyApi final : public LobbyApi {
         own_data_[key] = value;
         return true;
     }
+    // Listed or not. A listing that could not be sent yet (the connection still opening, or
+    // reopening) goes out from owner(), which the host asks every second.
     bool joinable(std::uint64_t lobby, bool open) override {
         if (!lobby || lobby != own_) return false;
-        if (open) return publish();
-        if (hosted_ && !ch_.request(R"({"op":"unhost"})")) return false;
+        listed_ = open;
+        if (open) {
+            publish();
+            return true;
+        }
+        if (hosted_) ch_.request(R"({"op":"unhost"})");
         hosted_ = false;
         return true;
     }
@@ -97,10 +103,11 @@ class DirectLobbyApi final : public LobbyApi {
     std::uint64_t next_ = 1;
     std::map<std::uint64_t, std::pair<LobbyCall, LobbyResult>> done_;
     std::optional<std::uint64_t> list_call_;
+    bool list_sent_{};
     std::vector<Row> rows_;
     std::uint64_t own_{}, published_{};
     std::map<std::string, std::string> own_data_;
-    bool everyone_ = true, hosted_{};
+    bool everyone_ = true, listed_{}, hosted_{}; // listed_: wanted; hosted_: sent
 
     std::uint64_t finished(LobbyCall kind, LobbyResult result) {
         const auto call = next_++;
@@ -120,7 +127,10 @@ class DirectLobbyApi final : public LobbyApi {
         message["op"] = "host";
         message["public"] = everyone_;
         message["lobby"] = std::move(lobby);
-        if (!ch_.request(message.dump())) return false;
+        if (!ch_.request(message.dump())) {
+            hosted_ = false;
+            return false;
+        }
         hosted_ = true;
         published_ = ch_.now_ms();
         return true;

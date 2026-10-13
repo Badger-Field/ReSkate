@@ -8,6 +8,8 @@
 #include "Extension/Profile/local_profile_runtime.h"
 #include "Extension/Objects/network_object_runtime.h"
 #include "Engine/Core/Log/logging.h"
+#include "Engine/Core/Platform/launcher_support.h"
+#include "Extension/Multiplayer/Direct/direct_play.h"
 #include "Engine/Core/Text/word_filter.h"
 #include "Extension/Skater/physics_tuning.h"
 #include <cmath>
@@ -172,7 +174,9 @@ void publish(Session &s, const NativeFrame *local) {
     view.map_fetching = s.fetching_since != 0;
     view.echo = s.mode == Mode::echo;
     view.local_id = t.local_id;
-    view.local_name = s.mode != Mode::off ? s.transport.name(t.local_id) : steam_social_snapshot()->local.name;
+    view.direct = launcher::offline_mode() && direct_play_installed();
+    view.local_name = view.direct ? direct_player_name()
+                    : s.mode != Mode::off ? s.transport.name(t.local_id) : steam_social_snapshot()->local.name;
     view.lobby_name = s.lobby_name;
     // A dedicated server's roster capacity counts the server itself.
     view.capacity = static_cast<int>(dedicated_host(s) ? s.capacity - 1 : s.capacity);

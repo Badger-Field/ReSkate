@@ -274,6 +274,7 @@ void password_popup(SkateMenu &menu, const Model &model) {
 }
 void join_page(SkateMenu &menu, const Model &model, const CallbacksV3 &callbacks) {
     const auto &mp = model.multiplayer;
+    if (mp.direct) direct_name_card(menu, mp);
     // Coming into view (the menu opening, or switching to this tab) fetches the
     // latest lobbies, so the list is never one left over from earlier.
     const int frame = ImGui::GetFrameCount();
@@ -287,9 +288,10 @@ void join_page(SkateMenu &menu, const Model &model, const CallbacksV3 &callbacks
     const float refresh_width = ImGui::CalcTextSize("Refreshing...").x + style.FramePadding.x * 2;
     const float sort_width = ImGui::CalcTextSize("Most players").x + style.FramePadding.x * 2 + ImGui::GetFrameHeight();
     const float same_map_width = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + ImGui::CalcTextSize("Same map only").x;
-    const float dedicated_width = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + ImGui::CalcTextSize("Dedicated only").x;
+    // Without Steam there are no dedicated servers to pick out.
+    const float dedicated_width = mp.direct ? 0.f : ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + ImGui::CalcTextSize("Dedicated only").x;
     ImGui::SetNextItemWidth(std::max(px(120), ImGui::GetContentRegionAvail().x - refresh_width - sort_width -
-                                                  same_map_width - dedicated_width - style.ItemSpacing.x * 4 - px(8)));
+                                                  same_map_width - dedicated_width - style.ItemSpacing.x * (mp.direct ? 3 : 4) - px(8)));
     ImGui::InputTextWithHint("##lobby-filter", "Search servers or maps", menu.multiplayer_lobby_search.data(),
                              menu.multiplayer_lobby_search.size());
     ImGui::SameLine();
@@ -297,10 +299,14 @@ void join_page(SkateMenu &menu, const Model &model, const CallbacksV3 &callbacks
     ImGui::Combo("##lobby-sort", &menu.multiplayer_lobby_sort, sorts.data(), static_cast<int>(sorts.size()));
     ImGui::SameLine(0, style.ItemSpacing.x + px(8));
     ImGui::Checkbox("Same map only", &menu.multiplayer_same_map_only);
-    ImGui::SameLine();
-    ImGui::Checkbox("Dedicated only", &menu.multiplayer_dedicated_only);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Dedicated servers are always up and are not someone's own game.");
+    if (!mp.direct) {
+        ImGui::SameLine();
+        ImGui::Checkbox("Dedicated only", &menu.multiplayer_dedicated_only);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Dedicated servers are always up and are not someone's own game.");
+    } else {
+        menu.multiplayer_dedicated_only = false;
+    }
     ImGui::SameLine();
     ImGui::BeginDisabled(mp.lobby_searching || mp.lobby_joining);
     if (ImGui::Button(refresh_label, ImVec2(refresh_width, 0)))
@@ -336,8 +342,9 @@ void join_page(SkateMenu &menu, const Model &model, const CallbacksV3 &callbacks
             const bool here = mp.active && lobby.id == mp.public_lobby;
             const bool hop = mp.active && !mp.hosting && !mp.echo && !here;
             const bool joinable = (!mp.active || hop) && !mp.lobby_joining && !row.self && !row.full;
-            // The team's own servers are ReSkate blue, and the ones friends are skating in green.
-            const bool with_friends = !lobby.friends.empty() && !lobby.official;
+            // The team's own servers are ReSkate blue, and the ones friends are skating in green,
+            // as are games on this player's own home network (without Steam).
+            const bool with_friends = (!lobby.friends.empty() || lobby.nearby) && !lobby.official;
             skate_theme::rough_rect(draw, top, ImVec2(top.x + width, top.y + tile_height),
                                     lobby.official ? skate_theme::official_tile : with_friends ? skate_theme::friends_tile : skate_theme::tile,
                                     static_cast<unsigned>(i + 41), px(1));
@@ -381,7 +388,7 @@ void join_page(SkateMenu &menu, const Model &model, const CallbacksV3 &callbacks
                 tag(menu, "PASSWORD", skate_theme::warning);
             }
             {
-                const char *kind = lobby.official ? "OFFICIAL" : lobby.dedicated ? "DEDICATED" : "PLAYER";
+                const char *kind = lobby.official ? "OFFICIAL" : lobby.dedicated ? "DEDICATED" : lobby.nearby ? "ON YOUR NETWORK" : "PLAYER";
                 const auto size = menu.bold->CalcTextSizeA(px(12), FLT_MAX, 0, kind);
                 right -= size.x + px(14) + px(12);
                 ImGui::SetCursorScreenPos(ImVec2(right, top.y + (tile_height - ImGui::GetFrameHeight()) * .5f));

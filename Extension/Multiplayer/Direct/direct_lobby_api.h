@@ -12,10 +12,10 @@
 // through the player's own connection to it. A lobby is its host's player ID. A public lobby is
 // listed to everyone; any other only to players on the host's home network, who then join it
 // from the list without a code. The service keeps a listing two minutes: the host publishes it
-// again every minute while it stays open.
+// again every minute while it stays open. While the connection to the service is still opening,
+// a search and a listing wait for it.
 namespace dingosdk::multiplayer {
 struct LobbyChannel {
-    std::function<bool()> ready;                            // connected to the service
     std::function<bool(std::string_view)> request;          // a JSON request
     std::function<std::vector<std::string>()> replies;      // the service's answers, in order
     std::function<std::uint64_t()> local_id;                // this player's ID
