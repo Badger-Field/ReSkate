@@ -1,4 +1,5 @@
 #include "session_internal.h"
+#include "Engine/Core/Debug/trace.h"
 #include "Extension/Multiplayer/Hud/native_player_ui.h"
 #include "Extension/Multiplayer/Hud/native_indicators.h"
 #include "Extension/Multiplayer/Hud/native_party.h"
@@ -71,6 +72,9 @@ void reset_peer(Session &s, std::size_t slot) {
 }
 void stop(Session &s, std::string reason) {
     s.local_typing_until = 0;
+    // A join that ends before the host's map was ready never got in.
+    if (s.mode == Mode::join && s.awaiting_map && !s.travelling && s.join_started)
+        trace::record("multiplayer.join", "app.join", std::chrono::milliseconds((now_us() - s.join_started) / 1000), false);
     s.voice.reset();
     s.voice_policy = {};
     s.tps = multiplayer_default_tps;
@@ -804,6 +808,8 @@ bool prepare_join_map(Session &s, bool ready, std::string_view current, MapLoade
             s.status = "Host map loaded. Waiting for your skater...";
             return false;
         }
+        if (!s.travelling && s.join_started)
+            trace::record("multiplayer.join", "app.join", std::chrono::milliseconds((now - s.join_started) / 1000));
         s.awaiting_map = false;
         s.fetching_since = 0;
         fetching_map_flag.store(false, std::memory_order_relaxed);
