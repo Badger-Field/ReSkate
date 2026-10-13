@@ -54,11 +54,19 @@ jobs:
           -DDINGOSDK_RELEASE_REPO="${{ github.repository }}"
           -DDINGOSDK_LAUNCHER_AUTO_UPDATE=ON
           -DDINGOSDK_BACKTRACE_URL="$BACKTRACE_URL"
-          -DDINGOSDK_BUILD_LAUNCHER_TESTS=ON
+      - name: The Spotify device from earlier runs (cargo)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            SpotifyHelper/target
+          key: cargo-windows-${{ hashFiles('SpotifyHelper/Cargo.lock', 'SpotifyHelper/Cargo.toml', 'SpotifyHelper/src/**') }}
+          restore-keys: cargo-windows-
       - name: Build
-        run: cmake --build --preset release --parallel
-      - name: Test
-        run: ctest --test-dir build/vs2022-x64 -C Release --output-on-failure
+        # Only what ships: the launcher and ReSkate.dll. The tests ran in the Build workflow on
+        # this commit (release from main once its checks are green).
+        run: cmake --build --preset release --parallel --target dingosdk_launcher dingosdk_runtime
       - name: Package
         shell: bash
         run: |

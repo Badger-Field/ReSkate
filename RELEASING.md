@@ -20,7 +20,13 @@ Merge only when it is green.
 Each Build job is a script in `ci/`, and the workflow only calls it, so a local run checks exactly what CI checks, uses no Actions minutes, and needs nothing pushed:
 
 - **Linux, or WSL on Windows:** `ci/local.sh` runs the server and regression tests (`build/linux`) and then the LiDAR parks tests. `ci/local.sh linux` or `ci/local.sh lidar` runs just one of them. The Python tests get their own virtual environment, in `build/lidar-venv`.
-- **Windows:** `powershell -ExecutionPolicy Bypass -File ci\local.ps1` builds `build\vs2022-x64` (Release) with the launcher tests, and runs every test. It needs Visual Studio 2022 with the C++ desktop workload.
+- **Windows:** `powershell -ExecutionPolicy Bypass -File ci\local.ps1` builds `build\vs2022-x64` (Release) with the launcher tests, and runs every test. It needs Visual Studio 2022 with the C++ desktop workload. Add `-Ninja` for exactly what CI runs: a Ninja build in `build\ninja-x64`, which loads the compiler from Visual Studio itself and reuses earlier compiles when `sccache` is on the PATH.
+
+### Why CI is quick
+
+- **Compiled files are kept between runs.** The Windows job builds with Ninja and sccache, and keeps sccache's files in the Actions cache, so a change to a few files rebuilds only those. Debug information goes into each object file (`/Z7`) under Ninja so the cache can hold it; the PDBs come out the same.
+- **The Spotify device (Rust) is kept too.** Its cargo build is cached until `SpotifyHelper` changes.
+- **Releases build only what ships**, the launcher and `ReSkate.dll`, and skip the tests, which the Build workflow already ran on that commit. So cut releases from `main` once its checks are green.
 
 Changes only to Markdown files or `LICENSE` start no build.
 

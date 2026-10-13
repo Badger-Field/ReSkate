@@ -24,20 +24,50 @@ jobs:
     name: Windows (MSVC)
     runs-on: windows-2022
     timeout-minutes: 90
+    env:
+      # Compiled files are kept between runs (sccache, in a cache below): a change to a few files
+      # rebuilds only those.
+      SCCACHE_DIR: ${{ github.workspace }}\.sccache
+      SCCACHE_CACHE_SIZE: 3G
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0  # crash reports name the build by git describe
+      - name: Install sccache
+        shell: pwsh
+        run: |
+          $version = "v0.8.2"
+          $sha256 = "2b35d159eff6d662b38d2527e7f362be90f5d9d8b9116f6197243f4b1cd926ff"
+          $zip = "$env:RUNNER_TEMP\sccache.zip"
+          Invoke-WebRequest "https://github.com/mozilla/sccache/releases/download/$version/sccache-$version-x86_64-pc-windows-msvc.zip" -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $sha256) { throw "sccache download does not match its checksum" }
+          Expand-Archive $zip "$env:RUNNER_TEMP\sccache"
+          "$env:RUNNER_TEMP\sccache\sccache-$version-x86_64-pc-windows-msvc" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - name: Compiled files from earlier runs
+        uses: actions/cache@v4
+        with:
+          path: .sccache
+          key: sccache-windows-${{ github.sha }}
+          restore-keys: sccache-windows-
+      - name: The Spotify device from earlier runs (cargo)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            SpotifyHelper/target
+          key: cargo-windows-${{ hashFiles('SpotifyHelper/Cargo.lock', 'SpotifyHelper/Cargo.toml', 'SpotifyHelper/src/**') }}
+          restore-keys: cargo-windows-
       - name: Configure, build and test
         shell: pwsh
-        run: ./ci/local.ps1
+        run: ./ci/local.ps1 -Ninja
       - uses: actions/upload-artifact@v4
         with:
           name: reskate-windows-${{ github.sha }}
           path: |
-            build/vs2022-x64/Release/ReSkateLauncher.exe
-            build/vs2022-x64/Release/ReSkate.dll
-            build/vs2022-x64/Release/ReSkateServer.exe
+            build/ninja-x64/ReSkateLauncher.exe
+            build/ninja-x64/ReSkate.dll
+            build/ninja-x64/ReSkateServer.exe
           retention-days: 14
 
   linux:

@@ -33,9 +33,17 @@ target_link_libraries(dingosdk_logging PRIVATE dingosdk_backtrace_client)
 add_dependencies(dingosdk_runtime dingosdk_launcher)
 
 # Release dumps need matching symbols; keep optimization and omit incremental linking.
+# Debug information goes in a shared PDB (/Zi) under Visual Studio, and in each object file (/Z7)
+# under Ninja, where a compiler cache (sccache, in CI) can keep it; the linker writes the same
+# full PDB from either.
+if(CMAKE_GENERATOR MATCHES "Visual Studio")
+    set(dingosdk_debug_info /Zi)
+else()
+    set(dingosdk_debug_info /Z7)
+endif()
 # PDBALTPATH embeds only the PDB's file name, not the build machine's folder.
 foreach(target dingosdk_runtime dingosdk_launcher dingosdk_server)
-    target_compile_options(${target} PRIVATE /Zi)
+    target_compile_options(${target} PRIVATE ${dingosdk_debug_info})
     target_link_options(${target} PRIVATE /DEBUG:FULL /INCREMENTAL:NO /OPT:REF /OPT:ICF
         "/PDBALTPATH:$<TARGET_PDB_FILE_NAME:${target}>")
 endforeach()
@@ -43,7 +51,7 @@ get_property(backtrace_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(target IN LISTS backtrace_targets)
     get_target_property(kind ${target} TYPE)
     if(kind STREQUAL "STATIC_LIBRARY")
-        target_compile_options(${target} PRIVATE /Zi)
+        target_compile_options(${target} PRIVATE ${dingosdk_debug_info})
     endif()
 endforeach()
 
