@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
                                                           "of the first log, the search's centre)")
     search.add_argument("--height-window", type=float, default=10.0, help="metres from --near-height still "
                                                                           "preferred (default 10)")
-    search.add_argument("--water-level", type=float, help="treat probes at or near this height as water (default: "
+    search.add_argument("--water-level", "--water-height", dest="water_level", type=float, help="treat probes at or near this height as water (default: "
                                                           "found from the probes)")
     search.add_argument("--no-water", action="store_true", help="assume there is no water")
     search.add_argument("--anchor-out", help="write the best place as an anchor park file, for city --anchor")

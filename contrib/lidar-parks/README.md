@@ -193,7 +193,7 @@ python -m reskate_lidar anchor search --map bam --around 627.1 1062.8 --radius 2
 
    - **What it ranks:** every square of `--size` round a probed point, by the share of it that is level with its own median height. It lists the best few that don't overlap, as anchor `x, y, z`.
    - **Squares left out:** those with under 85% of their probes read.
-   - **Water:** the game's probe gives a height, not what the surface is. So many probes at exactly the lowest height seen are taken as water, along with anything within 0.5 m of it. Water counts against a square. `--water-level` sets the water height, and `--no-water` turns this off.
+   - **Water:** the game's probe gives a height, not what the surface is. So many probes at exactly the lowest height seen are taken as water, along with anything within 0.5 m of it. Water counts against a square. `--water-level` (or `--water-height`) sets the water height; on bam it is 191.0, and `--no-water` turns this off.
      - The game may reset the skater to the start after a probe over water or out of bounds. That is expected: the height logged before the reset is still right.
    - **Street level first:** places within 10 m (`--height-window`) of a reference height come first. The reference is the first probe of the first log, which is the search's centre, unless `--near-height` sets it.
    - **Suspicious squares:** a square exactly flat over 20 or more probes is flagged and ranked last. Real ground has kerbs and falls; the sea doesn't.
