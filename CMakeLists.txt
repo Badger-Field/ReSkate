@@ -198,6 +198,13 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
     target_include_directories(dingosdk_direct_lobby_api_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     target_link_libraries(dingosdk_direct_lobby_api_tests PRIVATE dingosdk_json dingosdk_word_filter)
     add_test(NAME multiplayer_direct_lobby_api COMMAND dingosdk_direct_lobby_api_tests)
+    add_executable(dingosdk_lan_discovery_tests Extension/Multiplayer/Test/lan_discovery_tests.cpp
+        Extension/Multiplayer/Direct/lan_discovery.cpp)
+    target_include_directories(dingosdk_lan_discovery_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    if(WIN32)
+        target_link_libraries(dingosdk_lan_discovery_tests PRIVATE ws2_32)
+    endif()
+    add_test(NAME multiplayer_lan_discovery COMMAND dingosdk_lan_discovery_tests)
     add_executable(dingosdk_multiplayer_prediction_tests
         Extension/Multiplayer/Test/prediction_tests.cpp Extension/Multiplayer/Net/protocol.cpp Extension/Multiplayer/Remote/playback_buffers.cpp)
     add_test(NAME multiplayer_prediction COMMAND dingosdk_multiplayer_prediction_tests)
@@ -279,8 +286,9 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS AND WIN32)
         Extension/Multiplayer/Net/wire_codec.cpp Extension/Multiplayer/Net/delta_codec.cpp
         Extension/Multiplayer/Session/password.cpp Extension/Multiplayer/Session/party_book.cpp
         Extension/Multiplayer/Steam/steam_lobbies.cpp Extension/Multiplayer/Steam/steam_server_browser.cpp
-        Extension/Multiplayer/word_lists.cpp Extension/Multiplayer/Direct/direct_lobby_api.cpp)
-    target_link_libraries(dingosdk_multiplayer_mesh_tests PRIVATE dingosdk_logging dingosdk_launcher_support dingosdk_lz4 dingosdk_zstd bcrypt
+        Extension/Multiplayer/word_lists.cpp Extension/Multiplayer/Direct/direct_lobby_api.cpp
+        Extension/Multiplayer/Direct/lan_discovery.cpp)
+    target_link_libraries(dingosdk_multiplayer_mesh_tests PRIVATE dingosdk_logging dingosdk_launcher_support dingosdk_lz4 dingosdk_zstd bcrypt ws2_32
         dingosdk_word_filter dingosdk_json)
     add_test(NAME multiplayer_mesh COMMAND dingosdk_multiplayer_mesh_tests)
     add_executable(dingosdk_developer_identity_tests

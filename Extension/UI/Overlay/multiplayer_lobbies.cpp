@@ -314,6 +314,8 @@ void join_page(SkateMenu &menu, const Model &model, const CallbacksV3 &callbacks
     ImGui::EndDisabled();
 
     const auto &rows = lobby_list(menu, model);
+    if (mp.direct) note("Without Steam, Servers shows games hosted on your own network. For anyone else's, "
+                        "paste their join code below.");
     const auto shown = std::to_string(rows.size()) + " of " + std::to_string(mp.lobbies.size()) + " servers" +
         (mp.browser_status.empty() ? std::string{} : "  -  " + mp.browser_status);
     note(shown.c_str());

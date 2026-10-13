@@ -463,7 +463,7 @@ void session_page(SkateMenu &menu, const Model &model) {
     }
     if (mp.hosting) {
         ImGui::SameLine(0, px(6));
-        tag(menu, mp.public_host ? "PUBLIC" : "JOIN CODE", skate_theme::white);
+        tag(menu, mp.public_host ? "PUBLIC" : mp.home_host ? "HOME NETWORK" : "JOIN CODE", skate_theme::white);
         if (mp.password_required) {
             ImGui::SameLine(0, px(6));
             tag(menu, "PASSWORD", skate_theme::warning);

@@ -890,6 +890,11 @@ std::string command(std::string_view action, std::string_view argument, std::str
             else {
                 s.lobbies.refresh(now_us());
                 if (!s.transport.direct()) s.servers.refresh(now_us());
+                // And games on this player's own network.
+                if (s.transport.direct()) {
+                    s.lan.search();
+                    s.lan_searched = now_us();
+                }
             }
             publish(s);
             return s.lobbies.status().browser;
@@ -924,6 +929,11 @@ std::string command(std::string_view action, std::string_view argument, std::str
                     publish(s);
                 }
                 return reply;
+            }
+            // A game found on this player's own network: its listing carries its code.
+            if (const auto found = lan_lobby(s, id)) {
+                if (found->password_required && input.password.empty()) return "This game needs a password.";
+                return command("join", found->code, input.password);
             }
             // A friend on a server this game has not listed yet: only the list has its code.
             if (game_server_steam_id(id)) {
@@ -987,8 +997,16 @@ std::string command(std::string_view action, std::string_view argument, std::str
                     capacity > multiplayer_lobby_player_limit)
                     return refuse("Choose a player limit from 2 to " + std::to_string(multiplayer_lobby_player_limit) + ".");
             }
-            if (!visibility.empty() && visibility != "code" && visibility != "public")
-                return refuse("Use mp host code <limit> [lobby name] or mp host public <limit> [lobby name].");
+            if (!visibility.empty() && visibility != "code" && visibility != "public" && visibility != "home")
+                return refuse("Use mp host code|home|public <limit> [lobby name].");
+            // Without Steam's relays, a public game would show the host's address to anyone who
+            // joins it: off until there is a relay that hides it. A game on the home network is
+            // found on that network only (lan_discovery.h).
+            if (launcher::offline_mode() && visibility == "public")
+                return refuse("Public games are off without Steam: anyone who joined would see your IP address. "
+                              "Host on your home network, or with a join code you share.");
+            if (!launcher::offline_mode() && visibility == "home")
+                return refuse("Home network games are for playing without Steam. With Steam, host with a code or publicly.");
             if (configured_host) {
                 const auto split = lobby_name.find(' ');
                 const auto rate = lobby_name.substr(0, split);
@@ -1040,6 +1058,18 @@ std::string command(std::string_view action, std::string_view argument, std::str
                 return s.status;
             }
             s.mode = Mode::host;
+            // Without Steam only signals carrying this session's token reach the networking
+            // library (steam_transport.h): holders of its join code and, if it has one, its
+            // password. Kicked and banned players are refused before any address is exchanged.
+            if (s.transport.direct()) {
+                s.transport.set_admission_token(
+                    s.password ? direct_join_token(s.secret, *s.password) : direct_join_token(s.secret));
+                s.transport.set_admission_filter([&s](std::uint64_t id) {
+                    return !s.banned.contains(id) && !is_banned(s, id) && !reskate_banned(id) &&
+                           !s.join_backoff.waiting(id, now_us());
+                });
+                s.lan_host = visibility == "home";
+            }
             s.host_id = s.transport.status().local_id;
             load_host_preferences(s);
             auto &remembered = s.host_preferences;
@@ -1054,11 +1084,9 @@ std::string command(std::string_view action, std::string_view argument, std::str
             if (s.lobby_name.empty()) s.lobby_name = "ReSkate session";
             s.invite = format_invite({s.host_id, s.secret});
             s.public_host = visibility == "public";
-            // Without Steam a code-only game is still listed on the host's home network, so a
-            // player in the same house joins from the list without the code.
-            s.listed_host = s.public_host || s.transport.direct();
+            s.listed_host = s.public_host;
             if (s.listed_host)
-                s.lobbies.host(s.invite, capacity, s.password.has_value(), s.lobby_name, s.public_host);
+                s.lobbies.host(s.invite, capacity, s.password.has_value(), s.lobby_name);
             // Remember this setup, and bring back the host options chosen last time.
             remembered.public_lobby = s.public_host;
             remembered.capacity = capacity;
@@ -1106,6 +1134,9 @@ std::string command(std::string_view action, std::string_view argument, std::str
                 return s.status;
             }
             s.mode = Mode::join;
+            if (s.transport.direct())
+                s.transport.set_admission_token(
+                    s.password ? direct_join_token(s.secret, *s.password) : direct_join_token(s.secret));
             // Wait for the authenticated host's initial policy.
             apply_object_placement(s, ObjectPlacement::nobody);
             s.world = 0;

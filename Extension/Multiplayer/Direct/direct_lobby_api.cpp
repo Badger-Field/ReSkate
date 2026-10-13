@@ -121,11 +121,13 @@ class DirectLobbyApi final : public LobbyApi {
         return nullptr;
     }
     bool publish() {
+        // The service lists public games only; a game that is not public is never sent.
+        if (!everyone_) return false;
         auto lobby = Json::object();
         for (const auto &[key, value] : own_data_) lobby[key] = value;
         auto message = Json::object();
         message["op"] = "host";
-        message["public"] = everyone_;
+        message["public"] = true;
         message["lobby"] = std::move(lobby);
         if (!ch_.request(message.dump())) {
             hosted_ = false;
@@ -160,9 +162,7 @@ class DirectLobbyApi final : public LobbyApi {
         const auto parsed = std::from_chars(host.data(), host.data() + host.size(), row.host);
         if (parsed.ec != std::errc{} || parsed.ptr != host.data() + host.size() || !row.host) return;
         for (const auto &[key, value] : item.items())
-            if (key != "host" && key != "home" && value.is_string()) row.data[key] = value.string();
-        // On the asker's own network, as the service sees it.
-        row.data["rs_nearby"] = item.contains("home") && item.at("home").is_boolean() && item.at("home").get<bool>() ? "1" : "0";
+            if (key != "host" && value.is_string()) row.data[key] = value.string();
         rows_.push_back(std::move(row));
     }
 };

@@ -116,8 +116,11 @@ struct SteamTransport::Impl {
         std::uint64_t from;
         ArrivedSignal(Impl *o, std::uint64_t id) : owner(o), from(id) {}
         ISteamNetworkingConnectionSignaling *OnConnectRequest(HSteamNetConnection, const SteamNetworkingIdentity &peer, int port) override {
-            // The service says who sent it; the handshake must agree.
+            // The service says who sent it; the handshake must agree. Only a host, or a player
+            // the host's roster lets in (a guest's mesh), takes a new connection at all.
             if (peer.GetSteamID64() != from || port != virtual_port) return nullptr;
+            if (!owner->state.hosting && !owner->allowed.contains(from)) return nullptr;
+            if (owner->admission_filter && !owner->admission_filter(from)) return nullptr;
             return new PeerSignals(owner->signal_queue, from);
         }
         void SendRejectionSignal(const SteamNetworkingIdentity &, const void *message, int size) override {
@@ -136,6 +139,8 @@ struct SteamTransport::Impl {
     // (offline mode: a new key is kept for the next start).
     std::function<void()> key_taken;
     bool key_taken_reported{};
+    std::uint64_t admission_token{}; // direct mode: the session's (direct_join_token); 0 outside one
+    std::function<bool(std::uint64_t)> admission_filter; // set_admission_filter
     void pump_signals() {
         if (!direct_mode || !signaling) return;
         if (!key_taken_reported && signaling->needs_new_key()) {
@@ -143,16 +148,32 @@ struct SteamTransport::Impl {
             if (key_taken) key_taken();
             state.detail = "Your player ID matched another player's. A new one is ready: restart ReSkate to use it.";
         }
+        // Each signal starts with the session's admission token (set_admission_token). One
+        // without the right token, or with none expected, never reaches the networking library:
+        // a player who is not in this session, or not invited to it, cannot make this game find
+        // a route to them, which would tell them its addresses.
         for (auto &message : signaling->receive()) {
+            if (!admission_token || message.bytes.size() <= sizeof(admission_token)) continue;
+            std::uint64_t token{};
+            std::memcpy(&token, message.bytes.data(), sizeof(token));
+            if (token != admission_token) continue;
+            // A guest hears from the players it may link with (in direct mode, its host) only.
+            if (!state.hosting && !allowed.contains(message.from)) continue;
             ArrivedSignal context(this, message.from);
-            received_signal(sockets, message.bytes.data(), static_cast<int>(message.bytes.size()), &context);
+            received_signal(sockets, message.bytes.data() + sizeof(token),
+                            static_cast<int>(message.bytes.size() - sizeof(token)), &context);
         }
         decltype(signal_queue->out) out;
         {
             std::lock_guard lock(signal_queue->mutex);
             out.swap(signal_queue->out);
         }
-        for (const auto &[to, bytes] : out) signaling->send(to, bytes);
+        for (auto &[to, bytes] : out) {
+            if (!admission_token) continue; // not in a session: nothing to say to anyone
+            bytes.insert(bytes.begin(), reinterpret_cast<const std::uint8_t *>(&admission_token),
+                         reinterpret_cast<const std::uint8_t *>(&admission_token) + sizeof(admission_token));
+            signaling->send(to, bytes);
+        }
     }
     void *friends{};
     const char *(*persona_name)(void *, std::uint64_t){};
@@ -812,9 +833,12 @@ void SteamTransport::allow_peers(std::span<const Member> members) {
         return;
     p.allowed.clear();
     p.allowed.insert(p.host_id);
-    for (const auto &m : members)
-        if (m.id != p.state.local_id)
-            p.allowed.insert(m.id);
+    // Without Steam's relays a link to another guest would show each the other's addresses:
+    // in direct mode guests reach each other through the host only.
+    if (!p.direct_mode)
+        for (const auto &m : members)
+            if (m.id != p.state.local_id)
+                p.allowed.insert(m.id);
     for (auto it = p.links.begin(); it != p.links.end();) {
         const auto id = (it++)->first;
         if (!p.allowed.contains(id))
@@ -870,6 +894,7 @@ void SteamTransport::poll() {
         // (A connection by address names a Steam ID only when Steam has vouched for it.)
         if ((event.m_info.m_hListenSocket != p.listener && !direct) || !p.listener || !id || id == p.state.local_id ||
             (!p.state.hosting && !p.allowed.contains(id)) || p.links.size() >= p.capacity - 1 ||
+            (p.admission_filter && !p.admission_filter(id)) ||
             existing != p.links.end() ||
             event.m_info.m_identityRemote.m_eType != k_ESteamNetworkingIdentityType_SteamID) {
             p.close(p.sockets, event.m_hConn, 4002, "ReSkate session full or unavailable", false);
@@ -1077,6 +1102,8 @@ std::vector<std::string> SteamTransport::lobby_replies() {
     auto &p = *impl_;
     return p.direct_mode && p.signaling ? p.signaling->replies() : std::vector<std::string>{};
 }
+void SteamTransport::set_admission_token(std::uint64_t token) { impl_->admission_token = token; }
+void SteamTransport::set_admission_filter(std::function<bool(std::uint64_t)> admit) { impl_->admission_filter = std::move(admit); }
 void SteamTransport::set_detail(std::string detail) { impl_->state.detail = std::move(detail); }
 void SteamTransport::on_key_taken(std::function<void()> replace) { impl_->key_taken = std::move(replace); }
 void SteamTransport::remember_name(std::uint64_t id, std::string_view name) {
@@ -1085,6 +1112,7 @@ void SteamTransport::remember_name(std::uint64_t id, std::string_view name) {
     if (p.names.size() >= 1024 && !p.names.contains(id)) p.names.clear();
     p.names[id] = {std::string(name.substr(0, max_member_name)), 0};
 }
+
 bool SteamTransport::send(std::uint64_t id, std::span<const std::uint8_t> bytes, bool reliable, bool fresh,
                           TrafficLane lane) {
     auto &p = *impl_;

@@ -12,6 +12,8 @@
 #include <monocypher-ed25519.h>
 #include <monocypher.h>
 
+#include <algorithm>
+
 namespace dingosdk::multiplayer {
 namespace {
 std::array<std::uint8_t, 32> sha256(std::span<const std::uint8_t> data) {
@@ -88,6 +90,21 @@ std::uint64_t player_id_of(const std::array<std::uint8_t, 32> &public_key) {
     const auto account = static_cast<std::uint32_t>(digest[0]) << 24 | static_cast<std::uint32_t>(digest[1]) << 16 |
                          static_cast<std::uint32_t>(digest[2]) << 8 | digest[3];
     return direct_player_id(account);
+}
+
+std::uint64_t direct_join_token(std::uint64_t secret, std::span<const std::uint8_t> password_key) {
+    static constexpr char label[] = "reskate-direct-join-v2";
+    std::array<std::uint8_t, sizeof(label) - 1 + 8 + 64> message{};
+    std::copy(label, label + sizeof(label) - 1, message.begin());
+    for (int i = 0; i < 8; ++i) message[sizeof(label) - 1 + i] = static_cast<std::uint8_t>(secret >> (56 - 8 * i));
+    const auto key_bytes = std::min<std::size_t>(password_key.size(), 64);
+    std::copy_n(password_key.begin(), key_bytes, message.begin() + sizeof(label) - 1 + 8);
+    std::array<std::uint8_t, 8> digest{};
+    crypto_blake2b(digest.data(), digest.size(), message.data(), sizeof(label) - 1 + 8 + key_bytes);
+    crypto_wipe(message.data(), message.size());
+    std::uint64_t token{};
+    for (const auto b : digest) token = token << 8 | b;
+    return token ? token : 1;
 }
 
 std::string to_hex(std::span<const std::uint8_t> bytes) {

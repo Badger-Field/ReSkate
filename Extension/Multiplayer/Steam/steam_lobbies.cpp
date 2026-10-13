@@ -47,8 +47,21 @@ std::optional<MultiplayerLobby> read_lobby(std::uint64_t id, std::uint64_t owner
         return {};
     row.password_required = password == "1";
     row.owner = code->steam_id;
-    row.nearby = get("rs_nearby") == "1"; // from the lobby service only
     return row;
+}
+std::vector<std::pair<const char *, std::string>> listing_fields(std::string_view name, std::string_view map,
+                                                                 std::string_view code, unsigned players,
+                                                                 unsigned capacity, bool password_required, bool open) {
+    return {{"rs_kind", "reskate-co-skate"},
+            {"rs_protocol", std::to_string(protocol_version)},
+            {"rs_build", std::string(supported_build::game_sha256)},
+            {"rs_name", std::string(name)},
+            {"rs_map", std::string(map)},
+            {"rs_code", std::string(code)},
+            {"rs_players", std::to_string(players)},
+            {"rs_capacity", std::to_string(capacity)},
+            {"rs_password", password_required ? "1" : "0"},
+            {"rs_open", open ? "1" : "0"}};
 }
 void SteamLobbies::close_lobby() {
     if (const auto lobby = std::exchange(lobby_, 0)) {
@@ -66,15 +79,13 @@ void SteamLobbies::stop() {
     close_lobby();
     state_.hosting.clear();
 }
-void SteamLobbies::host(const std::string &code, unsigned capacity, bool password_required, std::string_view name,
-                        bool everyone) {
+void SteamLobbies::host(const std::string &code, unsigned capacity, bool password_required, std::string_view name) {
     require(name.empty() || safe_text(name, 128), "Lobby names must be at most 128 bytes with no control characters.");
     stop();
     const auto invite = parse_invite(code);
     require(invite.has_value(), "Host join code is invalid.");
     require(capacity >= 2 && capacity <= multiplayer_lobby_player_limit, "Invalid lobby capacity.");
     password_required_ = password_required;
-    everyone_ = everyone;
     capacity_ = capacity;
     players_ = 1;
     code_ = code;
@@ -82,7 +93,7 @@ void SteamLobbies::host(const std::string &code, unsigned capacity, bool passwor
     local_id_ = invite->steam_id;
     host_wanted_ = true;
     failed_ = false;
-    state_.hosting = everyone ? "Public lobby: waiting for a loaded map." : "Home network listing: waiting for a loaded map.";
+    state_.hosting = "Public lobby: waiting for a loaded map.";
 }
 void SteamLobbies::publish_host() {
     if (!lobby_)
@@ -96,27 +107,15 @@ void SteamLobbies::publish_host() {
     // Hide first, then publish a complete compatible record before exposing it.
     require(api_->joinable(lobby_, false), capital(api_->service()) + " could not close the lobby listing.");
     state_.listed = false;
-    const std::pair<const char *, std::string> values[]{
-        {"rs_kind", "reskate-co-skate"},
-        {"rs_protocol", std::to_string(protocol_version)},
-        {"rs_build", std::string(supported_build::game_sha256)},
-        {"rs_name", host_name_},
-        {"rs_map", map_},
-        {"rs_code", code_},
-        {"rs_players", std::to_string(players_)},
-        {"rs_capacity", std::to_string(capacity_)},
-        {"rs_password", password_required_ ? "1" : "0"},
-        {"rs_open", open ? "1" : "0"}};
-    for (const auto &[key, value] : values)
+    for (const auto &[key, value] : listing_fields(host_name_, map_, code_, players_, capacity_, password_required_, open))
         require(api_->data(lobby_, key, value), capital(api_->service()) + " could not publish the lobby details.");
-    require(api_->visibility(lobby_, everyone_), capital(api_->service()) + " could not list the lobby.");
+    require(api_->visibility(lobby_, true), capital(api_->service()) + " could not make the lobby public.");
     if (open)
         require(api_->joinable(lobby_, true), capital(api_->service()) + " could not open the lobby listing.");
     state_.listed = open;
     state_.hosting = !ready_ ? "Host is changing maps; the public listing will reopen after loading."
                     : !open ? "Public lobby is full; it will reopen when a player leaves."
-                           : everyone_ ? "Public lobby is listed on " + api_->service() + "."
-                                       : std::string("Listed for players on your home network.");
+                           : "Public lobby is listed on " + api_->service() + ".";
     published_ = signature;
 }
 void SteamLobbies::update_host(bool ready, unsigned players, std::string_view map, std::uint64_t now) {

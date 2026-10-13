@@ -265,6 +265,9 @@ bool SteamTransport::direct() const { return false; }
 void SteamTransport::remember_name(std::uint64_t, std::string_view) {}
 void SteamTransport::set_detail(std::string detail) { impl_->state.detail = std::move(detail); }
 void SteamTransport::on_key_taken(std::function<void()>) {}
+void SteamTransport::set_admission_token(std::uint64_t) {}
+std::uint64_t direct_join_token(std::uint64_t secret, std::span<const std::uint8_t>) { return secret | 1; }
+void SteamTransport::set_admission_filter(std::function<bool(std::uint64_t)>) {}
 bool SteamTransport::lobby_request(std::string_view) { return false; }
 std::vector<std::string> SteamTransport::lobby_replies() { return {}; }
 bool direct_play_installed() { return false; }

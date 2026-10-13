@@ -34,10 +34,12 @@ using namespace dingosdk::multiplayer;
 using namespace std::chrono_literals;
 
 namespace {
-constexpr std::uint64_t host_id = direct_player_id(0x1234), guest_id = direct_player_id(0xabcd);
+constexpr std::uint64_t host_id = direct_player_id(0x1234), guest_id = direct_player_id(0xabcd),
+                        intruder_id = direct_player_id(0x0bad);
+constexpr std::uint64_t session_secret = 0x5e55105e55105e55ull;
 // Lobby mode: each side's key, made before the processes split.
 const char *lobby_url{};
-PlayerKey host_key, guest_key;
+PlayerKey host_key, guest_key, intruder_key;
 static_assert(is_direct_player_id(host_id) && !is_direct_player_id(76561197960287930ull)); // a real (public) Steam ID
 
 // The trivial signaling server: the first line names the client, then "<to> <hex>" lines go
@@ -153,9 +155,9 @@ std::vector<std::uint8_t> bytes(const std::string &text) { return {text.begin(),
 std::string text(const std::vector<std::uint8_t> &data) { return {data.begin(), data.end()}; }
 
 // One side of the test, in its own process (the library runs once a process, as one identity).
-std::unique_ptr<DirectSignaling> signaling_for(bool hosting, std::uint16_t port, std::uint64_t local) {
+std::unique_ptr<DirectSignaling> signaling_for(const PlayerKey &key, std::uint16_t port, std::uint64_t local) {
     if (!lobby_url) return make_tcp_signaling("127.0.0.1", port, local);
-    auto signaling = make_lobby_signaling(lobby_url, hosting ? host_key : guest_key);
+    auto signaling = make_lobby_signaling(lobby_url, key);
     for (int i = 0; i < 500 && !signaling->connected(); ++i) std::this_thread::sleep_for(20ms);
     return signaling;
 }
@@ -169,13 +171,15 @@ int run_side(bool hosting, const char *library_path, std::uint16_t port) {
     const auto local = hosting ? host : guest, peer = hosting ? guest : host;
     SteamTransport transport;
     // No STUN or TURN here: both sides are on this machine, so their own addresses are enough.
-    auto signaling = signaling_for(hosting, port, local);
+    auto signaling = signaling_for(hosting ? host_key : guest_key, port, local);
     // (The plain TCP channel connects on first use; the lobby one is up before the transport starts.)
     if (lobby_url && !signaling->connected()) return fail(who, "lobby: " + signaling->problem());
     if (!transport.open_direct(library, local, std::move(signaling), {}))
         return fail(who, "open_direct: " + transport.status().detail);
     if (!transport.direct() || transport.status().local_id != local) return fail(who, "not in direct mode as the right player");
     if (hosting ? !transport.host(4) : !transport.join(peer)) return fail(who, "host/join: " + transport.status().detail);
+    // Both hold the session's join code, so both have its token.
+    transport.set_admission_token(direct_join_token(session_secret));
 
     const auto connected = [&] {
         for (const auto &p : transport.status().peers)
@@ -227,6 +231,31 @@ int run_side(bool hosting, const char *library_path, std::uint16_t port) {
     std::printf("[%s] ok\n", who);
     return 0;
 }
+// A player who knows the host's ID but not the session's code: their signals carry the wrong
+// token, so the host's networking library never sees them and they never get a connection
+// (nor learn the host's addresses), while the real guest does.
+int run_intruder(const char *library_path, std::uint16_t port) {
+    const char *who = "intruder";
+    void *library = dlopen(library_path, RTLD_NOW | RTLD_LOCAL);
+    if (!library) return fail(who, std::string("cannot load the library: ") + dlerror());
+    const auto host = lobby_url ? player_id_of(host_key.public_key) : host_id;
+    const auto local = lobby_url ? player_id_of(intruder_key.public_key) : intruder_id;
+    SteamTransport transport;
+    auto signaling = signaling_for(intruder_key, port, local);
+    if (lobby_url && !signaling->connected()) return fail(who, "lobby: " + signaling->problem());
+    if (!transport.open_direct(library, local, std::move(signaling), {}) || !transport.join(host))
+        return fail(who, "could not start: " + transport.status().detail);
+    transport.set_admission_token(direct_join_token(session_secret ^ 1));
+    const bool connected = wait_for(transport, 6s, [&] {
+        for (const auto &p : transport.status().peers)
+            if (p.id == host && p.connected) return true;
+        return false;
+    });
+    transport.stop();
+    if (connected) return fail(who, "connected to the host without the session's code");
+    std::printf("[%s] refused, as it should be\n", who);
+    return 0;
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -238,19 +267,20 @@ int main(int argc, char **argv) {
         lobby_url = argv[2];
         host_key = generate_player_key().value();
         guest_key = generate_player_key().value();
+        intruder_key = generate_player_key().value();
     }
     if (signal_identity_id(signal_identity(host_id)) != host_id || signal_identity_id("steamid:12x") || signal_identity_id("str:1"))
         return fail("test", "identity strings");
     SignalingServer server;
     const auto port = server.open();
     if (!port) return fail("test", "signaling server did not start");
-    pid_t sides[2]{};
-    for (int i = 0; i < 2; ++i) {
+    pid_t sides[3]{};
+    for (int i = 0; i < 3; ++i) {
         sides[i] = fork();
         if (sides[i] == 0) {
             close(server.listener());
-            if (i == 1) std::this_thread::sleep_for(300ms); // the host listens first
-            const int result = run_side(i == 0, argv[1], port);
+            if (i > 0) std::this_thread::sleep_for(300ms); // the host listens first
+            const int result = i == 2 ? run_intruder(argv[1], port) : run_side(i == 0, argv[1], port);
             std::fflush(nullptr);
             _exit(result);
         }

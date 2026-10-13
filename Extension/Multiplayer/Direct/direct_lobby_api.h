@@ -9,9 +9,9 @@
 #include <vector>
 
 // Lobbies without Steam: SteamLobbies' LobbyApi on the lobby service (contrib/lobby-service),
-// through the player's own connection to it. A lobby is its host's player ID. A public lobby is
-// listed to everyone; any other only to players on the host's home network, who then join it
-// from the list without a code. The service keeps a listing two minutes: the host publishes it
+// through the player's own connection to it. A lobby is its host's player ID. Only public games
+// are listed (games on a player's own network are found there: lan_discovery.h). The service
+// keeps a listing two minutes: the host publishes it
 // again every minute while it stays open. While the connection to the service is still opening,
 // a search and a listing wait for it.
 namespace dingosdk::multiplayer {

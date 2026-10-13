@@ -1,7 +1,7 @@
 // Lobbies without Steam (direct_lobby_api.h) under the browser's own lifecycle (SteamLobbies),
-// against a stand-in for the lobby service: a host's code-only game is listed on their home
-// network, a player there finds it in the list and joins it; it stays listed while the host
-// plays and goes when they stop.
+// against a stand-in for the lobby service: a public game is listed, found and joined from the
+// list; it stays listed while the host plays and goes when they stop. A game that is not public
+// is never sent to the service.
 #include "Extension/Multiplayer/Direct/direct_lobby_api.h"
 #include "Extension/Multiplayer/Direct/direct_signaling.h"
 #include "Engine/Core/Json/json.h"
@@ -81,44 +81,47 @@ struct Player {
 
 int main() {
     Service service;
-    const auto dad_id = direct_player_id(0x00c0ffee), son_id = direct_player_id(0x0000beef),
-               stranger_id = direct_player_id(0x00000bad);
-    Player dad{service, dad_id, "home"}, son{service, son_id, "home"}, stranger{service, stranger_id, "elsewhere"};
+    const auto dad_id = direct_player_id(0x00c0ffee), son_id = direct_player_id(0x0000beef);
+    Player dad{service, dad_id, "home"}, son{service, son_id, "elsewhere"};
     SteamLobbies hosting(make_direct_lobby_api(dad.channel()));
     SteamLobbies browsing(make_direct_lobby_api(son.channel()));
-    SteamLobbies away(make_direct_lobby_api(stranger.channel()));
 
-    // Dad hosts with a code: listed for his home network, not publicly. His connection to the
-    // service is still opening when he starts; the listing goes out once it is there.
+    // A game that is not public: nothing reaches the service, whatever the lobby layer is asked.
+    {
+        auto api = make_direct_lobby_api(dad.channel());
+        const auto lobby = [&] { api->create(8); return dad_id; }();
+        api->data(lobby, "rs_name", "Not public");
+        api->visibility(lobby, false);
+        api->joinable(lobby, true);
+        check(service.hosts == 0 && service.listings.empty(), "a game that is not public is never sent");
+        api->leave(lobby);
+    }
+
+    // Dad hosts publicly. His connection to the service is still opening when he starts; the
+    // listing goes out once it is there.
     const auto code = format_invite({dad_id, 0x0123456789abcdefull});
     std::uint64_t now = 1'000'000;
     dad.connected = false;
-    hosting.host(code, 8, false, "Dad's park", false);
+    hosting.host(code, 8, false, "Dad's park");
     hosting.update_host(true, 1, "levels/park/bam", now);
     hosting.tick(now += 200'000);
     hosting.update_host(true, 1, "levels/park/bam", now += 1'100'000);
     check(!service.listings.contains(dad_id), "nothing is listed before the connection is there");
     dad.connected = true;
     hosting.update_host(true, 1, "levels/park/bam", now += 1'100'000);
-    check(service.listings.contains(dad_id) && !service.listings[dad_id].everyone, "the game is listed, not publicly");
+    check(service.listings.contains(dad_id) && service.listings[dad_id].everyone, "the game is listed publicly");
     check(hosting.status().listed && hosting.hosted_lobby() == dad_id, "the host sees it listed");
-    check(hosting.status().hosting == "Listed for players on your home network.", "the host is told where it is listed");
 
-    // His son, on the same network, finds it and joins from the list.
+    // Someone finds it and joins from the list.
     browsing.refresh(now);
     browsing.tick(now += 200'000);
     const auto &rows = browsing.status().rows;
-    check(rows.size() == 1 && rows[0].owner == dad_id && rows[0].name == "Dad's park" && rows[0].nearby && rows[0].code == code,
-          "the son's list has it, on his network");
+    check(rows.size() == 1 && rows[0].owner == dad_id && rows[0].name == "Dad's park" && rows[0].code == code,
+          "the list has it");
     browsing.join(dad_id, son_id, now);
     browsing.tick(now += 200'000);
     const auto joined = browsing.take_join();
     check(joined && joined->code == code, "joining from the list gives the host's code");
-
-    // Someone on another network does not see it.
-    away.refresh(now);
-    away.tick(now += 200'000);
-    check(away.status().searched && away.status().rows.empty(), "another network's list is empty");
 
     // While Dad plays, the listing is published again each minute, so it never lapses.
     const int before = service.hosts;
@@ -133,7 +136,7 @@ int main() {
     check(!service.listings.contains(dad_id) && service.unhosts >= 1, "stopping unlists the game");
 
     // Browsing before the connection is there: the search waits for it, then finds the game.
-    hosting.host(code, 8, false, "Dad's park", false);
+    hosting.host(code, 8, false, "Dad's park");
     hosting.update_host(true, 1, "levels/park/bam", now += 1'100'000);
     hosting.tick(now += 200'000);
     hosting.update_host(true, 1, "levels/park/bam", now += 1'100'000);
@@ -147,6 +150,6 @@ int main() {
     early.tick(now += 200'000);
     check(!early.status().searching && early.status().rows.size() == 1, "once connected the search finds the game");
 
-    std::printf("%s\n", failures ? "FAILED" : "Direct lobbies: home listing, browsing, joining and refresh passed.");
+    std::printf("%s\n", failures ? "FAILED" : "Direct lobbies: public listing, browsing, joining and refresh passed.");
     return failures ? 1 : 0;
 }

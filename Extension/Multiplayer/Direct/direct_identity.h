@@ -26,6 +26,11 @@ bool verify(const std::array<std::uint8_t, 32> &public_key, std::string_view mes
             const std::array<std::uint8_t, 64> &signature);
 // The player ID this key connects as.
 std::uint64_t player_id_of(const std::array<std::uint8_t, 32> &public_key);
+// A session's admission token (SteamTransport::set_admission_token): a one-way digest of its
+// secret and, for a game with a password, the password's key, so only players who have both
+// the join code and the password ever make the host find a route to them (which would tell them
+// its addresses). The lobby service that carries the signals learns neither. Never 0.
+std::uint64_t direct_join_token(std::uint64_t secret, std::span<const std::uint8_t> password_key = {});
 
 std::string to_hex(std::span<const std::uint8_t> bytes);
 // Bytes from lowercase or uppercase hex; nothing when it is not hex of that length.

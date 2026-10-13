@@ -31,6 +31,11 @@ struct LobbyApi {
     virtual std::string service() { return "Steam"; }
 };
 std::unique_ptr<LobbyApi> make_steam_lobby_api();
+// A listing's fields, as read_lobby reads them: a Steam lobby's, the lobby service's, and the
+// answer a host gives its own network (lan_discovery.h).
+std::vector<std::pair<const char *, std::string>> listing_fields(std::string_view name, std::string_view map,
+                                                                 std::string_view code, unsigned players,
+                                                                 unsigned capacity, bool password_required, bool open);
 std::optional<MultiplayerLobby> read_lobby(std::uint64_t id, std::uint64_t owner,
                                            const std::function<std::string(const char *)> &get);
 struct LobbyStatus {
@@ -43,9 +48,8 @@ class SteamLobbies {
     // `hidden_host`: whether a player's lobbies are left out of the browser (the team's bans).
     explicit SteamLobbies(std::unique_ptr<LobbyApi> api, std::function<bool(std::uint64_t)> hidden_host = {})
         : api_(std::move(api)), hidden_host_(std::move(hidden_host)) {}
-    // `everyone`: listed publicly; otherwise (the lobby service only) to the host's home network.
     void host(const std::string &code, unsigned capacity = multiplayer_lobby_player_limit, bool password_required = false,
-              std::string_view name = {}, bool everyone = true);
+              std::string_view name = {});
     void update_host(bool ready, unsigned players, std::string_view map, std::uint64_t now);
     void refresh(std::uint64_t now);
     void join(std::uint64_t id, std::uint64_t local_id, std::uint64_t now);
@@ -66,7 +70,7 @@ class SteamLobbies {
     LobbyStatus state_;
     Pending creating_, searching_, joining_;
     bool host_wanted_{}, failed_{}, ready_{}, password_required_{};
-    bool friend_join_{}, everyone_ = true;
+    bool friend_join_{};
     unsigned players_ = 1, capacity_ = multiplayer_lobby_player_limit;
     std::uint64_t lobby_{}, local_id_{}, last_poll_{}, last_search_{}, join_id_{}, join_owner_{};
     std::uint64_t owner_checked_{}; // update_host's last full publication and ownership check

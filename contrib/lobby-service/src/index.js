@@ -22,7 +22,13 @@ const RATE_WINDOW_MS = 10_000;
 const RATE_MAX = 400; // messages a player may send in a window
 const PLAYER_RETENTION_MS = 30 * 24 * 3600_000; // an ID's owner is kept this long after it was last seen
 const SEEN_REFRESH_MS = 24 * 3600_000; // how often a connected player's `seen` is written again
-const NEW_KEYS_PER_HOUR = 20; // new player keys one address may introduce an hour
+const NEW_KEYS_PER_HOUR = 20; // new player keys one address (an IPv6 /64) may introduce an hour
+const NEW_KEYS_PER_WIDE_HOUR = 100; // and one IPv6 /48, which holds 65,536 /64s
+const NEW_KEYS_PER_HOUR_ALL = 2_000; // and everyone together
+const MAX_SIGNAL = 12_000; // hex characters: a signal is a few hundred bytes to a few KB
+const PAIR_MAX = 60; // signals one player may send one other player in a window
+const LIST_INTERVAL_MS = 3_000; // a player lists at most this often
+const LIST_CACHE_MS = 2_000; // and the list is built at most this often
 // Local development and tests only (DEV=1 in .dev.vars or --var DEV:1): a deployed service
 // without CHALLENGE_SECRET refuses players rather than sign with a value that is public here.
 const DEV_SECRET = "reskate-local-development-only";
@@ -51,9 +57,10 @@ export async function playerId(publicKey) {
   return ((4n << 56n) | (1n << 52n) | (1n << 32n) | BigInt(account)).toString();
 }
 
+const hmacKey = (secret) =>
+  crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
 async function hmac(secret, text) {
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  return hex(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text)));
+  return hex(await crypto.subtle.sign("HMAC", await hmacKey(secret), new TextEncoder().encode(text)));
 }
 
 // "<time>.<random>.<mac>": the service can check it is its own and recent without storing it.
@@ -68,7 +75,10 @@ async function checkChallenge(secret, challenge, now) {
   const [time, random, mac] = parts;
   const issued = Number(time);
   if (!Number.isSafeInteger(issued) || now - issued > CHALLENGE_LIFETIME_MS || issued - now > 5_000) return false;
-  return (await hmac(secret, `${time}.${random}`)) === mac;
+  // Checked by WebCrypto, in constant time, not by comparing strings.
+  const tag = unhex(mac);
+  if (!tag || tag.length !== 32) return false;
+  return crypto.subtle.verify("HMAC", await hmacKey(secret), tag, new TextEncoder().encode(`${time}.${random}`));
 }
 
 // What a player signs: the challenge, under a label so the signature means nothing elsewhere.
@@ -85,9 +95,18 @@ async function verify(key, signature, challenge) {
 
 // ---------------------------------------------------------------- worker
 
-// Who is on the same home network: the address Cloudflare saw, and for IPv6 its /64, since each
-// device in a home has an IPv6 address of its own within it. Only ever compared, never shown.
-export function homeKey(address) {
+// One connection's network, for the new-player limit: the address Cloudflare saw, and for IPv6
+// its /64, since each device on a network has an IPv6 address of its own within it (and one
+// network can take many). Never listed or sent to anyone. Not a "same home" test: behind
+// carrier-grade NAT, a campus or a VPN, strangers share one; games on a player's own network are
+// found on that network itself (Extension/Multiplayer/Direct/lan_discovery.h), not here.
+// The wider network an IPv6 address is in (its /48), which one customer may hold whole; for
+// IPv4 the address itself.
+export function wideNetworkKey(address) {
+  const key = networkKey(address);
+  return key.endsWith("::/64") ? key.split(":").slice(0, 3).join(":") + "::/48" : key;
+}
+export function networkKey(address) {
   if (!address) return "local";
   if (!address.includes(":")) return address;
   const [head, tail = ""] = address.toLowerCase().split("::");
@@ -122,7 +141,8 @@ export default {
     forwarded.headers.set("X-Challenge", challenge);
     // Development only: tests stand in for players on different networks.
     const address = (env.DEV === "1" && request.headers.get("X-Test-Address")) || request.headers.get("CF-Connecting-IP");
-    forwarded.headers.set("X-Home", homeKey(address));
+    forwarded.headers.set("X-Network", networkKey(address));
+    forwarded.headers.set("X-Network-Wide", wideNetworkKey(address));
     // One hub for everyone: signaling only flows while players connect, and a lobby list is
     // small. Shard by region if it ever gets busy.
     return env.HUB.get(env.HUB.idFromName("hub")).fetch(forwarded);
@@ -135,10 +155,11 @@ export class Hub extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
-    // Hosted games. A public one is listed to everyone; any other only to players on the
-    // host's home network (homeKey), who can join it without a code.
-    this.sql.exec("CREATE TABLE IF NOT EXISTS listings (host TEXT PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL, home TEXT NOT NULL, public INTEGER NOT NULL)");
-    this.sql.exec("DROP TABLE IF EXISTS lobbies"); // the listings before home networks
+    // Public games: listed to everyone. A game that is not public is never listed here.
+    this.sql.exec("CREATE TABLE IF NOT EXISTS public_games (host TEXT PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL)");
+    // Earlier listings: "lobbies", then "listings", which also listed games by shared address.
+    this.sql.exec("DROP TABLE IF EXISTS lobbies");
+    this.sql.exec("DROP TABLE IF EXISTS listings");
     // A player ID is 32 bits of the key's hash, so two keys can share one: the first key to
     // connect as an ID owns it, and another key is refused (its game makes a new key).
     this.sql.exec("CREATE TABLE IF NOT EXISTS players (id TEXT PRIMARY KEY, key TEXT NOT NULL, seen INTEGER NOT NULL)");
@@ -152,7 +173,7 @@ export class Hub extends DurableObject {
     this.sql.exec("CREATE INDEX IF NOT EXISTS players_seen ON players (seen)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS used_challenges_used ON used_challenges (used)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS admissions_hour ON admissions (hour)");
-    this.sql.exec("CREATE INDEX IF NOT EXISTS listings_updated ON listings (updated)");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS public_games_updated ON public_games (updated)");
   }
 
   async fetch(request) {
@@ -171,12 +192,21 @@ export class Hub extends DurableObject {
     if (owner && owner.key !== key)
       return new Response("This key's player ID belongs to another key: make a new key.", { status: 409 });
     if (!owner) {
-      const address = request.headers.get("X-Home") || "local";
+      // New keys a network may bring an hour: its own, its wider network's (IPv6 /48), and
+      // everyone's together, so neither address hopping nor a crowd grows the players table fast.
       const hour = Math.floor(now / 3600_000);
       this.sql.exec("DELETE FROM admissions WHERE hour < ?", hour);
-      const used = this.sql.exec("SELECT count FROM admissions WHERE address = ? AND hour = ?", address, hour).toArray()[0]?.count ?? 0;
-      if (used >= NEW_KEYS_PER_HOUR) return new Response("Too many new players from this address; try again later.", { status: 429 });
-      this.sql.exec("INSERT OR REPLACE INTO admissions (address, hour, count) VALUES (?, ?, ?)", address, hour, used + 1);
+      const limits = [
+        [request.headers.get("X-Network") || "local", NEW_KEYS_PER_HOUR],
+        ["wide:" + (request.headers.get("X-Network-Wide") || "local"), NEW_KEYS_PER_WIDE_HOUR],
+        ["*", NEW_KEYS_PER_HOUR_ALL],
+      ];
+      const used = limits.map(([address]) =>
+        this.sql.exec("SELECT count FROM admissions WHERE address = ? AND hour = ?", address, hour).toArray()[0]?.count ?? 0);
+      if (limits.some(([, limit], i) => used[i] >= limit))
+        return new Response("Too many new players from this address; try again later.", { status: 429 });
+      limits.forEach(([address], i) =>
+        this.sql.exec("INSERT OR REPLACE INTO admissions (address, hour, count) VALUES (?, ?, ?)", address, hour, used[i] + 1));
     }
     this.sql.exec("INSERT OR REPLACE INTO players (id, key, seen) VALUES (?, ?, ?)", id, key, now);
     // A player has one connection: a new one (a restart, a reconnect) replaces the old.
@@ -186,7 +216,7 @@ export class Hub extends DurableObject {
     const [client, server] = Object.values(new WebSocketPair());
     // Hibernation: idle connections cost nothing while players wait in a lobby.
     this.ctx.acceptWebSocket(server, [id]);
-    server.serializeAttachment({ id, window: now, count: 0, seen: now, home: request.headers.get("X-Home") || "local" });
+    server.serializeAttachment({ id, window: now, count: 0, seen: now });
     server.send(JSON.stringify({ op: "hello", id }));
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -217,15 +247,21 @@ export class Hub extends DurableObject {
   }
 
   // "steamid:<to> <hex>" in, "steamid:<from> <hex>" out.
+  // Nothing is said back either way: whether a player is online is nobody's business, and a
+  // signal to someone who is not here is simply dropped.
   signal(ws, from, line) {
     const match = /^steamid:(\d{1,20}) ([0-9a-f]+)\r?\n?$/i.exec(line);
-    if (!match || match[2].length % 2) return;
-    const targets = this.ctx.getWebSockets(match[1]);
-    if (!targets.length) {
-      ws.send(JSON.stringify({ op: "offline", id: match[1] }));
-      return;
-    }
-    for (const target of targets) {
+    if (!match || match[2].length % 2 || match[2].length > MAX_SIGNAL) return;
+    // One player may send another only so many signals a window (finding a route takes a few
+    // dozen), so nobody can flood one player's game.
+    const now = Date.now();
+    const pair = `${from}>${match[1]}`;
+    this.pairs ??= new Map();
+    if (this.pairs.size > 10_000) this.pairs.clear();
+    const seen = this.pairs.get(pair);
+    if (!seen || now - seen.window > RATE_WINDOW_MS) this.pairs.set(pair, { window: now, count: 1 });
+    else if (++seen.count > PAIR_MAX) return;
+    for (const target of this.ctx.getWebSockets(match[1])) {
       try { target.send(`steamid:${from} ${match[2]}`); } catch {}
     }
   }
@@ -243,24 +279,31 @@ export class Hub extends DurableObject {
         const data = JSON.stringify(row ?? null);
         if (!row || typeof row !== "object" || Array.isArray(row) || data.length > MAX_LOBBY)
           return reply({ op: "error", error: "A lobby row is a JSON object of at most 2000 characters." });
-        // Public unless the host says otherwise; otherwise listed on their home network only.
-        const listed = request.public === false ? 0 : 1;
-        this.sql.exec("INSERT OR REPLACE INTO listings (host, data, updated, home, public) VALUES (?, ?, ?, ?, ?)",
-          id, data, now, me.home ?? "local", listed);
+        // Only public games are listed (the old clients' rows carry no flag and were public).
+        if (request.public === false)
+          return reply({ op: "error", error: "Only public games are listed." });
+        this.sql.exec("INSERT OR REPLACE INTO public_games (host, data, updated) VALUES (?, ?, ?)", id, data, now);
+        this.list = null;
         return reply({ op: "hosted" });
       }
       case "unhost":
-        this.sql.exec("DELETE FROM listings WHERE host = ?", id);
+        this.sql.exec("DELETE FROM public_games WHERE host = ?", id);
+        this.list = null;
         return reply({ op: "unhosted" });
       case "list": {
-        this.sql.exec("DELETE FROM listings WHERE updated < ?", now - LOBBY_LIFETIME_MS);
-        const home = me.home ?? "local";
-        const rows = this.sql.exec(
-          "SELECT host, data, home FROM listings WHERE public = 1 OR home = ? ORDER BY updated DESC LIMIT 200", home).toArray()
-          // The host is who published the row, whatever the row itself says; `home`: on the
-          // asker's own network. Addresses are never sent.
-          .map((row) => ({ ...JSON.parse(row.data), host: row.host, home: row.home === home }));
-        return reply({ op: "lobbies", rows });
+        if (now - (me.listed ?? 0) < LIST_INTERVAL_MS)
+          return reply({ op: "error", error: "Listing too often; wait a few seconds." });
+        me.listed = now;
+        ws.serializeAttachment(me);
+        // Built at most every two seconds, however many ask.
+        if (!this.list || now - this.list.at > LIST_CACHE_MS) {
+          this.sql.exec("DELETE FROM public_games WHERE updated < ?", now - LOBBY_LIFETIME_MS);
+          const rows = this.sql.exec("SELECT host, data FROM public_games ORDER BY updated DESC LIMIT 200").toArray()
+            // The host is who published the row, whatever the row itself says.
+            .map(({ host, data }) => ({ ...JSON.parse(data), host }));
+          this.list = { at: now, text: JSON.stringify({ op: "lobbies", rows }) };
+        }
+        return ws.send(this.list.text);
       }
       default:
         return reply({ op: "error", error: "Unknown request." });
@@ -277,6 +320,9 @@ export class Hub extends DurableObject {
   left(ws) {
     const { id } = ws.deserializeAttachment() ?? {};
     // Its lobby goes with it, unless the player has already reconnected.
-    if (id && !this.ctx.getWebSockets(id).some((other) => other !== ws)) this.sql.exec("DELETE FROM listings WHERE host = ?", id);
+    if (id && !this.ctx.getWebSockets(id).some((other) => other !== ws)) {
+      this.sql.exec("DELETE FROM public_games WHERE host = ?", id);
+      this.list = null;
+    }
   }
 }

@@ -285,6 +285,7 @@ struct MultiplayerModel {
     // Playing without Steam (Extension/Multiplayer/Direct/direct_play.h): lobbies come from
     // the ReSkate lobby service, and local_name is the name this player chose.
     bool direct{};
+    bool home_host{}; // hosting for this home network (direct)
     std::uint64_t public_lobby{}; // Verified public listing, never a private invitation.
     std::string lobby_status, browser_status = "Refresh to find public ReSkate lobbies.";
     std::vector<MultiplayerLobby> lobbies;

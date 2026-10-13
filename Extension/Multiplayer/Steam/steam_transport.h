@@ -130,6 +130,14 @@ class SteamTransport {
     // Direct mode: called once if the lobby service says this player's key belongs to another
     // player, so a new key can be made for the next start.
     void on_key_taken(std::function<void()> replace);
+    // Direct mode: the session's admission token (direct_join_token of its secret, which only
+    // its players and holders of its join code know). Every signal carries it, and signals
+    // without it are dropped before the networking library sees them. 0: no session, nothing in
+    // or out.
+    void set_admission_token(std::uint64_t token);
+    // Direct mode, hosting: who may connect at all (not kicked, not banned). Asked before the
+    // networking library takes a connection, so a refused player never learns an address.
+    void set_admission_filter(std::function<bool(std::uint64_t)> admit);
     // The status line, when the transport could not be opened for a reason of the caller's.
     void set_detail(std::string detail);
     const TransportStatus &status() const;

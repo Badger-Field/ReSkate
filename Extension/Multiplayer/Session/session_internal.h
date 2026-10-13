@@ -12,6 +12,7 @@
 #include "Extension/Throwdowns/throwdown_relay.h"
 #include "Extension/Multiplayer/Steam/steam_lobbies.h"
 #include "Extension/Multiplayer/Steam/steam_server_browser.h"
+#include "Extension/Multiplayer/Direct/lan_discovery.h"
 #include "room.h"
 #include "party_book.h"
 #include "Extension/Multiplayer/Net/delta_codec.h"
@@ -153,6 +154,13 @@ struct PrivateRequest {
 };
 // Steam's lobbies, or offline the lobby service's (direct_lobby_api.h) through `transport`.
 std::unique_ptr<LobbyApi> session_lobby_api(SteamTransport &transport);
+struct Session;
+// Without Steam a player's name is whatever they typed: shown with bad words masked, and a
+// reserved name ("ReSkate", "Server") marked as a player's.
+std::string direct_display_name(std::string_view name);
+// Games found on this player's own network (lan_discovery.h), checked as any listing is.
+std::vector<MultiplayerLobby> lan_lobbies(const Session &s);
+std::optional<MultiplayerLobby> lan_lobby(const Session &s, std::uint64_t id);
 struct Session {
     VoiceChat voice;
     VoiceSettings voice_settings;
@@ -224,8 +232,12 @@ struct Session {
     std::deque<std::unique_ptr<PrivateRequest>> requests;
     SteamTransport transport;
     SteamLobbies lobbies{session_lobby_api(transport), [](std::uint64_t host) { return banned_host(host) || reskate_banned(host); }};
-    // Hosting with a listing: public, or without Steam on the host's home network too.
+    // Hosting with a public listing.
     bool listed_host{};
+    // Without Steam: hosting for this home network (lan_discovery.h), and its search.
+    bool lan_host{};
+    LanDiscovery lan;
+    std::uint64_t lan_announced{}, lan_searched{};
     SteamServerBrowser servers;
     // Guest of a dedicated server: whether the roster lists us as an admin,
     // and the server's voice range from it.

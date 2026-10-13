@@ -1,4 +1,5 @@
 #include "session_internal.h"
+#include "Engine/Core/Json/json.h"
 #include "Extension/Profile/local_profile_runtime.h"
 #include "Extension/Multiplayer/Net/wire_codec.h"
 #include "Engine/Game/Build/supported_build.h"
@@ -259,7 +260,7 @@ void apply_roster(Session &s, const Packet &p, std::uint64_t now) {
     // Without Steam the host's roster is where a guest learns everyone's name.
     if (s.transport.direct())
         for (const auto &m : p.members)
-            if (m.id != s.transport.status().local_id && !m.name.empty()) s.transport.remember_name(m.id, m.name);
+            if (m.id != s.transport.status().local_id && !m.name.empty()) s.transport.remember_name(m.id, direct_display_name(m.name));
     s.own_tag.clear();
     s.own_tag_color = 0;
     for (const auto &m : p.members)
@@ -439,7 +440,8 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             } else {
                 if (p.connected_at || p.direct_ready)
                     reset_direct(s, p, now);
-                if (p.handshaken && now >= p.next_dial && (!dedicated_host(s) || identity_link(s, id)) &&
+                // Without Steam guests go through the host only (steam_transport.cpp, allow_peers).
+                if (p.handshaken && now >= p.next_dial && !s.transport.direct() && (!dedicated_host(s) || identity_link(s, id)) &&
                     dial_peer(s.transport.status().local_id, id, s.host_id)) {
                     p.next_dial = now + 3000000;
                     s.transport.connect_peer(id);
@@ -831,7 +833,7 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             const bool joined = !link->handshaken;
             // Without Steam a guest's name is the one in their hello (checked by greeting_error).
             if (s.transport.direct() && p.kind == PacketKind::hello && !p.text.empty())
-                s.transport.remember_name(message.peer, p.text);
+                s.transport.remember_name(message.peer, direct_display_name(p.text));
             link->member.epoch = p.epoch;
             link->handshaken = true;
             link->world_ready = true;
@@ -1170,6 +1172,18 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
     if (s.listed_host)
         s.lobbies.update_host(world_playing(s, local), static_cast<unsigned>(s.transport.status().peers.size()) + 1,
                               s.map_name, now);
+    // A home network game answers its own network's questions (lan_discovery.h) with the same
+    // listing a public game has, kept current once a second.
+    if (s.lan_host && s.mode == Mode::host && now - s.lan_announced >= 1000000) {
+        s.lan_announced = now;
+        const auto players = static_cast<unsigned>(s.transport.status().peers.size()) + 1;
+        const bool open = world_playing(s, local) && players < s.capacity;
+        auto row = Json::object();
+        for (const auto &[key, value] : listing_fields(s.lobby_name, s.map_name, s.invite, players, s.capacity,
+                                                         s.password.has_value(), open))
+            row[key] = value;
+        s.lan.announce(open ? row.dump() : std::string{});
+    }
     if (s.mode == Mode::host && !s.travelling && s.travel_started &&
         std::none_of(peers.begin(), peers.end(), [](const auto &peer) { return peer.handshaken && !peer.world_ready; })) {
         s.travel_started = 0;

@@ -156,11 +156,37 @@ test("players are who their key says, and signals go between them", async () => 
   b.send(`steamid:${alice.id} 01`);
   assert.equal(await a.next((t) => t.startsWith("steamid:")), `steamid:${bob.id} 01`);
 
-  // To someone who is not here: the sender is told, nothing else happens.
+  // To someone who is not here: dropped, and the sender is not told (whether a player is
+  // online is nobody's business). A ping still answers, so the silence is not a dead socket.
   a.send(`steamid:${player().id} 00`);
-  await a.next(a.op("offline"));
+  a.send({ op: "ping" });
+  await a.next(a.op("pong"));
+  await assert.rejects(a.next((t) => t.includes("offline"), 300));
+
+  // Too long a signal is dropped; so is a flood from one player to another.
+  a.send(`steamid:${bob.id} ${"ab".repeat(6_001)}`);
+  for (let i = 0; i < 80; i++) a.send(`steamid:${bob.id} ${(i % 256).toString(16).padStart(2, "0")}`);
+  a.send({ op: "ping" });
+  await a.next(a.op("pong"));
+  await new Promise((r) => setTimeout(r, 300));
+  const got = [];
+  for (;;) {
+    try { got.push(await b.next((t) => t.startsWith("steamid:"), 100)); } catch { break; }
+  }
+  assert.ok(got.every((t) => t.length < 100), "the long signal was dropped");
+  assert.equal(got.length, 59, "60 signals a window from one player to another (one went before)");
   a.ws.close();
   b.ws.close();
+});
+
+test("a player lists at most every few seconds", async () => {
+  const p = await connect(player());
+  await p.next(p.op("hello"));
+  p.send({ op: "list" });
+  await p.next(p.op("lobbies"));
+  p.send({ op: "list" });
+  assert.match(JSON.parse(await p.next(p.op("error"))).error, /too often/);
+  p.ws.close();
 });
 
 test("public lobbies are listed while their host is here", async () => {
@@ -182,34 +208,33 @@ test("public lobbies are listed while their host is here", async () => {
   await h.closed;
   assert.ok(Date.now() - started < 2000, "the service answers a close at once");
   await new Promise((r) => setTimeout(r, 300));
-  v.send({ op: "list" });
-  rows = JSON.parse(await v.next(v.op("lobbies"))).rows;
-  assert.ok(!rows.some((r) => r.host === host.id), "a host's lobby leaves with them");
+  const later = await connect(player()); // a player lists at most every few seconds
+  await later.next(later.op("hello"));
+  later.send({ op: "list" });
+  rows = JSON.parse(await later.next(later.op("lobbies"))).rows;
+  assert.ok(!rows.some((r) => r.host === host.id), "a host's lobby leaves with them, list cache and all");
+  later.ws.close();
   v.ws.close();
 });
 
-test("a game that is not public is listed on its host's home network only", async () => {
-  const dad = player(), son = player(), stranger = player(), phone = player();
-  const d = await connect(dad, { address: "2001:db8:aa:1::10" });
-  const s = await connect(son, { address: "2001:db8:aa:1:1234::99" }); // same home, another device
-  const x = await connect(stranger, { address: "198.51.100.7" });
-  const p = await connect(phone, { address: "203.0.113.5" });
-  for (const c of [d, s, x, p]) await c.next(c.op("hello"));
+test("only public games are listed, whoever shares the host's address", async () => {
+  // Players behind one address (a home, or strangers behind carrier-grade NAT) are not told
+  // about each other's games: a game that is not public is refused, not listed.
+  const dad = player(), son = player(), phone = player();
+  const d = await connect(dad, { address: "203.0.113.9" });
+  const s = await connect(son, { address: "203.0.113.9" });
+  const p = await connect(phone, { address: "198.51.100.7" });
+  for (const c of [d, s, p]) await c.next(c.op("hello"));
   d.send({ op: "host", lobby: { name: "Dad's park" }, public: false });
-  await d.next(d.op("hosted"));
+  assert.equal(JSON.parse(await d.next(d.op("error"))).error, "Only public games are listed.");
   p.send({ op: "host", lobby: { name: "Open session" } }); // public by default
   await p.next(p.op("hosted"));
-
   s.send({ op: "list" });
   const seen = JSON.parse(await s.next(s.op("lobbies"))).rows;
-  assert.deepEqual(seen.find((r) => r.host === dad.id), { name: "Dad's park", host: dad.id, home: true });
-  assert.equal(seen.find((r) => r.host === phone.id)?.home, false);
-  x.send({ op: "list" });
-  const elsewhere = JSON.parse(await x.next(x.op("lobbies"))).rows;
-  assert.ok(!elsewhere.some((r) => r.host === dad.id), "another network does not see it");
-  assert.ok(elsewhere.some((r) => r.host === phone.id), "a public game is listed everywhere");
-  assert.ok(!JSON.stringify(elsewhere).includes("198.51") && !JSON.stringify(seen).includes("2001:db8"), "no addresses");
-  for (const c of [d, s, x, p]) c.ws.close();
+  assert.ok(!seen.some((r) => r.host === dad.id), "the non-public game is not listed, even to the same address");
+  assert.deepEqual(seen.find((r) => r.host === phone.id), { name: "Open session", host: phone.id });
+  assert.ok(!JSON.stringify(seen).includes("198.51") && !JSON.stringify(seen).includes("203.0"), "no addresses");
+  for (const c of [d, s, p]) c.ws.close();
 });
 
 test("a second connection replaces the first", async () => {

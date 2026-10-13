@@ -181,6 +181,16 @@ inline bool game_server_steam_id(std::uint64_t id) noexcept {
 inline bool persistent_server_steam_id(std::uint64_t id) noexcept {
     return game_server_steam_id(id) && ((id >> 52) & 15) == 3;
 }
+// Names no player may take: what the game's own messages are signed with ("ReSkate", "Server"),
+// ignoring case and spaces.
+inline bool reserved_name(std::string_view name) noexcept {
+    std::string folded;
+    for (const auto c : name)
+        if (c != ' ') folded.push_back(static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c));
+    for (const auto *reserved : {"reskate", "server", "host", "admin", "system"})
+        if (folded == reserved) return true;
+    return false;
+}
 // A player's own name as sent in their hello: at most this many bytes.
 constexpr std::size_t max_member_name = 64;
 // A role's tag (the word before a player's name), a role's name, and the commands a
