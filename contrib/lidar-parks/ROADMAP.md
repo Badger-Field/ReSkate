@@ -130,7 +130,7 @@ These apply to every phase:
 5. **Neighbourhoods** (phase 3): tiles, level of detail, and per-tile budgets (triangles, collision parts, objects, file size).
 6. **Surfaces.** Carry `surface=*` (asphalt, paving_stones, concrete, wood, metal) into the mesh extras and the report.
 7. **Better stand-ins for big spots.** A 20 m bench ledge is several boxes end to end. Tune `catalog.json` once the sizes are calibrated in game.
-8. **Street-level imagery** (DATA-SOURCES.md). Measure coverage at Venice with `imagery` on a machine that can reach the services. Then:
+8. **Street-level imagery** (DATA-SOURCES.md). At Venice, Panoramax and KartaView have nothing within 100 m. Mapillary is unknown until a client token is set. Then:
    - colours for skatepark meshes;
    - facade textures for blocks, kept as separate CC BY-SA parts.
 9. **Leisure=skatepark.** Report mapped skateparks in the area, and point to `convert` (phone scan) for their real shapes.

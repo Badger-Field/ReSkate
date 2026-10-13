@@ -117,8 +117,15 @@ say which parts are CC BY-SA. Keep those parts separable from the ODbL and publi
 
 ### Status
 
-- **Built:** the coverage command, tested with answers shaped like each service's.
-- **Not yet measured:** coverage at Venice Beach Skatepark. This cloud environment cannot reach any of the three services, and Mapillary needs a token. Run the command on a machine that can, with `MAPILLARY_TOKEN` set if you have one.
+- **Built:** the coverage command. It is tested with answers in the shapes the live services gave:
+  - Panoramax's `{features, links}` pages;
+  - KartaView's 150-per-page limit, and its `apiCode 601` for no results.
+- **Venice Beach Skatepark, within 100 m** (run on 2026-10-13 from a machine that can reach the services):
+  - **Panoramax:** 0 images (a well-formed empty answer).
+  - **KartaView:** 0 images (`apiCode 601`, "The request has an empty response").
+  - **Mapillary:** unknown until a client token is set (`MAPILLARY_TOKEN`).
+
+  So there is no open street-level imagery there from Panoramax or KartaView. Any texture or colour work for Venice depends on Mapillary, or on new photos someone takes and uploads under an open licence.
 
 ## Not allowed
 

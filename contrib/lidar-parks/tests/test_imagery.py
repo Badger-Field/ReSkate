@@ -171,3 +171,23 @@ def test_unreachable_still_says_what_was_asked(serve):
 def test_no_mapillary_token_is_not_a_failure(monkeypatch, serve):
     monkeypatch.delenv("MAPILLARY_TOKEN", raising=False)
     assert main(["imagery", "--centre", f"{LAT},{LON}"]) == 0
+
+
+def test_kartaview_601_is_a_real_zero(serve):
+    # KartaView's answer where it has no photos, word for word.
+    serve[0][imagery.KARTAVIEW] = (200, {"status": {"apiCode": 601, "apiMessage": "The request has an empty response",
+                                                    "httpCode": 200, "httpMessage": "Success"}})
+    found = imagery.kartaview(LAT, LON, 100)
+    assert found.outcome == "empty" and found.images == 0
+    assert "licence n/a" in found.summary()
+    assert "apiCode 601" in found.count_field
+
+
+def test_kartaview_601_ends_paging(serve):
+    def route(url):
+        if url.endswith("page=1"):
+            return 200, {"status": {"apiCode": 600}, "result": {"data": [{"sequenceId": "1"}] * 150}}
+        return 200, {"status": {"apiCode": 601, "apiMessage": "The request has an empty response"}}
+    serve[0][imagery.KARTAVIEW] = route
+    found = imagery.kartaview(LAT, LON, 100)
+    assert found.outcome == "found" and found.images == 150

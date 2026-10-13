@@ -37,6 +37,7 @@ MAPILLARY = "https://graph.mapillary.com/images"
 PANORAMAX = "https://api.panoramax.xyz/api/search"
 KARTAVIEW = "https://api.openstreetcam.org/2.0/photo/"
 KARTAVIEW_OK = {600, 200}
+KARTAVIEW_EMPTY = 601      # "The request has an empty response": KartaView's no-results code
 KARTAVIEW_PAGE = 150       # the most photos KartaView returns per page  # KartaView's apiCode for success (600), and plain 200 in case it changes
 
 
@@ -185,6 +186,8 @@ def kartaview(lat: float, lon: float, radius: float, url: str = KARTAVIEW, max_p
             coverage.request = first_request if page == 1 else coverage.request
             return coverage
         status = answer.get("status") if isinstance(answer, dict) else None
+        if isinstance(status, dict) and status.get("apiCode") == KARTAVIEW_EMPTY:
+            break  # no (more) photos: a real zero, not a failure
         if isinstance(status, dict) and status.get("apiCode") not in KARTAVIEW_OK:
             coverage.note = f"API error {status.get('apiCode')}: {status.get('apiMessage', '')}"
             return coverage
