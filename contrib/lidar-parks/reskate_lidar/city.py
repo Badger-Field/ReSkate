@@ -390,9 +390,28 @@ def _linear_feature(kind: str, a, b, height: float, across: float, notes: list[s
                    notes=notes)
 
 
+SPOT_TAGS = ("highway", "amenity", "barrier", "leisure", "man_made", "kerb")
+
+
+def drop_repeats(items: list[MapItem], tolerance: float = 1.0) -> list[MapItem]:
+    """Overture's copies of OpenStreetMap features left out: an Overture item with the same spot
+    tag as an OpenStreetMap one, lying within `tolerance` metres of it all along. Each feature is
+    then measured and decided once, from OpenStreetMap's geometry."""
+    osm = [i for i in items if i.source == "osm"]
+    kept = []
+    for item in items:
+        if item.source != "osm":
+            key = {k: item.tags.get(k) for k in SPOT_TAGS if item.tags.get(k)}
+            if key and any({k: o.tags.get(k) for k in key} == key
+                           and item.geometry.hausdorff_distance(o.geometry) <= tolerance for o in osm):
+                continue
+        kept.append(item)
+    return kept
+
+
 def spots_from_tags(items: list[MapItem], measure: Measure, ground: Grid, notes: list[str]) -> list[Spot]:
     spots: list[Spot] = []
-    for item in items:
+    for item in drop_repeats(items):
         tags, g = item.tags, item.geometry
         what = ""
         if tags.get("highway") == "steps" and g.geom_type == "LineString":
@@ -466,7 +485,9 @@ def _steps(item: MapItem, measure: Measure, ground: Grid, notes: list[str]) -> l
     spots = []
     tags = item.tags
     count = mapdata.count_tag(tags.get("step_count"))
-    for a, b in straight_runs(np.array(item.geometry.coords), min_length=0.8):
+    runs = straight_runs(np.array(item.geometry.coords), min_length=0.8)
+    left_out = []
+    for a, b in runs:
         u = (b - a) / np.hypot(*(b - a))
         # The landings just past each end.
         ends = ground.sample(np.array([a - u * 0.5, b + u * 0.5]))
@@ -490,9 +511,7 @@ def _steps(item: MapItem, measure: Measure, ground: Grid, notes: list[str]) -> l
                 a, b = middle - u * run / 2, middle + u * run / 2
                 ends = ground.sample(np.array([a - u * 0.25, b + u * 0.25]))
             else:
-                where = f"({(a[0] + b[0]) / 2:.0f}, {(a[1] + b[1]) / 2:.0f})"
-                notes.append(f"steps {item.id or ''} at {where}: the ground there climbs {rise:.2f} m over "
-                             f"{run:.1f} m, not like a flight; left out (a step_count tag would place it)")
+                left_out.append(f"({(a[0] + b[0]) / 2:.0f}, {(a[1] + b[1]) / 2:.0f}): {rise:.2f} m over {run:.1f} m")
                 continue
         width = mapdata.length_tag(tags.get("width")) or _stair_width(ground, a, b, u, rise)
         steps = count or max(2, int(round(rise / 0.16)))
@@ -516,6 +535,10 @@ def _steps(item: MapItem, measure: Measure, ground: Grid, notes: list[str]) -> l
             rail = Feature("rail", tuple(rail_centre), yaw, run / math.cos(pitch), 0.05, rise / 2 + 0.85,
                            pitch=pitch, notes=[f"handrail down {steps} steps"])
             spots.append(Spot(rail, float(ends[0]), float(ends[0]), item.source, "handrail"))
+    if left_out:
+        what = f"{len(left_out)} of {len(runs)} stretches were" if len(runs) > 1 else "it was"
+        notes.append(f"steps {item.id or ''} ({item.source}): the ground does not climb like a flight, so "
+                     f"{what} left out ({'; '.join(left_out)}); a step_count tag would place it")
     return spots
 
 

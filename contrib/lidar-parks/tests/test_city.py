@@ -445,8 +445,22 @@ def test_a_spot_mapped_by_both_sources_is_placed_once():
     model = city.build(synthcity.BOUNDS, items + repeated, synthcity.survey())
     for what in ("steps", "bench", "wall"):
         (spot,) = spots(model, what)
-        assert spot.source == "osm+overture"
+        assert spot.source == "osm"  # the repeat is dropped before measuring: decided once, from OSM
     assert len(spots(model, "handrail")) == 2
+    # Spots that both sources found separately (slightly apart) are still merged.
+    a = city.Spot(city.Feature("ledge", (0.0, 0.0), 0.0, 5.0, 0.4, 0.5), 10.0, 10.0, "osm", "wall")
+    b = city.Spot(city.Feature("ledge", (0.3, 0.0), math.pi, 5.2, 0.4, 0.5), 10.0, 10.0, "overture", "wall")
+    (merged,) = city.merge_sources([b, a])
+    assert merged.source == "osm+overture"
+
+
+def test_a_feature_both_sources_map_is_noted_once():
+    line = shapely.LineString([(-20, 20), (-12, 20)])
+    items = synthcity.map_items() + [mapdata.MapItem(line, {"highway": "steps"}, "osm", "way/30"),
+                                     mapdata.MapItem(line, {"highway": "steps"}, "overture", "ovt-30")]
+    model = city.build(synthcity.BOUNDS, items, synthcity.survey())
+    flight_notes = [n for n in model.notes if "does not climb like a flight" in n]
+    assert len(flight_notes) == 1 and "(osm)" in flight_notes[0]
 
 
 def test_the_writer_never_writes_the_same_object_twice():
@@ -464,7 +478,7 @@ def test_a_slope_is_not_a_flight_of_steps():
     plain = mapdata.MapItem(line, {"highway": "steps"}, "osm", "way/30")
     model = city.build(synthcity.BOUNDS, synthcity.map_items() + [plain], synthcity.survey())
     assert not [s for s in spots(model, "steps") if s.feature.centre[1] > 10]
-    assert any("not like a flight" in n for n in model.notes)
+    assert any("does not climb like a flight" in n for n in model.notes)
     counted = mapdata.MapItem(line, {"highway": "steps", "step_count": "5"}, "osm", "way/31")
     model = city.build(synthcity.BOUNDS, synthcity.map_items() + [counted], synthcity.survey())
     (stairs,) = [s for s in spots(model, "steps") if s.feature.centre[1] > 10]
