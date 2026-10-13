@@ -26,6 +26,11 @@ const NEW_KEYS_PER_HOUR = 20; // new player keys one address may introduce an ho
 // Local development and tests only (DEV=1 in .dev.vars or --var DEV:1): a deployed service
 // without CHALLENGE_SECRET refuses players rather than sign with a value that is public here.
 const DEV_SECRET = "reskate-local-development-only";
+// The game's User-Agent (lobby_user_agent in Extension/Multiplayer/Direct/direct_lobby.h). A
+// request without it gets a plain 404 before any signing, checking or Durable Object call, so
+// scanners cost one cheap Worker request each. A firewall rule in front of a custom domain can
+// stop them before the Worker (README.md); on workers.dev this check is the first line.
+const GAME_AGENT = "ReSkate-Lobby/1";
 
 // ---------------------------------------------------------------- identity
 
@@ -85,6 +90,7 @@ export default {
     const url = new URL(request.url);
     const secret = env.CHALLENGE_SECRET || (env.DEV === "1" ? DEV_SECRET : null);
     if (url.pathname === "/v1/health") return Response.json({ ok: Boolean(secret) });
+    if (request.headers.get("User-Agent") !== GAME_AGENT) return new Response("Not found", { status: 404 });
     if (!secret) return new Response("The service has no CHALLENGE_SECRET yet.", { status: 503 });
     if (url.pathname === "/v1/challenge") return Response.json({ challenge: await makeChallenge(secret, Date.now()) });
     if (url.pathname !== "/v1/connect") return new Response("Not found", { status: 404 });

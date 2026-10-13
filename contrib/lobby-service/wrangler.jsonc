@@ -3,10 +3,10 @@
   "name": "reskate-lobby",
   "main": "src/index.js",
   "compatibility_date": "2026-09-01",
-  // One public address: the custom domain skate.ops.rodeo, added in the dashboard, where
-  // Cloudflare's firewall rules screen requests before they reach (and count against) the
-  // Worker. No workers.dev URL and no per-version preview URLs: those skip the firewall.
-  "workers_dev": false,
+  // Address: workers.dev for now (reskate-lobby.reskate-lobby-service.workers.dev). Once the
+  // custom domain skate.ops.rodeo answers and has its firewall rules (README.md), set this to
+  // false: workers.dev skips the zone's firewall. No per-version preview URLs.
+  "workers_dev": true,
   "preview_urls": false,
   "durable_objects": {
     "bindings": [{ "name": "HUB", "class_name": "Hub" }]

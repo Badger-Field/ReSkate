@@ -50,14 +50,19 @@ Until `CHALLENGE_SECRET` is set, the deployed service refuses players (HTTP 503)
 `/v1/health` reports `{"ok":false}`. A development secret is used only with `DEV=1`, which
 the tests pass and `npm run dev` reads from `.dev.vars`.
 
-The service answers only on a custom domain added in the Cloudflare dashboard
-(`skate.ops.rodeo`); `wrangler.jsonc` turns the `workers.dev` and preview URLs off. Deploy
-that change only once the custom domain answers `/v1/health`, or the service has no address.
+For now the service answers at its workers.dev address,
+`https://reskate-lobby.reskate-lobby-service.workers.dev`, the game's default. The plan is the
+custom domain `skate.ops.rodeo`, added in the dashboard, behind the firewall rules below. Once
+that answers `/v1/health`: add the rules, set `"workers_dev": false` in `wrangler.jsonc`, point
+`default_lobby_url` at it, and deploy. Turning workers.dev off before the domain answers leaves the
+service with no address.
 
 ## Keeping scanners off it
 
-Every request that reaches the Worker counts against its request allowance, and the Worker
-already refuses anything but a signed connection before the Durable Object sees it. A custom
+Every request that reaches the Worker counts against its request allowance. The Worker answers
+anything without the game's User-Agent with a bare 404 before signing, checking or calling the
+Durable Object, so a scanner costs one cheap request; on workers.dev that is all the screening
+there is. A custom
 domain is published in certificate transparency logs, so scanners will find it. Cloudflare's
 firewall rules run before the Worker, so a request they block never reaches the Worker. Add
 these on the zone (Security, then WAF). Both rules name the lobby's host, so nothing else on

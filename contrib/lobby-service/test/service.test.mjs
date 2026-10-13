@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 const PORT = 8000 + Math.floor(Math.random() * 1000);
 const BASE = `http://127.0.0.1:${PORT}`;
+const AGENT = { "User-Agent": "ReSkate-Lobby/1" }; // what the game sends
 let dev, state;
 
 before(async () => {
@@ -64,7 +65,7 @@ function player() {
 }
 
 async function connectUrl(p, { badSignature = false, challenge = null } = {}) {
-  challenge ??= (await (await fetch(`${BASE}/v1/challenge`)).json()).challenge;
+  challenge ??= (await (await fetch(`${BASE}/v1/challenge`, { headers: AGENT })).json()).challenge;
   let signature = sign(null, Buffer.from(`reskate-lobby-v1:${challenge}`), p.privateKey);
   if (badSignature) signature = Buffer.from(signature.map((b, i) => (i === 0 ? b ^ 1 : b)));
   const query = new URLSearchParams({ key: p.raw.toString("hex"), sig: signature.toString("hex"), challenge });
@@ -73,7 +74,7 @@ async function connectUrl(p, { badSignature = false, challenge = null } = {}) {
 
 // A connection that collects what arrives; next() waits for the next message matching `want`.
 async function connect(p) {
-  const ws = new WebSocket(await connectUrl(p));
+  const ws = new WebSocket(await connectUrl(p), { headers: AGENT });
   const inbox = [];
   const waiters = [];
   ws.addEventListener("message", (event) => {
@@ -109,13 +110,23 @@ test("health", async () => {
 });
 
 // The status a WebSocket upgrade request gets (fetch() will not send an Upgrade header).
-const upgradeStatus = (url) => new Promise((resolve, reject) => {
-  const request = httpRequest(url, { headers: { Connection: "Upgrade", Upgrade: "websocket", "Sec-WebSocket-Version": "13",
+const upgradeStatus = (url, agent = AGENT) => new Promise((resolve, reject) => {
+  const request = httpRequest(url, { headers: { ...agent, Connection: "Upgrade", Upgrade: "websocket", "Sec-WebSocket-Version": "13",
     "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==" } });
   request.on("response", (response) => { response.resume(); resolve(response.statusCode); });
   request.on("upgrade", (response, socket) => { socket.destroy(); resolve(response.statusCode); });
   request.on("error", reject);
   request.end();
+});
+
+test("anything but the game gets a 404", async () => {
+  assert.equal((await fetch(`${BASE}/v1/challenge`)).status, 404);
+  assert.equal((await fetch(`${BASE}/v1/challenge`, { headers: { "User-Agent": "Mozilla/5.0" } })).status, 404);
+  assert.equal((await fetch(`${BASE}/wp-login.php`, { headers: AGENT })).status, 404);
+  const p = player();
+  const url = new URL((await connectUrl(p)).replace("ws:", "http:"));
+  assert.equal(await upgradeStatus(url, {}), 404);
+  assert.equal(await upgradeStatus(url), 101); // the same link from the game still works
 });
 
 test("a wrong signature or a stale challenge is refused", async () => {
