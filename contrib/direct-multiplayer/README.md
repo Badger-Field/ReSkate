@@ -21,8 +21,9 @@ Steam and no EA app. This is work in progress on the `direct-multiplayer` branch
   SteamID in the development universe (4), with the account number taken from the key's SHA-256,
   because GNS accepts only SteamID identities. The existing roles, bans and party code keep
   working. Still to come: keeping the key in the ReSkate profile, and the host checking it too.
-- **Steam mode is unchanged.** The direct transport is used when ReSkate runs in offline mode,
-  with Steam closed or signed out.
+- **Steam mode is unchanged.** The plan is for the direct transport to be used when ReSkate runs
+  in offline mode, with Steam closed or signed out. That game integration is not written yet:
+  so far `open_direct` is used only by the tests.
 
 ## Spike results
 

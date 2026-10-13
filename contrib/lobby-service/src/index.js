@@ -169,12 +169,16 @@ export class Hub extends DurableObject {
 
   webSocketMessage(ws, message) {
     const me = ws.deserializeAttachment();
-    if (typeof message !== "string" || message.length > MAX_MESSAGE) return;
+    // Every frame counts, whatever it holds; a player past the limit is disconnected, so a
+    // flood cannot keep this object busy. Their game reconnects after its pause.
     const now = Date.now();
     if (now - me.window > RATE_WINDOW_MS) { me.window = now; me.count = 0; }
     if (++me.count > RATE_MAX) {
+      try { ws.close(4008, "Too many messages"); } catch {}
+      return;
+    }
+    if (typeof message !== "string" || message.length > MAX_MESSAGE) {
       ws.serializeAttachment(me);
-      if (me.count === RATE_MAX + 1) ws.send(JSON.stringify({ op: "error", error: "Too many messages; slow down." }));
       return;
     }
     // A connected player stays seen (their game pings every 30 s), so a connection that lasts

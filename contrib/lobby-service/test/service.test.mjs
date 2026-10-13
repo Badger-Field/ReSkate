@@ -40,12 +40,17 @@ before(async () => {
   throw new Error(`wrangler dev did not start:\n${log}`);
 });
 
-after(() => {
+after(async () => {
+  const exited = new Promise((resolve) => (dev.exitCode !== null || dev.signalCode !== null ? resolve() : dev.once("exit", resolve)));
   try {
     if (process.platform === "win32") spawn("taskkill", ["/pid", String(dev.pid), "/T", "/F"]);
     else process.kill(-dev.pid);
   } catch {}
-  setTimeout(() => { try { rmSync(state, { recursive: true, force: true }); } catch {} }, 1000).unref();
+  await Promise.race([exited, new Promise((r) => setTimeout(r, 10_000))]);
+  // workerd may let go of its files a moment after wrangler exits (on Windows especially).
+  for (let i = 0; i < 10; i++) {
+    try { rmSync(state, { recursive: true, force: true }); break; } catch { await new Promise((r) => setTimeout(r, 300)); }
+  }
 });
 
 // A player: an Ed25519 key, and their ID as the game and the service derive it.
@@ -179,6 +184,14 @@ test("a second connection replaces the first", async () => {
   await second.next(second.op("hello"));
   assert.equal(await first.closed, 4000);
   second.ws.close();
+});
+
+test("a player who floods the service is disconnected, binary frames included", async () => {
+  const p = player();
+  const flood = await connect(p);
+  await flood.next(flood.op("hello"));
+  for (let i = 0; i < 401; i++) flood.ws.send(new Uint8Array([i & 255]));
+  assert.equal(await flood.closed, 4008);
 });
 
 test("two keys that share a player ID: the second is refused", async () => {
