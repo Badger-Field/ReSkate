@@ -59,7 +59,8 @@ So a real place becomes a map in two steps: meshes from this tool, then Studio t
 ## The plan
 
 1. **Clean surface: done.** `python -m reskate_lidar mesh scan.glb park.glb` writes the levelled
-   scan as one surface mesh, in the game's frame: metres, Y up, ground at y = 0, centred. It is
+   scan as one surface mesh in glTF's own frame (metres, Y up, ground at y = 0, centred, -Z along
+   the scan's y), which Blender and Studio read the right way round. It is
    2.5-D (one height per spot): coping lips and the space under rails close down. For a bowl that
    is exactly the ridable surface.
 2. **Tidy it in Blender** (manual for now): trim the scan's ragged border, flatten the ground,
@@ -117,15 +118,29 @@ documentation, so check it against Studio once someone has it.
   - **What that means here:** a city map should merge its collision into few parts (ground tiles, building blocks, spots), not one part per object.
 - **Known Studio map sizes.** Small parks are tens of MB. The Skate 3 map is 690 MB, and a whole-city GTA port is 5.1 GB. A 3 × 3 km mountain (Sledding Game) is 650 MB.
 
-### What that means for `city --mesh`
+### What `city --mesh` and `studio_prep.py` do with this
 
-1. **Make the GLB Studio-ready.** Write `sk8_collision_mode` and a surface on every node's extras: `triangle_mesh` for ground and spots, `hull` or `triangle_mesh` for buildings. Add a `spawn` node at the origin.
-2. **Write grind curves.** Ledge edges, rail tops and coping become polylines, as Spotbuilder's `_splines.obj` does. Add a small headless-Blender script that turns them into curves with Studio's grind settings.
-3. **Keep collision parts few.** Use one per ground tile, one for the buildings, and one per spot. A 1 km² district is then a few hundred bodies, far under 65,000.
-4. **Check with Studio itself.** Someone with Studio from the Discord confirms:
-   - the collision mode and surface names;
-   - the grind-curve settings the add-on reads;
-   - whether `reskate_cli compile-map` takes the `.blend` path as its argument.
+1. **The GLB is Studio-ready.**
+   - Every node's extras carry `sk8_collision_mode` (`triangle_mesh` for ground, buildings and spots; `none` for grind curves).
+   - Surface hints sit in `reskate_surface`.
+   - There is an empty `spawn` node.
+   - It is standard right-handed glTF: +Y up, -Z north. Earlier versions mirrored it.
+2. **Grind curves** are line nodes with `sk8_grind_curve`:
+   - ledge and bench top edges;
+   - rail bars;
+   - with `--skatepark`, each bowl's coping, from the map's bowl outlines at deck height.
+3. **`studio_prep.py`** (headless Blender, tested with `bpy` 4.2):
+   - imports the GLB;
+   - puts meshes in `Map`, the spawn in `Markers` and the grind lines, as curves, in `Grind curves`;
+   - sets the add-on's own properties when it is loaded;
+   - saves a `.blend` for Studio.
+4. **Collision parts stay few:** one per ground tile, one for the buildings, one per spot. The
+   Venice Beach Skatepark example has 2 collision parts (examples/).
+5. **Still to check with Studio itself:**
+   - the collision mode and surface preset names;
+   - the grind-curve settings;
+   - the spawn's facing;
+   - how `reskate_cli compile-map` is called.
 
 ## Unknowns
 

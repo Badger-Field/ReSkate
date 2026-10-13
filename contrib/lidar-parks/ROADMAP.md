@@ -49,6 +49,19 @@ The anchor is a measuring stick on open ground, as in README step 1. Then check:
 
    It is about 207k triangles; `emb-collision.glb` is about 52k.
 
+## First real target: Venice Beach Skatepark
+
+Built as a custom map from open data; see [examples/venice-beach-skatepark.md](examples/venice-beach-skatepark.md).
+- **The data:**
+  - 4 bowls, 0.9-2.6 m deep, at 10-12 points/m²;
+  - coping placed from the map's bowl outlines;
+  - 90k triangles, 2 collision parts.
+- **Next:** someone with ReSkate Studio opens `venice.blend` (from `studio_prep.py`), runs `reskate_cli compile-map`, and checks:
+  1. Does it compile? What did Studio ask for that is missing?
+  2. In game: do the bowls' depths feel right, and does the coping grind?
+  3. Is the map mirrored? The frame should be right since this change, but it is unchecked in game.
+- **A phone scan of each bowl** would add the lip and vertical walls (CAPTURE.md). Merging scans into the aerial mesh is the next step after that.
+
 ## What works
 
 - **`city`:** a place name (Nominatim), a centre and size, or a bounding box, up to 4 km² per run.
