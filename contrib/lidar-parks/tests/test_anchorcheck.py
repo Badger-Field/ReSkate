@@ -217,3 +217,30 @@ def test_probe_prints_the_bare_value(park, capsys):
     assert cli.main(["anchor", "probe", "--park", str(park)]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert any(line.startswith("trainer ground 600.0 1000.0;wait 1;") for line in lines)
+
+
+def test_reference_height_skips_water_at_the_centre():
+    # The search's centre is on the sea; the land round it is at street level.
+    heights = {(round(x, 1), round(z, 1)): round(waterfront(x, z), 1)
+               for x, z in anchorcheck.search_points(480, 1000, 300, 20)}
+    assert next(iter(heights.values())) == 191.0
+    water = anchorcheck.water_level(heights)
+    height, how = anchorcheck.reference_height(heights, water)
+    assert height > water + anchorcheck.WATER_BAND and "nearest" in how      # the beach, not the sea
+    heights_on_land = {(round(x, 1), round(z, 1)): round(waterfront(x, z), 1)
+                       for x, z in anchorcheck.search_points(700, 1000, 300, 20)}
+    height, how = anchorcheck.reference_height(heights_on_land, anchorcheck.water_level(heights_on_land))
+    assert height == pytest.approx(200.1, abs=0.15) and "within 30 m" in how
+
+
+def test_small_squares_and_mixed_grids_have_enough_probes():
+    # Size 100 at 20 m spacing: 25 probes a square (5 x 5), not (100/20 + 1)^2.
+    heights = {(round(x, 1), round(z, 1)): round(waterfront(x, z), 1)
+               for x, z in anchorcheck.search_points(700, 1000, 200, 20)}
+    best = anchorcheck.rank(heights, size=100, water=anchorcheck.water_level(heights), reference=200.0)
+    assert best[0].probes == 25 and best[0].level_share == 1.0
+    # A 30 m ring round a 20 m middle: squares out in the ring still count.
+    ring = {(round(x, 1), round(z, 1)): round(waterfront(x, z), 1)
+            for x, z in anchorcheck.search_points(700, 1000, 500, 30, skip_radius=200)}
+    best = anchorcheck.rank(heights | ring, size=160, top=20, reference=200.0)
+    assert any(max(abs(c.x - 700), abs(c.z - 1000)) > 250 for c in best)

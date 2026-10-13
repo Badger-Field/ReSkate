@@ -138,8 +138,8 @@ def main(argv: list[str] | None = None) -> int:
     search.add_argument("--size", type=float, default=160.0, help="the park's size in metres (default 160)")
     search.add_argument("--tolerance", type=float, default=0.3, help="metres still counted level (default 0.3)")
     search.add_argument("--top", type=int, default=5, help="how many places to list (default 5)")
-    search.add_argument("--near-height", type=float, help="the street height to prefer (default: the first probe "
-                                                          "of the first log, the search's centre)")
+    search.add_argument("--near-height", type=float, help="the street height to prefer (default: the median of the "
+                                                          "land probes within 30 m of the search's centre)")
     search.add_argument("--height-window", type=float, default=10.0, help="metres from --near-height still "
                                                                           "preferred (default 10)")
     search.add_argument("--water-level", "--water-height", dest="water_level", type=float, help="treat probes at or near this height as water (default: "
@@ -591,8 +591,6 @@ def _anchor_search(args) -> int:
     heights, missing, reference = {}, [], args.near_height
     for log in args.log:
         found, lost = anchorcheck.read_heights(Path(log).read_text(encoding="utf-8", errors="replace"))
-        if reference is None and found:
-            reference = next(iter(found.values()))   # the first probe of a batch is the search's centre
         heights.update(found)
         missing += lost
     missing = [p for p in dict.fromkeys(missing) if p not in heights]
@@ -605,8 +603,11 @@ def _anchor_search(args) -> int:
         wet = sum(h <= water + anchorcheck.WATER_BAND for h in heights.values())
         print(f"Water at {water:.1f}: {wet} probes at or within {anchorcheck.WATER_BAND} m of it are left out as "
               "water (--water-level to set it, --no-water if that is land)")
-    print(f"Reference height {reference:.1f} ({'--near-height' if args.near_height is not None else 'the first probe'}); "
-          f"places within {args.height_window:g} m of it come first")
+    if reference is None:
+        reference, how = anchorcheck.reference_height(heights, water)
+    else:
+        how = "--near-height"
+    print(f"Reference height {reference:.1f}, from {how}; places within {args.height_window:g} m of it come first")
     best = anchorcheck.rank(heights, args.size, args.tolerance, args.top, water=water, reference=reference,
                             window=args.height_window)
     print(f"Best places for a {args.size:g} m park on {args.map} (anchor x, y, z), within {args.tolerance:g} m:")

@@ -248,14 +248,16 @@ def rank(heights: dict[tuple[float, float], float], size: float, tolerance: floa
     wet = ground <= water + WATER_BAND if water is not None else np.zeros(len(ground), bool)
     if len(points) > 1:
         from scipy.spatial import cKDTree
-        spacing = float(np.median(cKDTree(points).query(points, k=2)[0][:, 1]))
+        gaps = cKDTree(points).query(points, k=2)[0][:, 1]   # each probe's spacing: grids may be mixed
     else:
-        spacing = size
-    expected = (math.floor(size / max(spacing, 1e-6)) + 1) ** 2
+        gaps = np.full(1, size)
     half = size / 2
     found = []
     for cx, cz in points:
         inside = (np.abs(points[:, 0] - cx) <= half + 1e-6) & (np.abs(points[:, 1] - cz) <= half + 1e-6)
+        # A square centred on a probe of a grid this fine holds this many; water probes count as read.
+        spacing = max(float(np.median(gaps[inside])), 1e-6)
+        expected = (2 * math.floor(half / spacing + 1e-6) + 1) ** 2
         if inside.sum() < coverage * expected:
             continue
         land = ground[inside & ~wet]
@@ -301,3 +303,24 @@ def anchor_park(map_name: str, x: float, y: float, z: float, item: str, template
     park = {"format": "reskate-park", "schema_version": 1, "revision": 0, "maps": {map_name: [stick]}}
     validate_park(park)
     return park
+
+
+def reference_height(heights: dict[tuple[float, float], float], water: float | None,
+                     reach: float = 30.0) -> tuple[float, str]:
+    """The street height round the search's centre: the median of the land probes within `reach`
+    of the first probe (a batch probes its centre first), else the nearest land probe. Returns
+    the height and how it was found."""
+    points = np.array(list(heights.keys()))
+    ground = np.array(list(heights.values()))
+    land = ground > water + WATER_BAND if water is not None else np.ones(len(ground), bool)
+    if not land.any():
+        raise ValueError("every probe is water: probe somewhere else, or pass --near-height")
+    centre = points[0]
+    distance = np.hypot(*(points - centre).T)
+    near = land & (distance <= reach + 1e-6)
+    if near.any():
+        return float(np.median(ground[near])), (f"the median of {int(near.sum())} land probes within {reach:g} m of "
+                                                 f"the search's centre ({centre[0]:.1f}, {centre[1]:.1f})")
+    nearest = int(np.where(land, distance, np.inf).argmin())
+    return float(ground[nearest]), (f"the land probe nearest the search's centre, at {points[nearest][0]:.1f}, "
+                                    f"{points[nearest][1]:.1f}, {distance[nearest]:.0f} m away")
