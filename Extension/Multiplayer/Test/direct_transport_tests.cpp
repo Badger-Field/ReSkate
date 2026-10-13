@@ -37,7 +37,9 @@ static_assert(is_direct_player_id(host_id) && !is_direct_player_id(7656119796028
 // to that client as "<from> <hex>".
 class SignalingServer {
   public:
-    std::uint16_t start() {
+    // Opens the port. No threads yet: the players' processes are forked after this, and a
+    // process forked while other threads run may inherit locks no one will release.
+    std::uint16_t open() {
         listener_ = socket(AF_INET, SOCK_STREAM, 0);
         int one = 1;
         setsockopt(listener_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
@@ -47,19 +49,35 @@ class SignalingServer {
         if (bind(listener_, reinterpret_cast<sockaddr *>(&address), sizeof(address)) || listen(listener_, 8)) return 0;
         socklen_t length = sizeof(address);
         getsockname(listener_, reinterpret_cast<sockaddr *>(&address), &length);
+        return ntohs(address.sin_port);
+    }
+    int listener() const { return listener_; }
+    void run() {
         accept_thread_ = std::thread([this] {
             for (;;) {
                 const int client = accept(listener_, nullptr, nullptr);
                 if (client < 0) return;
-                std::thread([this, client] { serve(client); }).detach();
+                std::lock_guard lock(mutex_);
+                sockets_.push_back(client);
+                workers_.emplace_back([this, client] { serve(client); });
             }
         });
-        return ntohs(address.sin_port);
     }
+    // Ends every thread before the server goes away.
     void stop() {
         shutdown(listener_, SHUT_RDWR);
         close(listener_);
         if (accept_thread_.joinable()) accept_thread_.join();
+        std::vector<std::thread> workers;
+        {
+            std::lock_guard lock(mutex_);
+            for (const int client : sockets_) shutdown(client, SHUT_RDWR);
+            workers.swap(workers_);
+        }
+        for (auto &worker : workers) worker.join();
+        std::lock_guard lock(mutex_);
+        for (const int client : sockets_) close(client);
+        sockets_.clear();
     }
     unsigned forwarded() const { return forwarded_; }
 
@@ -68,6 +86,8 @@ class SignalingServer {
     std::thread accept_thread_;
     std::mutex mutex_;
     std::map<std::string, int> clients_;
+    std::vector<int> sockets_;
+    std::vector<std::thread> workers_;
     std::atomic<unsigned> forwarded_{};
     void serve(int client) {
         std::string buffer, name;
@@ -97,7 +117,7 @@ class SignalingServer {
         }
         std::lock_guard lock(mutex_);
         if (!name.empty() && clients_[name] == client) clients_.erase(name);
-        close(client);
+        // stop() closes the socket, after this thread has finished with it.
     }
 };
 
@@ -125,10 +145,9 @@ int run_side(bool hosting, const char *library_path, std::uint16_t port) {
     void *library = dlopen(library_path, RTLD_NOW | RTLD_LOCAL);
     if (!library) return fail(who, std::string("cannot load the library: ") + dlerror());
     const auto local = hosting ? host_id : guest_id, peer = hosting ? guest_id : host_id;
-    auto signaling = make_tcp_signaling("127.0.0.1", port, local);
     SteamTransport transport;
     // No STUN here: both sides are on this machine, so their own addresses are enough.
-    if (!transport.open_direct(library, local, signaling.get(), ""))
+    if (!transport.open_direct(library, local, make_tcp_signaling("127.0.0.1", port, local), ""))
         return fail(who, "open_direct: " + transport.status().detail);
     if (!transport.direct() || transport.status().local_id != local) return fail(who, "not in direct mode as the right player");
     if (hosting ? !transport.host(4) : !transport.join(peer)) return fail(who, "host/join: " + transport.status().detail);
@@ -193,18 +212,20 @@ int main(int argc, char **argv) {
     if (signal_identity_id(signal_identity(host_id)) != host_id || signal_identity_id("steamid:12x") || signal_identity_id("str:1"))
         return fail("test", "identity strings");
     SignalingServer server;
-    const auto port = server.start();
+    const auto port = server.open();
     if (!port) return fail("test", "signaling server did not start");
     pid_t sides[2]{};
     for (int i = 0; i < 2; ++i) {
         sides[i] = fork();
         if (sides[i] == 0) {
+            close(server.listener());
+            if (i == 1) std::this_thread::sleep_for(300ms); // the host listens first
             const int result = run_side(i == 0, argv[1], port);
             std::fflush(nullptr);
             _exit(result);
         }
-        if (i == 0) std::this_thread::sleep_for(300ms); // the host listens first
     }
+    server.run();
     int failures = 0;
     for (const auto pid : sides) {
         int status = 0;

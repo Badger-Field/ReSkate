@@ -76,27 +76,32 @@ struct SteamTransport::Impl {
     void *sockets{};
     // Direct multiplayer (open_direct): routes found with ICE, through our own signaling.
     bool direct_mode{};
-    DirectSignaling *signaling{};
+    std::unique_ptr<DirectSignaling> signaling;
     HSteamNetConnection (*connect_custom)(void *, ISteamNetworkingConnectionSignaling *, const SteamNetworkingIdentity *, int, int,
                                           const SteamNetworkingConfigValue_t *){};
     bool (*received_signal)(void *, const void *, int, ISteamNetworkingSignalingRecvContext *){};
-    // The library sends signals from its own threads; poll() hands them to `signaling`.
-    std::mutex signals_mutex;
-    std::vector<std::pair<std::uint64_t, std::vector<std::uint8_t>>> signals_out;
-    void queue_signal(std::uint64_t to, const void *bytes, int size) {
-        if (!to || !bytes || size <= 0) return;
-        std::lock_guard lock(signals_mutex);
-        if (signals_out.size() < 256)
-            signals_out.emplace_back(to, std::vector<std::uint8_t>(static_cast<const std::uint8_t *>(bytes),
-                                                                   static_cast<const std::uint8_t *>(bytes) + size));
-    }
+    // The library sends signals from its own threads, and releases a connection's signaling
+    // object only some time after the connection closes, perhaps after this transport is gone:
+    // so they go into a queue each of those objects shares, and poll() hands them to `signaling`.
+    struct SignalQueue {
+        std::mutex mutex;
+        std::vector<std::pair<std::uint64_t, std::vector<std::uint8_t>>> out;
+        void push(std::uint64_t to, const void *bytes, int size) {
+            if (!to || !bytes || size <= 0) return;
+            std::lock_guard lock(mutex);
+            if (out.size() < 256)
+                out.emplace_back(to, std::vector<std::uint8_t>(static_cast<const std::uint8_t *>(bytes),
+                                                               static_cast<const std::uint8_t *>(bytes) + size));
+        }
+    };
+    std::shared_ptr<SignalQueue> signal_queue = std::make_shared<SignalQueue>();
     // One connection's signaling: what the library sends about it goes to that player.
     struct PeerSignals final : ISteamNetworkingConnectionSignaling {
-        Impl *owner;
+        std::shared_ptr<SignalQueue> queue;
         std::uint64_t peer;
-        PeerSignals(Impl *o, std::uint64_t id) : owner(o), peer(id) {}
+        PeerSignals(std::shared_ptr<SignalQueue> q, std::uint64_t id) : queue(std::move(q)), peer(id) {}
         bool SendSignal(HSteamNetConnection, const SteamNetConnectionInfo_t &, const void *message, int size) override {
-            owner->queue_signal(peer, message, size);
+            queue->push(peer, message, size);
             return true;
         }
         void Release() override { delete this; }
@@ -110,10 +115,10 @@ struct SteamTransport::Impl {
         ISteamNetworkingConnectionSignaling *OnConnectRequest(HSteamNetConnection, const SteamNetworkingIdentity &peer, int port) override {
             // The service says who sent it; the handshake must agree.
             if (peer.GetSteamID64() != from || port != virtual_port) return nullptr;
-            return new PeerSignals(owner, from);
+            return new PeerSignals(owner->signal_queue, from);
         }
         void SendRejectionSignal(const SteamNetworkingIdentity &, const void *message, int size) override {
-            owner->queue_signal(from, message, size);
+            owner->signal_queue->push(from, message, size);
         }
     };
     // Starts a connection to a player: through Steam, or in direct mode through our signaling.
@@ -121,7 +126,7 @@ struct SteamTransport::Impl {
         SteamNetworkingIdentity identity{};
         identity.SetSteamID64(id);
         if (direct_mode)
-            return connect_custom(sockets, new PeerSignals(this, id), &identity, virtual_port, count, options);
+            return connect_custom(sockets, new PeerSignals(signal_queue, id), &identity, virtual_port, count, options);
         return connect(sockets, &identity, virtual_port, count, options);
     }
     void pump_signals() {
@@ -130,10 +135,10 @@ struct SteamTransport::Impl {
             ArrivedSignal context(this, message.from);
             received_signal(sockets, message.bytes.data(), static_cast<int>(message.bytes.size()), &context);
         }
-        decltype(signals_out) out;
+        decltype(signal_queue->out) out;
         {
-            std::lock_guard lock(signals_mutex);
-            out.swap(signals_out);
+            std::lock_guard lock(signal_queue->mutex);
+            out.swap(signal_queue->out);
         }
         for (const auto &[to, bytes] : out) signaling->send(to, bytes);
     }
@@ -198,9 +203,11 @@ struct SteamTransport::Impl {
         const auto connection = connect_to(id, static_cast<int>(relayed.size()), relayed.data());
         const auto name = std::move(link.name);
         link = Link{connection, GetTickCount64(), false, name, connection ? lanes.setup(sockets, connection) : false};
-        state.detail = "Direct connection not available (" + why + "): connecting through Steam's relays...";
+        state.detail = "Direct connection not available (" + why + "): connecting through " +
+                       (direct_mode ? std::string("ICE...") : std::string("Steam's relays..."));
         direct_note = state.detail;
-        note_direct("Direct connection to the server did not come up (" + why + "); using Steam's relays.");
+        note_direct("Direct connection to the server did not come up (" + why + "); using " +
+                    (direct_mode ? "ICE." : "Steam's relays."));
     }
     std::string direct_note; // how the last direct attempt went
     // When each player's direct connection was last noted, and how often they asked since.
@@ -504,7 +511,8 @@ bool SteamTransport::bind(void *library, void *sockets, void *networking_utils) 
     p.state.detail = p.direct_mode ? "Ready for direct connections." : "Steam ready. Relay authentication may still be connecting.";
     return true;
 }
-bool SteamTransport::open_direct(void *library, std::uint64_t local_id, DirectSignaling *signaling, const std::string &stun_servers) {
+bool SteamTransport::open_direct(void *library, std::uint64_t local_id, std::unique_ptr<DirectSignaling> signaling,
+                                 const std::string &stun_servers) {
     auto &p = *impl_;
     if (p.state.ready)
         return p.direct_mode;
@@ -535,7 +543,7 @@ bool SteamTransport::open_direct(void *library, std::uint64_t local_id, DirectSi
             throw std::runtime_error("The networking library did not take the STUN servers.");
         p.friends = nullptr; // names come from each player's hello
         p.direct_mode = true;
-        p.signaling = signaling;
+        p.signaling = std::move(signaling);
         return bind(module, sockets, utils);
     } catch (const std::exception &e) {
         p.direct_mode = false;

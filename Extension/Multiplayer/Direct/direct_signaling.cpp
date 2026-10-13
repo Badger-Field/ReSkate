@@ -14,6 +14,7 @@
 #endif
 
 #include <charconv>
+#include <future>
 #include <chrono>
 #include <cstring>
 #include <utility>
@@ -23,12 +24,15 @@ namespace {
 #ifdef _WIN32
 using Socket = SOCKET;
 constexpr Socket no_socket = INVALID_SOCKET;
+constexpr int send_flags = 0;
 void close_socket(Socket s) { closesocket(s); }
 bool would_block() { const auto e = WSAGetLastError(); return e == WSAEWOULDBLOCK || e == WSAEINPROGRESS || e == WSAEALREADY; }
 bool set_nonblocking(Socket s) { u_long on = 1; return ioctlsocket(s, FIONBIO, &on) == 0; }
 #else
 using Socket = int;
 constexpr Socket no_socket = -1;
+// A send to a connection the service has closed must not raise SIGPIPE, which ends the process.
+constexpr int send_flags = MSG_NOSIGNAL;
 void close_socket(Socket s) { ::close(s); }
 bool would_block() { return errno == EWOULDBLOCK || errno == EAGAIN || errno == EINPROGRESS; }
 bool set_nonblocking(Socket s) { const auto flags = fcntl(s, F_GETFL, 0); return flags >= 0 && fcntl(s, F_SETFL, flags | O_NONBLOCK) == 0; }
@@ -92,7 +96,16 @@ class TcpSignaling final : public DirectSignaling {
     std::string problem() const override { return state_ == State::ready ? std::string{} : problem_; }
 
   private:
-    enum class State { idle, connecting, ready };
+    enum class State { idle, resolving, connecting, ready };
+    // A resolved address, copied out of getaddrinfo's list.
+    struct Address {
+        int family{}, type{}, protocol{};
+        sockaddr_storage address{};
+        socklen_t length{};
+    };
+    // The name lookup runs on its own thread: getaddrinfo blocks, and send() and receive()
+    // must not hold up the game.
+    std::future<std::vector<Address>> lookup_;
     std::string host_;
     std::uint16_t port_{};
     std::string identity_;
@@ -116,25 +129,35 @@ class TcpSignaling final : public DirectSignaling {
     }
     void start() {
         if (now_ms() < retry_at_) return;
-        addrinfo hints{}, *found{};
-        hints.ai_family = AF_UNSPEC;
-        hints.ai_socktype = SOCK_STREAM;
-        const auto service = std::to_string(port_);
-        if (getaddrinfo(host_.c_str(), service.c_str(), &hints, &found) != 0 || !found) {
-            drop("cannot find " + host_);
-            return;
-        }
-        for (auto *a = found; a; a = a->ai_next) {
-            socket_ = ::socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+        lookup_ = std::async(std::launch::async, [host = host_, port = port_] {
+            std::vector<Address> out;
+            addrinfo hints{}, *found{};
+            hints.ai_family = AF_UNSPEC;
+            hints.ai_socktype = SOCK_STREAM;
+            if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &found) != 0 || !found) return out;
+            for (auto *a = found; a && out.size() < 8; a = a->ai_next) {
+                if (a->ai_addrlen > sizeof(sockaddr_storage)) continue;
+                Address address{a->ai_family, a->ai_socktype, a->ai_protocol, {}, static_cast<socklen_t>(a->ai_addrlen)};
+                std::memcpy(&address.address, a->ai_addr, a->ai_addrlen);
+                out.push_back(address);
+            }
+            freeaddrinfo(found);
+            return out;
+        });
+        state_ = State::resolving;
+    }
+    void connect_to(const std::vector<Address> &addresses) {
+        if (addresses.empty()) { drop("cannot find " + host_); return; }
+        for (const auto &a : addresses) {
+            socket_ = ::socket(a.family, a.type, a.protocol);
             if (socket_ == no_socket) continue;
             if (!set_nonblocking(socket_)) { close_socket(socket_); socket_ = no_socket; continue; }
             int one = 1;
             setsockopt(socket_, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char *>(&one), sizeof(one));
-            if (::connect(socket_, a->ai_addr, static_cast<int>(a->ai_addrlen)) == 0 || would_block()) break;
+            if (::connect(socket_, reinterpret_cast<const sockaddr *>(&a.address), static_cast<int>(a.length)) == 0 || would_block()) break;
             close_socket(socket_);
             socket_ = no_socket;
         }
-        freeaddrinfo(found);
         if (socket_ == no_socket) { drop("cannot connect to " + host_); return; }
         state_ = State::connecting;
         out_ = identity_ + "\n" + out_;
@@ -142,6 +165,10 @@ class TcpSignaling final : public DirectSignaling {
     // Moves bytes both ways without blocking.
     void pump() {
         if (state_ == State::idle) start();
+        if (state_ == State::resolving) {
+            if (lookup_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+            connect_to(lookup_.get());
+        }
         if (socket_ == no_socket) return;
         if (state_ == State::connecting) {
             fd_set writable;
@@ -157,7 +184,7 @@ class TcpSignaling final : public DirectSignaling {
             problem_.clear();
         }
         while (!out_.empty()) {
-            const auto sent = ::send(socket_, out_.data(), static_cast<int>(out_.size()), 0);
+            const auto sent = ::send(socket_, out_.data(), static_cast<int>(out_.size()), send_flags);
             if (sent > 0) { out_.erase(0, static_cast<std::size_t>(sent)); continue; }
             if (sent < 0 && would_block()) break;
             drop("connection lost");

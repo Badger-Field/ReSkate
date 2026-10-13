@@ -74,11 +74,12 @@ class SteamTransport {
     // Direct multiplayer, without Steam: the standalone GameNetworkingSockets library
     // (`library`, a module handle the caller loaded and keeps loaded) instead of Steam's, as
     // player `local_id`. Players find routes to each other with ICE, exchanging what that takes
-    // through `signaling` (which the caller keeps alive until stop()); `stun_servers` is the
+    // through `signaling`, which the transport keeps from then on; `stun_servers` is the
     // library's comma-separated "host:port" list. Players' IP addresses are shared with each
     // other, which is what lets them connect without a relay. Once per process: the library
     // keeps the identity it was started with.
-    bool open_direct(void *library, std::uint64_t local_id, DirectSignaling *signaling, const std::string &stun_servers);
+    bool open_direct(void *library, std::uint64_t local_id, std::unique_ptr<DirectSignaling> signaling,
+                     const std::string &stun_servers);
     bool direct() const;
     bool host(unsigned capacity);
     // `direct_ip` and `direct_port` (host byte order; 0 for none): the address a dedicated server
