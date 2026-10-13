@@ -222,7 +222,7 @@ def test_probe_prints_the_bare_value(park, capsys):
 def test_reference_height_skips_water_at_the_centre():
     # The search's centre is on the sea; the land round it is at street level.
     heights = {(round(x, 1), round(z, 1)): round(waterfront(x, z), 1)
-               for x, z in anchorcheck.search_points(480, 1000, 300, 20)}
+               for x, z in anchorcheck.search_points(440, 1000, 300, 20)}
     assert next(iter(heights.values())) == 191.0
     water = anchorcheck.water_level(heights)
     height, how = anchorcheck.reference_height(heights, water)
