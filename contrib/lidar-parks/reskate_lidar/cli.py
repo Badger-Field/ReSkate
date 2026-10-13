@@ -67,7 +67,11 @@ def main(argv: list[str] | None = None) -> int:
     where.add_argument("--bbox", help="west,south,east,north in degrees")
     city.add_argument("--size", type=float, default=160.0,
                       help="width of the square around --place or --centre, metres (default 160)")
-    city.add_argument("--lidar", default="auto", help="auto (USGS 3DEP), none, or an EPT url or folder (ept.json)")
+    city.add_argument("--lidar", default="auto", help="auto (USGS 3DEP), none, an EPT url or folder (ept.json), "
+                                                      "or LAS/LAZ/COPC tiles: a file or a folder of them")
+    city.add_argument("--lidar-crs", help="the tiles' CRS (EPSG:<code>) where their headers give none")
+    city.add_argument("--lidar-credit", help="the credit the LiDAR's licence asks for, e.g. "
+                                             "\"© Environment Agency copyright and/or database right\" (DATA-SOURCES.md)")
     city.add_argument("--max-points", type=float, default=30e6, help="read at most about this many LiDAR points; "
                                                                       "bigger areas are read sparser (default 30 million)")
     city.add_argument("--sources", default="osm,overture", help="map data: osm, overture, or both (default)")
@@ -248,9 +252,18 @@ def _city_area(args, cache):
 
 
 def _city_lidar(args, bbox, frame, bounds, cache):
-    from . import ept
+    from . import ept, tiles
     if args.lidar == "none":
         return None, None
+    if args.lidar != "auto" and not args.lidar_credit:
+        print("  warning: no --lidar-credit; the outputs will ask you to credit the LiDAR yourself "
+              "(DATA-SOURCES.md lists what each survey asks)", file=sys.stderr)
+    if tiles.is_tiles(args.lidar):
+        reader = tiles.TileReader.open([args.lidar], args.lidar_crs)
+        print(f"  LiDAR: {reader.name}")
+        points = reader.read(bbox, frame, max_points=args.max_points, progress=print)
+        print(f"  {len(points.xyz):,} LiDAR points")
+        return points, reader.name
     url = args.lidar
     survey = None
     if url == "auto":
@@ -275,7 +288,7 @@ def _city_lidar(args, bbox, frame, bounds, cache):
     return points, (survey["name"] if survey else url)
 
 
-def attribution_lines(sources: set[str], survey: str | None, usgs: bool = True) -> list[str]:
+def attribution_lines(sources: set[str], survey: str | None, usgs: bool = True, credit: str | None = None) -> list[str]:
     from . import osm, overture
     lines = []
     if "osm" in sources or "overture" in sources:
@@ -285,6 +298,8 @@ def attribution_lines(sources: set[str], survey: str | None, usgs: bool = True) 
     if "lidar" in sources and usgs:
         lines.append("Elevation: U.S. Geological Survey 3D Elevation Program (3DEP) LiDAR"
                      + (f", survey {survey}" if survey else "") + "; public domain.")
+    elif "lidar" in sources and credit:
+        lines.append(f"Elevation: LiDAR {survey}; {credit}.".replace("..", "."))
     elif "lidar" in sources:
         lines.append(f"Elevation: LiDAR point cloud {survey}; credit it as its licence asks (DATA-SOURCES.md).")
     return lines
@@ -336,7 +351,7 @@ def run_city(args) -> int:
 
     print("Building the model")
     model = city_module.build(bounds, items, lidar, city_module.Settings(ground_cell=args.ground_cell), progress=print)
-    attribution = attribution_lines(model.sources, survey, usgs=args.lidar == "auto")
+    attribution = attribution_lines(model.sources, survey, usgs=args.lidar == "auto", credit=args.lidar_credit)
 
     print(f"\n{len(model.spots)} skate spots:")
     for index, spot in enumerate(model.spots):
@@ -399,7 +414,7 @@ def _run_skatepark(args, label, bbox, items, lidar, survey) -> int:
     park_result = skatepark.build(items, lidar, cell=args.park_cell)
     model = park_result.model
     attribution = attribution_lines({"osm", "overture", "lidar"} & ({i.source for i in items} | {"lidar"}), survey,
-                                    usgs=args.lidar == "auto")
+                                    usgs=args.lidar == "auto", credit=args.lidar_credit)
     print(f"  park {park_result.outline.area:,.0f} m², deck at {park_result.deck:.2f} m, "
           f"{park_result.density:.1f} ground points/m², {park_result.removed_above:,} points above the ground dropped")
     for n, bowl in enumerate(park_result.bowls):

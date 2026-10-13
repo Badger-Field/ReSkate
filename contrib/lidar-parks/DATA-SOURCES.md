@@ -63,10 +63,11 @@ Only ground, structures and street furniture are kept.
 - **The cache:** downloads go to the cache (`~/.cache/reskate-lidar`, `RESKATE_LIDAR_CACHE` or `--cache`), outside the repository. `contrib/lidar-parks/.gitignore` keeps LAZ, Parquet, GLB and cache folders out of git. Never commit downloaded data.
 - **Tests:** they build their fixtures (a small EPT, an Overpass answer, a Parquet file) from synthetic data at run time.
 
-## Allowed, not wired up yet
+## National LiDAR, read from tiles you download
 
-These are open, and they are next on the list in [ROADMAP.md](ROADMAP.md). Check each dataset's own
-page before use: licences differ by tile and year.
+`city --lidar <tile or folder>` reads LAS, LAZ and COPC tiles in any CRS (README, *LiDAR outside the US*).
+The tool does not download these itself yet: fetch the tiles over the area from the survey's own portal.
+Pass the credit with `--lidar-credit`. Check each dataset's own page before use: licences differ by tile and year.
 
 | Source | Licence | Credit |
 |---|---|---|
@@ -77,8 +78,8 @@ page before use: licences differ by tile and year.
 | Finland [NLS laser scanning](https://www.maanmittauslaitos.fi/en) | CC BY 4.0 | "National Land Survey of Finland" |
 | Other US state and county LiDAR portals | usually public domain; check each | as asked |
 
-Any EPT dataset already works with `--lidar <url or folder>` if its horizontal SRS is EPSG:3857 or
-EPSG:4326. Credit it yourself: the tool only names the URL.
+Any EPT dataset works with `--lidar <url or folder>`, in any horizontal SRS (pyproj reprojects
+it). Pass its credit with `--lidar-credit`; otherwise the outputs only name it and ask you to credit it.
 
 ## Street-level imagery (a track in progress)
 

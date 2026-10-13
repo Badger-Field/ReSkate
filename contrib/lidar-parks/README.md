@@ -138,6 +138,19 @@ What it finds:
 - **Limits:** areas are capped at 4 km². Downloads are cached in `~/.cache/reskate-lidar`, which `--cache` changes.
 - **Plans:** what's next, and what to check in game, is in [ROADMAP.md](ROADMAP.md).
 
+### LiDAR outside the US
+
+3DEP covers the US. Elsewhere, download the national survey's tiles over the area, then pass the file or folder:
+
+```
+python -m reskate_lidar city --centre 52.3573,4.8818 --size 160 --lidar ~/ahn-tiles \
+    --lidar-credit "AHN, CC0" --anchor ... --mods ...
+```
+
+- **Reading:** only tiles whose bounds reach the area are read. A `.copc.laz` is queried for just the area; other tiles are cropped as they are read.
+- **CRS:** coordinates in a national grid (RD, British National Grid, UTM) are reprojected with `pyproj`. The CRS comes from the tile header, or from `--lidar-crs`.
+- **Credit:** each survey's credit is in [DATA-SOURCES.md](DATA-SOURCES.md). Without `--lidar-credit`, the outputs ask you to add it.
+
 ### Is the anchor on open, flat ground? (`anchor`)
 
 A city park spreads tens of metres round its anchor. The base map's ground there may be a road, a sea wall or a slope. The game can measure it: the trainer's `trainer ground <x> <z>` finds the topmost surface at a map position and logs it.
@@ -180,6 +193,9 @@ python studio_prep.py venice.glb venice.blend      # Blender's bpy, or: blender 
 |---|---|
 | `--sources osm` / `overture` | use only one map source (default both) |
 | `--lidar none` / `<EPT url or folder>` | skip LiDAR, or read another EPT survey |
+| `--lidar <tile or folder>` | LAS, LAZ or COPC tiles on disk, in any CRS: AHN, the UK Environment Agency, Denmark, Finland (see below) |
+| `--lidar-crs EPSG:28992` | the tiles' CRS, where their headers give none |
+| `--lidar-credit "…"` | the credit the LiDAR's licence asks for; it goes into every output |
 | `--overpass <url or file>` | another Overpass server, or a saved answer |
 | `--ground-cell 0.5` | ground grid size (metres) |
 | `--tile 64` | mesh ground tile size (metres) |

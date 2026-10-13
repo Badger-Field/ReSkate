@@ -6,3 +6,4 @@ mapbox-earcut>=1.0  # trimesh triangulates polygons with it (synthetic test scan
 pillow>=10.0
 laspy[lazrs]>=2.4
 pyarrow>=14  # Overture Maps GeoParquet (city)
+pyproj>=3.6  # reprojects LiDAR in national grids (tiles.py); optional for 3DEP

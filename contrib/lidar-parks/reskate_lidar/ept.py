@@ -5,8 +5,8 @@ per survey): an octree of LAZ files, each node a few thousand points, so a city 
 the handful of nodes over it, not the survey's gigabytes. The index of surveys and their outlines
 (resources.geojson) is published by Hobu, Inc., who host the EPT copies.
 
-Other EPT datasets work the same way (pass --lidar <url or folder of ept.json>), as long as their
-horizontal SRS is EPSG:3857 or EPSG:4326, or they are already in metres in the local frame."""
+Other EPT datasets work the same way (pass --lidar <url or folder of ept.json>). EPSG:3857 and
+EPSG:4326 are read as they are; any other SRS is reprojected with pyproj (tiles.Projection)."""
 from __future__ import annotations
 
 import io
@@ -80,7 +80,8 @@ class EptReader:
         self.workers = workers
         self.info = json.loads(net.fetch(self.base + "/ept.json", cache, "ept", suffix=".json"))
         srs = self.info.get("srs") or {}
-        self.srs = f"{srs.get('authority', '')}:{srs.get('horizontal', '')}"
+        self.srs = (f"{srs['authority']}:{srs['horizontal']}" if srs.get("authority") and srs.get("horizontal")
+                    else srs.get("wkt", ""))
         if self.info.get("dataType") != "laszip":
             raise ValueError(f"{self.base}: EPT data type {self.info.get('dataType')!r}; only laszip is read")
 
@@ -131,15 +132,20 @@ class EptReader:
 
     # ------------------------------------------------------------ reading an area
 
+    @property
+    def projection(self):
+        from .tiles import Projection
+        if getattr(self, "_projection", None) is None:
+            if not self.srs:
+                raise ValueError(f"{self.base}: ept.json gives no horizontal SRS")
+            self._projection = Projection(self.srs)
+        return self._projection
+
     def _to_lonlat(self, xy: np.ndarray) -> np.ndarray:
-        if self.srs == "EPSG:3857":
-            return geo.mercator_to_lonlat(xy)
-        if self.srs == "EPSG:4326":
-            return xy
-        raise ValueError(f"{self.base}: horizontal SRS {self.srs}; only EPSG:3857 and EPSG:4326 are read")
+        return self.projection.to_lonlat(xy)
 
     def _from_lonlat(self, lonlat: np.ndarray) -> np.ndarray:
-        return geo.lonlat_to_mercator(lonlat) if self.srs == "EPSG:3857" else lonlat
+        return self.projection.from_lonlat(lonlat)
 
     def depth_for(self, spacing: float, lat: float) -> int:
         """The octree depth whose points are about `spacing` metres apart; deeper adds no detail
@@ -154,8 +160,7 @@ class EptReader:
 
     def read(self, bbox: geo.BBox, frame: geo.LocalFrame, max_depth: int | None = None,
              progress=None) -> Points:
-        corners = self._from_lonlat(np.array([[bbox.west, bbox.south], [bbox.east, bbox.north]]))
-        area = (*corners.min(axis=0), *corners.max(axis=0))
+        area = self.projection.area(bbox)
         keys = self.nodes(area, max_depth)
         if progress:
             progress(f"  {len(keys)} LiDAR tiles over the area")

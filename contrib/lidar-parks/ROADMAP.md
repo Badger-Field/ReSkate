@@ -72,6 +72,7 @@ Built as a custom map from open data; see [examples/venice-beach-skatepark.md](e
 
   Both become one tag model (`mapdata.MapItem`). Personal tags are dropped.
 - **LiDAR:**
+  - LAS, LAZ and COPC tiles on disk in any CRS, for surveys outside the US.
   - USGS 3DEP straight from its public EPT copies. The newest survey covering the area is chosen automatically.
   - Any other EPT works with `--lidar`.
   - Big areas read a shallower octree, to `--max-points`.
@@ -122,11 +123,15 @@ These apply to every phase:
 Done since the last list:
 - **The Studio-ready mesh,** for phase 2: `sk8_*` extras, a `spawn` node, grind curves, and `studio_prep.py`.
 - **Kerbs from the ground.** Where a road's edge runs along a sidewalk or plaza and the ground steps 8-30 cm up from the road, each straight stretch of at least 2 m is a low ledge (a slappy curb in the park). Kerbs come after every other spot, at most 12 (`Settings.kerbs`).
+- **LiDAR outside the US.** `--lidar` reads LAS, LAZ and COPC tiles on disk (AHN, the UK Environment Agency, Denmark, Finland), and EPT, in any CRS. Reprojection goes through `pyproj`. `--lidar-credit` carries the survey's credit into every output. It is tested on the synthetic block placed in Amsterdam, written as AHN-style tiles in the Dutch RD grid.
 - **Stricter residential handling.** On residential parcels (residential land that is not street, footway or park), no spot is ever placed. Homes (houses, detached, terraces, apartments, and any building on residential land) are their footprint's smallest rectangle, with the height rounded to 2 m.
 
-1. **Other open LiDAR.**
-   - **Readers:** COPC/LAZ tile lists, for the Netherlands' AHN (CC0), the UK Environment Agency (OGL), Denmark and Finland, and OpenTopography datasets.
-   - **Reprojection:** EPSG codes other than 3857 and 4326, through `pyproj` (optional).
+1. **Downloading national LiDAR.** Reading it works (above). Next is finding and fetching the tiles over an area:
+   - AHN's tile index on PDOK;
+   - the UK Environment Agency's survey catalogue;
+   - Denmark, Finland, and OpenTopography.
+
+   These hosts are blocked from this cloud environment, so it needs a run on the PC to record their answers first.
 2. **Neighbourhoods** (phase 3): tiles, level of detail, and per-tile budgets (triangles, collision parts, objects, file size).
 3. **Surfaces.** Carry `surface=*` (asphalt, paving_stones, concrete, wood, metal) into the mesh extras and the report.
 4. **Better stand-ins for big spots.** A 20 m bench ledge is several boxes end to end. Tune `catalog.json` once the sizes are calibrated in game.
