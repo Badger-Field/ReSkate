@@ -222,7 +222,12 @@ python studio_prep.py venice.glb venice.blend      # optional, for ReSkate Studi
 - **The park:** it finds the mapped skatepark at the centre (`leisure=skatepark`, or `sport=skateboard`).
 - **The surface:** builds it from the LiDAR's ground at 0.25 m (`--park-cell`), with skaters and trees left out.
 - **The coping:** grind curves along each bowl's coping, from the bowl outlines OpenStreetMap maps as holes in the park. Where there are none, it finds bowls in the ground.
-- **The output:** a mesh with the bowls' measured shapes, depths and coping lines. It was made for ReSkate Studio custom maps, a route this project no longer pursues (CUSTOM-MAPS.md). It is kept as data for building skateparks from Build Kit objects.
+- **As a park mod** (`--mods` / `--park`, with `--anchor`): each bowl becomes a ring of Build Kit quarter pipes, rising out of the ground to its measured depth.
+  - The coping lies on the bowl's real coping line.
+  - Quarters stop at 2.4 m. In a narrow bowl they are lower, to leave a flat bottom.
+  - Quarters that would mostly overlap are left out, so round ends are approximate.
+  - See [examples/venice-beach-skatepark.md](examples/venice-beach-skatepark.md).
+- **The mesh** (`--mesh`): the bowls' measured shapes, depths and coping lines, as data. It was made for ReSkate Studio custom maps, a route this project no longer pursues (CUSTOM-MAPS.md).
 - **Limits:** aerial LiDAR gets bowl shapes and depths, but not the coping lip: see [examples/venice-beach-skatepark.md](examples/venice-beach-skatepark.md).
 
 | Option | |

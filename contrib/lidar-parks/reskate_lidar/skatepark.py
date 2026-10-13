@@ -23,6 +23,7 @@ from scipy.spatial import cKDTree
 from . import ept
 from .city import CityModel, Grid
 from .citymesh import Grind
+from .features import Feature
 from .mapdata import MapItem
 
 
@@ -269,3 +270,79 @@ def build(items: list[MapItem], points: ept.Points, near=(0.0, 0.0), cell: float
         notes.append(f"{density:.0f} ground points/m² over the park: bowl shapes and depths come through, "
                      "the coping lip and the top of vertical walls do not (a ground scan adds them)")
     return Park(model, outline, bowls, deck, density, removed, notes)
+
+
+# ---------------------------------------------------------------- as a park mod
+
+RUN_PER_HEIGHT = 1.4      # a Build Kit quarter pipe's run for its height (1.5 m for 1.0 m, 3 m for 2.4 m)
+MIN_EDGE = 1.0            # metres: shorter outline edges are left to their neighbours' quarters
+SIMPLIFY = 0.75           # metres: a bowl's outline is straightened at least this much into runs of quarters
+FLAT_BOTTOM = 0.8         # a quarter's run is at most this share of the bowl's inner radius
+MAX_OVERLAP = 0.4         # a quarter mostly on top of ones already placed is left out
+MIN_QUARTER = 0.5         # metres: a hollow with room only for lower quarters is not built as a bowl
+
+
+def inner_radius(outline) -> float:
+    """The radius of the largest circle inside the outline (to 5 cm)."""
+    lo, hi = 0.0, math.sqrt(outline.area)
+    while hi - lo > 0.05:
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if not outline.buffer(-mid).is_empty else (lo, mid)
+    return lo
+
+
+def bowl_features(park: Park, max_height: float = 2.4) -> tuple[list[Feature], list[str]]:
+    """Each bowl as a ring of quarter pipes, for a park mod: Build Kit objects stand on the base
+    map and cannot dig, so a bowl becomes transitions rising out of the ground to its measured
+    depth, with the coping along its real coping line.
+
+    The outline is straightened into edges; along each, quarters face into the bowl, their tops
+    on the edge. A quarter's run grows with its height, so in a narrow bowl the height is capped
+    to leave a flat bottom. Quarters that would mostly sit on top of others (round bowls' many
+    short edges) are left out, longest edges first: an approximation of the bowl's plan, not its
+    exact shape."""
+    import shapely
+    from shapely.geometry.polygon import orient
+    features, notes = [], []
+    for number, bowl in enumerate(park.bowls):
+        outline = bowl.outline
+        if outline.geom_type == "MultiPolygon":
+            outline = max(outline.geoms, key=lambda g: g.area)
+        height = float(min(bowl.depth, max_height))
+        room = FLAT_BOTTOM * inner_radius(outline) / RUN_PER_HEIGHT
+        if bowl.depth > max_height:
+            notes.append(f"bowl {number}: {bowl.depth:.1f} m deep; its quarters stop at {max_height:.1f} m")
+        if room < MIN_QUARTER:
+            notes.append(f"bowl {number}: too small for quarter pipes ({inner_radius(outline) * 2:.1f} m across)")
+            continue
+        if room < height:
+            notes.append(f"bowl {number}: {inner_radius(outline) * 2:.1f} m across at its narrowest, so its quarters "
+                         f"are {room:.1f} m high, not {height:.1f} m, to leave a flat bottom")
+            height = room
+        run = height * RUN_PER_HEIGHT
+        straight = orient(outline.simplify(max(SIMPLIFY, run / 4), preserve_topology=True), 1.0)   # CCW
+        ring = np.asarray(straight.exterior.coords)
+        candidates = []
+        for a, b in zip(ring[:-1], ring[1:]):
+            edge = b - a
+            length = float(np.hypot(*edge))
+            if length < MIN_EDGE:
+                continue
+            outward = np.array([edge[1], -edge[0]]) / length          # right of a CCW edge: outside
+            centre = (a + b) / 2 - outward * run / 2
+            if not shapely.contains_xy(outline, *centre):
+                continue
+            candidates.append(Feature("quarter", (float(centre[0]), float(centre[1])),
+                                      math.atan2(outward[1], outward[0]), run, length, height,
+                                      notes=[f"bowl {number}"]))
+        kept, taken = [], None
+        for f in sorted(candidates, key=lambda f: -f.across):
+            footprint = shapely.Polygon(f.footprint())
+            if taken is not None and footprint.intersection(taken).area > MAX_OVERLAP * footprint.area:
+                continue
+            kept.append(f)
+            taken = footprint if taken is None else taken.union(footprint)
+        if not kept:
+            notes.append(f"bowl {number}: too small for quarter pipes of {height:.1f} m")
+        features += kept
+    return features, notes

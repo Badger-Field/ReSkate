@@ -399,25 +399,8 @@ def run_city(args) -> int:
         print(f"  skipped: {line}")
 
     name = args.name or re.sub(r"[^A-Za-z0-9 _\-.]", "", (args.place or "City block").split(",")[0]).strip()[:64] or "City block"
-    if args.park or args.mods:
-        anchor = park.read_anchor(args.anchor, cat.marker) if args.anchor else park.Anchor()
-        map_name = args.map or anchor.map or "bam"
-        document = park.build_park(placements, map_name, anchor)
-        written = len(document["maps"][map_name])
-        if written < len(placements):
-            print(f"note: {len(placements) - written} placements were exact duplicates and were written once")
-        if not args.anchor:
-            print("note: no --anchor, so the place sits at the map's origin; see README for placing it")
-        if args.park:
-            Path(args.park).write_text(park.encode(document), encoding="utf-8")
-            print(f"Wrote {args.park}")
-        if args.mods:
-            description = (f"{name}, built from open data with {len(placements)} Build Kit objects. "
-                           + " ".join(attribution))[:512]
-            written = park.write_mod(args.mods, name, document, name, args.author, args.version, description)
-            readme = written.parent.parent / "README.md"
-            readme.write_text(city_readme(name, label, bbox, model, placements, attribution), encoding="utf-8")
-            print(f"Wrote {written}")
+    _write_place_park(args, cat, name, placements, attribution,
+                      city_readme(name, label, bbox, model, placements, attribution))
 
     mesh_info = None
     if args.mesh:
@@ -437,6 +420,29 @@ def run_city(args) -> int:
     return 0
 
 
+def _write_place_park(args, cat, name, placements, attribution, readme_text) -> None:
+    """The placements as a park file (--park) and a mod (--mods), against the anchor."""
+    if not (args.park or args.mods):
+        return
+    anchor = park.read_anchor(args.anchor, cat.marker) if args.anchor else park.Anchor()
+    map_name = args.map or anchor.map or "bam"
+    document = park.build_park(placements, map_name, anchor)
+    written = len(document["maps"][map_name])
+    if written < len(placements):
+        print(f"note: {len(placements) - written} placements were exact duplicates and were written once")
+    if not args.anchor:
+        print("note: no --anchor, so the place sits at the map's origin; see README for placing it")
+    if args.park:
+        Path(args.park).write_text(park.encode(document), encoding="utf-8")
+        print(f"Wrote {args.park}")
+    if args.mods:
+        description = (f"{name}, built from open data with {len(placements)} Build Kit objects. "
+                       + " ".join(attribution))[:512]
+        written = park.write_mod(args.mods, name, document, name, args.author, args.version, description)
+        (written.parent.parent / "README.md").write_text(readme_text, encoding="utf-8")
+        print(f"Wrote {written}")
+
+
 def _run_skatepark(args, label, bbox, items, lidar, survey) -> int:
     from . import citymesh, preview, skatepark
     if lidar is None:
@@ -454,6 +460,20 @@ def _run_skatepark(args, label, bbox, items, lidar, survey) -> int:
               + ("" if bowl.from_map else " (found in the ground)"))
     for note in park_result.notes:
         print(f"  note: {note}")
+
+    # As a park mod: each bowl a ring of quarter pipes to its depth, the coping on its real line.
+    cat = catalog_module.load_catalog(args.catalog)
+    features, notes = skatepark.bowl_features(park_result)
+    placements, skipped = catalog_module.place(features, cat)
+    if len(placements) > args.max_objects:
+        skipped.append(f"{len(placements) - args.max_objects} quarter pipes over the {args.max_objects}-object budget")
+        placements = placements[:args.max_objects]
+    print(f"\nAs a park mod: {len(placements)} quarter pipes round {len(park_result.bowls)} bowls")
+    for line in notes + skipped:
+        print(f"  note: {line}")
+    name = args.name or re.sub(r"[^A-Za-z0-9 _\-.]", "", (args.place or "Skatepark").split(",")[0]).strip()[:64] or "Skatepark"
+    _write_place_park(args, cat, name, placements, attribution,
+                      skatepark_readme(name, label, bbox, park_result, placements, attribution))
     info = None
     if args.mesh:
         info = citymesh.write(model, args.mesh, tile=args.tile)
@@ -463,7 +483,7 @@ def _run_skatepark(args, label, bbox, items, lidar, survey) -> int:
     else:
         print("(no mesh written: pass --mesh park.glb)")
     if args.preview:
-        preview.render_city(model, [], args.preview)
+        preview.render_city(model, placements, args.preview)
         print(f"Wrote {args.preview}")
     if args.report:
         Path(args.report).write_text(json.dumps({
@@ -475,7 +495,11 @@ def _run_skatepark(args, label, bbox, items, lidar, survey) -> int:
             "bowls": [{"area": b.outline.area, "depth": b.depth, "rim": b.rim, "floor": b.floor,
                        "points_per_m2": b.density, "steepest_degrees": b.steepest, "from_map": b.from_map,
                        "coping_length": b.outline.exterior.length} for b in park_result.bowls],
-            "spawn": model.spawn, "notes": park_result.notes, "mesh": info, "attribution": attribution,
+            "spawn": model.spawn, "notes": park_result.notes + notes + skipped, "mesh": info,
+            "park_mod": {"quarter_pipes": len(placements),
+                         "objects": [{"item": p.item.item, "x": p.x, "y": p.y, "yaw": p.yaw, "scale": p.scale}
+                                     for p in placements]},
+            "attribution": attribution,
         }, indent=2, default=float), encoding="utf-8")
         print(f"Wrote {args.report}")
     print("\n" + "\n".join(attribution))
@@ -498,6 +522,19 @@ def city_report(label, bbox, model, placements, skipped, attribution, mesh_info)
                        for p in placements],
         "skipped": skipped, "notes": model.notes, "mesh": mesh_info, "attribution": attribution,
     }
+
+
+def skatepark_readme(name, label, bbox, park_result, placements, attribution) -> str:
+    bowls = ", ".join(f"{b.depth:.1f} m" for b in park_result.bowls) or "none"
+    return (f"# {name}\n\n"
+            f"A real skatepark in skate., made by ReSkate's `reskate_lidar city --skatepark` from open data: {label} "
+            f"({bbox.centre[0]:.5f}, {bbox.centre[1]:.5f}).\n\n"
+            f"Bowls measured in aerial LiDAR (depths {bowls}), each built as a ring of Build Kit quarter pipes "
+            f"rising to its depth, with the coping on the bowl's real coping line: {len(placements)} objects. "
+            "Build Kit objects cannot be sunk into the ground, so the bowls stand on it.\n\n"
+            "## Attribution\n\n" + "\n".join(f"- {line}" for line in attribution) + "\n\n"
+            "OpenStreetMap data is available under the Open Database License (ODbL 1.0): "
+            "https://www.openstreetmap.org/copyright. This park is a Produced Work from it.\n")
 
 
 def city_readme(name, label, bbox, model, placements, attribution) -> str:

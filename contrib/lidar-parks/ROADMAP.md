@@ -123,6 +123,7 @@ These apply to every phase:
 
 Done since the last list:
 - **The Studio-ready mesh:** `sk8_*` extras, a `spawn` node, grind curves, and `studio_prep.py`. Since then, the custom-map route has been dropped (Questions, 1).
+- **Skatepark bowls as park mods.** `city --skatepark --mods …` builds each measured bowl as a ring of Build Kit quarter pipes, rising to its depth with the coping on its real coping line. Venice: 78 quarter pipes round 4 bowls (examples/).
 - **Anchor check:** `anchor probe` / `anchor check` measure the base map under a park with the trainer's ground probe.
 - **Kerbs from the ground.** Where a road's edge runs along a sidewalk or plaza and the ground steps 8-30 cm up from the road, each straight stretch of at least 2 m is a low ledge (a slappy curb in the park). Kerbs come after every other spot, at most 12 (`Settings.kerbs`).
 - **LiDAR outside the US.** `--lidar` reads LAS, LAZ and COPC tiles on disk (AHN, the UK Environment Agency, Denmark, Finland), and EPT, in any CRS. Reprojection goes through `pyproj`. `--lidar-credit` carries the survey's credit into every output. It is tested on the synthetic block placed in Amsterdam, written as AHN-style tiles in the Dutch RD grid.
@@ -134,10 +135,10 @@ Done since the last list:
    - Denmark, Finland, and OpenTopography.
 
    These hosts are blocked from this cloud environment, so it needs a run on the PC to record their answers first.
-2. **Skatepark bowls as park mods** (phase 3). Turn `--skatepark`'s measured bowls into Build Kit objects:
-   - a raised deck;
-   - quarter pipes or banks at each bowl's depth and wall angle;
-   - coping rails along the outlines.
+2. **Skatepark bowls in game.** Each bowl is now a ring of quarter pipes (done, above). Next:
+   - load Venice as a park mod and check the bowls skate;
+   - fill the gaps at round ends with smaller quarters, or with banks set at an angle;
+   - add a deck at coping height where the real park has one.
 3. **Surfaces.** Carry `surface=*` (asphalt, paving_stones, concrete, wood, metal) into the report, and into the choice of stand-in where the catalog has variants.
 4. **Better stand-ins for big spots.** A 20 m bench ledge is several boxes end to end. Tune `catalog.json` once the sizes are calibrated in game.
 5. **Street-level imagery** (DATA-SOURCES.md). At Venice, Panoramax and KartaView have nothing within 100 m. Mapillary is unknown until a client token is set. Then:

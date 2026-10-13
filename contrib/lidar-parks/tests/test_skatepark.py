@@ -16,8 +16,8 @@ import numpy as np
 import pytest
 import shapely
 
-from reskate_lidar import citymesh, ept, geo, skatepark
-from reskate_lidar.cli import main
+from reskate_lidar import catalog, citymesh, ept, geo, park as park_module, skatepark
+from reskate_lidar.cli import DEFAULT_CATALOG, main
 from reskate_lidar.mapdata import MapItem
 from test_city import FRAME, glb_document, overpass_answer, write_ept
 
@@ -161,9 +161,18 @@ def test_skatepark_command(tmp_path):
     code = main(["city", f"--centre={FRAME.lat},{FRAME.lon}", "--size", "60", "--skatepark",
                  "--lidar", str(tmp_path / "ept"), "--sources", "osm", "--overpass", str(answer),
                  "--cache", str(tmp_path / "cache"), "--mesh", str(tmp_path / "park.glb"),
-                 "--preview", str(tmp_path / "park.png"), "--report", str(tmp_path / "park.json")])
+                 "--preview", str(tmp_path / "park.png"), "--report", str(tmp_path / "park.json"),
+                 "--mods", str(tmp_path / "Mods"), "--name", "Synthetic Bowl", "--author", "tests"])
     assert code == 0
+    mod = tmp_path / "Mods" / "Synthetic Bowl"
+    document = json.loads((mod / "parks" / "bam.park.json").read_text())
+    park_module.validate_park(document)
+    objects = document["maps"]["bam"]
+    assert objects and all("quarterpipe" in o["item"] for o in objects)
+    readme = (mod / "README.md").read_text()
+    assert "quarter pipes" in readme and "OpenStreetMap contributors" in readme
     report = json.loads((tmp_path / "park.json").read_text())
+    assert report["park_mod"]["quarter_pipes"] == len(objects)
     (bowl,) = report["bowls"]
     assert bowl["from_map"] and bowl["depth"] == pytest.approx(DEPTH, abs=0.2)
     assert "OpenStreetMap" in " ".join(report["attribution"])
@@ -195,3 +204,44 @@ def test_studio_prep_lays_out_the_blend(park, tmp_path):
     # Blender is Z up with Y north: the spawn keeps its east/north place.
     assert found["spawn"][0] == pytest.approx(park.model.spawn[0], abs=0.01)
     assert found["spawn"][1] == pytest.approx(park.model.spawn[1], abs=0.01)
+
+
+def test_bowls_become_rings_of_quarter_pipes(park):
+    features, notes = skatepark.bowl_features(park)
+    assert features and not notes
+    (bowl,) = park.bowls
+    outline = bowl.outline
+    covered = 0.0
+    for f in features:
+        assert f.kind == "quarter" and f.height == pytest.approx(DEPTH, abs=0.2)
+        u = np.array([math.cos(f.yaw), math.sin(f.yaw)])
+        centre = np.array(f.centre)
+        assert (centre - BOWL_CENTRE) @ u > 0                          # rising away from the middle
+        assert shapely.contains_xy(outline, *centre)
+        top = centre + u * f.along / 2                                 # the coping edge
+        assert outline.exterior.distance(shapely.Point(*top)) < 0.8    # on the real coping line
+        covered += f.across
+    # Round bowls lose the quarters that would overlap: at least 40% of the rim keeps one.
+    assert 0.4 * outline.exterior.length <= covered <= 1.1 * outline.exterior.length
+    footprints = [shapely.Polygon(f.footprint()) for f in features]
+    for i, a in enumerate(footprints):                               # none mostly on top of the others
+        others = shapely.union_all([b for j, b in enumerate(footprints) if j != i])
+        assert a.intersection(others).area <= 0.5 * a.area
+
+    placements, skipped = catalog.place(features, catalog.load_catalog(DEFAULT_CATALOG))
+    assert not skipped and placements
+    assert all("quarterpipe" in p.item.item for p in placements)
+    assert all(p.item.height * p.scale == pytest.approx(DEPTH, abs=0.3) for p in placements)
+
+
+def test_deep_bowls_are_capped_and_tiny_ones_reported(park):
+    deep = skatepark.Park(park.model, park.outline,
+                          [skatepark.Bowl(park.bowls[0].outline, 100, DECK, DECK - 3.5, 70, True),
+                           skatepark.Bowl(shapely.Point(5, 5).buffer(0.6), 10, DECK, DECK - 2.0, 60, False)],
+                          DECK, 10.0, 0)
+    features, notes = skatepark.bowl_features(deep)
+    # 3.5 m deep: capped at 2.4 m, then by the 8 m-wide bowl's room for a flat bottom.
+    room = skatepark.FLAT_BOTTOM * skatepark.inner_radius(park.bowls[0].outline) / skatepark.RUN_PER_HEIGHT
+    assert all(f.height == pytest.approx(min(2.4, room)) for f in features)
+    assert any("3.5 m deep" in n for n in notes) and any("flat bottom" in n for n in notes)
+    assert any("bowl 1: too small" in n for n in notes)
