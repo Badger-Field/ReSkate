@@ -355,7 +355,10 @@ if(DINGOSDK_BUILD_TRAINER_TESTS)
     target_include_directories(dingosdk_trainer_tuning_dump PRIVATE "${PROJECT_SOURCE_DIR}")
     target_link_libraries(dingosdk_trainer_tuning_dump PRIVATE dingosdk_game_archives)
     # Fails when the game's data stops naming a tuning value (the trainer's table comes from those names).
-    add_test(NAME trainer_tuning_names COMMAND dingosdk_trainer_tuning_dump "${DINGOSDK_TEST_GAME_ROOT}")
+    # It reads the game's own files: pass the Skate folder in DINGOSDK_TEST_GAME_ROOT to run it.
+    if(DINGOSDK_TEST_GAME_ROOT)
+        add_test(NAME trainer_tuning_names COMMAND dingosdk_trainer_tuning_dump "${DINGOSDK_TEST_GAME_ROOT}")
+    endif()
     # What a session's host shares beyond its tuning: the encoding, and what a guest refuses.
     add_executable(dingosdk_trainer_session_tests Extension/Trainer/Test/session_extras_tests.cpp Extension/Trainer/trainer_session.cpp)
     target_include_directories(dingosdk_trainer_session_tests PRIVATE "${PROJECT_SOURCE_DIR}")
@@ -392,12 +395,15 @@ if(DINGOSDK_BUILD_HALL_OF_MEAT_TESTS)
         Extension/HallOfMeat/hall_of_meat_model.cpp Extension/HallOfMeat/hall_of_meat_card.cpp)
     target_include_directories(dingosdk_hall_of_meat_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     add_test(NAME hall_of_meat COMMAND dingosdk_hall_of_meat_tests)
-    # skate.'s own skeleton mesh, read from the game's data and posed (with a Skate folder).
-    add_executable(dingosdk_hall_of_meat_skeleton_tests Extension/HallOfMeat/Test/hall_of_meat_skeleton_tests.cpp
-        Extension/HallOfMeat/hall_of_meat_skeleton.cpp)
-    target_include_directories(dingosdk_hall_of_meat_skeleton_tests PRIVATE "${PROJECT_SOURCE_DIR}")
-    target_link_libraries(dingosdk_hall_of_meat_skeleton_tests PRIVATE dingosdk_game_archives dingosdk_logging)
-    add_test(NAME hall_of_meat_skeleton COMMAND dingosdk_hall_of_meat_skeleton_tests "${DINGOSDK_TEST_GAME_ROOT}")
+    # skate.'s own skeleton mesh, read from the game's data and posed: on Windows (its logging is
+    # Windows-only), with the Skate folder in DINGOSDK_TEST_GAME_ROOT.
+    if(WIN32 AND DINGOSDK_TEST_GAME_ROOT)
+        add_executable(dingosdk_hall_of_meat_skeleton_tests Extension/HallOfMeat/Test/hall_of_meat_skeleton_tests.cpp
+            Extension/HallOfMeat/hall_of_meat_skeleton.cpp)
+        target_include_directories(dingosdk_hall_of_meat_skeleton_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+        target_link_libraries(dingosdk_hall_of_meat_skeleton_tests PRIVATE dingosdk_game_archives dingosdk_logging)
+        add_test(NAME hall_of_meat_skeleton COMMAND dingosdk_hall_of_meat_skeleton_tests "${DINGOSDK_TEST_GAME_ROOT}")
+    endif()
 endif()
 get_property(project_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(target IN LISTS project_targets)
