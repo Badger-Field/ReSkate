@@ -381,3 +381,57 @@ def test_city_refuses_huge_areas(tmp_path, capsys):
     code = main(["city", "--centre", "37.79,-122.39", "--size", "5000", "--lidar", "none", "--cache", str(tmp_path)])
     assert code == 2
     assert "km²" in capsys.readouterr().err
+
+
+def with_a_home():
+    """The synthetic block plus a residential parcel along the square's east edge (x 30-40): a
+    house, and a bench just inside the parcel (0.6 m from the square, which once let a spot in) and
+    a low wall in its yard, all visible in the points."""
+    items = synthcity.map_items() + [
+        mapdata.MapItem(shapely.box(30, -30, 40, 28), {"landuse": "residential"}, "osm", "way/20"),
+        # An L-shaped house, 8.6 m tall in the points.
+        mapdata.MapItem(shapely.Polygon([(33, -25), (39, -25), (39, -15), (36, -15), (36, -19), (33, -19)]),
+                        {"building": "house"}, "osm", "way/21"),
+        mapdata.MapItem(shapely.Point(30.6, 5.0), {"amenity": "bench", "direction": "90"}, "osm", "node/22"),
+        mapdata.MapItem(shapely.LineString([(33, 15), (39, 15)]), {"barrier": "wall", "height": "0.5"}, "osm", "way/23"),
+    ]
+    points = synthcity.survey()
+    xy = points.xyz[:, :2]
+    house = shapely.contains_xy(items[-3].geometry, xy[:, 0], xy[:, 1])
+    points.xyz[house, 2] += 8.6
+    points.classes[house] = ept.BUILDING
+    bench = shapely.contains_xy(synthcity._rect((30.6, 5.0), math.pi / 2, 1.8, 0.5), xy[:, 0], xy[:, 1])
+    points.xyz[bench, 2] += 0.45
+    points.classes[bench] = 1
+    return items, points
+
+
+def test_no_spots_on_residential_parcels():
+    items, points = with_a_home()
+    model = city.build(synthcity.BOUNDS, items, points)
+    for spot in model.spots:
+        assert spot.feature.centre[0] < 30, (spot.what, spot.feature.centre)
+    assert "1 spots on residential parcels left out" in model.notes
+    # Without the parcel, the same bench is a spot: the rule is what keeps it out.
+    open_items = [i for i in items if i.tags.get("landuse") != "residential"]
+    assert any(s.what == "bench" and s.feature.centre[0] > 30 for s in city.build(synthcity.BOUNDS, open_items, points).spots)
+    # The square's own spots are all still there.
+    assert {s.what for s in model.spots} >= {"steps", "handrail", "bench", "wall"}
+
+
+def test_homes_are_plain_blocks():
+    items, points = with_a_home()
+    model = city.build(synthcity.BOUNDS, items, points)
+    (house,) = [b for b in model.buildings if b.home]
+    # The L becomes its smallest rectangle, and 8.6 m becomes 8 m.
+    assert house.footprint.area == pytest.approx(6 * 10, rel=0.01)
+    assert len(house.footprint.exterior.coords) == 5
+    assert house.height == 8.0 and house.height_from == "lidar"
+    (office,) = [b for b in model.buildings if not b.home]
+    assert office.height == pytest.approx(12.0, abs=0.5)  # not a home: measured as it is
+
+
+def test_a_house_off_residential_land_is_still_a_home():
+    item = mapdata.MapItem(shapely.box(0, 0, 5, 5), {"building": "detached"}, "osm")
+    assert city.is_home(item, None)
+    assert not city.is_home(mapdata.MapItem(shapely.box(0, 0, 5, 5), {"building": "office"}, "osm"), None)

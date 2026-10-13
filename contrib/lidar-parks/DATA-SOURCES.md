@@ -55,6 +55,8 @@ Only ground, structures and street furniture are kept.
 - **Spot search:** spots are looked for only in public, car-free space, so cars, people and back yards are not read.
 - **Ground outside public space:** away from streets and buildings, the ground is smoothed to a few metres.
 - **Buildings:** closed blocks, with no interiors.
+- **Homes:** houses, apartments, and anything on residential land are plain rectangular blocks, with heights rounded to 2 m.
+- **Residential parcels:** they never get a skate spot.
 
 ### Caching and git
 

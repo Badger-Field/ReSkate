@@ -14,7 +14,7 @@ These need a human.
 2. **Where should city parks go on San Vansterdam (`bam`)?** A 160 m square of real plaza needs open, flat ground at least that big.
    - Is there such a spot?
    - Do Build Kit objects 80 m from the anchor still load and collide?
-3. **Can this environment reach OpenStreetMap?** This cloud environment's network policy blocks:
+1. **Can this environment reach OpenStreetMap?** This cloud environment's network policy blocks:
    - `overpass-api.de`
    - `nominatim.openstreetmap.org`
    - `opentopography.org`
@@ -41,8 +41,8 @@ The anchor is a measuring stick on open ground, as in README step 1. Then check:
 1. **Load:** **PARK MODS** lists *Embarcadero Plaza*, and it loads without errors. About 50 objects: stairs, handrails, ledges, pads and banks.
 2. **Layout:** compare with `emb.png`. North in the plaza should be the stick's left (+90° from its facing), since the stick faces east. Does the layout match? If it is mirrored, tell us: the frame is meant to be right, but nobody has checked it in game yet.
 3. **Ledges:** the long benches round the sunken lawn (#4, #6, #8 in the preview) should be grindable at about 0.45 m.
-4. **Stairs and rails:** the stairs (#1, 0.8 m) should have no gap under them, and handrails should line up with the flights.
-5. **Mesh:** if you have a level tool, open `--mesh emb.glb` and check:
+2. **Stairs and rails:** the stairs (#1, 0.8 m) should have no gap under them, and handrails should line up with the flights.
+3. **Mesh:** if you have a level tool, open `--mesh emb.glb` and check:
    - its scale against a 1 m Build Kit stick;
    - it is Y up;
    - north is +Z.
@@ -118,22 +118,21 @@ These apply to every phase:
 
 ## Next
 
-1. **Studio-ready mesh,** for phase 2. Add `sk8_*` extras on every node, a `spawn` node, grind polylines and a headless-Blender converter script.
-2. **Stricter residential handling.** Inside `landuse=residential`, and for buildings tagged house, detached or residential:
-   - simplify footprints to plain blocks;
-   - round heights;
-   - never add spots.
-3. **Kerbs from the ground.** Road edges are 15 cm steps in the DTM: slappy curbs along plazas. Map them only where a footway meets a road, and cap the count.
-4. **Other open LiDAR.**
+Done since the last list:
+- **The Studio-ready mesh,** for phase 2: `sk8_*` extras, a `spawn` node, grind curves, and `studio_prep.py`.
+- **Stricter residential handling.** On residential parcels (residential land that is not street, footway or park), no spot is ever placed. Homes (houses, detached, terraces, apartments, and any building on residential land) are their footprint's smallest rectangle, with the height rounded to 2 m.
+
+1. **Kerbs from the ground.** Road edges are 15 cm steps in the DTM: slappy curbs along plazas. Map them only where a footway meets a road, and cap the count.
+2. **Other open LiDAR.**
    - **Readers:** COPC/LAZ tile lists, for the Netherlands' AHN (CC0), the UK Environment Agency (OGL), Denmark and Finland, and OpenTopography datasets.
    - **Reprojection:** EPSG codes other than 3857 and 4326, through `pyproj` (optional).
-5. **Neighbourhoods** (phase 3): tiles, level of detail, and per-tile budgets (triangles, collision parts, objects, file size).
-6. **Surfaces.** Carry `surface=*` (asphalt, paving_stones, concrete, wood, metal) into the mesh extras and the report.
-7. **Better stand-ins for big spots.** A 20 m bench ledge is several boxes end to end. Tune `catalog.json` once the sizes are calibrated in game.
-8. **Street-level imagery** (DATA-SOURCES.md). At Venice, Panoramax and KartaView have nothing within 100 m. Mapillary is unknown until a client token is set. Then:
+3. **Neighbourhoods** (phase 3): tiles, level of detail, and per-tile budgets (triangles, collision parts, objects, file size).
+4. **Surfaces.** Carry `surface=*` (asphalt, paving_stones, concrete, wood, metal) into the mesh extras and the report.
+5. **Better stand-ins for big spots.** A 20 m bench ledge is several boxes end to end. Tune `catalog.json` once the sizes are calibrated in game.
+6. **Street-level imagery** (DATA-SOURCES.md). At Venice, Panoramax and KartaView have nothing within 100 m. Mapillary is unknown until a client token is set. Then:
    - colours for skatepark meshes;
    - facade textures for blocks, kept as separate CC BY-SA parts.
-9. **Leisure=skatepark.** Report mapped skateparks in the area, and point to `convert` (phone scan) for their real shapes.
+7. **Leisure=skatepark.** Report mapped skateparks in the area, and point to `convert` (phone scan) for their real shapes.
 
 ## Known limits
 

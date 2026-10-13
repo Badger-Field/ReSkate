@@ -42,6 +42,12 @@ SOFT = {("landuse", "grass"), ("landuse", "meadow"), ("leisure", "garden"), ("na
         ("natural", "grassland"), ("natural", "wood"), ("landuse", "forest"), ("surface", "grass"),
         ("overture:class", "grass"), ("overture:class", "garden"), ("overture:class", "meadow"),
         ("overture:class", "forest"), ("overture:class", "flowerbed"), ("landuse", "flowerbed")}
+# Where people live: land tagged residential, and buildings that are homes. Inside it, outside
+# public space (streets, footways, parks), nothing is modelled beyond the lie of the land and plain
+# blocks for the homes; no skate spot is ever placed there.
+RESIDENTIAL = {("landuse", "residential"), ("overture:subtype", "residential"), ("overture:class", "residential")}
+HOMES = {"house", "detached", "residential", "semidetached_house", "terrace", "bungalow", "cabin",
+         "farm", "static_caravan", "houseboat", "apartments"}
 PUBLIC_AREAS = {("place", "square"), ("leisure", "park"), ("leisure", "skatepark"), ("leisure", "playground"),
                 ("leisure", "pitch"), ("highway", "pedestrian"), ("amenity", "marketplace"),
                 ("overture:class", "pedestrian"), ("overture:class", "plaza"), ("overture:class", "park"),
@@ -93,6 +99,7 @@ class Building:
     height: float            # roof above base
     height_from: str         # "lidar", "tag", "levels" or "default"
     source: str
+    home: bool = False       # a home, shown only as a plain block with a rounded height
 
 
 @dataclass
@@ -186,16 +193,20 @@ def _width(item: MapItem, table: dict, default: float) -> float:
     return mapdata.length_tag(item.tag("width")) or mapdata.length_tag(item.tag("est_width")) or table.get(item.tag("highway"), default)
 
 
-def areas(items: list[MapItem]) -> tuple[object, object, object, object]:
-    """Public space, roads (where cars go), buildings and soft ground (grass, beds), as shapely geometries."""
+def areas(items: list[MapItem]) -> tuple[object, object, object, object, object]:
+    """Public space, roads (where cars go), buildings, soft ground (grass, beds) and residential
+    land, as shapely geometries."""
     from shapely.ops import unary_union
 
-    public, roads, buildings, soft = [], [], [], []
+    public, roads, buildings, soft, residential = [], [], [], [], []
     for item in items:
         g, tags = item.geometry, item.tags
         polygonal = g.geom_type in ("Polygon", "MultiPolygon")
         if polygonal and any(tags.get(k) == v for k, v in SOFT):
             soft.append(g)
+        if polygonal and any(tags.get(k) == v for k, v in RESIDENTIAL):
+            residential.append(g)
+            continue
         if "building" in tags and polygonal and tags.get("building") != "no":
             buildings.append(g)
             continue
@@ -210,13 +221,25 @@ def areas(items: list[MapItem]) -> tuple[object, object, object, object]:
                 roads.append(g.buffer(_width(item, ROAD_WIDTH, 7) / 2, cap_style="flat"))
             elif highway in WALK_WIDTH:
                 public.append(g.buffer(_width(item, WALK_WIDTH, 2) / 2))
-    return tuple(unary_union(p) if p else None for p in (public, roads, buildings, soft))
+    return tuple(unary_union(p) if p else None for p in (public, roads, buildings, soft, residential))
 
 
 # ---------------------------------------------------------------- buildings
 
+def is_home(item: MapItem, residential) -> bool:
+    """A home: tagged as one, or any building standing on residential land."""
+    if item.tags.get("building") in HOMES:
+        return True
+    return residential is not None and residential.contains(item.geometry.representative_point())
+
+
+def plain_block(footprint, height: float) -> tuple[object, float]:
+    """A home as a block: its footprint's smallest rectangle, its height to the nearest 2 m (at least 4 m)."""
+    return footprint.minimum_rotated_rectangle, max(4.0, 2.0 * round(height / 2.0))
+
+
 def buildings_from(items: list[MapItem], ground: Grid, lidar: ept.Points | None,
-                   tree: tuple[cKDTree, np.ndarray] | None) -> list[Building]:
+                   tree: tuple[cKDTree, np.ndarray] | None, residential=None) -> list[Building]:
     import shapely
 
     chosen: list[tuple[object, MapItem]] = []
@@ -258,6 +281,10 @@ def buildings_from(items: list[MapItem], ground: Grid, lidar: ept.Points | None,
             height, how = 3.2 * mapdata.count_tag(item.tag("building:levels")) + 1.0, "levels"
         if height is None:
             height, how = 8.0, "default"
+        if is_home(item, residential):
+            footprint, height = plain_block(footprint, height)
+            result.append(Building(footprint, base, float(height), how, item.source, home=True))
+            continue
         result.append(Building(footprint, base, float(height), how, item.source))
     return result
 
@@ -653,8 +680,10 @@ def build(bounds, items: list[MapItem], lidar: ept.Points | None, settings: Sett
     ground, measured = ground_grid(lidar, bounds, s.ground_cell)
     if not measured:
         notes.append("no ground points: the ground is flat")
-    public, roads, building_area, soft = areas(items)
+    public, roads, building_area, soft, residential = areas(items)
     public = public.intersection(area) if public is not None else shapely.Polygon()
+    # Residential parcels: residential land that is not street, footway or park.
+    homes_land = residential.difference(public) if residential is not None else shapely.Polygon()
     car_free = public
     for cut in (roads, building_area, soft):
         if cut is not None:
@@ -669,8 +698,9 @@ def build(bounds, items: list[MapItem], lidar: ept.Points | None, settings: Sett
 
     measure = Measure(lidar, ground)
     tree = (measure.tree, measure.z) if measure.tree is not None else None
-    buildings = buildings_from(items, ground, lidar, tree)
-    say(f"  {len(buildings)} buildings")
+    buildings = buildings_from(items, ground, lidar, tree, residential)
+    homes = sum(1 for b in buildings if b.home)
+    say(f"  {len(buildings)} buildings" + (f", {homes} of them homes (plain blocks)" if homes else ""))
 
     car_free_mask = rasterise(car_free, ground)
     tagged = [sp for sp in spots_from_tags(items, measure, ground, notes)
@@ -684,7 +714,11 @@ def build(bounds, items: list[MapItem], lidar: ept.Points | None, settings: Sett
         banks = _dedupe(tagged + found, banks_from_ground(ground, car_free_mask, [t for t in tagged if t.what == "steps"]))
         say(f"  {len(banks)} banks in the ground")
         found += banks
-    spots = sorted(tagged + found, key=lambda sp: (sp.priority, -sp.feature.along))
+    shapely.prepare(homes_land)
+    private = {id(sp) for sp in tagged + found if homes_land.contains(shapely.Point(sp.feature.centre))}
+    if private:
+        notes.append(f"{len(private)} spots on residential parcels left out")
+    spots = sorted((sp for sp in tagged + found if id(sp) not in private), key=lambda sp: (sp.priority, -sp.feature.along))
     for b in buildings:
         if b.height_from == "default":
             notes.append(f"building at ({b.footprint.centroid.x:.0f}, {b.footprint.centroid.y:.0f}): "
