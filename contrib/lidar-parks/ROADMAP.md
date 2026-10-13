@@ -60,7 +60,7 @@ Measured from open data; see [examples/venice-beach-skatepark.md](examples/venic
   - 90k triangles, 2 collision parts.
 - **As a park mod:**
   - **The limit:** Build Kit objects stand on the base map and cannot dig, so a bowl cannot be sunk into the ground.
-  - **What could work:** the nearest park mod raises the deck instead. Quarter pipes and banks would ring each bowl at its measured depth, with coping rails along the map's outlines. That is *Next*, item 2.
+  - **What is built:** each bowl as a ring of quarter pipes rising to its measured depth, with the coping on the map's outlines: 78 quarter pipes (examples/). It is not checked in game yet.
   - **The GLB stays useful as data:** bowl outlines, depths and wall angles.
 - **A phone scan of each bowl** would add the lip and vertical walls (CAPTURE.md).
 
