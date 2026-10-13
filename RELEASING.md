@@ -22,6 +22,20 @@ Each Build job is a script in `ci/`, and the workflow only calls it, so a local 
 - **Linux, or WSL on Windows:** `ci/local.sh` runs the server and regression tests (`build/linux`) and then the LiDAR parks tests. `ci/local.sh linux` or `ci/local.sh lidar` runs just one of them. The Python tests get their own virtual environment, in `build/lidar-venv`.
 - **Windows:** `powershell -ExecutionPolicy Bypass -File ci\local.ps1` builds `build\vs2022-x64` (Release) with the launcher tests, and runs every test. It needs Visual Studio 2022 with the C++ desktop workload. Add `-Ninja` for exactly what CI runs: a Ninja build in `build\ninja-x64`, which loads the compiler from Visual Studio itself and reuses earlier compiles when `sccache` is on the PATH.
 
+### Running the game unattended
+
+To check a build in the game with nobody at the PC, as the test harness does:
+
+```
+set RESKATE_ASSUME_FOCUS=1
+set RESKATE_STARTUP_COMMANDS=wait 45;press b;<your commands>
+ReSkateLauncher.exe --no-gui --no-update
+```
+
+- **`RESKATE_STARTUP_COMMANDS`** holds console commands separated by `;`, run once the world is up. `load` waits for its destination, `editor ...` waits for the park editor, and `wait N` pauses for N seconds.
+- **The game starts in its hub menu** after loading. `press b` (Back) closes it. `press <button> [ms]` holds a controller button for a moment: a, b, x, y, start, back, the d-pad, lb, rb, lt, rt, ls and rs.
+- **`RESKATE_ASSUME_FOCUS=1`** tells the game its window is in front and active. Without it, a game that has never had focus ignores controller input, so `press` does nothing on a PC nobody is using. Leave it unset for normal play.
+
 ### Why CI is quick
 
 - **Compiled files are kept between runs.** The Windows job builds with Ninja and sccache, and keeps sccache's files in the Actions cache, so a change to a few files rebuilds only those. Debug information goes into each object file (`/Z7`) under Ninja so the cache can hold it; the PDBs come out the same.

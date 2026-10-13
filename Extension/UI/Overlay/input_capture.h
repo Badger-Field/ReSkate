@@ -26,6 +26,10 @@ std::string xinput_entry_owners();
 // there is nothing to do; called about once a second while a controller is being read.
 void keep_xinput_capture_first();
 bool install_input_capture();
+// RESKATE_ASSUME_FOCUS=1 (unattended test runs): the game is told its window is in front and
+// active even when no window is (a harness on a PC nobody is using), so it does not hold itself
+// in its pause menu. Its window then never hears that it lost focus either.
+bool assume_focus();
 // Skate's controller mode registers the mouse with RIDEV_NOLEGACY, which stops
 // the Windows cursor from moving. While the overlay owns the pointer the mouse
 // is registered without it; the game's own registration returns on close.

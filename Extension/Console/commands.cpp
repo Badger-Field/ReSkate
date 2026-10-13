@@ -137,7 +137,8 @@ void register_console_commands(Commands &registry) {
     registry.add(std::move(status));
     // For scripts and test runs: get past a game menu (b is its Back) without a person at the PC.
     auto button = argument("button");
-    button.choices = {"a", "b", "x", "y", "start", "back", "up", "down", "left", "right"};
+    button.choices = {"a", "b", "x", "y", "start", "back", "up", "down", "left", "right",
+                      "lb", "rb", "lt", "rt", "ls", "rs"};
     auto hold = argument("ms", Type::unsigned_integer, true);
     hold.minimum = 50;
     hold.maximum = 2000;
@@ -145,9 +146,11 @@ void register_console_commands(Commands &registry) {
                         {button, hold});
     press.execution = Execution::local;
     press.run = [](const Model &, const Values &args, const Output &out) {
-        static constexpr std::pair<std::string_view, unsigned short> buttons[]{
-            {"a", 0x1000},  {"b", 0x2000},    {"x", 0x4000}, {"y", 0x8000},    {"start", 0x0010},
-            {"back", 0x0020}, {"up", 0x0001}, {"down", 0x0002}, {"left", 0x0004}, {"right", 0x0008}};
+        static constexpr std::pair<std::string_view, unsigned> buttons[]{
+            {"a", 0x1000},    {"b", 0x2000},  {"x", 0x4000},    {"y", 0x8000},     {"start", 0x0010},
+            {"back", 0x0020}, {"up", 0x0001}, {"down", 0x0002}, {"left", 0x0004},  {"right", 0x0008},
+            {"lb", 0x0100},   {"rb", 0x0200}, {"ls", 0x0040},   {"rs", 0x0080},    {"lt", 0x10000},
+            {"rt", 0x20000}};
         const auto name = lower(std::get<std::string>(args[0]));
         const auto ms = args.size() > 1 ? static_cast<unsigned>(std::get<std::uint64_t>(args[1])) : 150u;
         for (const auto &[label, bits] : buttons)
