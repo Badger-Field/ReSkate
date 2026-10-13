@@ -3,6 +3,7 @@
 #include "Extension/Profile/local_profile_runtime.h"
 #include "Extension/Multiplayer/Session/session.h"
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <optional>
 namespace dingosdk::console {
@@ -35,6 +36,11 @@ std::string destination_name(const overlay::Level &level) {
     if (!level.display_name.empty())
         return level.display_name;
     return world_level_name(level.asset);
+}
+bool contains_ignoring_case(std::string_view text, std::string_view part) {
+    const auto lower = [](char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); };
+    return std::search(text.begin(), text.end(), part.begin(), part.end(),
+                       [&](char a, char b) { return lower(a) == lower(b); }) != text.end();
 }
 const overlay::Level *find_destination(const Model &model, std::string_view name, const ServerMaps &maps) {
     if (name.empty())
@@ -71,7 +77,17 @@ const overlay::Level *find_destination(const Model &model, std::string_view name
         if (result)
             return result;
     }
-    return nullptr;
+    // Last, any part of an asset path ("BAM_LevelRoot", "dingolevel_reskate_skate3improved"),
+    // when only one destination has it: what RESKATE_STARTUP_COMMANDS' load waits for.
+    const overlay::Level *result = nullptr;
+    for (const auto &level : model.levels) {
+        if (!offered(level, maps) || !contains_ignoring_case(level.asset, name))
+            continue;
+        if (result)
+            return nullptr;
+        result = &level;
+    }
+    return result;
 }
 } // namespace
 void register_world_commands(Commands &registry) {
