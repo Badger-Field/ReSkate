@@ -70,6 +70,12 @@ checking its hash against the pin.
 1. Create a release tagged `gns-d534c19`, marked as a pre-release so the updater ignores it.
 2. Attach the tested `GameNetworkingSockets.dll` to it.
 
+The DLL has OpenSSL, Abseil, Protocol Buffers and WebRTC's ICE compiled in. Their licences ask for
+their notices to go with every copy, so each release adds
+`contrib/direct-multiplayer/GameNetworkingSockets-NOTICES.txt` beside the DLL, both in the zip and as
+an asset, named `THIRD-PARTY-NOTICES.txt`. When the pin changes to a build with other components,
+update that file too.
+
 When the pin changes, add a new `gns-<commit>` release with the new DLL.
 
 ## Not in releases yet
