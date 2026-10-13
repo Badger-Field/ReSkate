@@ -3,6 +3,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Direct multiplayer's side channel: small messages to and from other players, addressed by

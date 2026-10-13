@@ -42,6 +42,9 @@ bool set_nonblocking(Socket s) { const auto flags = fcntl(s, F_GETFL, 0); return
 // both ways, and so is a peer that floods.
 constexpr std::size_t max_signal = 16 * 1024, max_buffer = 256 * 1024, max_inbox = 256;
 constexpr std::chrono::seconds retry_after{3};
+// An address that neither accepts nor refuses (packets dropped on the way) is given up on after
+// this, for the next one, rather than after the system's own TCP timeout of a minute or more.
+constexpr std::uint64_t connect_timeout_ms = 5000;
 
 std::uint64_t now_ms() {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -112,6 +115,7 @@ class TcpSignaling final : public DirectSignaling {
     // is passed over for the next before the name is looked up again.
     std::vector<Address> addresses_;
     std::size_t next_address_{};
+    std::uint64_t connect_started_{};
     std::string host_;
     std::uint16_t port_{};
     std::string identity_;
@@ -167,6 +171,7 @@ class TcpSignaling final : public DirectSignaling {
         }
         if (socket_ == no_socket) { addresses_.clear(); drop("cannot connect to " + host_); return; }
         state_ = State::connecting;
+        connect_started_ = now_ms();
         out_ = identity_ + "\n" + out_;
     }
     // Moves bytes both ways without blocking.
@@ -184,7 +189,15 @@ class TcpSignaling final : public DirectSignaling {
             FD_ZERO(&writable);
             FD_SET(socket_, &writable);
             timeval none{};
-            if (select(static_cast<int>(socket_ + 1), nullptr, &writable, nullptr, &none) <= 0) return;
+            if (select(static_cast<int>(socket_ + 1), nullptr, &writable, nullptr, &none) <= 0) {
+                if (now_ms() - connect_started_ < connect_timeout_ms) return;
+                close_socket(socket_); // no answer: the next address
+                socket_ = no_socket;
+                in_.clear();
+                out_.clear();
+                connect_next();
+                return;
+            }
             int error = 0;
             socklen_t length = sizeof(error);
             getsockopt(socket_, SOL_SOCKET, SO_ERROR, reinterpret_cast<char *>(&error), &length);

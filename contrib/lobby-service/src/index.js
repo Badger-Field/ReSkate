@@ -20,6 +20,8 @@ const MAX_MESSAGE = 40_000; // characters: a signal is a few KB as hex
 const MAX_LOBBY = 2_000; // characters of a lobby row
 const RATE_WINDOW_MS = 10_000;
 const RATE_MAX = 400; // messages a player may send in a window
+const PLAYER_RETENTION_MS = 30 * 24 * 3600_000; // an ID's owner is kept this long after its last connection
+const NEW_KEYS_PER_HOUR = 20; // new player keys one address may introduce an hour
 // Local development and tests only (DEV=1 in .dev.vars or --var DEV:1): a deployed service
 // without CHALLENGE_SECRET refuses players rather than sign with a value that is public here.
 const DEV_SECRET = "reskate-local-development-only";
@@ -117,6 +119,9 @@ export class Hub extends DurableObject {
     this.sql.exec("CREATE TABLE IF NOT EXISTS players (id TEXT PRIMARY KEY, key TEXT NOT NULL, seen INTEGER NOT NULL)");
     // Each challenge signs one connection: one captured with its signature cannot be replayed.
     this.sql.exec("CREATE TABLE IF NOT EXISTS used_challenges (challenge TEXT PRIMARY KEY, used INTEGER NOT NULL)");
+    // New keys per address per hour: every key that connects is kept (for ID ownership), so
+    // the number one address can introduce is limited, and old ones are pruned.
+    this.sql.exec("CREATE TABLE IF NOT EXISTS admissions (address TEXT NOT NULL, hour INTEGER NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (address, hour))");
   }
 
   async fetch(request) {
@@ -129,9 +134,19 @@ export class Hub extends DurableObject {
     if (this.sql.exec("SELECT 1 FROM used_challenges WHERE challenge = ?", challenge).toArray().length)
       return new Response("Challenge already used", { status: 401 });
     this.sql.exec("INSERT INTO used_challenges (challenge, used) VALUES (?, ?)", challenge, now);
+    // Owners not seen for a month give their ID up; a returning player simply owns it again.
+    this.sql.exec("DELETE FROM players WHERE seen < ?", now - PLAYER_RETENTION_MS);
     const owner = this.sql.exec("SELECT key FROM players WHERE id = ?", id).toArray()[0];
     if (owner && owner.key !== key)
       return new Response("This key's player ID belongs to another key: make a new key.", { status: 409 });
+    if (!owner) {
+      const address = request.headers.get("CF-Connecting-IP") || "local";
+      const hour = Math.floor(now / 3600_000);
+      this.sql.exec("DELETE FROM admissions WHERE hour < ?", hour);
+      const used = this.sql.exec("SELECT count FROM admissions WHERE address = ? AND hour = ?", address, hour).toArray()[0]?.count ?? 0;
+      if (used >= NEW_KEYS_PER_HOUR) return new Response("Too many new players from this address; try again later.", { status: 429 });
+      this.sql.exec("INSERT OR REPLACE INTO admissions (address, hour, count) VALUES (?, ?, ?)", address, hour, used + 1);
+    }
     this.sql.exec("INSERT OR REPLACE INTO players (id, key, seen) VALUES (?, ?, ?)", id, key, now);
     // A player has one connection: a new one (a restart, a reconnect) replaces the old.
     for (const old of this.ctx.getWebSockets(id)) {
