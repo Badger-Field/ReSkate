@@ -16,6 +16,10 @@ namespace mv = addr::mesh_variations;
 using RemoveDatabases = std::uint64_t (*)(void*, void*, void*, std::uint64_t);
 RemoveDatabases original{};
 std::uintptr_t fault_at{}, key_at{}, resume_at{};
+using ReleaseBuffer = void (*)(void*);
+ReleaseBuffer original_release{};
+std::uintptr_t empty_buffer{};
+std::atomic<std::uint64_t> bad_buffers{};
 std::atomic<bool> installed{};
 std::atomic<std::uint64_t> skips{}, recoveries{};
 
@@ -71,6 +75,48 @@ std::uint64_t guarded(void* registry, void* second, void* list, std::uint64_t fo
     note(skipped_before, recovered_before);
     return result;
 }
+// Whether `value` can be a heap block the game allocated: in user space, and aligned.
+bool could_be_block(std::uintptr_t value) noexcept {
+    return value >= 0x10000 && value <= memory::highest_user_address && value % 8 == 0;
+}
+// The release that frees [object + 0x360]: a value that cannot be a block (float data, in the
+// crashes) is not freed, since freeing it can only crash. The field gets the empty value and the
+// flag is cleared, as after a free. Anything that could be a block goes to the game as before.
+void guarded_release(void* object) {
+    const auto at = reinterpret_cast<std::uintptr_t>(object);
+    std::uint8_t flag{};
+    std::uintptr_t value{};
+    if (memory::peek(at + mv::release_flag_at, flag) && flag && memory::peek(at + mv::release_buffer_at, value) && value &&
+        value != empty_buffer && !could_be_block(value)) {
+        *reinterpret_cast<std::uintptr_t*>(at + mv::release_buffer_at) = empty_buffer;
+        *reinterpret_cast<std::uint8_t*>(at + mv::release_flag_at) = 0;
+        const auto count = bad_buffers.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (count <= 5 || count % 100 == 0) {
+            try {
+                logging::log(logging::Level::warning, logging::Channel::runtime,
+                    "Level unload: a resource held {:#x} where the game keeps a buffer address, which it would have freed "
+                    "and crashed on; it was not freed ({} since the game started).", value, count);
+            } catch (...) {}
+        }
+        return;
+    }
+    original_release(object);
+}
+void install_release_guard(std::uintptr_t base) noexcept {
+    std::array<unsigned char, 32> head{};
+    if (!memory::peek(base + mv::release_buffer.rva, head) || head != mv::release_buffer.bytes) {
+        logging::log(logging::Level::warning, logging::Channel::runtime,
+            "Buffer release guard: this build's release code differs; it is left as it is.");
+        return;
+    }
+    empty_buffer = base + mv::empty_buffer;
+    const auto target = reinterpret_cast<void*>(base + mv::release_buffer.rva);
+    if (hook_prepare(target, reinterpret_cast<void*>(&guarded_release), reinterpret_cast<void**>(&original_release)) != HookOk ||
+        hook_enable(target) != HookOk) {
+        original_release = nullptr;
+        logging::log(logging::Level::warning, logging::Channel::runtime, "Buffer release guard: the game's function could not be hooked.");
+    }
+}
 } // namespace
 
 bool install(std::uintptr_t base) noexcept {
@@ -79,6 +125,7 @@ bool install(std::uintptr_t base) noexcept {
     std::array<unsigned char, 32> head{};
     std::array<unsigned char, 6> read{};
     std::array<unsigned char, 4> next{};
+    install_release_guard(base);
     if (!memory::peek(base + mv::remove_databases.rva, head) || head != mv::remove_databases.bytes ||
         !memory::peek(base + mv::mesh_hash_read, read) || read != mv::mesh_hash_read_bytes ||
         !memory::peek(base + mv::next_entry, next) || next != mv::next_entry_bytes) {

@@ -11,6 +11,11 @@
 //   game crashed a moment later on what it pointed at (seen leaving Skate 3 Improved, 2026-10-13).
 // - Only when the entry cannot be told apart is it passed over, as before.
 // Either way the function finishes, lock and all. Every other fault is left to the crash reporter.
+//
+// The same unload then crashed in a resource release (Engine/Game/Build/<build>/mesh_variations.h,
+// release_buffer) that frees a buffer whose address was float data. A second hook skips that free
+// when the value cannot be a heap block (outside user space, or unaligned), leaving the field
+// empty as a free would; any value that could be a block is freed by the game as before.
 namespace dingosdk::mesh_unload_guard {
 // Checks this build's function and hooks it; once. False when the build differs (no guard).
 bool install(std::uintptr_t base) noexcept;

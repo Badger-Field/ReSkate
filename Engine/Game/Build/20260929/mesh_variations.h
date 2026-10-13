@@ -23,6 +23,17 @@ inline constexpr std::array<unsigned char, 6> mesh_hash_read_bytes{0x8b, 0x90, 0
 // finds the name hash again (Extension/World/mesh_registry.h) it puts it in edx and goes on here.
 inline constexpr std::uintptr_t key_low_read = 0x3f5fc58;
 inline constexpr std::array<unsigned char, 7> key_low_read_bytes{0x8b, 0x43, 0x20, 0x48, 0xc1, 0xe2, 0x20};
+// release(object): vtable slot 0x40 of the class whose vtable is at 0x64f2ba8, called from
+// 0x3ea5a80 when a 0xf0-byte resource slot's use count reaches zero, also as a level unloads.
+// When byte [object + 0x3b0] is set it frees the buffer at [object + 0x360] (0x1584c50: unless
+// it is the empty value, the address 0x72fe704), puts the empty value back and clears the flag.
+// Leaving Skate 3 Improved for San Vansterdam crashed in that free, twice: the "buffer" was two
+// floats (0x44c00000_xxxxxxxx), not an address (dumps of 2026-10-13 01:26 and 01:47).
+inline constexpr Fingerprint release_buffer{0x3f5fa20, {
+    0x40,0x53,0x48,0x83,0xec,0x20,0x80,0xb9,0xb0,0x03,0x00,0x00,0x00,0x48,0x8b,0xd9,
+    0x74,0x19,0x48,0x81,0xc1,0x60,0x03,0x00,0x00,0xe8,0x12,0x52,0x62,0xfd,0xc6,0x83}};
+inline constexpr std::uintptr_t release_buffer_at = 0x360, release_flag_at = 0x3b0;
+inline constexpr std::uintptr_t empty_buffer = 0x72fe704;
 // The step to the next entry (add rbx, 0x30), after the call that takes one out: where an entry
 // without a mesh goes on from.
 inline constexpr std::uintptr_t next_entry = 0x3f5fc67;
