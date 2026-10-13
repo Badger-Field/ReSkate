@@ -7,10 +7,10 @@ human with the game.
 
 These need a human.
 
-1. **ReSkate Studio.**
-   - **The question:** can Studio take an outside mesh (GLB/OBJ/FBX) for both drawing and collision? Where can we get Studio, or its docs?
-   - **Why it matters:** a true custom map (route 2) needs it. Nothing in this repository builds Frostbite meshes or Havok collision. The details are in [CUSTOM-MAPS.md](CUSTOM-MAPS.md).
-   - **What exists now:** `city --mesh` writes ready meshes: tiled ground, buildings and skate features, plus a lighter collision copy.
+1. **ReSkate Studio.** **Partly answered by research:** see CUSTOM-MAPS.md, *How ReSkate Studio builds a map*.
+   - Studio is in the ReSkate Discord, pinned in `#general`.
+   - It builds maps from Blender with its add-on and `reskate_cli compile-map`. Other tools already feed it GLBs this way.
+   - **Still needed:** someone with Studio confirms the add-on's collision, surface and grind-curve settings, and how `compile-map` is called.
 2. **Where should city parks go on San Vansterdam (`bam`)?** A 160 m square of real plaza needs open, flat ground at least that big.
    - Is there such a spot?
    - Do Build Kit objects 80 m from the anchor still load and collide?
@@ -81,20 +81,43 @@ The anchor is a measuring stick on open ground, as in README step 1. Then check:
   - a car, a hedge and a planter on grass give no spots;
   - a pit in a back yard is smoothed away.
 
+## Phases
+
+From a park of real spots to skating anywhere:
+1. **Real spots as a park mod.** Done; see *What works*. It needs the in-game check above.
+2. **One real block as a custom map:** ground, building massing and spots, built with ReSkate Studio.
+   - **Depends on:** Studio importing our mesh.
+   - **Next:** make `city --mesh` Studio-ready (`sk8_*` properties, spawn, grind curves; CUSTOM-MAPS.md), then build one block with Studio.
+3. **A district of about 1 km².** Measure what it costs in game:
+   - **Static bodies:** stock skate. has 8,200. ReSkate raises that to 65,000 (`Extension/World/physics_world_size.h`), and Studio makes one body per collision part.
+   - **Memory and load time.**
+   - **What it needs:** tiles with level of detail, and few collision parts per tile.
+4. **A city in tiles,** each its own map. `reskate-levels.json` allows 64 levels per mod and 256 in total.
+5. **Skate anywhere.** A place picker: Leaflet with OSM tiles, in plain JS. Pick a spot, and the tile for it is generated on request.
+
+### Rules for places people live
+
+These apply to every phase:
+- **Spots:** only in public, hard, car-free space. Residential parcels get no spots and no detail.
+- **Ground:** smoothed outside public space.
+- **Buildings:** closed blocks only.
+- **Before an area is shared:** its outputs, coordinates and place names stay out of the repository, tests and docs until its owner says otherwise.
+
 ## Next
 
-1. **Kerbs from the ground.** Road edges are 15 cm steps in the DTM: slappy curbs along plazas. Map them only where a footway meets a road, and cap the count.
-2. **Other open LiDAR.**
+1. **Studio-ready mesh,** for phase 2. Add `sk8_*` extras on every node, a `spawn` node, grind polylines and a headless-Blender converter script.
+2. **Stricter residential handling.** Inside `landuse=residential`, and for buildings tagged house, detached or residential:
+   - simplify footprints to plain blocks;
+   - round heights;
+   - never add spots.
+3. **Kerbs from the ground.** Road edges are 15 cm steps in the DTM: slappy curbs along plazas. Map them only where a footway meets a road, and cap the count.
+4. **Other open LiDAR.**
    - **Readers:** COPC/LAZ tile lists, for the Netherlands' AHN (CC0), the UK Environment Agency (OGL), Denmark and Finland, and OpenTopography datasets.
    - **Reprojection:** EPSG codes other than 3857 and 4326, through `pyproj` (optional).
-3. **Neighbourhoods.** Split an area into tiles, each its own park mod (1024 objects per map, 3 parks per server by default) or mesh tile.
-   - Thin the ground by level of detail: a coarser grid away from spots, with decimation that keeps edges.
-   - Set budgets per tile: triangles, objects and file size.
-4. **Surfaces.** Carry `surface=*` (asphalt, paving_stones, concrete, wood, metal) into the mesh extras and the report.
-5. **Better stand-ins for big spots.** A 20 m bench ledge is several boxes end to end. Long banks and wide stairs are sets side by side.
-   - Use `--keep-elevation` with real terrain only once custom maps exist.
-   - Tune `catalog.json` once the sizes are calibrated in game (`calibrate`).
-6. **Leisure=skatepark.** Report mapped skateparks in the area, and point to `convert` (phone scan) for their real shapes.
+5. **Neighbourhoods** (phase 3): tiles, level of detail, and per-tile budgets (triangles, collision parts, objects, file size).
+6. **Surfaces.** Carry `surface=*` (asphalt, paving_stones, concrete, wood, metal) into the mesh extras and the report.
+7. **Better stand-ins for big spots.** A 20 m bench ledge is several boxes end to end. Tune `catalog.json` once the sizes are calibrated in game.
+8. **Leisure=skatepark.** Report mapped skateparks in the area, and point to `convert` (phone scan) for their real shapes.
 
 ## Known limits
 
