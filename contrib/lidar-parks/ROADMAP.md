@@ -15,7 +15,7 @@ These need a human.
    - Is there such a spot? `anchor probe` / `anchor check` (README) now measure one in game: they give the share of the footprint that is flat and clear, and which objects would be buried or float.
    - The first Embarcadero try loaded all 33 of 33 objects, but its anchor (627.1, 199.9, 1062.8) is on the NE waterfront promenade or coast road. A probe run there, and at candidates inland, would settle it.
    - Do Build Kit objects 80 m from the anchor still load and collide?
-1. **Can this environment reach OpenStreetMap?** This cloud environment's network policy blocks:
+3. **Can this environment reach OpenStreetMap?** This cloud environment's network policy blocks:
    - `overpass-api.de`
    - `nominatim.openstreetmap.org`
    - `opentopography.org`
@@ -42,8 +42,8 @@ The anchor is a measuring stick on open ground, as in README step 1. Before load
 1. **Load:** **PARK MODS** lists *Embarcadero Plaza*, and it loads without errors. About 50 objects: stairs, handrails, ledges, pads and banks.
 2. **Layout:** compare with `emb.png`. North in the plaza should be the stick's left (+90° from its facing), since the stick faces east. Does the layout match? If it is mirrored, tell us: the frame is meant to be right, but nobody has checked it in game yet.
 3. **Ledges:** the long benches round the sunken lawn (#4, #6, #8 in the preview) should be grindable at about 0.45 m.
-2. **Stairs and rails:** the stairs (#1, 0.8 m) should have no gap under them, and handrails should line up with the flights.
-3. **Mesh:** if you have a level tool, open `--mesh emb.glb` and check:
+4. **Stairs and rails:** the stairs (#1, 0.8 m) should have no gap under them, and handrails should line up with the flights.
+5. **Mesh:** if you have a level tool, open `--mesh emb.glb` and check:
    - its scale against a 1 m Build Kit stick;
    - it is Y up;
    - north is +Z.
