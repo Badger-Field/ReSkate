@@ -54,6 +54,12 @@ void apply_guest_tools(Session &s, bool noclip, bool no_bail, bool boosts) {
 }
 } // namespace session_detail
 namespace {
+// Whether the lists may be searched now; saying yes starts the wait for the next search.
+bool take_browse(Session &s, std::uint64_t now) {
+    if (s.browsed && now - s.browsed < multiplayer_browse_interval_us) return false;
+    s.browsed = now;
+    return true;
+}
 std::string edit_distances(Session &s, std::string_view argument) {
     if (s.mode != Mode::host) return "Only the lobby host can change TPS distances.";
     MultiplayerDistances value;
@@ -867,9 +873,12 @@ std::string command(std::string_view action, std::string_view argument, std::str
         if (action == "browse") {
             if (!s.transport.open())
                 s.status = s.transport.status().detail;
-            else {
-                s.lobbies.refresh(now_us());
-                s.servers.refresh(now_us());
+            else if (const auto now = now_us(); take_browse(s, now)) {
+                s.lobbies.refresh(now);
+                s.servers.refresh(now);
+            } else {
+                const auto left = multiplayer_browse_interval_us - (now - s.browsed);
+                return "The server list can be refreshed again in " + std::to_string((left + 999999) / 1000000) + " s.";
             }
             publish(s);
             return s.lobbies.status().browser;
@@ -907,7 +916,7 @@ std::string command(std::string_view action, std::string_view argument, std::str
             }
             // A friend on a server this game has not listed yet: only the list has its code.
             if (game_server_steam_id(id)) {
-                s.servers.refresh(now_us());
+                if (const auto now = now_us(); take_browse(s, now)) s.servers.refresh(now);
                 s.status = "That server is not in your server list yet. Open the server browser and join it there.";
                 publish(s);
                 return s.status;

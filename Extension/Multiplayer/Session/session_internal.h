@@ -223,6 +223,9 @@ struct Session {
     SteamTransport transport;
     SteamLobbies lobbies{make_steam_lobby_api(), [](std::uint64_t host) { return banned_host(host) || reskate_banned(host); }};
     SteamServerBrowser servers;
+    // When the lobby and server lists were last searched. Every search in the game, asked for
+    // or automatic, waits multiplayer_browse_interval_us after it (take_browse).
+    std::uint64_t browsed{};
     // Guest of a dedicated server: whether the roster lists us as an admin,
     // and the server's voice range from it.
     // On a dedicated server: what the player's role gives them (its permissions packet), and the
