@@ -544,7 +544,9 @@ bool SteamTransport::open_direct(void *library, std::uint64_t local_id, std::uni
                  std::tuple{k_ESteamNetworkingConfig_P2P_TURN_ServerList, &routes.turn_servers, "TURN servers"},
                  std::tuple{k_ESteamNetworkingConfig_P2P_TURN_UserList, &routes.turn_users, "TURN users"},
                  std::tuple{k_ESteamNetworkingConfig_P2P_TURN_PassList, &routes.turn_passwords, "TURN passwords"}})
-            if (!value->empty() && !set_list(utils, option, value->c_str()))
+            // Process-wide settings: every one is set, empty included (no STUN, no TURN), so
+            // nothing of an earlier open_direct is left behind.
+            if (!set_list(utils, option, value->c_str()))
                 throw std::runtime_error(std::string("The networking library did not take the ") + what + ".");
         p.friends = nullptr; // names come from each player's hello
         p.direct_mode = true;
