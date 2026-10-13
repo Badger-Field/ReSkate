@@ -237,3 +237,21 @@ def test_mesh_export(tmp_path):
     assert high[1] == pytest.approx(1.5, abs=0.1)          # the quarter pipe is the tallest
     assert np.ptp(mesh.bounds[:, [0, 2]], axis=0).min() > 30
     assert np.mean(mesh.face_normals[:, 1]) > 0.8          # facing up
+
+
+@pytest.mark.parametrize("folder", ["Park ", " Park", ".hidden", "Park\n", "a/b", ""])
+def test_mod_folder_names_the_game_refuses(tmp_path, folder):
+    item = catalog.CatalogItem("own_bk_test", ["ledge"], 1.0, 1.0, 1.0)
+    document = park.build_park([catalog.Placement(item, 0, 0, 0, 0, 0, 1.0, 0)], "bam", park.Anchor())
+    with pytest.raises(ValueError):
+        park.write_mod(tmp_path, folder, document, "x", "", "1", "")
+
+
+@pytest.mark.parametrize("up", ["w", "--z", "zz", "+-y"])
+def test_bad_up_axis_is_a_clear_error(tmp_path, up):
+    with pytest.raises(ValueError):
+        align.level(np.zeros((10, 3)), up)
+    scan = tmp_path / "flat.xyz"
+    grid = np.stack(np.meshgrid(np.arange(50.0), np.arange(50.0)), -1).reshape(-1, 2) * 0.1
+    np.savetxt(scan, np.column_stack([grid, np.zeros(len(grid))]))
+    assert main(["mesh", str(scan), str(tmp_path / "out.glb"), f"--up={up}"]) == 2

@@ -95,8 +95,11 @@ def level(points: np.ndarray, up: str = "auto", seed: int = 0) -> Alignment:
     the largest plane, oriented so most of the scan sits above it."""
     hint = None
     if up != "auto":
+        axis = up.lstrip("-+")
+        if axis not in UP_AXES or len(up) - len(axis) > 1:
+            raise ValueError(f"Up axis {up!r}: use auto, x, y or z, optionally with - in front")
         sign = -1.0 if up.startswith("-") else 1.0
-        hint = sign * np.array(UP_AXES[up.lstrip("-+")])
+        hint = sign * np.array(UP_AXES[axis])
     normal, d, inliers = ransac_ground(points, hint, seed=seed)
     if hint is None:
         # Most of a park (ramps, ledges, rails) is above the ground, not below it.

@@ -26,7 +26,7 @@ MAX_OBJECTS_PER_MAP = 1024   # placements_store.cpp
 DEFAULT_DROPPER_LIMIT = 256  # config/defaults/object-dropper.json limits.max_objects
 MAX_PARK_BYTES = 2 * 1024 * 1024
 MAP_PATTERN = re.compile(r"^[a-z0-9_]{1,32}$")
-MOD_NAME_PATTERN = re.compile(r"^[A-Za-z0-9 _\-.]{1,64}$")
+MOD_NAME_PATTERN = re.compile(r"[A-Za-z0-9 _\-.]{1,64}")
 
 
 @dataclass
@@ -181,8 +181,10 @@ def encode(park: dict) -> str:
 def write_mod(mods_root: str | Path, folder: str, park: dict, title: str, author: str, version: str,
               description: str) -> Path:
     """Mods/<folder>/manifest.json + parks/<map>.park.json; returns the park file."""
-    if not MOD_NAME_PATTERN.match(folder) or folder.startswith("."):
-        raise ValueError(f"Mod folder name {folder!r}: letters, digits, spaces, _ - . only")
+    # As the game and server take a mod folder (Server/server_config.cpp valid_mod_folder).
+    if not MOD_NAME_PATTERN.fullmatch(folder) or folder[0] in ". " or folder[-1] == " ":
+        raise ValueError(f"Mod folder name {folder!r}: 1-64 letters, digits, spaces, _ - . "
+                         "(not starting with a dot, no spaces at either end)")
     for text, limit, what in ((title, 64, "name"), (author, 64, "author"), (version, 32, "version"),
                               (description, 512, "description")):
         if len(text) > limit:
