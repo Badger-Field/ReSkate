@@ -124,6 +124,9 @@ class SteamTransport {
     // Direct mode has no friends list: the name each player gives (this player's own, their
     // hello to a host, a host's roster to a guest) is kept here for name() to answer with.
     void remember_name(std::uint64_t id, std::string_view name);
+    // Direct mode: a request to the lobby service and its answers (DirectSignaling::request).
+    bool lobby_request(std::string_view json);
+    std::vector<std::string> lobby_replies();
     // Direct mode: called once if the lobby service says this player's key belongs to another
     // player, so a new key can be made for the next start.
     void on_key_taken(std::function<void()> replace);

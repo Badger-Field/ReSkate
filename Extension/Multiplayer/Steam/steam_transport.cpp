@@ -1069,6 +1069,14 @@ std::string SteamTransport::name(std::uint64_t id) {
     p.names[id] = {text, now + (text.empty() ? 1000U : 10000U)};
     return text;
 }
+bool SteamTransport::lobby_request(std::string_view json) {
+    auto &p = *impl_;
+    return p.direct_mode && p.signaling && p.signaling->request(json);
+}
+std::vector<std::string> SteamTransport::lobby_replies() {
+    auto &p = *impl_;
+    return p.direct_mode && p.signaling ? p.signaling->replies() : std::vector<std::string>{};
+}
 void SteamTransport::set_detail(std::string detail) { impl_->state.detail = std::move(detail); }
 void SteamTransport::on_key_taken(std::function<void()> replace) { impl_->key_taken = std::move(replace); }
 void SteamTransport::remember_name(std::uint64_t id, std::string_view name) {

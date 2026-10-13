@@ -27,7 +27,7 @@ namespace dingosdk::multiplayer {
 namespace {
 using namespace std::chrono_literals;
 
-constexpr std::size_t max_message = 64 * 1024, max_inbox = 256, max_outbox = 256;
+constexpr std::size_t max_message = 64 * 1024, max_inbox = 256, max_outbox = 256, max_replies = 64;
 
 struct Url {
     bool secure{};
@@ -400,6 +400,18 @@ class LobbySignaling final : public DirectSignaling {
         std::lock_guard lock(mutex_);
         return std::exchange(inbox_, {});
     }
+    bool request(std::string_view json) override {
+        if (json.empty() || json.front() != '{' || json.size() > 4096) return false;
+        std::lock_guard lock(mutex_);
+        if (!ready_ || outbox_.size() >= max_outbox) return false;
+        outbox_.emplace_back(json);
+        wake_.notify_all();
+        return true;
+    }
+    std::vector<std::string> replies() override {
+        std::lock_guard lock(mutex_);
+        return std::exchange(replies_, {});
+    }
     bool connected() const override {
         std::lock_guard lock(mutex_);
         return ready_;
@@ -425,6 +437,7 @@ class LobbySignaling final : public DirectSignaling {
     std::shared_ptr<WebSocket> socket_;
     std::deque<std::string> outbox_;
     std::vector<SignalMessage> inbox_;
+    std::vector<std::string> replies_; // the service's answers to request(), whole
 
     void set_problem(std::string text) {
         std::lock_guard lock(mutex_);
@@ -532,6 +545,10 @@ class LobbySignaling final : public DirectSignaling {
                 } else if (op == "error" && json.contains("error") && json.at("error").is_string()) {
                     std::lock_guard lock(mutex_);
                     problem_ = "Lobby service: " + json.at("error").string();
+                    if (replies_.size() < max_replies) replies_.push_back(*message);
+                } else if (!op.empty() && op != "pong") {
+                    std::lock_guard lock(mutex_);
+                    if (replies_.size() < max_replies) replies_.push_back(*message);
                 }
             } catch (...) {}
         }

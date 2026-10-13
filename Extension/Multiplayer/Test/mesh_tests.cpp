@@ -265,6 +265,8 @@ bool SteamTransport::direct() const { return false; }
 void SteamTransport::remember_name(std::uint64_t, std::string_view) {}
 void SteamTransport::set_detail(std::string detail) { impl_->state.detail = std::move(detail); }
 void SteamTransport::on_key_taken(std::function<void()>) {}
+bool SteamTransport::lobby_request(std::string_view) { return false; }
+std::vector<std::string> SteamTransport::lobby_replies() { return {}; }
 bool direct_play_installed() { return false; }
 bool open_direct_play(SteamTransport &) { return false; }
 std::string direct_player_name() { return "Skater"; }

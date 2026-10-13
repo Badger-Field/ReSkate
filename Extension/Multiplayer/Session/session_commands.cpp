@@ -614,11 +614,9 @@ std::string send_admin(Session &s, std::string text) {
 bool own_mark_command(std::string_view action) {
     return action == "mark-tag" || action == "mark-items" || action == "mark-style";
 }
-// Offline, players connect straight to each other (direct_play.h): hosting and joining by code
-// work, and the session's own settings and chat. Lobby lists and friends' lobbies are Steam's.
-bool steam_only_command(std::string_view action) {
-    return action == "browse" || action == "join-lobby" || action == "join-friend-lobby";
-}
+// Offline, players connect straight to each other (direct_play.h), and lobbies are listed by the
+// lobby service (direct_lobby_api.h). Friends' lobbies are Steam's.
+bool steam_only_command(std::string_view action) { return action == "join-friend-lobby"; }
 bool offline_command(std::string_view action) {
     return own_mark_command(action) || (direct_play_installed() && !steam_only_command(action));
 }
@@ -665,7 +663,7 @@ std::string command(std::string_view action, std::string_view argument, std::str
     if (launcher::offline_mode() && !offline_command(action))
         return !direct_play_installed()
             ? "Multiplayer without Steam needs GameNetworkingSockets.dll beside ReSkate.dll."
-            : "The lobby browser needs Steam. Without Steam, host with a code and share it, or join with one.";
+            : "Joining a friend's lobby needs Steam. Without Steam, join from Servers or with a code.";
     // The name other players see without Steam (with Steam, it is the Steam name).
     if (action == "name") {
         if (!launcher::offline_mode()) return "With Steam, other players see your Steam name.";
@@ -886,11 +884,12 @@ std::string command(std::string_view action, std::string_view argument, std::str
             return s.status;
         }
         if (action == "browse") {
-            if (!s.transport.open())
+            // Without Steam: the lobby service's list; dedicated servers are Steam's.
+            if (launcher::offline_mode() ? !open_direct_play(s.transport) : !s.transport.open())
                 s.status = s.transport.status().detail;
             else {
                 s.lobbies.refresh(now_us());
-                s.servers.refresh(now_us());
+                if (!s.transport.direct()) s.servers.refresh(now_us());
             }
             publish(s);
             return s.lobbies.status().browser;
@@ -933,7 +932,7 @@ std::string command(std::string_view action, std::string_view argument, std::str
                 publish(s);
                 return s.status;
             }
-            if (!s.transport.open())
+            if (launcher::offline_mode() ? !open_direct_play(s.transport) : !s.transport.open())
                 return s.transport.status().detail;
             if (action == "join-friend-lobby")
                 s.lobbies.join_friend(id, s.transport.status().local_id, now_us());
@@ -990,8 +989,6 @@ std::string command(std::string_view action, std::string_view argument, std::str
             }
             if (!visibility.empty() && visibility != "code" && visibility != "public")
                 return refuse("Use mp host code <limit> [lobby name] or mp host public <limit> [lobby name].");
-            if (launcher::offline_mode() && visibility == "public")
-                return refuse("Public lobbies need Steam for now. Host with a code and share it instead.");
             if (configured_host) {
                 const auto split = lobby_name.find(' ');
                 const auto rate = lobby_name.substr(0, split);
@@ -1057,8 +1054,11 @@ std::string command(std::string_view action, std::string_view argument, std::str
             if (s.lobby_name.empty()) s.lobby_name = "ReSkate session";
             s.invite = format_invite({s.host_id, s.secret});
             s.public_host = visibility == "public";
-            if (s.public_host)
-                s.lobbies.host(s.invite, capacity, s.password.has_value(), s.lobby_name);
+            // Without Steam a code-only game is still listed on the host's home network, so a
+            // player in the same house joins from the list without the code.
+            s.listed_host = s.public_host || s.transport.direct();
+            if (s.listed_host)
+                s.lobbies.host(s.invite, capacity, s.password.has_value(), s.lobby_name, s.public_host);
             // Remember this setup, and bring back the host options chosen last time.
             remembered.public_lobby = s.public_host;
             remembered.capacity = capacity;

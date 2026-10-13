@@ -191,6 +191,13 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
         target_link_libraries(dingosdk_direct_lobby_tests PRIVATE dingosdk_monocypher dingosdk_json OpenSSL::Crypto pthread)
     endif()
     add_test(NAME multiplayer_direct_lobby COMMAND dingosdk_direct_lobby_tests ${DINGOSDK_TEST_LOBBY_URL})
+    # Lobbies without Steam: the lobby service's LobbyApi under SteamLobbies.
+    add_executable(dingosdk_direct_lobby_api_tests Extension/Multiplayer/Test/direct_lobby_api_tests.cpp
+        Extension/Multiplayer/Direct/direct_lobby_api.cpp Extension/Multiplayer/Steam/steam_lobbies.cpp
+        Extension/Multiplayer/Net/protocol.cpp)
+    target_include_directories(dingosdk_direct_lobby_api_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_link_libraries(dingosdk_direct_lobby_api_tests PRIVATE dingosdk_json dingosdk_word_filter)
+    add_test(NAME multiplayer_direct_lobby_api COMMAND dingosdk_direct_lobby_api_tests)
     add_executable(dingosdk_multiplayer_prediction_tests
         Extension/Multiplayer/Test/prediction_tests.cpp Extension/Multiplayer/Net/protocol.cpp Extension/Multiplayer/Remote/playback_buffers.cpp)
     add_test(NAME multiplayer_prediction COMMAND dingosdk_multiplayer_prediction_tests)
@@ -272,7 +279,7 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS AND WIN32)
         Extension/Multiplayer/Net/wire_codec.cpp Extension/Multiplayer/Net/delta_codec.cpp
         Extension/Multiplayer/Session/password.cpp Extension/Multiplayer/Session/party_book.cpp
         Extension/Multiplayer/Steam/steam_lobbies.cpp Extension/Multiplayer/Steam/steam_server_browser.cpp
-        Extension/Multiplayer/word_lists.cpp)
+        Extension/Multiplayer/word_lists.cpp Extension/Multiplayer/Direct/direct_lobby_api.cpp)
     target_link_libraries(dingosdk_multiplayer_mesh_tests PRIVATE dingosdk_logging dingosdk_launcher_support dingosdk_lz4 dingosdk_zstd bcrypt
         dingosdk_word_filter dingosdk_json)
     add_test(NAME multiplayer_mesh COMMAND dingosdk_multiplayer_mesh_tests)

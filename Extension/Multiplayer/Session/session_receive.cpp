@@ -1167,7 +1167,7 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             s.last_world_ready = now;
         }
     }
-    if (s.public_host)
+    if (s.listed_host)
         s.lobbies.update_host(world_playing(s, local), static_cast<unsigned>(s.transport.status().peers.size()) + 1,
                               s.map_name, now);
     if (s.mode == Mode::host && !s.travelling && s.travel_started &&

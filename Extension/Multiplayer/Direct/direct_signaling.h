@@ -31,6 +31,10 @@ class DirectSignaling {
     // The lobby service refused this player's key because another key already owns the same
     // player ID: the game should make a new key and connect with that.
     virtual bool needs_new_key() const { return false; }
+    // The lobby service's own requests, as its JSON messages ({"op":"host",...}, {"op":"list"}),
+    // and what it answers, in order. Channels without a lobby service send nothing.
+    virtual bool request(std::string_view) { return false; }
+    virtual std::vector<std::string> replies() { return {}; }
 };
 
 // Over a plain TCP connection, one line a message: the protocol of GameNetworkingSockets'

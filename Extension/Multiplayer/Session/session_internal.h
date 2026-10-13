@@ -151,6 +151,8 @@ struct PrivateRequest {
     std::uint64_t queued{};
     ~PrivateRequest() { erase_password(password); }
 };
+// Steam's lobbies, or offline the lobby service's (direct_lobby_api.h) through `transport`.
+std::unique_ptr<LobbyApi> session_lobby_api(SteamTransport &transport);
 struct Session {
     VoiceChat voice;
     VoiceSettings voice_settings;
@@ -221,7 +223,9 @@ struct Session {
     std::mutex request_mutex;
     std::deque<std::unique_ptr<PrivateRequest>> requests;
     SteamTransport transport;
-    SteamLobbies lobbies{make_steam_lobby_api(), [](std::uint64_t host) { return banned_host(host) || reskate_banned(host); }};
+    SteamLobbies lobbies{session_lobby_api(transport), [](std::uint64_t host) { return banned_host(host) || reskate_banned(host); }};
+    // Hosting with a listing: public, or without Steam on the host's home network too.
+    bool listed_host{};
     SteamServerBrowser servers;
     // Guest of a dedicated server: whether the roster lists us as an admin,
     // and the server's voice range from it.

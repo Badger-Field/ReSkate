@@ -37,6 +37,8 @@ struct MultiplayerLobby {
     bool dedicated{};
     // A dedicated server the ReSkate team runs (developer_identity.h): first in the browser.
     bool official{};
+    // Listed by the lobby service as on this player's own home network (direct multiplayer).
+    bool nearby{};
     int ping = -1; // ms, when the server answered directly
     // A dedicated server that takes direct connections: its address (host byte order) and UDP
     // port, 0 for none.

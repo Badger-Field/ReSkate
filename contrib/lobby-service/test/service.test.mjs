@@ -73,8 +73,9 @@ async function connectUrl(p, { badSignature = false, challenge = null } = {}) {
 }
 
 // A connection that collects what arrives; next() waits for the next message matching `want`.
-async function connect(p) {
-  const ws = new WebSocket(await connectUrl(p), { headers: AGENT });
+// `address`: the network the player is on (development only: X-Test-Address).
+async function connect(p, { address } = {}) {
+  const ws = new WebSocket(await connectUrl(p), { headers: address ? { ...AGENT, "X-Test-Address": address } : AGENT });
   const inbox = [];
   const waiters = [];
   ws.addEventListener("message", (event) => {
@@ -185,6 +186,30 @@ test("public lobbies are listed while their host is here", async () => {
   rows = JSON.parse(await v.next(v.op("lobbies"))).rows;
   assert.ok(!rows.some((r) => r.host === host.id), "a host's lobby leaves with them");
   v.ws.close();
+});
+
+test("a game that is not public is listed on its host's home network only", async () => {
+  const dad = player(), son = player(), stranger = player(), phone = player();
+  const d = await connect(dad, { address: "2001:db8:aa:1::10" });
+  const s = await connect(son, { address: "2001:db8:aa:1:1234::99" }); // same home, another device
+  const x = await connect(stranger, { address: "198.51.100.7" });
+  const p = await connect(phone, { address: "203.0.113.5" });
+  for (const c of [d, s, x, p]) await c.next(c.op("hello"));
+  d.send({ op: "host", lobby: { name: "Dad's park" }, public: false });
+  await d.next(d.op("hosted"));
+  p.send({ op: "host", lobby: { name: "Open session" } }); // public by default
+  await p.next(p.op("hosted"));
+
+  s.send({ op: "list" });
+  const seen = JSON.parse(await s.next(s.op("lobbies"))).rows;
+  assert.deepEqual(seen.find((r) => r.host === dad.id), { name: "Dad's park", host: dad.id, home: true });
+  assert.equal(seen.find((r) => r.host === phone.id)?.home, false);
+  x.send({ op: "list" });
+  const elsewhere = JSON.parse(await x.next(x.op("lobbies"))).rows;
+  assert.ok(!elsewhere.some((r) => r.host === dad.id), "another network does not see it");
+  assert.ok(elsewhere.some((r) => r.host === phone.id), "a public game is listed everywhere");
+  assert.ok(!JSON.stringify(elsewhere).includes("198.51") && !JSON.stringify(seen).includes("2001:db8"), "no addresses");
+  for (const c of [d, s, x, p]) c.ws.close();
 });
 
 test("a second connection replaces the first", async () => {

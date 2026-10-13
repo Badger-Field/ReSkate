@@ -24,6 +24,9 @@
 #include "Engine/Core/Text/word_filter.h"
 #include "Engine/Game/Multiplayer/session_tools.h"
 #include "Engine/Game/UI/game_view.h"
+#include "Engine/Core/Platform/launcher_support.h"
+#include "Extension/Multiplayer/Direct/direct_lobby_api.h"
+#include "Extension/Multiplayer/Direct/direct_play.h"
 #include <Windows.h>
 #include <bcrypt.h>
 #include <algorithm>
@@ -36,6 +39,17 @@
 namespace dingosdk::multiplayer {
 using namespace session_detail;
 namespace session_detail {
+std::unique_ptr<LobbyApi> session_lobby_api(SteamTransport &transport) {
+    if (!launcher::offline_mode()) return make_steam_lobby_api();
+    LobbyChannel channel;
+    channel.ready = [&transport] { return transport.direct(); };
+    channel.request = [&transport](std::string_view json) { return transport.lobby_request(json); };
+    channel.replies = [&transport] { return transport.lobby_replies(); };
+    channel.local_id = [&transport] { return transport.status().local_id; };
+    channel.name = [] { return direct_player_name(); };
+    channel.now_ms = [] { return static_cast<std::uint64_t>(GetTickCount64()); };
+    return make_direct_lobby_api(std::move(channel));
+}
 std::uint64_t nonce() {
     std::uint64_t value{};
     if (BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(&value), sizeof(value),
@@ -143,7 +157,7 @@ void stop(Session &s, std::string reason) {
     s.object_owners_valid = false;
     reset_audio();
     reset_effects();
-    s.public_host = s.started_map = s.roster_dirty = false;
+    s.public_host = s.listed_host = s.started_map = s.roster_dirty = false;
     s.awaiting_map = s.join_map_authorized = s.map_load_submitted = false;
     s.join_started = s.last_map_request = s.last_map_load_check = 0;
     s.join_destination.clear();

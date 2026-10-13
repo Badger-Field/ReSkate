@@ -85,6 +85,18 @@ async function verify(key, signature, challenge) {
 
 // ---------------------------------------------------------------- worker
 
+// Who is on the same home network: the address Cloudflare saw, and for IPv6 its /64, since each
+// device in a home has an IPv6 address of its own within it. Only ever compared, never shown.
+export function homeKey(address) {
+  if (!address) return "local";
+  if (!address.includes(":")) return address;
+  const [head, tail = ""] = address.toLowerCase().split("::");
+  const groups = head ? head.split(":") : [];
+  const rest = tail ? tail.split(":") : [];
+  const full = [...groups, ...Array(Math.max(0, 8 - groups.length - rest.length)).fill("0"), ...rest];
+  return full.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, "")).join(":") + "::/64";
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -108,6 +120,9 @@ export default {
     forwarded.headers.set("X-Player", id);
     forwarded.headers.set("X-Player-Key", hex(key));
     forwarded.headers.set("X-Challenge", challenge);
+    // Development only: tests stand in for players on different networks.
+    const address = (env.DEV === "1" && request.headers.get("X-Test-Address")) || request.headers.get("CF-Connecting-IP");
+    forwarded.headers.set("X-Home", homeKey(address));
     // One hub for everyone: signaling only flows while players connect, and a lobby list is
     // small. Shard by region if it ever gets busy.
     return env.HUB.get(env.HUB.idFromName("hub")).fetch(forwarded);
@@ -120,7 +135,10 @@ export class Hub extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
-    this.sql.exec("CREATE TABLE IF NOT EXISTS lobbies (host TEXT PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL)");
+    // Hosted games. A public one is listed to everyone; any other only to players on the
+    // host's home network (homeKey), who can join it without a code.
+    this.sql.exec("CREATE TABLE IF NOT EXISTS listings (host TEXT PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL, home TEXT NOT NULL, public INTEGER NOT NULL)");
+    this.sql.exec("DROP TABLE IF EXISTS lobbies"); // the listings before home networks
     // A player ID is 32 bits of the key's hash, so two keys can share one: the first key to
     // connect as an ID owns it, and another key is refused (its game makes a new key).
     this.sql.exec("CREATE TABLE IF NOT EXISTS players (id TEXT PRIMARY KEY, key TEXT NOT NULL, seen INTEGER NOT NULL)");
@@ -134,7 +152,7 @@ export class Hub extends DurableObject {
     this.sql.exec("CREATE INDEX IF NOT EXISTS players_seen ON players (seen)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS used_challenges_used ON used_challenges (used)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS admissions_hour ON admissions (hour)");
-    this.sql.exec("CREATE INDEX IF NOT EXISTS lobbies_updated ON lobbies (updated)");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS listings_updated ON listings (updated)");
   }
 
   async fetch(request) {
@@ -153,7 +171,7 @@ export class Hub extends DurableObject {
     if (owner && owner.key !== key)
       return new Response("This key's player ID belongs to another key: make a new key.", { status: 409 });
     if (!owner) {
-      const address = request.headers.get("CF-Connecting-IP") || "local";
+      const address = request.headers.get("X-Home") || "local";
       const hour = Math.floor(now / 3600_000);
       this.sql.exec("DELETE FROM admissions WHERE hour < ?", hour);
       const used = this.sql.exec("SELECT count FROM admissions WHERE address = ? AND hour = ?", address, hour).toArray()[0]?.count ?? 0;
@@ -168,7 +186,7 @@ export class Hub extends DurableObject {
     const [client, server] = Object.values(new WebSocketPair());
     // Hibernation: idle connections cost nothing while players wait in a lobby.
     this.ctx.acceptWebSocket(server, [id]);
-    server.serializeAttachment({ id, window: now, count: 0, seen: now });
+    server.serializeAttachment({ id, window: now, count: 0, seen: now, home: request.headers.get("X-Home") || "local" });
     server.send(JSON.stringify({ op: "hello", id }));
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -194,7 +212,7 @@ export class Hub extends DurableObject {
       this.sql.exec("UPDATE players SET seen = ? WHERE id = ?", now, me.id);
     }
     ws.serializeAttachment(me);
-    if (message.startsWith("{")) return this.control(ws, me.id, message, now);
+    if (message.startsWith("{")) return this.control(ws, me, message, now);
     this.signal(ws, me.id, message);
   }
 
@@ -212,7 +230,8 @@ export class Hub extends DurableObject {
     }
   }
 
-  control(ws, id, text, now) {
+  control(ws, me, text, now) {
+    const id = me.id;
     let request;
     try { request = JSON.parse(text); } catch { return; }
     const reply = (value) => ws.send(JSON.stringify(value));
@@ -224,17 +243,23 @@ export class Hub extends DurableObject {
         const data = JSON.stringify(row ?? null);
         if (!row || typeof row !== "object" || Array.isArray(row) || data.length > MAX_LOBBY)
           return reply({ op: "error", error: "A lobby row is a JSON object of at most 2000 characters." });
-        this.sql.exec("INSERT OR REPLACE INTO lobbies (host, data, updated) VALUES (?, ?, ?)", id, data, now);
+        // Public unless the host says otherwise; otherwise listed on their home network only.
+        const listed = request.public === false ? 0 : 1;
+        this.sql.exec("INSERT OR REPLACE INTO listings (host, data, updated, home, public) VALUES (?, ?, ?, ?, ?)",
+          id, data, now, me.home ?? "local", listed);
         return reply({ op: "hosted" });
       }
       case "unhost":
-        this.sql.exec("DELETE FROM lobbies WHERE host = ?", id);
+        this.sql.exec("DELETE FROM listings WHERE host = ?", id);
         return reply({ op: "unhosted" });
       case "list": {
-        this.sql.exec("DELETE FROM lobbies WHERE updated < ?", now - LOBBY_LIFETIME_MS);
-        const rows = this.sql.exec("SELECT host, data FROM lobbies ORDER BY updated DESC LIMIT 200").toArray()
-          // The host is who published the row, whatever the row itself says.
-          .map(({ host, data }) => ({ ...JSON.parse(data), host }));
+        this.sql.exec("DELETE FROM listings WHERE updated < ?", now - LOBBY_LIFETIME_MS);
+        const home = me.home ?? "local";
+        const rows = this.sql.exec(
+          "SELECT host, data, home FROM listings WHERE public = 1 OR home = ? ORDER BY updated DESC LIMIT 200", home).toArray()
+          // The host is who published the row, whatever the row itself says; `home`: on the
+          // asker's own network. Addresses are never sent.
+          .map((row) => ({ ...JSON.parse(row.data), host: row.host, home: row.home === home }));
         return reply({ op: "lobbies", rows });
       }
       default:
@@ -252,6 +277,6 @@ export class Hub extends DurableObject {
   left(ws) {
     const { id } = ws.deserializeAttachment() ?? {};
     // Its lobby goes with it, unless the player has already reconnected.
-    if (id && !this.ctx.getWebSockets(id).some((other) => other !== ws)) this.sql.exec("DELETE FROM lobbies WHERE host = ?", id);
+    if (id && !this.ctx.getWebSockets(id).some((other) => other !== ws)) this.sql.exec("DELETE FROM listings WHERE host = ?", id);
   }
 }

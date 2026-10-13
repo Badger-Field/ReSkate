@@ -27,6 +27,8 @@ struct LobbyApi {
     virtual bool joinable(std::uint64_t, bool) = 0;
     virtual bool visibility(std::uint64_t, bool) = 0;
     virtual std::string name() = 0;
+    // Who keeps the lobbies, for messages: "Steam", or "the lobby service".
+    virtual std::string service() { return "Steam"; }
 };
 std::unique_ptr<LobbyApi> make_steam_lobby_api();
 std::optional<MultiplayerLobby> read_lobby(std::uint64_t id, std::uint64_t owner,
@@ -41,8 +43,9 @@ class SteamLobbies {
     // `hidden_host`: whether a player's lobbies are left out of the browser (the team's bans).
     explicit SteamLobbies(std::unique_ptr<LobbyApi> api, std::function<bool(std::uint64_t)> hidden_host = {})
         : api_(std::move(api)), hidden_host_(std::move(hidden_host)) {}
+    // `everyone`: listed publicly; otherwise (the lobby service only) to the host's home network.
     void host(const std::string &code, unsigned capacity = multiplayer_lobby_player_limit, bool password_required = false,
-              std::string_view name = {});
+              std::string_view name = {}, bool everyone = true);
     void update_host(bool ready, unsigned players, std::string_view map, std::uint64_t now);
     void refresh(std::uint64_t now);
     void join(std::uint64_t id, std::uint64_t local_id, std::uint64_t now);
@@ -63,7 +66,7 @@ class SteamLobbies {
     LobbyStatus state_;
     Pending creating_, searching_, joining_;
     bool host_wanted_{}, failed_{}, ready_{}, password_required_{};
-    bool friend_join_{};
+    bool friend_join_{}, everyone_ = true;
     unsigned players_ = 1, capacity_ = multiplayer_lobby_player_limit;
     std::uint64_t lobby_{}, local_id_{}, last_poll_{}, last_search_{}, join_id_{}, join_owner_{};
     std::uint64_t owner_checked_{}; // update_host's last full publication and ownership check
