@@ -39,6 +39,8 @@ struct MapNeed {
     // The version of it installed here, when that is another than the host's: the host's is
     // fetched in its place. Empty: the map is not installed.
     std::string have;
+    // Local steady-clock deadline, shared with the downloader, never transmitted.
+    std::uint64_t deadline_us{};
 };
 std::optional<MapNeed> take_map_need();
 // Whether a session is waiting on a map being fetched right now. Thread-safe.

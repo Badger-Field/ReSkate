@@ -155,6 +155,7 @@ void stop(Session &s, std::string reason) {
     s.map_label.clear();
     s.map_package.clear();
     s.fetching_since = 0;
+    s.map_fetch_deadline = 0;
     fetching_map_flag.store(false, std::memory_order_relaxed);
     s.world = 1;
     s.travelling = false;
@@ -768,6 +769,7 @@ bool observe_local_world(Session &s, const NativeFrame &local, std::string_view 
     } else if (s.travelling) {
         if (local.ready && !s.awaiting_map && s.host_world_ready) {
             s.travelling = false;
+            s.map_fetch_deadline = 0;
             s.last_world_ready = 0;
             for (auto &peer : active_peers(s)) {
                 peer.last_packet = now;
@@ -796,6 +798,10 @@ bool observe_local_world(Session &s, const NativeFrame &local, std::string_view 
 // Native loading can unload every local actor. Keep the connection in preflight
 // until the selected map and a controllable skater are available.
 bool prepare_join_map(Session &s, bool ready, std::string_view current, MapLoader loader, std::uint64_t now) {
+    if (map_fetch_policy::expired(s.map_fetch_deadline, now)) {
+        stop(s, "Map download timed out. Please try joining the server again.");
+        return false;
+    }
     if (!s.awaiting_map)
         return true;
     // (While the map is being fetched the clock is held: see below.)
@@ -844,15 +850,11 @@ bool prepare_join_map(Session &s, bool ready, std::string_view current, MapLoade
             if (!s.map_package.empty()) {
                 if (!s.fetching_since) {
                     s.fetching_since = now;
+                    if (!s.map_fetch_deadline) s.map_fetch_deadline = now + map_fetch_limit_us;
                     fetching_map_flag.store(true, std::memory_order_relaxed);
-                    s.map_need = MapNeed{s.map_package, name, dedicated_host(s), s.travelling, have};
-                    s.rejoin = Session::Rejoin{{s.host_id, s.secret}, s.password};
+                    s.map_need = MapNeed{s.map_package, name, dedicated_host(s), s.travelling, have, s.map_fetch_deadline};
+                    s.rejoin = Session::Rejoin{{s.host_id, s.secret}, s.password, s.map_fetch_deadline};
                     s.last_map_request = s.last_world_ready = 0;   // say so at once
-                }
-                if (now - s.fetching_since > map_fetch_limit_us) {
-                    s.leave_notice = where + ", which did not finish downloading in time. Install its map mod and join again.";
-                    stop(s, s.leave_notice);
-                    return false;
                 }
                 // The time a load gets starts when the map is here.
                 s.join_started = now;

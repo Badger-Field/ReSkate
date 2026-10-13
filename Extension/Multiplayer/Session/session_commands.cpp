@@ -968,6 +968,8 @@ std::string command(std::string_view action, std::string_view argument, std::str
         if (action == "rejoin") {
             rejoin = std::exchange(s.rejoin, std::nullopt);
             if (!rejoin) return "There is no session to go back to.";
+            if (map_fetch_policy::expired(rejoin->deadline_us, now_us()))
+                return "Map download timed out. Please try joining the server again.";
         }
         if (action != "host" && action != "join" && action != "echo" && !rejoin)
             return "Unknown multiplayer action.";
@@ -1113,6 +1115,7 @@ std::string command(std::string_view action, std::string_view argument, std::str
             s.host_id = invitation->steam_id;
             s.awaiting_map = true;
             s.join_started = now_us();
+            s.map_fetch_deadline = rejoin ? rejoin->deadline_us : 0;
             s.status = "Connecting and checking the host's map...";
         }
         set_lobby_park_mode(s.mode == Mode::host || s.mode == Mode::join, s.mode == Mode::join);

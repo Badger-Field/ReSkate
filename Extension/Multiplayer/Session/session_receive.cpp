@@ -594,6 +594,12 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             continue;
         }
         const auto &p = *decoded;
+        if (s.mode == Mode::host && link->fetching_since && (!link->handshaken || link->travel_since) &&
+            map_fetch_policy::host_expired(link->fetching_since, now)) {
+            disconnect(s, message.peer, "The server stopped waiting for the map download.");
+            if (s.mode == Mode::off) return;
+            continue;
+        }
         // A dedicated server sends no poses; its roster and control traffic keep it alive.
         if (dedicated_host(s) && message.peer == s.host_id) link->last_packet = now;
         if (p.kind == PacketKind::world_state) {
@@ -608,6 +614,8 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
                                      !newer_sequence(p.sequence, s.world_state_sequence)))
                 continue;
             if (p.world > s.world) {
+                // Initial authorization during an automatic rejoin keeps the original budget.
+                const auto fetch_deadline = s.world ? 0 : s.map_fetch_deadline;
                 clear_world(s, now);
                 s.world = p.world;
                 s.travelling = s.awaiting_map = s.join_map_authorized = true;
@@ -618,6 +626,7 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
                 s.map_label.clear();
                 s.map_package.clear();
                 s.fetching_since = 0;
+                s.map_fetch_deadline = fetch_deadline;
                 fetching_map_flag.store(false, std::memory_order_relaxed);
                 s.map = 0;
                 s.map_load_submitted = false;
@@ -637,6 +646,8 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             s.host_world_ready = p.world_ready;
             link->world_ready = p.world_ready;
             link->last_packet = now;
+            if (s.mode == Mode::join && message.peer == s.host_id && !s.awaiting_map)
+                s.map_fetch_deadline = 0;
             if (s.travelling)
                 s.status = p.world_ready ? "Host map ready. Waiting for local loading..."
                                         : "The host is changing maps. Your session stays connected.";
@@ -1134,6 +1145,12 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
         }
         // Authorized arrivals get time for native loading; this has an absolute
         // deadline, so requests cannot keep an unused slot reserved indefinitely.
+        if (s.mode == Mode::host && p.fetching_since && (!p.handshaken || p.travel_since) &&
+            map_fetch_policy::host_expired(p.fetching_since, now)) {
+            disconnect(s, p.member.id, "The server stopped waiting for the map download.");
+            if (s.mode == Mode::off) return;
+            continue;
+        }
         const std::uint64_t handshake_timeout = p.map_authorized ? 180000000 : 8000000;
         if (p.handshaken && (s.travelling || p.travel_since)) {
             if (p.travel_since && now - p.travel_since > 180000000) {
