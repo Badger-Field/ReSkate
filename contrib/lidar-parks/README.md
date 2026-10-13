@@ -174,6 +174,28 @@ python -m reskate_lidar anchor probe --park "<Skate>/Mods/Embarcadero Plaza/park
 
    A good anchor has at least 90% level and no buried or floating objects. Otherwise, move the stick, or make the park smaller with `city --size`.
 
+**Finding open ground (`anchor search`).** When the anchor fails, search round it:
+
+```
+python -m reskate_lidar anchor search --map bam --around 627.1 1062.8 --radius 200 --spacing 20 --out-dir probes
+```
+
+1. **Batches:** this writes the probes as batches. Each batch is one `RESKATE_STARTUP_COMMANDS` value under the launcher's 4,000 characters, about 110 probes, with the centre first.
+2. **Run each batch:** set the value, start the game, load the map with no park mods, and keep each run's `ReSkate.log` as its own file.
+   - Points that hadn't streamed in are listed.
+   - If there are many, use `--wait 2`.
+3. **Rank:**
+
+   ```
+   python -m reskate_lidar anchor search --map bam --log batch-01.log --log batch-02.log ... \
+       --size 160 --anchor-out new-anchor.park.json --anchor-template "<old anchor>.park.json"
+   ```
+
+   - **What it ranks:** every square of `--size` round a probed point, by the share of it that is level with its own median height. It lists the best few that don't overlap, as anchor `x, y, z`.
+   - **Squares left out:** those with under 85% of their probes read.
+   - **Next:** it prints a finer `--around` search round the best one.
+   - **The anchor file:** `--anchor-out` writes the best place as an anchor file, keeping the old stick's facing. Pass it to `city --anchor`, then confirm with `anchor probe` and `anchor check`.
+
 ### A skatepark's real shape (`--skatepark`)
 
 For a park of bowls and transitions, which the Build Kit can't make:

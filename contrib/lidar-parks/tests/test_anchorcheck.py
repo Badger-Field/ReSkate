@@ -101,3 +101,76 @@ def test_cli_probe_then_check(park, tmp_path, capsys):
     assert cli.main(["anchor", "check", "--park", str(park), "--log", str(log), "--report", str(report)]) == 0
     assert "a good anchor" in capsys.readouterr().out
     assert json.loads(report.read_text())["level_share"] == 1.0
+
+
+def test_search_grid_and_batches():
+    points = anchorcheck.search_points(600, 1000, 200, 20)
+    assert len(points) == 21 * 21
+    assert points[0] == pytest.approx([600, 1000])               # the centre first
+    batches = anchorcheck.batches(points)
+    assert all(len(b) <= anchorcheck.STARTUP_LIMIT for b in batches)
+    assert sum(b.count("trainer ground") for b in batches) == len(points)
+    assert all(not b.startswith(";") and not b.endswith(";") for b in batches)
+    assert batches[0].startswith("trainer ground 600.0 1000.0;wait 1;trainer ground")
+
+
+def waterfront(x, z):
+    """A shore along x = 600: beach west of it, a 200 m-wide flat plaza east of it from z 900 to
+    1100, a hillside beyond, and a tower at (880, 1000)."""
+    if x < 600:
+        return 196.0 - (600 - x) * 0.02
+    if abs(x - 880) < 15 and abs(z - 1000) < 15:
+        return 345.0
+    if 900 <= z <= 1100:
+        return 200.0
+    return 200.0 + 0.1 * (abs(z - 1000) - 100)
+
+
+def test_search_ranks_the_open_ground():
+    heights = {(round(x, 1), round(z, 1)): waterfront(x, z) for x, z in anchorcheck.search_points(600, 1000, 300, 20)}
+    best = anchorcheck.rank(heights, size=160, top=3)
+    top = best[0]
+    assert top.level_share == 1.0 and top.ground == pytest.approx(200.0)
+    assert 600 <= top.x - 80 and top.x + 80 < 865                # on the plaza: off the beach, clear of the tower
+    assert 900 <= top.z - 80 and top.z + 80 <= 1100
+    assert best[-1].level_share < 1.0
+    for a in best:                                               # no two overlap by more than half
+        for b in best:
+            if a is not b:
+                assert max(abs(a.x - b.x), abs(a.z - b.z)) >= 80
+    with pytest.raises(ValueError, match="smaller --size"):
+        anchorcheck.rank(heights, size=2000)
+
+
+def test_cli_search_round_trip(park, tmp_path, capsys):
+    assert cli.main(["anchor", "search", "--around", "600", "1000", "--radius", "300", "--spacing", "20",
+                     "--out-dir", str(tmp_path / "batches")]) == 0
+    capsys.readouterr()
+    logs = []
+    for number, batch in enumerate(sorted((tmp_path / "batches").glob("batch-*.txt")), 1):
+        probes = [c.split() for c in batch.read_text().strip().split(";") if c.startswith("trainer ground")]
+        log = tmp_path / f"batch-{number:02d}.log"
+        log.write_text("\n".join(landed(float(x), waterfront(float(x), float(z)), float(z)) for _, _, x, z in probes))
+        logs += ["--log", str(log)]
+    anchor = tmp_path / "best.park.json"
+    assert cli.main(["anchor", "search", *logs, "--size", "160", "--anchor-out", str(anchor),
+                     "--anchor-template", str(park)]) == 0
+    out = capsys.readouterr().out
+    assert "961 probes read from 9 logs" in out
+    assert "1. " in out and "100% level" in out and "--around" in out
+    document = json.loads(anchor.read_text())
+    (stick,) = document["maps"]["bam"]
+    assert stick["position"][1] == pytest.approx(200.0) and stick["item"] == "own_bk_box"
+
+
+def test_lower_and_higher_say_relative_to_the_park(park):
+    footprint = anchorcheck.read_park(park)
+    heights = {(580.0, 990.0): 191.1, (620.0, 990.0): 205.0, (600.0, 1010.0): 200.0}
+    text = anchorcheck.check(footprint, heights).summary(0.3)
+    assert "up to 8.9 m below the park's ground" in text and "up to 5.0 m above the park's ground" in text
+
+
+def test_probe_prints_the_bare_value(park, capsys):
+    assert cli.main(["anchor", "probe", "--park", str(park)]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert any(line.startswith("trainer ground 600.0 1000.0;wait 1;") for line in lines)

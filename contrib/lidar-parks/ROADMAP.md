@@ -12,7 +12,9 @@ These need a human.
    - The custom-map research stays in CUSTOM-MAPS.md as reference.
 2. **Where should city parks go on San Vansterdam (`bam`)?** A 160 m square of real plaza needs open, flat ground at least that big.
    - Is there such a spot? `anchor probe` / `anchor check` (README) now measure one in game: they give the share of the footprint that is flat and clear, and which objects would be buried or float.
-   - The first Embarcadero try loaded all 33 of 33 objects, but its anchor (627.1, 199.9, 1062.8) is on the NE waterfront promenade or coast road. A probe run there, and at candidates inland, would settle it.
+   - The first Embarcadero try loaded all 33 of 33 objects, but its anchor (627.1, 199.9, 1062.8) is on the NE waterfront promenade or coast road.
+   - **Measured:** `anchor check` there gave 6 of 78 probes level (8%), 11 higher (a rooftop 145.7 m up), and 61 lower, mostly beach a few metres down. 11 objects would float. Two runs agreed to 0.05 m.
+   - **Next:** `anchor search` round it, coarse then fine (README), to find the open ground.
    - Do Build Kit objects 80 m from the anchor still load and collide?
 3. **Can this environment reach OpenStreetMap?** This cloud environment's network policy blocks:
    - `overpass-api.de`
@@ -100,7 +102,7 @@ Measured from open data; see [examples/venice-beach-skatepark.md](examples/venic
 From a park of real spots to skating anywhere:
 1. **Real spots as a park mod.** Done; see *What works*. It needs the in-game check above.
 2. **Parks that fit their ground:**
-   - `anchor probe` / `anchor check` (done);
+   - `anchor probe` / `anchor check` / `anchor search` (done);
    - stand-in sizes calibrated in game;
    - budgets up to the loader's 1,024 objects per map.
 3. **Skateparks as park mods:** bowls and transitions approximated from Build Kit ramps, from the measured shapes (`--skatepark` data).

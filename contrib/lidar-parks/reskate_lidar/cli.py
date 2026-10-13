@@ -124,6 +124,20 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--tolerance", type=float, default=0.3, help="metres from the park's ground still "
                                                                     "counted level (default 0.3)")
     check.add_argument("--report", help="write the verdict as JSON")
+    search = anchor_steps.add_parser("search", help="find open, flat ground: with --around, write probe batches "
+                                                    "over an area; with --log, rank squares of --size by how level")
+    search.add_argument("--map", default="bam", help="base map key (default bam)")
+    search.add_argument("--around", nargs=2, type=float, metavar=("X", "Z"), help="the search's centre on the map")
+    search.add_argument("--radius", type=float, default=200.0, help="metres each way from --around (default 200)")
+    search.add_argument("--spacing", type=float, default=20.0, help="metres between probes (default 20)")
+    search.add_argument("--wait", type=int, default=1, help="seconds after each probe (default 1)")
+    search.add_argument("--out-dir", help="write each batch here too, one file per batch")
+    search.add_argument("--log", action="append", help="a ReSkate.log from a batch run (repeat for several)")
+    search.add_argument("--size", type=float, default=160.0, help="the park's size in metres (default 160)")
+    search.add_argument("--tolerance", type=float, default=0.3, help="metres still counted level (default 0.3)")
+    search.add_argument("--top", type=int, default=5, help="how many places to list (default 5)")
+    search.add_argument("--anchor-out", help="write the best place as an anchor park file, for city --anchor")
+    search.add_argument("--anchor-template", help="the old anchor file: the new stick keeps its facing")
 
     synth = commands.add_parser("synth", help="write a synthetic park scan for trying the tool")
     synth.add_argument("output", help=".ply file to write")
@@ -502,6 +516,8 @@ def run_imagery(args) -> int:
 
 def run_anchor(args) -> int:
     from . import anchorcheck
+    if args.step == "search":
+        return _anchor_search(args)
     footprint = anchorcheck.read_park(args.park)
     if args.step == "probe":
         if args.spacing <= 0 or args.limit < 2:
@@ -511,6 +527,8 @@ def run_anchor(args) -> int:
         print(f"{len(points)} probes over {len(footprint.items)} objects on {footprint.map}. Load {footprint.map} "
               "without the park, then either set this before starting the game:")
         print(f"  RESKATE_STARTUP_COMMANDS={commands}")
+        print("The value alone, to paste:")
+        print(commands)
         print("or type each line in the console (the park need not be loaded):")
         lines = [f"trainer ground {x:.1f} {z:.1f}" for x, z in points]
         for line in lines:
@@ -529,6 +547,56 @@ def run_anchor(args) -> int:
                                      encoding="utf-8")
         print(f"Wrote {args.report}")
     return 0 if verdict.good else 1
+
+
+def _anchor_search(args) -> int:
+    from . import anchorcheck
+    if bool(args.around) == bool(args.log):
+        raise ValueError("anchor search takes either --around X Z (write probes) or --log (rank what they found)")
+    if args.around:
+        if args.spacing <= 0 or not 0 < args.radius <= 5000 or args.wait < 0:
+            raise ValueError("--spacing and --radius must be positive (radius up to 5000), --wait at least 0")
+        points = anchorcheck.search_points(*args.around, args.radius, args.spacing)
+        batches = anchorcheck.batches(points, args.wait)
+        print(f"{len(points)} probes, {args.spacing:g} m apart, {args.radius:g} m each way round "
+              f"{args.around[0]:g}, {args.around[1]:g} on {args.map}: {len(batches)} batches. For each batch, start "
+              f"the game with RESKATE_STARTUP_COMMANDS set to it, load {args.map} with no park mods, let it run "
+              f"(about {len(points) * (args.wait + 1) // len(batches) // 60 + 1} min), and keep ReSkate.log as its own file.")
+        folder = Path(args.out_dir) if args.out_dir else None
+        if folder:
+            folder.mkdir(parents=True, exist_ok=True)
+        for number, batch in enumerate(batches, 1):
+            print(f"\n# batch {number} of {len(batches)} ({batch.count('trainer ground')} probes)")
+            print(batch)
+            if folder:
+                (folder / f"batch-{number:02d}.txt").write_text(batch + "\n", encoding="utf-8")
+        if folder:
+            print(f"\nWrote {len(batches)} batches to {folder}")
+        logs = " ".join(f"--log batch-{n:02d}.log" for n in range(1, len(batches) + 1))
+        print(f"\nThen: python -m reskate_lidar anchor search --map {args.map} {logs} --size <park size>")
+        return 0
+    heights, missing = {}, []
+    for log in args.log:
+        found, lost = anchorcheck.read_heights(Path(log).read_text(encoding="utf-8", errors="replace"))
+        heights.update(found)
+        missing += lost
+    missing = [p for p in dict.fromkeys(missing) if p not in heights]
+    print(f"{len(heights)} probes read from {len(args.log)} logs" +
+          (f"; {len(missing)} found no collision yet (not streamed in)" if missing else ""))
+    best = anchorcheck.rank(heights, args.size, args.tolerance, args.top)
+    print(f"Best places for a {args.size:g} m park on {args.map} (anchor x, y, z), within {args.tolerance:g} m:")
+    for number, candidate in enumerate(best, 1):
+        print(f"  {number}. {candidate.line()}")
+    top = best[0]
+    fine = max(2.0, args.size / 16)
+    print(f"Refine round the best: python -m reskate_lidar anchor search --map {args.map} --around {top.x:.1f} {top.z:.1f} "
+          f"--radius {args.size / 2 + fine:g} --spacing {fine:g}")
+    if args.anchor_out:
+        cat = catalog_module.load_catalog(DEFAULT_CATALOG)
+        document = anchorcheck.anchor_park(args.map, top.x, top.ground, top.z, cat.marker, args.anchor_template)
+        Path(args.anchor_out).write_text(json.dumps(document, indent=2), encoding="utf-8")
+        print(f"Wrote {args.anchor_out}: pass it to city --anchor, then check with anchor probe / anchor check")
+    return 0
 
 
 def run_calibrate(args) -> int:
