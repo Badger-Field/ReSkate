@@ -287,6 +287,29 @@ void filter_pad(bool outer, DWORD user, XINPUT_STATE* output) noexcept {
     g.sThumbRX = pad.right_x;
     g.sThumbRY = pad.right_y;
 }
+// `press` (console): a short press of controller buttons on the first pad, so a script can get
+// past a game menu without a person and without SendInput, which types into whatever has focus.
+// With no pad connected, the first pad reads as a connected, idle one while the press lasts and
+// for a second after it, so the game also sees the buttons come up again.
+struct VirtualPress {
+    std::atomic<WORD> buttons{};
+    std::atomic<std::uint64_t> down_until{}, up_until{};
+};
+VirtualPress& virtual_press() { static auto* value = new VirtualPress; return *value; }
+void apply_virtual_press(bool outer, DWORD user, DWORD& result, XINPUT_STATE* output) noexcept {
+    if (!outer || user != 0 || !output) return;
+    auto& press = virtual_press();
+    const auto now = GetTickCount64();
+    if (now >= press.up_until.load(std::memory_order_acquire)) return;
+    if (result != ERROR_SUCCESS) {
+        *output = {};
+        result = ERROR_SUCCESS;
+    }
+    if (now < press.down_until.load(std::memory_order_acquire)) {
+        output->Gamepad.wButtons |= press.buttons.load(std::memory_order_relaxed);
+        output->dwPacketNumber ^= 0x40000000u;
+    }
+}
 // Another program's hook on XInput that was put in front of the capture's own after it was
 // installed (Steam's overlay does, for Steam Input, and answers the game with its own pad
 // without going on to XInput): the capture then never sees the game's reads, and a menu that
@@ -308,6 +331,7 @@ DWORD WINAPI captured_front(DWORD user, XINPUT_STATE* output) {
     } else if (result == ERROR_SUCCESS) {
         filter_pad(outer, user, output);
     }
+    if (!capture) apply_virtual_press(outer, user, result, output);
     return result;
 }
 void keep_xinput_capture_first() {
@@ -612,6 +636,7 @@ DWORD WINAPI captured_xinput(DWORD user, XINPUT_STATE* output) {
     } else if (result == ERROR_SUCCESS) {
         filter_pad(outer, user, output);
     }
+    if (!capture) apply_virtual_press(outer, user, result, output);
     return result;
 }
 template<std::size_t I>
@@ -906,4 +931,11 @@ bool install_input_capture() {
 
 extern "C" void DingoSDKOverlaySetGamepadFilter(dingosdk::overlay::GamepadFilter filter) {
     dingosdk::overlay::detail::gamepad_filter().store(filter, std::memory_order_release);
+}
+extern "C" void DingoSDKOverlayPressGamepad(unsigned short buttons, unsigned milliseconds) {
+    auto& press = dingosdk::overlay::detail::virtual_press();
+    const auto now = GetTickCount64();
+    press.buttons.store(buttons, std::memory_order_relaxed);
+    press.down_until.store(now + milliseconds, std::memory_order_release);
+    press.up_until.store(now + milliseconds + 1000, std::memory_order_release);
 }
