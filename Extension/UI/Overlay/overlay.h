@@ -239,6 +239,7 @@ struct BoardBreakModel {
 struct GrindExitModel {
     bool available = false, enabled = false, toe_heel = true;
     int stance = 0;
+    int strength = 100; // pop-out strength, percent (10-100)
 };
 
 struct Model {
