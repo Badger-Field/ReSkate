@@ -28,7 +28,9 @@ dingosdk::overlay::Model console_model_snapshot() {
 void console_callback_result(bool queued, const std::array<char, 512>& result,
                              std::string_view fallback) {
     std::string line = queued ? "ok: " : "error: ";
-    line += result[0] ? result.data() : fallback;
+    // The fallback names a refusal; a request that was queued without a message says so plainly
+    // (it used to read "ok: Load request rejected.").
+    line += result[0] ? std::string_view(result.data()) : queued ? std::string_view("Request queued.") : fallback;
     console_line(line);
 }
 
