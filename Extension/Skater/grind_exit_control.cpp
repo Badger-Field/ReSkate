@@ -78,7 +78,7 @@ struct Trigger {
 struct Control {
     std::atomic<std::uintptr_t> base{};
     std::atomic<bool> started{}, enabled{}, guard{true}, lean_guard{true}, hooked{};
-    std::atomic<float> side_speed{gx::measured_side_speed}, prewindow{0.4f};
+    std::atomic<float> side_speed{gx::measured_side_speed}, prewindow{1.0f};
     std::atomic<int> strength{100}; // pop-out strength, percent of the sideways speed (10-100)
     std::atomic<int> stance{static_cast<int>(Stance::unset)}, sides{static_cast<int>(Sides::toeheel)};
     std::atomic<bool> wanted{}; // the player's on/off choice, kept; `enabled` is whether it is installed now
@@ -522,7 +522,7 @@ std::string command(const std::vector<std::string>& words) {
     }
     if (verb == "prewindow") {
         float value{};
-        if (!number(0.0f, 1.0f, value)) return "Usage: grindexit prewindow <0 to 1> (seconds a trigger may be pressed before the grind connects; 0.4)";
+        if (!number(0.0f, 2.0f, value)) return "Usage: grindexit prewindow <0 to 2> (seconds a trigger may be pressed before the grind connects; 1)";
         c.prewindow.store(value);
         return status_text(c);
     }

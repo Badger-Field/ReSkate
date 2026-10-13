@@ -11,7 +11,8 @@ out to your heel side, a kickflip out to whichever side you pick.
 Off until you switch it on: skate.'s menu, **Mod Options > Player > Grind exit triggers** (or the
 ReSkate menu's skater page, or the console (`~`) with `grindexit exits on|off`). The choices are kept.
 
-- **While grinding, press LT or RT** (or up to 0.4 s before the grind connects), then do any trick
+- **While grinding, press LT or RT** (or up to 1 s before the grind connects,
+  for example as you ollie up to the rail), then do any trick
   out of the grind with the right stick as usual. Keep the trigger held until you land, then let go.
 - **Input Mode** (`grindexit sides toeheel|travel`):
   - **Toe / Heel**: LT pops out to your toe side, RT to your heel side, riding normal, fakie or

@@ -7,7 +7,7 @@
 // trick and of the body's rotation (Skate's own controls tie both to the left stick).
 //
 // While on:
-//   - A trigger pressed DURING a grind, or up to `prewindow` seconds (0.4) before the grind
+//   - A trigger pressed DURING a grind, or up to `prewindow` seconds (1) before the grind
 //     connects, is "claimed": it picks the side of the next pop out of the grind. The player
 //     chooses what LT / RT mean:
 //       toe/heel     LT the toe side, RT the heel side, worked out from which foot leads (the
