@@ -7,6 +7,8 @@
 #include "Engine/Core/Debug/trace.h"
 #include "Engine/Vfs/mod_catalog.h"
 
+#include <algorithm>
+#include <deque>
 #include <shellapi.h>
 
 #include <format>
@@ -372,6 +374,10 @@ void Launcher::run_download(bool validate) {
         progress_for("DepotDownloader"));
     set(Phase::downloading, "Connecting to Steam");
     DepotOutput output;
+    // DepotDownloader's last lines, for the log when the download fails: they say why (the
+    // account does not own the game, Steam refused the sign-in, the disk is full), and are
+    // otherwise only written at the debug level.
+    std::deque<std::string> last_lines;
     update::SteamLogin login;
     login.username = settings_.steam_username;
     login.remember = settings_.steam_remember;
@@ -390,6 +396,11 @@ void Launcher::run_download(bool validate) {
                 for (auto at = logged.find(login.username); at != std::string::npos; at = logged.find(login.username, at + 8))
                     logged.replace(at, login.username.size(), "<hidden>");
             logging::write(logging::Level::debug, logging::Channel::launcher, logged);
+            // (Not the rows of a QR code, nor each step of the progress.)
+            if (!logged.empty() && logged.find('%') == std::string::npos && std::ranges::none_of(logged, [](unsigned char c) { return c >= 0x80; })) {
+                if (last_lines.size() >= 40) last_lines.pop_front();
+                last_lines.push_back(logged.substr(0, 300));
+            }
             output.feed(line);
             std::lock_guard lock(mutex_);
             if (line.find("Use the Steam Mobile App to confirm") != std::string_view::npos) {
@@ -427,6 +438,8 @@ void Launcher::run_download(bool validate) {
         return;
     }
     timing.fail();
+    logging::log(logging::Level::warning, logging::Channel::launcher, "The Steam download did not finish (exit code {}). DepotDownloader's last lines:", code);
+    for (const auto& line : last_lines) logging::write(logging::Level::warning, logging::Channel::launcher, "  " + line);
     fail(std::format("The Steam download did not finish (exit code {}). {}", code, output.message));
 }
 
