@@ -156,6 +156,7 @@ void stop(Session &s, std::string reason) {
     s.map_package.clear();
     s.fetching_since = 0;
     s.map_fetch_deadline = 0;
+    map_fetch_deadline_flag.store(0);
     fetching_map_flag.store(false, std::memory_order_relaxed);
     s.world = 1;
     s.travelling = false;
@@ -730,7 +731,10 @@ std::string take_leave_notice() { return std::exchange(session().leave_notice, {
 std::optional<MapNeed> take_map_need() { return std::exchange(session().map_need, std::nullopt); }
 void set_map_package_lookup(MapPackageLookup lookup) noexcept { map_package_lookup.store(lookup, std::memory_order_relaxed); }
 bool fetching_map() noexcept { return fetching_map_flag.load(std::memory_order_relaxed); }
-void hold_map_load(bool hold) noexcept { map_load_held.store(hold, std::memory_order_relaxed); }
+std::uint64_t map_fetch_deadline() noexcept { return map_fetch_deadline_flag.load(); }
+void hold_map_load(bool hold, std::string_view package) noexcept {
+    map_load_held.store(hold && !package.empty() ? map_hash(package) : 0);
+}
 MultiplayerChat chat() {
     auto &s = session();
     std::lock_guard lock(s.mutex);
@@ -770,6 +774,7 @@ bool observe_local_world(Session &s, const NativeFrame &local, std::string_view 
         if (local.ready && !s.awaiting_map && s.host_world_ready) {
             s.travelling = false;
             s.map_fetch_deadline = 0;
+            map_fetch_deadline_flag.store(0);
             s.last_world_ready = 0;
             for (auto &peer : active_peers(s)) {
                 peer.last_packet = now;
@@ -837,7 +842,7 @@ bool prepare_join_map(Session &s, bool ready, std::string_view current, MapLoade
         // installed one's place), and loads when the two agree.
         const auto have = std::string(other_map_version(s.map_package, host_map_package(s.join_destination)));
         // (Nor while its files are being put in place and applied: hold_map_load.)
-        const bool held = map_load_held.load(std::memory_order_relaxed);
+        const bool held = !s.map_package.empty() && map_load_held.load() == map_hash(s.map_package);
         const auto result = have.empty() && !held ? loader(s.join_destination, s.map_load_submitted, detail) : MapLoadResult::missing;
         if (result == MapLoadResult::missing) {
             const auto name = s.map_label.empty() ? world_level_name(world_destination_asset(s.join_destination)) : s.map_label;
@@ -851,6 +856,7 @@ bool prepare_join_map(Session &s, bool ready, std::string_view current, MapLoade
                 if (!s.fetching_since) {
                     s.fetching_since = now;
                     if (!s.map_fetch_deadline) s.map_fetch_deadline = now + map_fetch_limit_us;
+                    map_fetch_deadline_flag.store(s.map_fetch_deadline);
                     fetching_map_flag.store(true, std::memory_order_relaxed);
                     s.map_need = MapNeed{s.map_package, name, dedicated_host(s), s.travelling, have, s.map_fetch_deadline};
                     s.rejoin = Session::Rejoin{{s.host_id, s.secret}, s.password, s.map_fetch_deadline};

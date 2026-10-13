@@ -594,6 +594,10 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             continue;
         }
         const auto &p = *decoded;
+        if (s.mode == Mode::join && map_fetch_policy::expired(s.map_fetch_deadline, now)) {
+            stop(s, "Map download timed out. Please try joining the server again.");
+            return;
+        }
         if (s.mode == Mode::host && link->fetching_since && (!link->handshaken || link->travel_since) &&
             map_fetch_policy::host_expired(link->fetching_since, now)) {
             disconnect(s, message.peer, "The server stopped waiting for the map download.");
@@ -627,6 +631,7 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
                 s.map_package.clear();
                 s.fetching_since = 0;
                 s.map_fetch_deadline = fetch_deadline;
+                map_fetch_deadline_flag.store(fetch_deadline);
                 fetching_map_flag.store(false, std::memory_order_relaxed);
                 s.map = 0;
                 s.map_load_submitted = false;
@@ -646,8 +651,6 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             s.host_world_ready = p.world_ready;
             link->world_ready = p.world_ready;
             link->last_packet = now;
-            if (s.mode == Mode::join && message.peer == s.host_id && !s.awaiting_map)
-                s.map_fetch_deadline = 0;
             if (s.travelling)
                 s.status = p.world_ready ? "Host map ready. Waiting for local loading..."
                                         : "The host is changing maps. Your session stays connected.";
@@ -748,6 +751,7 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             s.map_package = p.map_package;
             s.world = p.world;
             s.join_map_authorized |= p.map_authorized;
+            link->last_packet = now;
             if (new_challenge)
                 s.last_map_request = 0;
             if (!s.join_map_authorized)
@@ -841,6 +845,10 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             link->world_ready = true;
             link->travel_since = 0;
             link->last_packet = now;
+            if (s.mode == Mode::join && message.peer == s.host_id && !s.awaiting_map) {
+                s.map_fetch_deadline = 0;
+                map_fetch_deadline_flag.store(0);
+            }
             if (joined) s.join_backoff.joined(message.peer);
             if (s.mode == Mode::host) {
                 send_required(s, message.peer, encode_wire(packet(s, PacketKind::welcome, now)));
@@ -1152,6 +1160,8 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             continue;
         }
         const std::uint64_t handshake_timeout = p.map_authorized ? 180000000 : 8000000;
+        const bool fetching_from_host = s.mode == Mode::join && p.member.id == s.host_id &&
+            s.map_fetch_deadline && !map_fetch_policy::expired(s.map_fetch_deadline, now);
         if (p.handshaken && (s.travelling || p.travel_since)) {
             if (p.travel_since && now - p.travel_since > 180000000) {
                 disconnect(s, p.member.id, "A player could not finish loading the new map.");
@@ -1159,7 +1169,8 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             }
             continue;
         }
-        if ((!p.handshaken && p.connected_at && now - p.connected_at > handshake_timeout) ||
+        if ((!p.handshaken && p.connected_at &&
+             (fetching_from_host ? now - p.last_packet > 10000000 : now - p.connected_at > handshake_timeout)) ||
             (p.handshaken && now - p.last_packet > 10000000)) {
             disconnect(s, p.member.id, "A player timed out while waiting for gameplay data.");
             if (s.mode == Mode::off)

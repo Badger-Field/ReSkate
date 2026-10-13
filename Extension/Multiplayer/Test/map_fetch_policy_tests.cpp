@@ -1,4 +1,5 @@
 #include "Extension/Multiplayer/Net/map_fetch_policy.h"
+#include "Extension/Multiplayer/Net/protocol.h"
 #include <array>
 #include <cstdint>
 #include <iostream>
@@ -15,6 +16,8 @@ int main() {
     try {
         require(policy::second_us == 1000000, "microsecond units");
         require(policy::session_us == 1800 * policy::second_us, "30 minute session");
+        require(dingosdk::multiplayer::map_fetch_limit_us == policy::session_us,
+            "host protocol and local downloader share the session budget");
         require(policy::transfer_us == 1620 * policy::second_us, "27 minute transfer");
         require(policy::completion_reserve_us == 180 * policy::second_us, "3 minute completion reserve");
         require(policy::confirmation_us == 120 * policy::second_us, "2 minute confirmation");

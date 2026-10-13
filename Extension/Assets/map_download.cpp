@@ -17,6 +17,7 @@
 #include <map>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 namespace dingosdk::map_download {
 namespace {
@@ -34,6 +35,7 @@ std::atomic<Stage> stage{Stage::idle};
 std::atomic<unsigned> workers{};
 std::atomic<std::uint64_t> deadline{}, ask_until{}, transfer_until{};
 multiplayer::MapNeed need;       // under mutex, while not idle
+std::optional<multiplayer::MapNeed> pending; // a fresh attempt waiting for cancelled work to drain
 package::Name wanted;            // under mutex
 std::string version;             // under mutex: the one to download
 std::string newest;              // under mutex
@@ -68,17 +70,21 @@ bool need_server() {
 }
 
 // The session that is waiting on the map is left: there is no map to wait for.
-void leave_session() {
-    if (multiplayer::fetching_map()) multiplayer::queue_command("stop", "", "");
+void leave_session(std::uint64_t expected = 0) {
+    const auto owned = expected ? expected : multiplayer::map_fetch_deadline();
+    if (multiplayer::fetching_map() && owned)
+        multiplayer::queue_command("stop-map-fetch", std::to_string(owned), "");
 }
 
 // Back to idle with the reason said, as the plain "map not installed" notice is.
 void fail(std::string reason, bool retry = false) {
     std::string text;
     bool update{};
+    std::uint64_t failed_deadline{};
     {
         std::lock_guard lock(mutex);
         if (stage.exchange(Stage::idle) == Stage::idle) return;
+        failed_deadline = deadline.load();
         watch.cancel.store(true);
         stop_install.store(true);
         apply_wanted.store(false);
@@ -88,7 +94,7 @@ void fail(std::string reason, bool retry = false) {
                        : ", which is not installed on this PC. ") + reason;
         if (!retry) last_failed = need.package;
     }
-    leave_session();
+    if (multiplayer::map_fetch_deadline() == failed_deadline) leave_session(failed_deadline);
     logging::log(logging::Level::warning, logging::Channel::assets, "Map download: {}", text);
     overlay::notify(overlay::NoticeLevel::warning, update ? "Map version differs" : "Map not installed", std::move(text));
 }
@@ -239,6 +245,10 @@ void fetch() {
                     ? "The download failed (Thunderstore answered " + std::to_string(result.http_status) + ")."
                     : "The download failed (Windows error " + std::to_string(result.error) + ").");
             }
+            if (policy::expired(transfer, multiplayer::now_us())) {
+                fs::remove(archive, error);
+                return fail("Map download timed out. Please try joining the server again.", true);
+            }
             if (!advance(Stage::downloading, Stage::installing)) {
                 fs::remove(archive, error);
                 return;
@@ -308,14 +318,20 @@ void start(void (*work)()) {
 } // namespace
 
 void offer(const multiplayer::MapNeed& asked) {
-    std::lock_guard lock(mutex);
+    std::unique_lock lock(mutex);
+    if (stage.load() != Stage::idle && asked.deadline_us && asked.deadline_us != deadline.load()) {
+        lock.unlock();
+        fail("Map download cancelled.", true);
+        lock.lock();
+    }
     // A cancelled worker/atomic live merge must drain before its globals or files are reused.
     if (stage.load() == Stage::idle && (workers.load() || (apply_started.load() && live_mods::busy()))) {
-        leave_session();
+        pending = asked;
         overlay::notify(overlay::NoticeLevel::warning, "Map download",
-            "The previous map operation is still finishing. Please try joining again shortly.");
+            "The previous map operation is still finishing. Waiting before starting this map.");
         return;
     }
+    pending.reset();
     auto idle = Stage::idle;
     const auto name = package::parse_name(asked.package);
     // (Taken before anything is set up, so a second need while this one is in hand is dropped.)
@@ -359,7 +375,12 @@ void offer(const multiplayer::MapNeed& asked) {
     apply_wanted.store(false);
     apply_started.store(false);
     pick_download.store(true);
-    start(check);
+    try {
+        start(check);
+    } catch (...) {
+        lock.unlock();
+        fail("The map download could not be started. Please try joining again.", true);
+    }
 }
 
 void answer(bool download) noexcept {
@@ -432,9 +453,28 @@ View view() {
 }
 
 void tick() {
+    std::optional<multiplayer::MapNeed> next;
+    {
+        std::lock_guard lock(mutex);
+        if (pending && pending->deadline_us != multiplayer::map_fetch_deadline()) pending.reset();
+        if (pending && stage.load() == Stage::idle && !workers.load() &&
+            !(apply_started.load() && live_mods::busy()))
+            next = std::exchange(pending, std::nullopt);
+    }
+    if (next) offer(*next);
     auto now = stage.load();
     if (now != Stage::idle) {
         const auto session = multiplayer::model();
+        // Admission (or completed travel) retires the session deadline. Do not turn an
+        // already successful join into a timeout while waiting out the UI's settling delay.
+        if (now == Stage::joining && session.active && session.connected &&
+            !multiplayer::fetching_map() && !multiplayer::map_fetch_deadline()) {
+            std::lock_guard lock(mutex);
+            if (stage.compare_exchange_strong(now, Stage::idle)) last_failed.clear();
+            now = stage.load();
+        }
+        if (session.active && now != Stage::joining && multiplayer::map_fetch_deadline() != deadline.load())
+            fail("Map download cancelled.", true);
         if (!session.active && session.status.find("stopped waiting for the map download") != std::string::npos)
             fail("The server stopped waiting for the map download.", true);
         if (continuing() && now == Stage::asking &&
@@ -448,7 +488,7 @@ void tick() {
     // The session leaves the map alone until it has been applied (an update's level is one the
     // game already has, and would load from files that are being replaced).
     multiplayer::hold_map_load((now != Stage::idle && now != Stage::joining) ||
-        workers.load() || (apply_started.load() && live_mods::busy()));
+        workers.load() || (apply_started.load() && live_mods::busy()), need_package());
     if (now == Stage::applying) {
         if (apply_wanted.load()) {
             // (A merge of the player's own may be running: wait for it and start this one.)

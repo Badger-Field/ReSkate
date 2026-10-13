@@ -25,9 +25,12 @@ namespace fs = std::filesystem;
 namespace policy = dingosdk::multiplayer::map_fetch_policy;
 fs::path root;
 std::atomic<std::uint64_t> clock{1000000};
+constexpr auto use_download_deadline = static_cast<std::uint64_t>(-1);
+std::atomic<std::uint64_t> active_deadline{use_download_deadline};
 std::atomic<bool> downloading{}, installing{}, release_download{}, release_install{}, merging{};
 std::atomic<bool> fetching{true}, held{}, observed_cancel{}, installed_cancel{};
 std::atomic<unsigned> downloads{}, installs{}, applies{}, stops{}, rejoins{};
+std::atomic<std::uint64_t> queued_stop_deadline{};
 bool block_download{}, block_install{}, slow{}, transfer_error{}, fallback{};
 dingosdk::MultiplayerModel session;
 std::mutex messages_mutex, gate_mutex;
@@ -157,9 +160,23 @@ std::string status() { return "applied"; }
 namespace dingosdk::multiplayer {
 MultiplayerModel model() { return fixture::session; }
 bool fetching_map() noexcept { return fixture::fetching.load(); }
-void hold_map_load(bool hold) noexcept { fixture::held.store(hold); }
-bool queue_command(std::string_view action, std::string_view, std::string_view) {
+std::uint64_t map_fetch_deadline() noexcept {
+    const auto active = fixture::active_deadline.load();
+    return active == fixture::use_download_deadline ? map_download::deadline.load() : active;
+}
+void hold_map_load(bool hold, std::string_view package) noexcept {
+    fixture::held.store(hold);
+    if (hold && package != "Team-Map-1.0.0") std::abort();
+}
+bool queue_command(std::string_view action, std::string_view argument, std::string_view password) {
     if (action == "stop") ++fixture::stops;
+    if (action == "stop-map-fetch") {
+        const auto expected = map_download::deadline.load();
+        fixture::require(expected && argument == std::to_string(expected) && password.empty(),
+            "map stop carries the captured originating attempt deadline");
+        fixture::queued_stop_deadline.store(expected);
+        ++fixture::stops;
+    }
     if (action == "rejoin") ++fixture::rejoins;
     return true;
 }
@@ -195,6 +212,7 @@ void reset() {
     require(download::view().stage == Stage::idle, "previous lifecycle did not finish");
     fs::remove_all(root / "Mods");
     clock.store(1000000);
+    active_deadline.store(use_download_deadline);
     downloading.store(false);
     installing.store(false);
     release_download.store(false);
@@ -208,6 +226,7 @@ void reset() {
     installs.store(0);
     applies.store(0);
     stops.store(0);
+    queued_stop_deadline.store(0);
     rejoins.store(0);
     block_download = block_install = slow = transfer_error = fallback = false;
     session = {};
@@ -246,10 +265,13 @@ void joined() {
     require(download::view().stage == Stage::idle, "joined session clears lifecycle");
     require(!held.load() && stops.load() == 0 && rejoins.load() == 0, "normal join does not leave or rejoin");
 }
-void idle(const char* reason) {
+void idle(const char* reason, unsigned expected_stops = 1) {
     require(download::view().stage == Stage::idle, reason);
     drain();
-    require(stops.load() == 1, "failure leaves waiting session exactly once");
+    require(stops.load() == expected_stops, "failure only stops its originating waiting session");
+    if (expected_stops)
+        require(queued_stop_deadline.load() == download::deadline.load(),
+            "queued map stop identifies the originating attempt for dispatch-time ownership validation");
     download::tick();
     require(held.load() == (merging.load() && download::apply_started.load()),
         "failure holds map loading only while an uncancellable live merge drains");
@@ -261,6 +283,35 @@ void tests() {
     offer();
     applying();
     require(downloads.load() == 1 && installs.load() == 1, "success downloads and installs exactly once");
+    joined();
+
+    reset();
+    merging.store(true);
+    offer();
+    download::answer(true);
+    wait([] { return download::view().stage == Stage::applying; }, "unrelated live merge blocked map offer");
+    drain();
+    download::tick();
+    require(applies.load() == 0 && held.load(), "map apply waits for unrelated live merge without rejecting offer");
+    merging.store(false);
+    download::tick();
+    require(applies.load() == 1, "map apply starts after unrelated merge drains");
+    joined();
+
+    reset();
+    block_download = true;
+    offer();
+    download::answer(true);
+    wait([] { return downloading.load(); }, "download did not start for duplicate confirmation");
+    const auto first_transfer_deadline = download::transfer_until.load();
+    clock.fetch_add(policy::second_us);
+    download::answer(true);
+    require(download::transfer_until.load() == first_transfer_deadline && downloads.load() == 1 &&
+            download::workers.load() == 1,
+        "only winning confirmation claims a worker and publishes the transfer deadline");
+    release_download.store(true);
+    gate.notify_all();
+    start_apply();
     joined();
 
     reset();
@@ -315,6 +366,17 @@ void tests() {
     require(installed_cancel.load() && applies.load() == 0 && noticed("could not be installed"), "installer observes cancellation");
 
     reset();
+    block_install = true;
+    offer();
+    download::answer(true);
+    wait([] { return installing.load(); }, "install did not start for progress timeout");
+    clock.store(download::deadline.load());
+    drain();
+    idle("installer progress deadline");
+    require(installed_cancel.load() && applies.load() == 0,
+        "installer progress callback enforces session deadline without client tick");
+
+    reset();
     offer();
     applying();
     clock.store(download::deadline.load());
@@ -351,6 +413,15 @@ void tests() {
     require(downloads.load() == 0 && noticed("two minutes"), "tick expires unanswered prompt");
 
     reset();
+    const auto short_session = clock.load() + policy::confirmation_us / 2;
+    offer(short_session);
+    require(download::ask_until.load() == short_session, "confirmation is capped by existing session deadline");
+    clock.store(short_session);
+    download::answer(true);
+    idle("shorter session confirmation boundary");
+    require(downloads.load() == 0 && noticed("timed out"), "confirmation never extends existing session budget");
+
+    reset();
     offer(clock.load() + policy::completion_reserve_us);
     download::answer(true);
     idle("completion reserve boundary");
@@ -385,7 +456,7 @@ void tests() {
     offer();
     applying();
     require(downloads.load() == 2, "retry fetches same package again");
-    // Retry guard deliberately queued another stop above.
+    // The original user cancellation stopped its waiting attempt.
     stops.store(0);
     joined();
 
@@ -428,6 +499,130 @@ void tests() {
     stops.store(0);
     download::answer(false);
     idle("host map change");
+
+    reset();
+    block_download = true;
+    offer();
+    download::answer(true);
+    wait([] { return downloading.load(); }, "download did not start for session replacement");
+    active_deadline.store(0);
+    download::tick();
+    idle("session identity changed", 0);
+    require(observed_cancel.load() && installs.load() == 0,
+        "download cancels when the active session no longer owns its deadline");
+
+    reset();
+    offer();
+    active_deadline.store(0);
+    fetching.store(false);
+    session.connected = true;
+    download::tick();
+    require(download::view().stage == Stage::idle && !held.load() && downloads.load() == 0 &&
+            stops.load() == 0 && rejoins.load() == 0,
+        "abandoned confirmation cancels without holding or stopping a fresh unrelated ordinary join");
+    download::answer(true);
+    require(downloads.load() == 0, "late confirmation cannot start download for abandoned session");
+
+    reset();
+    offer();
+    const auto abandoned_deadline = download::deadline.load();
+    clock.fetch_add(policy::second_us);
+    const auto fresh_deadline = clock.load() + policy::session_us;
+    active_deadline.store(fresh_deadline);
+    download::offer({"Team-Map-1.0.0", "Test map", true, false, "", fresh_deadline});
+    wait([] { return download::asking(); }, "fresh same-package need was not retaken");
+    drain();
+    require(download::deadline.load() == fresh_deadline && fresh_deadline != abandoned_deadline &&
+            download::transfer_until.load() == 0 && stops.load() == 0,
+        "fresh same-package attempt replaces stale confirmation without stopping its new session");
+    applying();
+    joined();
+
+    reset();
+    block_download = true;
+    offer();
+    download::answer(true);
+    wait([] { return downloading.load(); }, "old download did not start for queued replacement");
+    clock.fetch_add(policy::second_us);
+    const auto queued_deadline = clock.load() + policy::session_us;
+    active_deadline.store(queued_deadline);
+    download::offer({"Team-Map-1.0.0", "Test map", true, false, "", queued_deadline});
+    download::tick();
+    require(download::view().stage == Stage::idle && download::watch.cancel.load() &&
+            downloads.load() == 1 && stops.load() == 0 && download::pending &&
+            download::pending->deadline_us == queued_deadline,
+        "fresh offer queues while cancelled worker drains without stopping replacement session");
+    drain();
+    require(observed_cancel.load() && installs.load() == 0 && !fs::exists(archive),
+        "old worker cleans partial archive before queued replacement can use its globals");
+    block_download = false;
+    download::tick();
+    wait([] { return download::asking(); }, "queued same-package need was not offered after drain");
+    drain();
+    require(download::deadline.load() == queued_deadline && download::transfer_until.load() == 0 &&
+            !download::pending && stops.load() == 0,
+        "queued attempt keeps fresh deadline and resets previous transfer budget");
+    applying();
+    require(downloads.load() == 2, "queued fresh attempt starts exactly one new transfer");
+    joined();
+
+    reset();
+    block_download = true;
+    offer();
+    download::answer(true);
+    wait([] { return downloading.load(); }, "old download did not start for stale pending need");
+    clock.fetch_add(policy::second_us);
+    const auto superseded_deadline = clock.load() + policy::session_us;
+    active_deadline.store(superseded_deadline);
+    download::offer({"Team-Map-1.0.0", "Test map", true, false, "", superseded_deadline});
+    active_deadline.store(0);
+    drain();
+    download::tick();
+    require(download::view().stage == Stage::idle && !download::pending && downloads.load() == 1 &&
+            stops.load() == 0 && !held.load(),
+        "queued need is discarded when its replacement session also ends before worker drain");
+
+    reset();
+    offer();
+    applying();
+    merging.store(false);
+    download::tick();
+    clock.store(download::join_at.load() + policy::installed_load_us - 1);
+    download::tick();
+    require(download::view().stage == Stage::joining, "installed map load retains its last microsecond");
+    clock.fetch_add(1);
+    download::tick();
+    idle("installed map load timeout");
+    require(noticed("still cannot load"), "installed map reports load failure at 30 seconds");
+
+    reset();
+    offer();
+    applying();
+    merging.store(false);
+    download::tick();
+    fetching.store(false);
+    session.active = false;
+    clock.fetch_add(2500000);
+    download::tick();
+    require(download::view().stage == Stage::idle && rejoins.load() == 1 && stops.load() == 0,
+        "successful install rejoins when the original session ended independently");
+
+    reset();
+    offer();
+    applying();
+    clock.store(download::deadline.load() - 2);
+    merging.store(false);
+    download::tick();
+    require(download::view().stage == Stage::joining, "near-deadline apply reaches joining");
+    clock.fetch_add(1);
+    session.connected = true;
+    fetching.store(false);
+    active_deadline.store(0);
+    clock.fetch_add(2);
+    download::tick();
+    require(download::view().stage == Stage::idle && !held.load() && stops.load() == 0 &&
+            rejoins.load() == 0 && !noticed("timed out"),
+        "join completed within session budget retires successfully even when next tick is after deadline");
 
     reset();
     download::tick();
