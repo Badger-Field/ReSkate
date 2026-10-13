@@ -10,6 +10,7 @@
 #include "Extension/Objects/network_object_runtime.h"
 #include "park_document.h"
 #include "park_mods.h"
+#include "park_object_sets.h"
 #include <chrono>
 #include <future>
 
@@ -65,6 +66,10 @@ void refresh_park_mods() {
     e.next_park_scan = GetTickCount64() + 5000;
     ++park_scans;
     use_park_scan(scan_parks(e.data_root, e.directory));
+}
+void refresh_object_sets() {
+    auto &e = editor_state();
+    e.object_sets = std::make_shared<const std::vector<EditorObjectSet>>(editor::load_object_sets(e.sets_directory));
 }
 void poll_park_mods() {
     auto &e = editor_state();
@@ -256,6 +261,8 @@ void move_existing(std::uint64_t entity, const profile::PlacedObject &object) {
 void initialize_park_editor(const std::filesystem::path &directory) {
     auto &e = editor_state();
     e.directory = directory / L"parks";
+    e.sets_directory = directory / L"object_sets";
+    refresh_object_sets();
     e.surface_api = editor::surface_api(local_runtime().base);
     e.picking_api = editor::picking_api(local_runtime().base);
     e.highlight_api = editor::highlight_api(local_runtime().base);
@@ -663,6 +670,7 @@ ParkEditorModel local_park_editor() {
     model.project = e.project;
     model.can_load_parks = !is_lobby_guest();
     model.surface = e.surface;
+    model.object_sets = e.object_sets;
     if (e.transaction && e.transaction->preview)
         model.preview_token = e.transaction->preview->token;
     model.status = e.status;

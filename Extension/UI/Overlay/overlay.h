@@ -456,6 +456,8 @@ using ParkSelectionQueue = bool (*)(const EditorSelectionRequest &);
 void set_park_selection_queue(ParkSelectionQueue) noexcept;
 using ParkPasteQueue = bool (*)(const EditorPasteRequest &);
 void set_park_paste_queue(ParkPasteQueue) noexcept;
+using ParkObjectSetQueue = bool (*)(const EditorObjectSetRequest &);
+void set_park_object_set_queue(ParkObjectSetQueue) noexcept;
 using ParkDeleteQueue = bool (*)(const EditorDeleteRequest &);
 void set_park_delete_queue(ParkDeleteQueue) noexcept;
 struct CallbacksV3 {

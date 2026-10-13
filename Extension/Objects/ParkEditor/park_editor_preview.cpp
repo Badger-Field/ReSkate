@@ -1,4 +1,5 @@
 #include "park_editor_runtime.h"
+#include "park_object_sets.h"
 #include "park_editor_internal.h"
 #include "Extension/Objects/local_placements_runtime.h"
 
@@ -108,6 +109,35 @@ bool queue_local_park_delete(const EditorDeleteRequest &request) {
         // One validated layout change gives the whole selection one undo step.
         return begin(std::move(target), 0);
     } catch (...) {
+        return false;
+    }
+}
+bool queue_local_park_object_set(const EditorObjectSetRequest &request) {
+    std::lock_guard lock(local_runtime().native_mutex);
+    auto &e = editor_state();
+    auto &r = placements_runtime();
+    // Sets are files beside the profile's parks: the layout in the world is unchanged, and
+    // placing one goes through queue_local_park_paste with its checks and its one undo step.
+    try {
+        if (!local_runtime().active || !idle() || request.generation != e.generation || e.sets_directory.empty())
+            return false;
+        if (request.action == EditorObjectSetAction::save) {
+            profile::ObjectLayout objects;
+            for (const auto &object : request.objects)
+                objects.push_back({object.id ? object.id : 1, object.item, object.position, object.rotation,
+                                   object.scale});
+            editor::save_object_set(e.sets_directory, request.name, r.map, objects);
+            e.status = "Saved the set " + request.name + " (" + std::to_string(objects.size()) + " objects).";
+        } else {
+            editor::remove_object_set(e.sets_directory, request.name);
+            e.status = "Deleted the set " + request.name + ".";
+        }
+        refresh_object_sets();
+        ++e.revision;
+        return true;
+    } catch (const std::exception &error) {
+        e.status = std::string("error: ") + error.what();
+        ++e.revision;
         return false;
     }
 }
