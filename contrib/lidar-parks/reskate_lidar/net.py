@@ -82,3 +82,17 @@ def fetch(url: str, cache: Path, kind: str, data: bytes | None = None, suffix: s
     partial.write_bytes(body)
     partial.replace(target)
     return body
+
+
+def request(url: str, data: bytes | None = None, headers: dict[str, str] | None = None,
+            timeout: float = 60.0) -> tuple[int, str, bytes]:
+    """One uncached request: (HTTP status, final URL after redirects, body). An HTTP error is an
+    answer here, not an exception, so the caller can say what went wrong."""
+    host = urllib.parse.urlparse(url).hostname or ""
+    _wait_turn(host)
+    req = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT, **(headers or {})})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return response.status, response.geturl(), response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, url, error.read() or b""

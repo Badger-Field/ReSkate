@@ -101,7 +101,8 @@ def main(argv: list[str] | None = None) -> int:
                                                      "how much, how recent, which licence (metadata only)")
     imagery.add_argument("--centre", required=True, help="latitude,longitude")
     imagery.add_argument("--radius", type=float, default=100.0, help="metres (default 100)")
-    imagery.add_argument("--cache", help="download cache folder")
+    imagery.add_argument("--verbose", action="store_true",
+                         help="each service's request (no tokens), HTTP status and the count field it read")
     imagery.add_argument("--report", help="write the coverage as JSON")
 
     synth = commands.add_parser("synth", help="write a synthetic park scan for trying the tool")
@@ -449,18 +450,20 @@ def city_readme(name, label, bbox, model, placements, attribution) -> str:
 
 
 def run_imagery(args) -> int:
-    from . import geo, imagery, net
+    from . import geo, imagery
     lat, lon = geo.parse_latlon(args.centre)
     if not 1 <= args.radius <= 2000:
         raise ValueError("--radius: 1 to 2000 metres")
-    found = imagery.survey(lat, lon, args.radius, net.cache_dir(args.cache))
+    found = imagery.survey(lat, lon, args.radius)
     print(f"Street-level imagery within {args.radius:.0f} m of {lat:.6f}, {lon:.6f}:")
     for coverage in found:
         print(f"  {coverage.summary()}")
+        if args.verbose:
+            print(coverage.details())
     if args.report:
         Path(args.report).write_text(json.dumps([c.__dict__ for c in found], indent=2), encoding="utf-8")
         print(f"Wrote {args.report}")
-    return 0
+    return 0 if all(c.outcome != "failed" or "token" in c.note for c in found) else 1
 
 
 def run_calibrate(args) -> int:

@@ -2,15 +2,21 @@
 licence, and whether it carries 3-D (structure-from-motion) data. Metadata only: no picture is
 downloaded, and nothing about the people in them is kept.
 
+Every answer is checked, not trusted: a source reports `found` (images counted from the field
+named in `count_field`), `empty` (a well-formed answer with none), or `failed` (an HTTP error, an
+API error inside a 200, or an answer whose shape is not the one expected). So a zero is a real
+zero. `request` and `http_status` say exactly what was asked (never with a token in it).
+
 Sources (DATA-SOURCES.md has their licences and the credit each needs):
-- Mapillary (API v4, graph.mapillary.com): every request needs a client token, which only the
-  person running this can get (a Mapillary developer app). Pass it in MAPILLARY_TOKEN; it is sent
-  in a header and never written to the cache or the report. Images may carry `sfm_cluster`, the
-  URL of the point cloud Mapillary reconstructed from them.
-- Panoramax (api.panoramax.xyz, the federation's meta-catalogue): open STAC search, no token. Each
-  picture's licence is read from it, or from its instance's /api/configuration.
-- KartaView (api.openstreetcam.org): open, but its API is little documented; the nearby-photos
-  call used here is the long-standing v1 one.
+- Mapillary (API v4, graph.mapillary.com/images): every request needs a client token, which only
+  the person running this can get. Pass it in MAPILLARY_TOKEN; it is sent in a header, never in
+  the URL, the cache or the report. bbox is west,south,east,north (lon/lat). Images may carry
+  `sfm_cluster`, the URL of Mapillary's point cloud.
+- Panoramax (api.panoramax.xyz/api/search, the federation's meta-catalogue): STAC search, no
+  token; bbox is west,south,east,north (lon/lat). Pictures carry their own licence.
+- KartaView (api.openstreetcam.org/2.0/photo/): lat, lng and radius in metres (1-500). The old
+  1.0 nearby-photos call has answered 301/404 since 2023. Errors come as `status.apiCode` inside
+  an HTTP 200; KartaView may also ask for authentication, which is reported, not worked around.
 
 Google Street View and other closed imagery are never used: their terms forbid it."""
 from __future__ import annotations
@@ -20,18 +26,20 @@ import os
 import urllib.parse
 from collections import Counter
 from dataclasses import dataclass, field
-from pathlib import Path
+from datetime import datetime, timezone
 
 from . import geo, net
 
 MAPILLARY = "https://graph.mapillary.com/images"
 PANORAMAX = "https://api.panoramax.xyz/api/search"
-KARTAVIEW = "https://api.openstreetcam.org/1.0/list/nearby-photos/"
+KARTAVIEW = "https://api.openstreetcam.org/2.0/photo/"
+KARTAVIEW_OK = {600, 200}  # KartaView's apiCode for success (600), and plain 200 in case it changes
 
 
 @dataclass
 class Coverage:
     source: str
+    outcome: str = "failed"               # found, empty or failed
     images: int = 0
     first: str | None = None              # earliest capture date (YYYY-MM-DD)
     last: str | None = None
@@ -39,69 +47,146 @@ class Coverage:
     with_point_cloud: int = 0             # Mapillary images with an sfm_cluster
     licences: dict[str, int] = field(default_factory=dict)
     note: str = ""
+    request: str = ""                     # method and URL asked, without any token
+    http_status: int | None = None
+    count_field: str = ""                 # where the count was read, and its raw value
 
     def summary(self) -> str:
-        if self.note and not self.images:
-            return f"{self.source}: {self.note}"
+        if self.outcome == "failed":
+            return f"{self.source}: FAILED, {self.note}"
+        if self.outcome == "empty":
+            return f"{self.source}: 0 images (a well-formed answer with none); licence n/a"
         span = f"{self.first} to {self.last}" if self.first else "dates unknown"
         extra = f", {self.with_point_cloud} with a point cloud" if self.source == "Mapillary" else ""
         licences = ", ".join(f"{name} ({n})" for name, n in sorted(self.licences.items())) or "licence not stated"
         return (f"{self.source}: {self.images} images in {self.sequences} sequences, {span}{extra}; {licences}"
                 + (f" ({self.note})" if self.note else ""))
 
+    def details(self) -> str:
+        return (f"    request: {self.request or '(none)'}\n    HTTP status: {self.http_status}\n"
+                f"    count read from: {self.count_field or '(nothing usable)'}")
+
 
 def _dates(values) -> tuple[str | None, str | None]:
-    days = sorted(v[:10] for v in values if v)
+    days = sorted(str(v)[:10] for v in values if v)
     return (days[0], days[-1]) if days else (None, None)
 
 
-def mapillary(bbox: geo.BBox, cache: Path, token: str | None = None, url: str = MAPILLARY) -> Coverage:
+def _ask(coverage: Coverage, url: str, data: bytes | None = None, headers: dict | None = None):
+    """The JSON answer, or None with the coverage marked failed and why."""
+    coverage.request = ("POST " if data else "GET ") + url
+    try:
+        status, final, body = net.request(url, data, headers)
+    except OSError as error:  # no connection at all
+        coverage.note = f"not reachable ({error})"
+        return None
+    coverage.http_status = status
+    if final != url:
+        coverage.request += f" (redirected to {final})"
+    if status != 200:
+        coverage.note = f"HTTP {status}: {body[:200].decode('utf-8', 'replace').strip()}"
+        return None
+    try:
+        return json.loads(body)
+    except ValueError:
+        coverage.note = f"not JSON: {body[:200].decode('utf-8', 'replace').strip()}"
+        return None
+
+
+def _misshapen(coverage: Coverage, answer, expected: str) -> None:
+    keys = sorted(answer) if isinstance(answer, dict) else type(answer).__name__
+    coverage.note = f"unexpected answer: no {expected} (top-level keys: {keys})"
+
+
+def mapillary(bbox: geo.BBox, token: str | None = None, url: str = MAPILLARY) -> Coverage:
+    coverage = Coverage("Mapillary")
     token = token or os.environ.get("MAPILLARY_TOKEN")
     if not token:
-        return Coverage("Mapillary", note="needs a client token (a free Mapillary developer app); set MAPILLARY_TOKEN")
+        coverage.note = "needs a client token (a free Mapillary developer app); set MAPILLARY_TOKEN"
+        return coverage
     query = urllib.parse.urlencode({
-        "bbox": f"{bbox.west},{bbox.south},{bbox.east},{bbox.north}",  # south-west, then north-east
+        "bbox": f"{bbox.west},{bbox.south},{bbox.east},{bbox.north}",
         "fields": "id,captured_at,sequence,sfm_cluster", "limit": 2000})
-    answer = json.loads(net.fetch(f"{url}?{query}", cache, "mapillary", suffix=".json",
-                                  headers={"Authorization": f"OAuth {token}"}))
-    images = answer.get("data", [])
-    from datetime import datetime, timezone
-    first, last = _dates(datetime.fromtimestamp(i["captured_at"] / 1000, timezone.utc).isoformat()
-                         for i in images if i.get("captured_at"))
-    return Coverage("Mapillary", len(images), first, last, len({i.get("sequence") for i in images if i.get("sequence")}),
-                    sum(1 for i in images if i.get("sfm_cluster")), {"CC BY-SA 4.0": len(images)} if images else {},
-                    "capped at 2000 per request" if len(images) >= 2000 else "")
+    answer = _ask(coverage, f"{url}?{query}", headers={"Authorization": f"OAuth {token}"})
+    if answer is None:
+        return coverage
+    if isinstance(answer, dict) and "error" in answer:
+        coverage.note = f"API error: {answer['error'].get('message', answer['error'])}"
+        return coverage
+    if not isinstance(answer, dict) or not isinstance(answer.get("data"), list):
+        _misshapen(coverage, answer, "'data' list")
+        return coverage
+    images = answer["data"]
+    coverage.count_field = f"data: {len(images)} items"
+    coverage.outcome = "found" if images else "empty"
+    coverage.images = len(images)
+    coverage.first, coverage.last = _dates(
+        datetime.fromtimestamp(i["captured_at"] / 1000, timezone.utc).isoformat() for i in images if i.get("captured_at"))
+    coverage.sequences = len({i.get("sequence") for i in images if i.get("sequence")})
+    coverage.with_point_cloud = sum(1 for i in images if i.get("sfm_cluster"))
+    coverage.licences = {"CC BY-SA 4.0": len(images)} if images else {}
+    if len(images) >= 2000:
+        coverage.note = "capped at 2000 per request: there are more"
+    return coverage
 
 
-def panoramax(bbox: geo.BBox, cache: Path, url: str = PANORAMAX) -> Coverage:
+def panoramax(bbox: geo.BBox, url: str = PANORAMAX) -> Coverage:
+    coverage = Coverage("Panoramax")
     query = urllib.parse.urlencode({"bbox": f"{bbox.west},{bbox.south},{bbox.east},{bbox.north}", "limit": 1000})
-    answer = json.loads(net.fetch(f"{url}?{query}", cache, "panoramax", suffix=".json"))
-    features = answer.get("features", [])
-    licences = Counter((f.get("properties") or {}).get("license") or "see the instance's /api/configuration"
-                       for f in features)
-    first, last = _dates((f.get("properties") or {}).get("datetime") for f in features)
-    return Coverage("Panoramax", len(features), first, last, len({f.get("collection") for f in features}), 0,
-                    dict(licences))
+    answer = _ask(coverage, f"{url}?{query}")
+    if answer is None:
+        return coverage
+    if not isinstance(answer, dict) or answer.get("type") != "FeatureCollection" or not isinstance(answer.get("features"), list):
+        _misshapen(coverage, answer, "STAC FeatureCollection with 'features'")
+        return coverage
+    features = answer["features"]
+    coverage.count_field = f"features: {len(features)} items"
+    coverage.outcome = "found" if features else "empty"
+    coverage.images = len(features)
+    properties = [(f.get("properties") or {}) for f in features]
+    coverage.first, coverage.last = _dates(p.get("datetime") for p in properties)
+    coverage.sequences = len({f.get("collection") for f in features if f.get("collection")})
+    coverage.licences = dict(Counter(p.get("license") or "see the instance's /api/configuration" for p in properties))
+    return coverage
 
 
-def kartaview(lat: float, lon: float, radius: float, cache: Path, url: str = KARTAVIEW) -> Coverage:
-    form = urllib.parse.urlencode({"lat": lat, "lng": lon, "radius": radius}).encode()
-    answer = json.loads(net.fetch(url, cache, "kartaview", data=form, suffix=".json"))
-    photos = answer.get("currentPageItems") or answer.get("osv", {}).get("photos") or []
-    first, last = _dates(p.get("shot_date") or p.get("date_added") for p in photos)
-    return Coverage("KartaView", len(photos), first, last, len({p.get("sequence_id") for p in photos}), 0,
-                    {"CC BY-SA 4.0": len(photos)} if photos else {})
+def kartaview(lat: float, lon: float, radius: float, url: str = KARTAVIEW) -> Coverage:
+    coverage = Coverage("KartaView")
+    radius = int(min(max(round(radius), 1), 500))  # the API takes 1-500 m
+    query = urllib.parse.urlencode({"lat": lat, "lng": lon, "radius": radius, "itemsPerPage": 1000})
+    answer = _ask(coverage, f"{url}?{query}")
+    if answer is None:
+        return coverage
+    status = answer.get("status") if isinstance(answer, dict) else None
+    if isinstance(status, dict) and status.get("apiCode") not in KARTAVIEW_OK:
+        coverage.note = f"API error {status.get('apiCode')}: {status.get('apiMessage', '')}"
+        return coverage
+    result = answer.get("result") if isinstance(answer, dict) else None
+    data = result.get("data") if isinstance(result, dict) else None
+    if not isinstance(data, list):
+        _misshapen(coverage, answer, "'result.data' list")
+        return coverage
+    coverage.count_field = f"result.data: {len(data)} items" + (
+        f"; status.apiCode {status.get('apiCode')}" if isinstance(status, dict) else "")
+    coverage.outcome = "found" if data else "empty"
+    coverage.images = len(data)
+    coverage.first, coverage.last = _dates(p.get("shotDate") or p.get("dateAdded") for p in data)
+    coverage.sequences = len({p.get("sequenceId") for p in data if p.get("sequenceId")})
+    coverage.licences = {"CC BY-SA 4.0": len(data)} if data else {}
+    if radius == 500:
+        coverage.note = "radius capped at 500 m"
+    return coverage
 
 
-def survey(lat: float, lon: float, radius: float, cache: Path, token: str | None = None) -> list[Coverage]:
-    """Coverage within `radius` metres from every source; a source that fails says why."""
+def survey(lat: float, lon: float, radius: float, token: str | None = None) -> list[Coverage]:
+    """Coverage within `radius` metres from every source; one that fails says why."""
     bbox = geo.bbox_around(lat, lon, 2 * radius)
     found = []
-    for name, call in (("Mapillary", lambda: mapillary(bbox, cache, token)),
-                       ("Panoramax", lambda: panoramax(bbox, cache)),
-                       ("KartaView", lambda: kartaview(lat, lon, radius, cache))):
+    for name, call in (("Mapillary", lambda: mapillary(bbox, token)),
+                       ("Panoramax", lambda: panoramax(bbox)),
+                       ("KartaView", lambda: kartaview(lat, lon, radius))):
         try:
             found.append(call())
-        except (OSError, ValueError, KeyError) as error:
-            found.append(Coverage(name, note=f"not reachable or unexpected answer ({error})"))
+        except OSError as error:  # no connection at all
+            found.append(Coverage(name, note=f"not reachable ({error})"))
     return found

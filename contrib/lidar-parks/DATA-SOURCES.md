@@ -84,15 +84,17 @@ Street-level photos can add what aerial LiDAR can't see from above. Only openly 
 are used; **Google Street View is not**, because its terms forbid extracting imagery or deriving
 3-D content from it.
 
-`python -m reskate_lidar imagery --centre lat,lon --radius 100` reports, for each source, how many
+`python -m reskate_lidar imagery --centre lat,lon --radius 100 [--verbose]` reports, for each source, how many
 images lie around a place, their capture dates, their licences, and (for Mapillary) how many carry
 a point cloud. It reads metadata only and downloads no picture.
+- **Each source's answer is checked.** It reports *found*, *empty* (a well-formed answer with no images) or *failed* (an HTTP error, an API error, or an answer of the wrong shape), so a zero is a real zero.
+- **`--verbose`** prints each request (never with a token), its HTTP status, and the field the count was read from.
 
 | Source | Licence | Credit to show | Access |
 |---|---|---|---|
 | [Mapillary](https://www.mapillary.com) | CC BY-SA 4.0 ([licence page](https://help.mapillary.com/hc/en-us/articles/115001770409-CC-BY-SA-license-for-open-data)) | the photographer and a link to each image used, plus "CC BY-SA 4.0". The API does not always return the author, so keep the image ids. | API v4 at `graph.mapillary.com`. **Every request needs a client token** from a Mapillary developer app, which only the person running the tool can make. Put it in `MAPILLARY_TOKEN`: it is sent in a header and never stored. Searches return at most 2,000 images per box. The `sfm_cluster` field is the URL of Mapillary's reconstructed point cloud. |
 | [Panoramax](https://panoramax.fr) (federated; `api.panoramax.xyz`) | per instance: the OpenStreetMap France instance uses CC BY-SA 4.0, the IGN instance its open licence. Each picture's licence is read at run time (`/api/configuration`). | as the picture's licence asks; the tool records it per picture | open STAC search, no token |
-| [KartaView](https://kartaview.org) | CC BY-SA 4.0 ([OSM wiki](https://wiki.openstreetmap.org/wiki/KartaView)) | "© KartaView contributors, CC BY-SA 4.0" and a link to the images | open, but its API is little documented. The tool uses the long-standing nearby-photos call. |
+| [KartaView](https://kartaview.org) | CC BY-SA 4.0 ([OSM wiki](https://wiki.openstreetmap.org/wiki/KartaView)) | "© KartaView contributors, CC BY-SA 4.0" and a link to the images | API v2: `GET /2.0/photo/?lat=&lng=&radius=` (radius 1-500 m). The old 1.0 nearby-photos call has answered 301/404 since 2023. Errors come as `status.apiCode` inside an HTTP 200, and some reads may need authentication. |
 
 **Share-alike.** A texture, colour or mesh made from CC BY-SA photos is an adaptation, and must be
 shared under CC BY-SA 4.0 with the credit above. For a free mod that is fine, but its README must
