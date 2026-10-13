@@ -89,6 +89,10 @@ def main(argv: list[str] | None = None) -> int:
     city.add_argument("--turn", type=float, default=0.0, help="turn the whole place (degrees, counter-clockwise)")
     city.add_argument("--mesh", help="also write the place as a mesh for a custom map (.glb; a -collision.glb beside it)")
     city.add_argument("--tile", type=float, default=64.0, help="ground mesh tile size, metres (default 64)")
+    city.add_argument("--skatepark", action="store_true",
+                      help="just the mapped skatepark at the centre, as its real shape (bowls, coping) for a "
+                           "custom map: needs --mesh; no park mod")
+    city.add_argument("--park-cell", type=float, default=0.25, help="--skatepark surface grid, metres (default 0.25)")
     city.add_argument("--catalog", default=str(DEFAULT_CATALOG))
     city.add_argument("--preview", help="write a top-down PNG of the place")
     city.add_argument("--report", help="write everything found as JSON")
@@ -303,6 +307,9 @@ def run_city(args) -> int:
         corners = np.array([[bounds[0], bounds[1]], [bounds[2], bounds[1]], [bounds[2], bounds[3]], [bounds[0], bounds[3]]]) @ rotation.T
         bounds = (*corners.min(axis=0), *corners.max(axis=0))
 
+    if args.skatepark:
+        return _run_skatepark(args, label, bbox, items, lidar, survey)
+
     print("Building the model")
     model = city_module.build(bounds, items, lidar, city_module.Settings(ground_cell=args.ground_cell), progress=print)
     attribution = attribution_lines(model.sources, survey, usgs=args.lidar == "auto")
@@ -352,6 +359,51 @@ def run_city(args) -> int:
     if args.report:
         Path(args.report).write_text(json.dumps(city_report(label, bbox, model, placements, skipped, attribution,
                                                             mesh_info), indent=2, default=float), encoding="utf-8")
+        print(f"Wrote {args.report}")
+    print("\n" + "\n".join(attribution))
+    return 0
+
+
+def _run_skatepark(args, label, bbox, items, lidar, survey) -> int:
+    from . import citymesh, preview, skatepark
+    if lidar is None:
+        raise ValueError("--skatepark needs LiDAR")
+    print("Building the skatepark")
+    park_result = skatepark.build(items, lidar, cell=args.park_cell)
+    model = park_result.model
+    attribution = attribution_lines({"osm", "overture", "lidar"} & ({i.source for i in items} | {"lidar"}), survey,
+                                    usgs=args.lidar == "auto")
+    print(f"  park {park_result.outline.area:,.0f} m², deck at {park_result.deck:.2f} m, "
+          f"{park_result.density:.1f} ground points/m², {park_result.removed_above:,} points above the ground dropped")
+    for n, bowl in enumerate(park_result.bowls):
+        print(f"  bowl {n}: {bowl.outline.area:5.0f} m², {bowl.depth:.2f} m deep, {bowl.density:4.1f} points/m², "
+              f"walls to {bowl.steepest:.0f} degrees, coping {bowl.outline.exterior.length:.0f} m"
+              + ("" if bowl.from_map else " (found in the ground)"))
+    for note in park_result.notes:
+        print(f"  note: {note}")
+    info = None
+    if args.mesh:
+        info = citymesh.write(model, args.mesh, tile=args.tile)
+        print(f"Wrote {info['visual']} ({info['visual_triangles']:,} triangles, {info['grinds']} grind curves) and "
+              f"{info['collision']} ({info['collision_triangles']:,} triangles)")
+        Path(args.mesh).with_suffix(".txt").write_text("\n".join(attribution) + "\n", encoding="utf-8")
+    else:
+        print("(no mesh written: pass --mesh park.glb)")
+    if args.preview:
+        preview.render_city(model, [], args.preview)
+        print(f"Wrote {args.preview}")
+    if args.report:
+        Path(args.report).write_text(json.dumps({
+            "place": label, "bbox": [bbox.west, bbox.south, bbox.east, bbox.north],
+            "origin": {"lat": bbox.centre[0], "lon": bbox.centre[1], "deck_elevation": park_result.deck},
+            "frame": "glTF: x east, y up, z south (metres); deck at y = 0",
+            "park_area": park_result.outline.area, "density": park_result.density,
+            "points_above_ground_dropped": park_result.removed_above,
+            "bowls": [{"area": b.outline.area, "depth": b.depth, "rim": b.rim, "floor": b.floor,
+                       "points_per_m2": b.density, "steepest_degrees": b.steepest, "from_map": b.from_map,
+                       "coping_length": b.outline.exterior.length} for b in park_result.bowls],
+            "spawn": model.spawn, "notes": park_result.notes, "mesh": info, "attribution": attribution,
+        }, indent=2, default=float), encoding="utf-8")
         print(f"Wrote {args.report}")
     print("\n" + "\n".join(attribution))
     return 0

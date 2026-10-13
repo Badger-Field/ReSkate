@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -197,7 +198,14 @@ def test_keep_elevation_lifts_the_terrace(model):
     assert len(lifts) > 1  # spots on different ground stand at different heights
 
 
-def test_mesh_is_in_the_game_frame(model, tmp_path):
+def glb_document(path) -> dict:
+    import struct
+    data = Path(path).read_bytes()
+    length = struct.unpack_from("<I", data, 12)[0]
+    return json.loads(data[20:20 + length])
+
+
+def test_mesh_is_in_the_gltf_frame(model, tmp_path):
     import trimesh
     info = citymesh.write(model, tmp_path / "block.glb", tile=32)
     assert (tmp_path / "block.glb").exists() and (tmp_path / "block-collision.glb").exists()
@@ -208,12 +216,30 @@ def test_mesh_is_in_the_game_frame(model, tmp_path):
     assert len([n for n in names if n.startswith("ground_")]) == 9  # 80 m in 32 m tiles: 3 x 3
     ground = visual.geometry["ground_1_1"]
     assert np.mean(ground.face_normals[:, 1]) > 0.9  # faces up (+y)
-    # The building is west (game -x) and south (game -z) of the origin, and 12 m tall.
+    # glTF is right-handed, +Y up, -Z north. The building is west (-x) and south (+z) of the
+    # origin, and 12 m tall.
     building = visual.geometry["buildings"]
     lo, hi = building.bounds
-    assert hi[0] < -30 and lo[2] < -15 and hi[2] < 0
+    assert hi[0] < -30 and lo[2] > 0 and hi[2] > 15
     assert hi[1] - (model.buildings[0].base - model.origin_elevation) == pytest.approx(12.0, abs=0.6)
     assert building.is_volume
+
+
+def test_mesh_carries_what_studio_reads(model, tmp_path):
+    info = citymesh.write(model, tmp_path / "block.glb", tile=32)
+    document = glb_document(tmp_path / "block.glb")
+    nodes = {n["name"]: n for n in document["nodes"]}
+    assert nodes["ground_0_0"]["extras"]["sk8_collision_mode"] == "triangle_mesh"
+    assert nodes["buildings"]["extras"]["sk8_collision_mode"] == "triangle_mesh"
+    # Grind curves: the wall's and the bench's two top edges, each rail's bar.
+    grinds = [n for n in nodes.values() if (n.get("extras") or {}).get("sk8_grind_curve")]
+    assert len(grinds) == info["grinds"] >= 2 + 2 + 2 + 2
+    assert all(n["extras"]["sk8_collision_mode"] == "none" for n in grinds)
+    assert {"metal", "wood", "concrete"} <= {n["extras"]["reskate_surface"] for n in grinds}
+    # A spawn empty on the ground at the origin, in the scene.
+    spawn = nodes["spawn"]
+    assert "mesh" not in spawn and spawn["translation"][1] == pytest.approx(0.1, abs=0.05)
+    assert document["nodes"].index(spawn) in document["scenes"][0]["nodes"]
 
 
 def test_spot_meshes_sit_on_their_ground(model):

@@ -129,6 +129,12 @@ class CityModel:
     origin_elevation: float       # ground elevation at the frame's origin; the game's y = 0
     notes: list[str] = field(default_factory=list)
     sources: set[str] = field(default_factory=set)
+    # For meshes (citymesh.py): grind curves beyond the spots' own, where a skater starts, which
+    # ground cells to keep (None: all), and the ground's surface.
+    grinds: list = field(default_factory=list)
+    spawn: tuple[float, float] | None = None
+    ground_keep: np.ndarray | None = None
+    ground_surface: str = "asphalt"
 
 
 # ---------------------------------------------------------------- ground

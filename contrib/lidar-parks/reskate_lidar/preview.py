@@ -98,4 +98,13 @@ def render_city(model, placements: list[Placement], path, max_side: int = 1800) 
         along = p.item.along * p.scale * (math.cos(p.pitch) if p.pitch else 1.0)
         f = Feature("box", (p.x, p.y), p.yaw, along, p.item.across * p.scale, 0.0)
         draw.polygon([pixel(*q) for q in f.footprint()], outline=(255, 255, 255), width=1)
+    for grind in getattr(model, "grinds", []):
+        line = [pixel(x, y) for x, y in grind.points[:, :2]]
+        if grind.closed:
+            line.append(line[0])
+        draw.line(line, fill=(255, 60, 60), width=3)
+    if getattr(model, "spawn", None) is not None:
+        sx, sy = pixel(*model.spawn)
+        draw.ellipse([sx - 7, sy - 7, sx + 7, sy + 7], outline=(255, 255, 255), width=3)
+        draw.text((sx + 9, sy - 6), "spawn", fill=(255, 255, 255))
     image.save(path)
