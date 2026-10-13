@@ -5,3 +5,4 @@ shapely>=2.0
 mapbox-earcut>=1.0  # trimesh triangulates polygons with it (synthetic test scans)
 pillow>=10.0
 laspy[lazrs]>=2.4
+pyarrow>=14  # Overture Maps GeoParquet (city)

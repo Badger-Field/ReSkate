@@ -1,9 +1,10 @@
-"""Command line: python -m reskate_lidar <convert|calibrate|synth> ..."""
+"""Command line: python -m reskate_lidar <convert|city|calibrate|mesh|synth> ..."""
 from __future__ import annotations
 
 import argparse
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -58,13 +59,47 @@ def main(argv: list[str] | None = None) -> int:
     mesh.add_argument("--cell", type=float, default=0.1, help="grid cell size in metres (default 0.1)")
     mesh.add_argument("--seed", type=int, default=0)
 
+    city = commands.add_parser("city", help="a real place (plaza, block) from open map data and LiDAR, "
+                                             "as a park mod and/or a mesh for a custom map")
+    where = city.add_mutually_exclusive_group(required=True)
+    where.add_argument("--place", help="a place name, looked up with OpenStreetMap's Nominatim")
+    where.add_argument("--centre", help="latitude,longitude of the middle of the area")
+    where.add_argument("--bbox", help="west,south,east,north in degrees")
+    city.add_argument("--size", type=float, default=160.0,
+                      help="width of the square around --place or --centre, metres (default 160)")
+    city.add_argument("--lidar", default="auto", help="auto (USGS 3DEP), none, or an EPT url or folder (ept.json)")
+    city.add_argument("--max-points", type=float, default=30e6, help="read at most about this many LiDAR points; "
+                                                                      "bigger areas are read sparser (default 30 million)")
+    city.add_argument("--sources", default="osm,overture", help="map data: osm, overture, or both (default)")
+    city.add_argument("--overpass", help="Overpass API url, or a saved Overpass JSON answer")
+    city.add_argument("--overture-release", help="e.g. 2026-09-23.1 (default: the latest)")
+    city.add_argument("--cache", help="download cache folder (default ~/.cache/reskate-lidar)")
+    city.add_argument("--ground-cell", type=float, default=0.5, help="ground grid, metres (default 0.5)")
+    city.add_argument("--anchor", help="a park file with one measuring stick where the area's centre goes")
+    city.add_argument("--map", help="base map key (default: the anchor's map, else bam)")
+    city.add_argument("--mods", help="the game's Mods folder to write the park mod into")
+    city.add_argument("--park", help="write only a .park.json here")
+    city.add_argument("--name", default="", help="mod name (default: from the place)")
+    city.add_argument("--author", default="")
+    city.add_argument("--version", default="1.0.0")
+    city.add_argument("--max-objects", type=int, default=park.DEFAULT_DROPPER_LIMIT,
+                      help=f"Build Kit object budget (default {park.DEFAULT_DROPPER_LIMIT}, at most {park.MAX_OBJECTS_PER_MAP})")
+    city.add_argument("--keep-elevation", action="store_true",
+                      help="place spots at their real heights (default: each on the base map's ground)")
+    city.add_argument("--turn", type=float, default=0.0, help="turn the whole place (degrees, counter-clockwise)")
+    city.add_argument("--mesh", help="also write the place as a mesh for a custom map (.glb; a -collision.glb beside it)")
+    city.add_argument("--tile", type=float, default=64.0, help="ground mesh tile size, metres (default 64)")
+    city.add_argument("--catalog", default=str(DEFAULT_CATALOG))
+    city.add_argument("--preview", help="write a top-down PNG of the place")
+    city.add_argument("--report", help="write everything found as JSON")
+
     synth = commands.add_parser("synth", help="write a synthetic park scan for trying the tool")
     synth.add_argument("output", help=".ply file to write")
     synth.add_argument("--seed", type=int, default=0)
 
     args = parser.parse_args(argv)
     try:
-        return {"convert": run_convert, "calibrate": run_calibrate, "mesh": run_mesh,
+        return {"convert": run_convert, "city": run_city, "calibrate": run_calibrate, "mesh": run_mesh,
                 "synth": run_synth}[args.command](args)
     except (ValueError, FileNotFoundError) as error:
         print(f"error: {error}", file=sys.stderr)
@@ -157,6 +192,201 @@ def run_convert(args) -> int:
         }, indent=2, default=float), encoding="utf-8")
         print(f"Wrote {args.report}")
     return 0
+
+
+MAX_AREA_KM2 = 4.0
+
+
+def _city_area(args, cache):
+    from . import geo, osm
+    label = args.place or args.centre or args.bbox
+    if args.bbox:
+        bbox = geo.parse_bbox(args.bbox)
+    else:
+        if args.place:
+            found = osm.geocode(args.place, cache)
+            print(f"{args.place}: {found['display_name']}")
+            lat, lon = found["lat"], found["lon"]
+        else:
+            lat, lon = geo.parse_latlon(args.centre)
+        bbox = geo.bbox_around(lat, lon, args.size)
+    frame = geo.LocalFrame(*bbox.centre)
+    bounds = frame.bounds(bbox)
+    area = (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]) / 1e6
+    if area > MAX_AREA_KM2:
+        raise ValueError(f"The area is {area:.1f} km²; keep to {MAX_AREA_KM2:.0f} km² a run "
+                         "(the map servers' limits, and the game's object budget)")
+    return label, bbox, frame, bounds
+
+
+def _city_lidar(args, bbox, frame, bounds, cache):
+    from . import ept
+    if args.lidar == "none":
+        return None, None
+    url = args.lidar
+    survey = None
+    if url == "auto":
+        surveys = ept.find_surveys(bbox, cache)
+        if not surveys:
+            print("  no USGS 3DEP survey covers this area; going on without LiDAR "
+                  "(pass --lidar with another EPT dataset)", file=sys.stderr)
+            return None, None
+        survey = surveys[0]
+        url = survey["url"]
+        print(f"  LiDAR: USGS 3DEP {survey['name']}")
+    reader = ept.EptReader(url, cache)
+    area = (bounds[2] - bounds[0]) * (bounds[3] - bounds[1])
+    # Aerial surveys run up to ~150 points/m²; past the budget, read a shallower octree.
+    max_depth = None
+    if area * 150 > args.max_points:
+        spacing = math.sqrt(area / args.max_points)
+        max_depth = reader.depth_for(spacing, bbox.centre[0])
+        print(f"  large area: LiDAR read to about {spacing:.2f} m spacing")
+    points = reader.read(bbox, frame, max_depth=max_depth, progress=print)
+    print(f"  {len(points.xyz):,} LiDAR points")
+    return points, (survey["name"] if survey else url)
+
+
+def attribution_lines(sources: set[str], survey: str | None, usgs: bool = True) -> list[str]:
+    from . import osm, overture
+    lines = []
+    if "osm" in sources or "overture" in sources:
+        lines.append(f"Map data {osm.ATTRIBUTION}.")
+    if "overture" in sources:
+        lines.append(f"Map data from {overture.ATTRIBUTION}.")
+    if "lidar" in sources and usgs:
+        lines.append("Elevation: U.S. Geological Survey 3D Elevation Program (3DEP) LiDAR"
+                     + (f", survey {survey}" if survey else "") + "; public domain.")
+    elif "lidar" in sources:
+        lines.append(f"Elevation: LiDAR point cloud {survey}; credit it as its licence asks (DATA-SOURCES.md).")
+    return lines
+
+
+def run_city(args) -> int:
+    from . import city as city_module, mapdata, net, osm, overture, preview
+    cache = net.cache_dir(args.cache)
+    if not 1 <= args.max_objects <= park.MAX_OBJECTS_PER_MAP:
+        raise ValueError(f"--max-objects: 1 to {park.MAX_OBJECTS_PER_MAP}")
+    label, bbox, frame, bounds = _city_area(args, cache)
+    print(f"Area {bounds[2] - bounds[0]:.0f} x {bounds[3] - bounds[1]:.0f} m around "
+          f"{bbox.centre[0]:.6f}, {bbox.centre[1]:.6f}")
+
+    items = []
+    wanted = {s.strip() for s in args.sources.split(",") if s.strip()}
+    if not wanted <= {"osm", "overture"}:
+        raise ValueError("--sources: osm, overture, or osm,overture")
+    if "osm" in wanted:
+        try:
+            found = osm.fetch(bbox, cache, args.overpass)
+            print(f"  OpenStreetMap: {len(found)} items")
+            items += found
+        except OSError as error:
+            print(f"  OpenStreetMap not reachable ({error}); going on without it", file=sys.stderr)
+    if "overture" in wanted:
+        try:
+            items += overture.fetch(bbox, cache, args.overture_release, progress=print)
+        except (OSError, ImportError) as error:
+            print(f"  Overture not reachable ({error}); going on without it", file=sys.stderr)
+    if not items:
+        raise ValueError("No map data for the area (see the messages above)")
+    items = mapdata.localise(items, frame)
+    lidar, survey = _city_lidar(args, bbox, frame, bounds, cache)
+
+    if args.turn:
+        import shapely
+        t = math.radians(args.turn)
+        rotation = np.array([[math.cos(t), -math.sin(t)], [math.sin(t), math.cos(t)]])
+        for item in items:
+            item.geometry = shapely.transform(item.geometry, lambda xy: xy @ rotation.T)
+        if lidar is not None:
+            lidar.xyz[:, :2] = lidar.xyz[:, :2] @ rotation.T
+        corners = np.array([[bounds[0], bounds[1]], [bounds[2], bounds[1]], [bounds[2], bounds[3]], [bounds[0], bounds[3]]]) @ rotation.T
+        bounds = (*corners.min(axis=0), *corners.max(axis=0))
+
+    print("Building the model")
+    model = city_module.build(bounds, items, lidar, city_module.Settings(ground_cell=args.ground_cell), progress=print)
+    attribution = attribution_lines(model.sources, survey, usgs=args.lidar == "auto")
+
+    print(f"\n{len(model.spots)} skate spots:")
+    for index, spot in enumerate(model.spots):
+        f = spot.feature
+        print(f"  #{index:<3} {f.kind:<10} {f.along:5.1f} x {f.across:4.1f} m, {f.height:4.2f} m high  "
+              f"{spot.what} ({spot.source}) at ({f.centre[0]:.0f}, {f.centre[1]:.0f})")
+    for note in model.notes:
+        print(f"  note: {note}")
+
+    cat = catalog_module.load_catalog(args.catalog)
+    chosen, placements, skipped = city_module.park_features(model, args.max_objects, cat, args.keep_elevation)
+    print(f"\nPlacing {len(placements)} Build Kit objects for {len(chosen)} spots")
+    for line in skipped:
+        print(f"  skipped: {line}")
+
+    name = args.name or re.sub(r"[^A-Za-z0-9 _\-.]", "", (args.place or "City block").split(",")[0]).strip()[:64] or "City block"
+    if args.park or args.mods:
+        anchor = park.read_anchor(args.anchor, cat.marker) if args.anchor else park.Anchor()
+        map_name = args.map or anchor.map or "bam"
+        document = park.build_park(placements, map_name, anchor)
+        if not args.anchor:
+            print("note: no --anchor, so the place sits at the map's origin; see README for placing it")
+        if args.park:
+            Path(args.park).write_text(park.encode(document), encoding="utf-8")
+            print(f"Wrote {args.park}")
+        if args.mods:
+            description = (f"{name}, built from open data with {len(placements)} Build Kit objects. "
+                           + " ".join(attribution))[:512]
+            written = park.write_mod(args.mods, name, document, name, args.author, args.version, description)
+            readme = written.parent.parent / "README.md"
+            readme.write_text(city_readme(name, label, bbox, model, placements, attribution), encoding="utf-8")
+            print(f"Wrote {written}")
+
+    mesh_info = None
+    if args.mesh:
+        from . import citymesh
+        mesh_info = citymesh.write(model, args.mesh, tile=args.tile)
+        print(f"Wrote {mesh_info['visual']} ({mesh_info['visual_triangles']:,} triangles) and "
+              f"{mesh_info['collision']} ({mesh_info['collision_triangles']:,} triangles)")
+        Path(args.mesh).with_suffix(".txt").write_text("\n".join(attribution) + "\n", encoding="utf-8")
+    if args.preview:
+        preview.render_city(model, placements, args.preview)
+        print(f"Wrote {args.preview}")
+    if args.report:
+        Path(args.report).write_text(json.dumps(city_report(label, bbox, model, placements, skipped, attribution,
+                                                            mesh_info), indent=2, default=float), encoding="utf-8")
+        print(f"Wrote {args.report}")
+    print("\n" + "\n".join(attribution))
+    return 0
+
+
+def city_report(label, bbox, model, placements, skipped, attribution, mesh_info) -> dict:
+    return {
+        "place": label,
+        "bbox": [bbox.west, bbox.south, bbox.east, bbox.north],
+        "origin": {"lat": bbox.centre[0], "lon": bbox.centre[1], "elevation": model.origin_elevation},
+        "frame": "x east, y north, metres from the origin; in game x, y up, z north",
+        "buildings": [{"centre": [b.footprint.centroid.x, b.footprint.centroid.y], "area": b.footprint.area,
+                       "base": b.base, "height": b.height, "height_from": b.height_from, "source": b.source}
+                      for b in model.buildings],
+        "spots": [{**{k: v for k, v in s.feature.__dict__.items()}, "yaw_degrees": math.degrees(s.feature.yaw),
+                   "ground": s.ground, "source": s.source, "what": s.what} for s in model.spots],
+        "placements": [{"item": p.item.item, "x": p.x, "y": p.y, "z": p.z, "yaw_degrees": math.degrees(p.yaw),
+                        "pitch_degrees": math.degrees(p.pitch), "scale": p.scale, "spot": p.feature}
+                       for p in placements],
+        "skipped": skipped, "notes": model.notes, "mesh": mesh_info, "attribution": attribution,
+    }
+
+
+def city_readme(name, label, bbox, model, placements, attribution) -> str:
+    kinds: dict[str, int] = {}
+    for s in model.spots:
+        kinds[s.feature.kind] = kinds.get(s.feature.kind, 0) + 1
+    found = ", ".join(f"{n} {k}" for k, n in sorted(kinds.items())) or "nothing"
+    return (f"# {name}\n\n"
+            f"A real place in skate., made by ReSkate's `reskate_lidar city` from open data: {label} "
+            f"({bbox.centre[0]:.5f}, {bbox.centre[1]:.5f}).\n\n"
+            f"Skate spots: {found}, as {len(placements)} Build Kit objects.\n\n"
+            "## Attribution\n\n" + "\n".join(f"- {line}" for line in attribution) + "\n\n"
+            "OpenStreetMap data is available under the Open Database License (ODbL 1.0): "
+            "https://www.openstreetmap.org/copyright. This park is a Produced Work from it.\n")
 
 
 def run_calibrate(args) -> int:

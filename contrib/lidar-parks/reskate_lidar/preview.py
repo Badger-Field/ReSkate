@@ -54,3 +54,48 @@ def render(hm: HeightMap, features: list[Feature], placements: list[Placement], 
         f = Feature("box", (p.x, p.y), p.yaw, along, across, 0.0)
         draw.polygon([pixel(*q) for q in f.footprint()], outline=(255, 255, 255), width=1)
     image.save(path)
+
+
+def render_city(model, placements: list[Placement], path, max_side: int = 1800) -> None:
+    """A city model from above: shaded ground, public space tinted, buildings in grey, each spot
+    outlined in its kind's colour with its number, placed objects in white. North is up."""
+    import shapely
+    from .city import rasterise
+
+    grid = model.ground
+    rows, cols = grid.shape
+    scale = min(4.0, max_side / max(rows, cols))
+    h = grid.heights
+    gy, gx = np.gradient(h, grid.cell)
+    shade = np.clip(0.6 + 0.4 * (-gx - gy) / np.sqrt(1 + gx * gx + gy * gy), 0, 1)
+    tone = np.clip((h - np.percentile(h, 2)) / max(np.ptp(h), 1.0), 0, 1)
+    grey = np.clip(0.3 + 0.4 * tone, 0, 1) * shade
+    rgb = np.stack([grey, grey, grey], axis=-1)
+    public = rasterise(model.car_free, grid)
+    rgb[public] = rgb[public] * [0.75, 0.95, 0.8]
+    image = Image.fromarray((np.flipud(rgb) * 255).astype(np.uint8))
+    image = image.resize((max(1, int(cols * scale)), max(1, int(rows * scale))), Image.BILINEAR)
+    draw = ImageDraw.Draw(image)
+
+    def pixel(x, y):
+        return ((x - grid.origin[0]) / grid.cell * scale, (rows - 1 - (y - grid.origin[1]) / grid.cell) * scale)
+
+    for b in model.buildings:
+        for polygon in (b.footprint.geoms if b.footprint.geom_type == "MultiPolygon" else [b.footprint]):
+            draw.polygon([pixel(x, y) for x, y in polygon.exterior.coords], fill=(90, 90, 100), outline=(200, 200, 210))
+            c = polygon.representative_point()
+            draw.text(pixel(c.x, c.y), f"{b.height:.0f}m", fill=(230, 230, 240))
+    for index, spot in enumerate(model.spots):
+        f = spot.feature
+        colour = COLOURS.get(f.kind, (200, 200, 200))
+        draw.polygon([pixel(*p) for p in f.footprint()], outline=colour, width=3)
+        cx, cy = pixel(*f.centre)
+        if f.kind in ("stairs", "kicker", "bank", "quarter"):
+            tip = pixel(f.centre[0] + math.cos(f.yaw) * f.along / 2, f.centre[1] + math.sin(f.yaw) * f.along / 2)
+            draw.line([(cx, cy), tip], fill=colour, width=3)
+        draw.text((cx + 4, cy + 4), f"#{index}", fill=colour)
+    for p in placements:
+        along = p.item.along * p.scale * (math.cos(p.pitch) if p.pitch else 1.0)
+        f = Feature("box", (p.x, p.y), p.yaw, along, p.item.across * p.scale, 0.0)
+        draw.polygon([pixel(*q) for q in f.footprint()], outline=(255, 255, 255), width=1)
+    image.save(path)
