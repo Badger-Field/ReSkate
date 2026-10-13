@@ -138,6 +138,29 @@ What it finds:
 - **Limits:** areas are capped at 4 km². Downloads are cached in `~/.cache/reskate-lidar`, which `--cache` changes.
 - **Plans:** what's next, and what to check in game, is in [ROADMAP.md](ROADMAP.md).
 
+### Is the anchor on open, flat ground? (`anchor`)
+
+A city park spreads tens of metres round its anchor. The base map's ground there may be a road, a sea wall or a slope. The game can measure it: the trainer's `trainer ground <x> <z>` finds the topmost surface at a map position and logs it.
+
+```
+python -m reskate_lidar anchor probe --park "<Skate>/Mods/Embarcadero Plaza/parks/bam.park.json"
+```
+
+1. **Probe:** this prints a grid of probes over the park's footprint, with 10 m spacing and at most 100 probes. They come as a `RESKATE_STARTUP_COMMANDS` value, and as console lines (`--out` writes those to a file).
+2. **Run them in game:** turn the park mod off and load the map alone, otherwise the probes land on the park.
+3. **Check:**
+
+   ```
+   python -m reskate_lidar anchor check --park "<...>/bam.park.json" --log "<Skate>/ReSkate.log"
+   ```
+
+   It reports:
+   - what share of the footprint is within 0.3 m (`--tolerance`) of the park's ground, which counts as flat and clear;
+   - what is higher (walls, buildings) or lower (drops, beach), and by how much;
+   - which objects would be buried or float.
+
+   A good anchor has at least 90% level and no buried or floating objects. Otherwise, move the stick, or make the park smaller with `city --size`.
+
 ### A skatepark's real shape (`--skatepark`)
 
 For a park of bowls and transitions, which the Build Kit can't make:

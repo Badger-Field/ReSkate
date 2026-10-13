@@ -1,4 +1,4 @@
-"""Command line: python -m reskate_lidar <convert|city|calibrate|mesh|synth> ..."""
+"""Command line: python -m reskate_lidar <convert|city|imagery|anchor|calibrate|mesh|synth> ..."""
 from __future__ import annotations
 
 import argparse
@@ -105,13 +105,29 @@ def main(argv: list[str] | None = None) -> int:
                          help="each service's request (no tokens), HTTP status and the count field it read")
     imagery.add_argument("--report", help="write the coverage as JSON")
 
+    anchor = commands.add_parser("anchor", help="is a park's anchor on open, flat ground? probe the base map "
+                                                   "in game with `trainer ground`, then read the heights back")
+    anchor_steps = anchor.add_subparsers(dest="step", required=True)
+    probe = anchor_steps.add_parser("probe", help="the probes over the park's footprint, as startup commands")
+    probe.add_argument("--park", required=True, help="the .park.json to check")
+    probe.add_argument("--spacing", type=float, default=10.0, help="metres between probes (default 10; "
+                                                                    "widened to keep within --limit)")
+    probe.add_argument("--limit", type=int, default=100, help="most probes (default 100)")
+    probe.add_argument("--out", help="also write the console lines here, one per probe")
+    check = anchor_steps.add_parser("check", help="read the probes' heights from ReSkate.log")
+    check.add_argument("--park", required=True, help="the .park.json that was probed")
+    check.add_argument("--log", required=True, help="ReSkate.log from the probing run")
+    check.add_argument("--tolerance", type=float, default=0.3, help="metres from the park's ground still "
+                                                                    "counted level (default 0.3)")
+    check.add_argument("--report", help="write the verdict as JSON")
+
     synth = commands.add_parser("synth", help="write a synthetic park scan for trying the tool")
     synth.add_argument("output", help=".ply file to write")
     synth.add_argument("--seed", type=int, default=0)
 
     args = parser.parse_args(argv)
     try:
-        return {"convert": run_convert, "city": run_city, "imagery": run_imagery, "calibrate": run_calibrate, "mesh": run_mesh,
+        return {"convert": run_convert, "city": run_city, "imagery": run_imagery, "anchor": run_anchor, "calibrate": run_calibrate, "mesh": run_mesh,
                 "synth": run_synth}[args.command](args)
     except (ValueError, FileNotFoundError) as error:
         print(f"error: {error}", file=sys.stderr)
@@ -467,6 +483,37 @@ def run_imagery(args) -> int:
         Path(args.report).write_text(json.dumps([c.__dict__ for c in found], indent=2), encoding="utf-8")
         print(f"Wrote {args.report}")
     return 0 if all(c.outcome != "failed" for c in found) else 1
+
+
+def run_anchor(args) -> int:
+    from . import anchorcheck
+    footprint = anchorcheck.read_park(args.park)
+    if args.step == "probe":
+        if args.spacing <= 0 or args.limit < 2:
+            raise ValueError("--spacing must be positive and --limit at least 2")
+        points = anchorcheck.probe_points(footprint, args.spacing, limit=args.limit)
+        commands = anchorcheck.startup_commands(points)
+        print(f"{len(points)} probes over {len(footprint.items)} objects on {footprint.map}. Load {footprint.map} "
+              "without the park, then either set this before starting the game:")
+        print(f"  RESKATE_STARTUP_COMMANDS={commands}")
+        print("or type each line in the console (the park need not be loaded):")
+        lines = [f"trainer ground {x:.1f} {z:.1f}" for x, z in points]
+        for line in lines:
+            print(f"  {line}")
+        if args.out:
+            Path(args.out).write_text("\n".join(lines) + "\n", encoding="utf-8")
+            print(f"Wrote {args.out}")
+        print(f"Then: python -m reskate_lidar anchor check --park {args.park} --log <ReSkate.log>")
+        return 0
+    heights, missing = anchorcheck.read_heights(Path(args.log).read_text(encoding="utf-8", errors="replace"))
+    verdict = anchorcheck.check(footprint, heights, missing, args.tolerance)
+    print(f"{args.park}: ground {footprint.base:.1f} on {footprint.map}")
+    print(verdict.summary(args.tolerance))
+    if args.report:
+        Path(args.report).write_text(json.dumps(verdict.__dict__ | {"level_share": verdict.level_share}, indent=2),
+                                     encoding="utf-8")
+        print(f"Wrote {args.report}")
+    return 0 if verdict.good else 1
 
 
 def run_calibrate(args) -> int:

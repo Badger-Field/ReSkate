@@ -12,7 +12,8 @@ These need a human.
    - It builds maps from Blender with its add-on and `reskate_cli compile-map`. Other tools already feed it GLBs this way.
    - **Still needed:** someone with Studio confirms the add-on's collision, surface and grind-curve settings, and how `compile-map` is called.
 2. **Where should city parks go on San Vansterdam (`bam`)?** A 160 m square of real plaza needs open, flat ground at least that big.
-   - Is there such a spot?
+   - Is there such a spot? `anchor probe` / `anchor check` (README) now measure one in game: they give the share of the footprint that is flat and clear, and which objects would be buried or float.
+   - The first Embarcadero try loaded all 33 of 33 objects, but its anchor (627.1, 199.9, 1062.8) is on the NE waterfront promenade or coast road. A probe run there, and at candidates inland, would settle it.
    - Do Build Kit objects 80 m from the anchor still load and collide?
 1. **Can this environment reach OpenStreetMap?** This cloud environment's network policy blocks:
    - `overpass-api.de`
@@ -36,7 +37,7 @@ python -m reskate_lidar city --centre 37.7955,-122.3952 --size 160 \
     --name "Embarcadero Plaza" --preview emb.png --report emb.json
 ```
 
-The anchor is a measuring stick on open ground, as in README step 1. Then check:
+The anchor is a measuring stick on open ground, as in README step 1. Before loading the park, check the ground with `anchor probe` and `anchor check` (README, *Is the anchor on open, flat ground?*). Then check:
 
 1. **Load:** **PARK MODS** lists *Embarcadero Plaza*, and it loads without errors. About 50 objects: stairs, handrails, ledges, pads and banks.
 2. **Layout:** compare with `emb.png`. North in the plaza should be the stick's left (+90° from its facing), since the stick faces east. Does the layout match? If it is mirrored, tell us: the frame is meant to be right, but nobody has checked it in game yet.
