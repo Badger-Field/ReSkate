@@ -255,7 +255,6 @@ void status_tile(const Fonts& fonts, const State& state, ImVec2 position, float 
     switch (state.phase) {
     case Phase::ready: icon = Icon::check; accent = color::good; pill = "READY"; break;
     case Phase::failed: icon = Icon::fail; accent = color::danger; pill = "PROBLEM"; break;
-    case Phase::install_here: icon = Icon::check; accent = color::good; pill = "ONE STEP"; break;
     case Phase::update_available:
     case Phase::game_missing:
     case Phase::game_outdated:
@@ -438,7 +437,6 @@ void frame(Launcher& launcher, const Fonts& fonts, HWND window, Ui& ui, ModsPane
     bool secondary = false;
     switch (state.phase) {
     case Phase::checking: label = "CHECKING"; enabled = false; break;
-    case Phase::install_here: label = "INSTALL"; detail = "Into your Steam copy of skate."; break;
     case Phase::update_available: label = "UPDATE"; detail = "New ReSkate files are ready"; break;
     case Phase::updating: label = "UPDATING"; enabled = false; break;
     case Phase::game_missing: label = "INSTALL"; detail = "Download skate. from Steam"; break;
@@ -462,7 +460,6 @@ void frame(Launcher& launcher, const Fonts& fonts, HWND window, Ui& ui, ModsPane
     }
     const auto act = [&] {
         switch (state.phase) {
-        case Phase::install_here: launcher.install_here(); break;
         case Phase::update_available: launcher.apply_updates(); break;
         case Phase::game_missing:
         case Phase::game_outdated: open_sign_in(launcher, ui, false); break;
