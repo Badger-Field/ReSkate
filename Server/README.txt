@@ -212,6 +212,7 @@ kick_minutes       How long a kicked player is kept out, by an admin's kick or
                    restarts). They are told how long when they are kicked and
                    when they try to join. A kick keeps the time it was given;
                    changing this is for later kicks. A ban is still for good.
+                   One kick can be given its own time: kick <player> 30.
                    Console: kick-time <minutes>|restart.
 word_warnings      The ReSkate team keeps a list of words that are not allowed
                    in chat at all (read from api.reskate.dev with the global
@@ -555,8 +556,9 @@ or Travel, and voice, distances, placement and kicks from the Multiplayer menu.
   msg-party <player> <text>     Message everyone in that player's party ("[DM from <you> to party]").
   msg-admins <text>             Message every admin who is online ("[DM from <you> to admins]").
                                 Players can whisper each other with /w <player> <text> in chat.
-  kick <player>                 Until the server restarts, or for kick-time's minutes.
-                                Name start or SteamID64.
+  kick <player> [minutes]       For that many minutes (1-1440), or "restart" for until
+                                the server restarts; with neither, for as long as
+                                kick-time says. Name start or SteamID64.
   kick-time <minutes>|restart   How long a kicked player (by an admin or a vote) is kept
                                 out: 1-1440 minutes, or until the server restarts.
                                 Nobody kicks or bans a player of their rank or above; the console can.

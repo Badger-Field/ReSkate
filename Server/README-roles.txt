@@ -115,8 +115,8 @@ Any role with at least one command can also use help and roles (the list).
 
 Players
   players              Connected players and their SteamID64s.
-  kick                 kick <player>: off the server until it restarts, or for
-                       as long as kick-time says.
+  kick                 kick <player> [minutes|restart]: off the server for
+                       that long, or for as long as kick-time says.
   kick-time            kick-time <minutes>|restart: how long a kick lasts.
   ban                  ban <player or SteamID64> [name]: for good.
   unban                unban <SteamID64>.
