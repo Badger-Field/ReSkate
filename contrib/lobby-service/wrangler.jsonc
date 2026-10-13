@@ -1,0 +1,12 @@
+{
+  // ReSkate lobby service. Deploy: npx wrangler login, then npx wrangler deploy.
+  "name": "reskate-lobby",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  "durable_objects": {
+    "bindings": [{ "name": "HUB", "class_name": "Hub" }]
+  },
+  // SQLite-backed Durable Objects are on Cloudflare's free plan.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }]
+  // Production also needs a secret for join challenges: npx wrangler secret put CHALLENGE_SECRET
+}
