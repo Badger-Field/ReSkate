@@ -969,7 +969,8 @@ void update_model(std::uintptr_t client, TickState& frame) {
     model.board_break = {dingosdk::board_break::available(), dingosdk::board_break::enabled(), !breakable_deck.empty(),
                          dingosdk::board_break::deck_label(breakable_deck)};
     model.grind_exit = {dingosdk::grind_exit_control::available(), dingosdk::grind_exit_control::enabled(),
-                        dingosdk::grind_exit_control::toe_heel(), dingosdk::grind_exit_control::stance()};
+                        dingosdk::grind_exit_control::toe_heel(), dingosdk::grind_exit_control::stance(),
+                        dingosdk::grind_exit_control::strength()};
     model.bindings = dingosdk::local_profile_controller_bindings();
     model.parks = dingosdk::local_profile_parks();
     model.world = dingosdk::local_profile_world_layers();
