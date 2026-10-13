@@ -463,7 +463,7 @@ def run_imagery(args) -> int:
     if args.report:
         Path(args.report).write_text(json.dumps([c.__dict__ for c in found], indent=2), encoding="utf-8")
         print(f"Wrote {args.report}")
-    return 0 if all(c.outcome != "failed" or "token" in c.note for c in found) else 1
+    return 0 if all(c.outcome != "failed" for c in found) else 1
 
 
 def run_calibrate(args) -> int:

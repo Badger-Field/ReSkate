@@ -3,7 +3,8 @@ licence, and whether it carries 3-D (structure-from-motion) data. Metadata only:
 downloaded, and nothing about the people in them is kept.
 
 Every answer is checked, not trusted: a source reports `found` (images counted from the field
-named in `count_field`), `empty` (a well-formed answer with none), or `failed` (an HTTP error, an
+named in `count_field`), `empty` (a well-formed answer with none), `skipped` (Mapillary with no
+token), or `failed` (an HTTP error, an
 API error inside a 200, or an answer whose shape is not the one expected). So a zero is a real
 zero. `request` and `http_status` say exactly what was asked (never with a token in it).
 
@@ -13,8 +14,10 @@ Sources (DATA-SOURCES.md has their licences and the credit each needs):
   the URL, the cache or the report. bbox is west,south,east,north (lon/lat). Images may carry
   `sfm_cluster`, the URL of Mapillary's point cloud.
 - Panoramax (api.panoramax.xyz/api/search, the federation's meta-catalogue): STAC search, no
-  token; bbox is west,south,east,north (lon/lat). Pictures carry their own licence.
-- KartaView (api.openstreetcam.org/2.0/photo/): lat, lng and radius in metres (1-500). The old
+  token; bbox is west,south,east,north (lon/lat). Answers are {"features": [...], "links": [...]}
+  (no "type"), paged by a links entry rel=next. Pictures carry their own licence.
+- KartaView (api.openstreetcam.org/2.0/photo/): lat, lng and radius in metres (1-500), at most
+  150 photos per page (itemsPerPage, page). The old
   1.0 nearby-photos call has answered 301/404 since 2023. Errors come as `status.apiCode` inside
   an HTTP 200; KartaView may also ask for authentication, which is reported, not worked around.
 
@@ -33,13 +36,14 @@ from . import geo, net
 MAPILLARY = "https://graph.mapillary.com/images"
 PANORAMAX = "https://api.panoramax.xyz/api/search"
 KARTAVIEW = "https://api.openstreetcam.org/2.0/photo/"
-KARTAVIEW_OK = {600, 200}  # KartaView's apiCode for success (600), and plain 200 in case it changes
+KARTAVIEW_OK = {600, 200}
+KARTAVIEW_PAGE = 150       # the most photos KartaView returns per page  # KartaView's apiCode for success (600), and plain 200 in case it changes
 
 
 @dataclass
 class Coverage:
     source: str
-    outcome: str = "failed"               # found, empty or failed
+    outcome: str = "failed"               # found, empty, skipped or failed
     images: int = 0
     first: str | None = None              # earliest capture date (YYYY-MM-DD)
     last: str | None = None
@@ -54,6 +58,8 @@ class Coverage:
     def summary(self) -> str:
         if self.outcome == "failed":
             return f"{self.source}: FAILED, {self.note}"
+        if self.outcome == "skipped":
+            return f"{self.source}: skipped, {self.note}"
         if self.outcome == "empty":
             return f"{self.source}: 0 images (a well-formed answer with none); licence n/a"
         span = f"{self.first} to {self.last}" if self.first else "dates unknown"
@@ -102,7 +108,8 @@ def mapillary(bbox: geo.BBox, token: str | None = None, url: str = MAPILLARY) ->
     coverage = Coverage("Mapillary")
     token = token or os.environ.get("MAPILLARY_TOKEN")
     if not token:
-        coverage.note = "needs a client token (a free Mapillary developer app); set MAPILLARY_TOKEN"
+        coverage.outcome = "skipped"
+        coverage.note = "no token: it needs a client token (a free Mapillary developer app) in MAPILLARY_TOKEN"
         return coverage
     query = urllib.parse.urlencode({
         "bbox": f"{bbox.west},{bbox.south},{bbox.east},{bbox.north}",
@@ -130,17 +137,31 @@ def mapillary(bbox: geo.BBox, token: str | None = None, url: str = MAPILLARY) ->
     return coverage
 
 
-def panoramax(bbox: geo.BBox, url: str = PANORAMAX) -> Coverage:
+def panoramax(bbox: geo.BBox, url: str = PANORAMAX, max_pages: int = 10) -> Coverage:
+    """STAC search pages: each answer has a 'features' list, and a links entry rel=next while
+    there are more (the meta-catalogue leaves out "type")."""
     coverage = Coverage("Panoramax")
     query = urllib.parse.urlencode({"bbox": f"{bbox.west},{bbox.south},{bbox.east},{bbox.north}", "limit": 1000})
-    answer = _ask(coverage, f"{url}?{query}")
-    if answer is None:
-        return coverage
-    if not isinstance(answer, dict) or answer.get("type") != "FeatureCollection" or not isinstance(answer.get("features"), list):
-        _misshapen(coverage, answer, "STAC FeatureCollection with 'features'")
-        return coverage
-    features = answer["features"]
-    coverage.count_field = f"features: {len(features)} items"
+    features, pages, next_url = [], 0, f"{url}?{query}"
+    first_request = None
+    while next_url and pages < max_pages:
+        answer = _ask(coverage, next_url)
+        first_request = first_request or coverage.request
+        if answer is None:
+            coverage.request = first_request
+            return coverage
+        if not isinstance(answer, dict) or not isinstance(answer.get("features"), list):
+            coverage.request = first_request
+            _misshapen(coverage, answer, "'features' list")
+            return coverage
+        features += answer["features"]
+        pages += 1
+        next_url = next((link.get("href") for link in answer.get("links") or []
+                         if isinstance(link, dict) and link.get("rel") == "next"), None)
+    coverage.request = first_request
+    coverage.count_field = f"features: {len(features)} items over {pages} page(s)"
+    if next_url:
+        coverage.note = f"stopped after {max_pages} pages: there are more"
     coverage.outcome = "found" if features else "empty"
     coverage.images = len(features)
     properties = [(f.get("properties") or {}) for f in features]
@@ -150,30 +171,42 @@ def panoramax(bbox: geo.BBox, url: str = PANORAMAX) -> Coverage:
     return coverage
 
 
-def kartaview(lat: float, lon: float, radius: float, url: str = KARTAVIEW) -> Coverage:
+def kartaview(lat: float, lon: float, radius: float, url: str = KARTAVIEW, max_pages: int = 20) -> Coverage:
+    """Pages of at most KARTAVIEW_PAGE photos (the API's maximum), until one comes back short."""
     coverage = Coverage("KartaView")
     radius = int(min(max(round(radius), 1), 500))  # the API takes 1-500 m
-    query = urllib.parse.urlencode({"lat": lat, "lng": lon, "radius": radius, "itemsPerPage": 1000})
-    answer = _ask(coverage, f"{url}?{query}")
-    if answer is None:
-        return coverage
-    status = answer.get("status") if isinstance(answer, dict) else None
-    if isinstance(status, dict) and status.get("apiCode") not in KARTAVIEW_OK:
-        coverage.note = f"API error {status.get('apiCode')}: {status.get('apiMessage', '')}"
-        return coverage
-    result = answer.get("result") if isinstance(answer, dict) else None
-    data = result.get("data") if isinstance(result, dict) else None
-    if not isinstance(data, list):
-        _misshapen(coverage, answer, "'result.data' list")
-        return coverage
-    coverage.count_field = f"result.data: {len(data)} items" + (
+    photos, status, first_request = [], None, None
+    for page in range(1, max_pages + 1):
+        query = urllib.parse.urlencode({"lat": lat, "lng": lon, "radius": radius,
+                                        "itemsPerPage": KARTAVIEW_PAGE, "page": page})
+        answer = _ask(coverage, f"{url}?{query}")
+        first_request = first_request or coverage.request
+        if answer is None:
+            coverage.request = first_request if page == 1 else coverage.request
+            return coverage
+        status = answer.get("status") if isinstance(answer, dict) else None
+        if isinstance(status, dict) and status.get("apiCode") not in KARTAVIEW_OK:
+            coverage.note = f"API error {status.get('apiCode')}: {status.get('apiMessage', '')}"
+            return coverage
+        result = answer.get("result") if isinstance(answer, dict) else None
+        data = result.get("data") if isinstance(result, dict) else None
+        if not isinstance(data, list):
+            _misshapen(coverage, answer, "'result.data' list")
+            return coverage
+        photos += data
+        if len(data) < KARTAVIEW_PAGE:
+            break
+    else:
+        coverage.note = f"stopped after {max_pages} pages: there are more"
+    coverage.request = first_request
+    coverage.count_field = f"result.data: {len(photos)} items over {page} page(s)" + (
         f"; status.apiCode {status.get('apiCode')}" if isinstance(status, dict) else "")
-    coverage.outcome = "found" if data else "empty"
-    coverage.images = len(data)
-    coverage.first, coverage.last = _dates(p.get("shotDate") or p.get("dateAdded") for p in data)
-    coverage.sequences = len({p.get("sequenceId") for p in data if p.get("sequenceId")})
-    coverage.licences = {"CC BY-SA 4.0": len(data)} if data else {}
-    if radius == 500:
+    coverage.outcome = "found" if photos else "empty"
+    coverage.images = len(photos)
+    coverage.first, coverage.last = _dates(p.get("shotDate") or p.get("dateAdded") for p in photos)
+    coverage.sequences = len({p.get("sequenceId") for p in photos if p.get("sequenceId")})
+    coverage.licences = {"CC BY-SA 4.0": len(photos)} if photos else {}
+    if radius == 500 and not coverage.note:
         coverage.note = "radius capped at 500 m"
     return coverage
 
