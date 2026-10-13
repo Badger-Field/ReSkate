@@ -15,6 +15,15 @@ not on anyone's PC, so every release comes from a known commit.
 
 Merge only when it is green.
 
+### Running the same checks on your own PC
+
+Each Build job is a script in `ci/`, and the workflow only calls it, so a local run checks exactly what CI checks, uses no Actions minutes, and needs nothing pushed:
+
+- **Linux, or WSL on Windows:** `ci/local.sh` runs the server and regression tests (`build/linux`) and then the LiDAR parks tests. `ci/local.sh linux` or `ci/local.sh lidar` runs just one of them. The Python tests get their own virtual environment, in `build/lidar-venv`.
+- **Windows:** `powershell -ExecutionPolicy Bypass -File ci\local.ps1` builds `build\vs2022-x64` (Release) with the launcher tests, and runs every test. It needs Visual Studio 2022 with the C++ desktop workload.
+
+Changes only to Markdown files or `LICENSE` start no build.
+
 ## Cutting a release
 
 1. **Pick the version.** It must be `X.Y.Z`. This fork continues from upstream's last release (2.0.7), so

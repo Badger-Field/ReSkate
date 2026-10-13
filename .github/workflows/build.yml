@@ -1,11 +1,15 @@
 # Builds every push to main and every pull request: the launcher, runtime and server on Windows
 # (MSVC, as releases are built), and the dedicated server with the regression tests on Linux.
+# Each job runs a script in ci/, so the same checks run on your own PC with no Actions minutes:
+# ci/local.sh (Linux, LiDAR parks) and ci/local.ps1 (Windows). Changes to docs alone build nothing.
 name: Build
 
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', 'LICENSE']
   pull_request:
+    paths-ignore: ['**.md', 'LICENSE']
   workflow_dispatch:
 
 permissions:
@@ -24,13 +28,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0  # crash reports name the build by git describe
-      - name: Configure
-        # No crash uploads from CI builds.
-        run: cmake --preset vs2022-x64 -DDINGOSDK_BACKTRACE_URL= -DDINGOSDK_BUILD_LAUNCHER_TESTS=ON
-      - name: Build
-        run: cmake --build --preset release --parallel
-      - name: Test
-        run: ctest --test-dir build/vs2022-x64 -C Release --output-on-failure
+      - name: Configure, build and test
+        shell: pwsh
+        run: ./ci/local.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: reskate-windows-${{ github.sha }}
@@ -48,18 +48,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Configure
-        run: >
-          cmake -S . -B build/linux -DCMAKE_BUILD_TYPE=Release
-          -DDINGOSDK_BUILD_TESTS=ON -DDINGOSDK_BUILD_MULTIPLAYER_TESTS=ON
-          -DDINGOSDK_BUILD_PARK_EDITOR_TESTS=ON -DDINGOSDK_BUILD_TRAINER_TESTS=ON
-          -DDINGOSDK_BUILD_ROUTE_TESTS=ON -DDINGOSDK_BUILD_ROAD_RASH_TESTS=ON
-          -DDINGOSDK_BUILD_BOARD_BREAK_TESTS=ON -DDINGOSDK_BUILD_HALL_OF_MEAT_TESTS=ON
-          -DDINGOSDK_BUILD_LAUNCHER_TESTS=ON
-      - name: Build
-        run: cmake --build build/linux --parallel
-      - name: Test
-        run: ctest --test-dir build/linux --output-on-failure
+      - name: Configure, build and test
+        run: ci/local.sh linux
 
   lidar-parks:
     name: LiDAR parks (Python)
@@ -74,7 +64,4 @@ jobs:
         with:
           python-version: "3.12"
       - if: steps.present.outputs.yes
-        working-directory: contrib/lidar-parks
-        run: |
-          python -m pip install -r requirements.txt pytest
-          python -m pytest -q tests
+        run: ci/local.sh lidar
