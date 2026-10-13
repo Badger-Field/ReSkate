@@ -181,7 +181,9 @@ void Launcher::download(bool validate, bool qr, std::string password) {
         password_ = std::move(password);
         qr_login_ = qr;
     }
-    start([this, validate] { run_download(validate); });
+    // Data of another build is put right by checking every file, not only fetching what is missing.
+    const bool verify = validate || launcher_app::game_data_mismatched(session_.paths);
+    start([this, verify] { run_download(verify); });
 }
 
 void Launcher::play() { start([this] { run_play(); }); }
@@ -333,7 +335,13 @@ void Launcher::run_check() {
             fail("This launcher is out of date. Download the latest ReSkate release.");
             return;
         }
-        if (installed) set(Phase::game_outdated, "Steam updated Skate",
+        // (Data of another build under a Skate.exe that may itself be right: every file is
+        // checked, which download() sees to.)
+        if (installed && launcher_app::game_data_mismatched(session_.paths))
+            set(Phase::game_outdated, "Game files need verifying",
+                "Some of the game's files are from another version of skate. (Steam updated it, or a download did not finish). "
+                "Press DOWNLOAD: every file is checked and only the wrong ones are downloaded.");
+        else if (installed) set(Phase::game_outdated, "Steam updated Skate",
             "ReSkate needs the build below. Only the files that differ are downloaded.");
         else set(Phase::game_missing, "Skate is not installed here",
             "Download the build below from Steam, about 14 GB, with an account that owns skate.");
