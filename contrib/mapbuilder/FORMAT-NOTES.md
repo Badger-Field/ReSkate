@@ -460,6 +460,22 @@ sub-world paths) and `IsDefault`. Bam's `DefaultStartPoint` autoloads
 from game logic. The plan is to reuse bam's `DefaultStartPoint` entry as the 333 map does and have
 ReSkate place the skater after load.
 
+**What the 333 map ships.** Four TOCs: `layout.toc`, `Win32/globals.toc`,
+`Win32/levels/game/dingolevel_root/dingolevel_root.toc` (the root-level edits) and its own level
+TOC. That level TOC holds 4,729 bundles (all load flag 1):
+
+- 4,432 world-partition tiles `wproot/wp/dN_xXXX_zZZZ_sublevel` (N looks like a quadtree depth:
+  d1 x1, d2 x402, d3 x1,154, d4 x2,875) and 249 vista tiles under `wpvista/wp/` (all d2);
+- six named bundles: the root `<map>/<map>`, `wproot`, `wpvista`, `wpvista_root`, `busstops`,
+  `behaviors/effects_0`;
+- 42 of bam's bundles listed in its own TOC, all under `bam_levelroot/`: `bam_coregameassets`,
+  `startpoint_sublevels`, `vfx_global`, `vfx_season_04`, the `lighting_*` set and the seven
+  `tod_*` bundles with their low/medium/high variants.
+
+A first level could be: root, `wproot`, one tile, plus those 42 base bundles. The vista set,
+`busstops` and `behaviors/effects_0` look optional. Not yet checked: whether the 42 point at the
+base game's own data or are rebuilt copies.
+
 ## 7. Practical notes
 
 - Ground probing with `trainer ground x z` reports the height about 5 ms after the teleport, before
