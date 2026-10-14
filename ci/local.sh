@@ -2,9 +2,10 @@
 # The checks CI runs, run here: the same commands .github/workflows/build.yml runs, because the
 # workflow calls this script. Nothing is uploaded and no Actions minutes are used.
 #
-#   ci/local.sh            every Linux job: the server and tests, then the LiDAR parks tests
+#   ci/local.sh            every Linux job: the server and tests, the LiDAR parks tests, the map builder tests
 #   ci/local.sh linux      the server and the regression tests (build/linux)
 #   ci/local.sh lidar      the LiDAR parks Python tests
+#   ci/local.sh mapbuilder the map builder's Python tests (checked against the C++ format code)
 #
 # The Windows job is ci/local.ps1, on a Windows PC with Visual Studio 2022.
 set -euo pipefail
@@ -34,9 +35,17 @@ lidar() {
     (cd "$dir" && "../../$venv/bin/python" -m pytest -q tests)
 }
 
+mapbuilder() {
+    local venv=build/mapbuilder-venv
+    [[ -x $venv/bin/python ]] || python3 -m venv "$venv"
+    "$venv/bin/python" -m pip install -q pytest
+    (cd contrib/mapbuilder && "../../$venv/bin/python" -m pytest -q tests)
+}
+
 case "${1:-all}" in
     linux) linux ;;
     lidar) lidar ;;
-    all) linux && lidar ;;
-    *) echo "usage: ci/local.sh [linux|lidar|all]" >&2; exit 2 ;;
+    mapbuilder) mapbuilder ;;
+    all) linux && lidar && mapbuilder ;;
+    *) echo "usage: ci/local.sh [linux|lidar|mapbuilder|all]" >&2; exit 2 ;;
 esac
