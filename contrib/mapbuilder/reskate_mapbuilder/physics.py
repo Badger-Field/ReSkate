@@ -3,8 +3,8 @@
 Layout and edge rules from contrib/mapbuilder/FORMAT-NOTES.md, section 2.
 What has been tested in game: a resource with a shape replaced by one
 built this way (vertices, half-edge arrays, edge data by the rule below, zeroed tree nodes)
-loads, and the skater stands on it. A version-2 file written whole from scratch has not
-been tested yet.
+loads, and the skater stands on it. A base map file (version 0) rewritten whole as version 2
+crashed the game; whole files are now written in the source's version, not yet tested in game.
 
 Pointers in this format are u32 distances from the pointer's own position (0 = none).
 """
@@ -179,38 +179,97 @@ def _box(points):
     return tuple(min(p[i] for p in points) for i in range(3)), tuple(max(p[i] for p in points) for i in range(3))
 
 
-def write_physics(shapes: list[Shape], parts: list[Part], align: int = 16) -> bytes:
-    """A version-2 PhysicsResource holding triangle-mesh shapes and their parts."""
-    shape_table = 0x84
+# Each array sits at its element's natural alignment, as in the game's files.
+_SLOT_ALIGN = {0: 4, 1: 2, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 2, 11: 8}
+
+
+def _place(out: bytearray, blob: bytes, alignment: int) -> int:
+    start = (len(out) + alignment - 1) // alignment * alignment
+    out += bytes(start - len(out)) + blob
+    return start
+
+
+def write_physics(shapes: list[Shape], parts: list[Part], version: int = 2, tail: bytes | None = None) -> bytes:
+    """A PhysicsResource holding triangle-mesh shapes and their parts.
+
+    Version 2 is the custom map's and the base props' form: a mass block at 0x38, then the
+    tables, then each shape's arrays in turn. Version 0 is the base map's staticmodelgroup
+    form, which its loader expects (a version-2 file there crashed the game): no mass block,
+    a world box at the data start, arrays grouped by slot across shapes, then a top-level
+    tree over the parts. `tail` replaces that tree (zeroed by default, as zeroed shape trees
+    work); a rewrite of a base file passes the source's own."""
+    if version not in (0, 2):
+        raise ValueError("version must be 0 or 2")
+    shape_table = 0x84 if version == 2 else 0x38
     part_table = shape_table + SHAPE_SIZE * len(shapes)
     data = part_table + PART_SIZE * len(parts)
     out = bytearray(data)
-    struct.pack_into("<IIII", out, 0, 2, MAGIC, 1, len(parts))
+    struct.pack_into("<IIII", out, 0, version, MAGIC, 1 if version == 2 else 0, len(parts))
     struct.pack_into("<I", out, 0x18, len(shapes))
-    for at, target in ((0x24, 0x38), (0x28, shape_table), (0x2C, part_table), (0x30, part_table)):
+    first = 0x38 if version == 2 else shape_table
+    for at, target in ((0x24, first), (0x28, shape_table), (0x2C, part_table), (0x30, part_table)):
         struct.pack_into("<I", out, at, target - at)
-    first_array = None
-    out[0x38:0x84] = _V2_BLOCK
+    if version == 2:
+        out[0x38:0x84] = _V2_BLOCK
+    else:
+        struct.pack_into("<II", out, 0x10, len(parts), 1)  # 0x10 equals the part count in every base file
+        struct.pack_into("<II", out, 0x1C, 0, 4)          # no 0x2C table entries; 4 in every base file
+        world = [part.to_world(v) for part in parts if part.shape >= 0 for v in shapes[part.shape].vertices]
+        lo, hi = _box(world)
+        out += struct.pack("<9f", *lo, *hi, 0.0, 0.0, 0.0)
+    arrays = [_shape_arrays(shape) for shape in shapes]
     for s_i, shape in enumerate(shapes):
-        rec = shape_table + s_i * SHAPE_SIZE
         lo, hi = _box(shape.vertices)
         f = len(shape.triangles)
-        struct.pack_into("<6f4HI", out, rec, *lo, *hi, len(shape.vertices), 3 * f, f, f - 1 if f >= 2 else 0, 0)
-        for slot, blob in enumerate(_shape_arrays(shape)):
-            if blob is None:
-                continue
-            start = (len(out) + align - 1) // align * align
-            out += bytes(start - len(out)) + blob
-            first_array = start if first_array is None else first_array
-            pointer = rec + 36 + 4 * slot
-            struct.pack_into("<I", out, pointer, start - pointer)
-    struct.pack_into("<I", out, 0x34, (first_array if first_array is not None else data) - 0x34)
+        struct.pack_into("<6f4HI", out, shape_table + s_i * SHAPE_SIZE, *lo, *hi, len(shape.vertices), 3 * f, f,
+                         f - 1 if f >= 2 else 0, 0)
+    order = ([(s_i, slot) for s_i in range(len(shapes)) for slot in range(12)] if version == 2
+             else [(s_i, slot) for slot in range(12) for s_i in range(len(shapes))])
+    for s_i, slot in order:
+        blob = arrays[s_i][slot]
+        if blob is None:
+            continue
+        start = _place(out, blob, _SLOT_ALIGN[slot])
+        pointer = shape_table + s_i * SHAPE_SIZE + 36 + 4 * slot
+        struct.pack_into("<I", out, pointer, start - pointer)
+    if version == 0:
+        if tail is None:
+            tail = bytes(8 * (len(parts) - 1)) if len(parts) >= 2 else b""
+        _place(out, tail, 8)
+        out += bytes(-len(out) % 16)
+    struct.pack_into("<I", out, 0x34, data - 0x34)
     for p_i, part in enumerate(parts):
         rec = part_table + p_i * PART_SIZE
         struct.pack_into("<4f3ffIIIIfIIIII", out, rec, *part.rotation, *part.translation, part.scale, part.word_20,
                          part.kind, part.hashes[0], part.hashes[1], part.float_30, part.word_34, part.shape,
                          part.word_3c, part.material, part.word_44)
     return bytes(out)
+
+
+def physics_tail(data: bytes) -> bytes:
+    """The bytes of a version-0 resource after its last shape array (its top-level tree over
+    the parts, then padding), for write_physics(version=0, tail=...). Triangle-mesh shapes only."""
+    (shape_count,) = struct.unpack_from("<I", data, 0x18)
+    shape_table = _ptr(data, 0x28)
+    end = _ptr(data, 0x34) + 36
+    for s_i in range(shape_count):
+        rec = shape_table + s_i * SHAPE_SIZE
+        v, h, f, n = struct.unpack_from("<4H", data, rec + 24)
+        sizes = {0: 12 * v, 1: 2 * (v + 1), 2: 2 * h, 3: 2 * h, 4: 4 * h, 5: (h + 31) // 32 * 4,
+                 6: (h + 31) // 32 * 4, 7: 2 * (f + 1), 11: 8 * n}
+        for slot in range(12):
+            at = _ptr(data, rec + 36 + 4 * slot)
+            if at is None:
+                continue
+            if slot not in sizes:
+                raise ValueError(f"shape {s_i} has slot {slot}: only triangle meshes are supported")
+            end = max(end, at + sizes[slot])
+    start = (end + 7) // 8 * 8
+    (part_count,) = struct.unpack_from("<I", data, 0x0C)
+    size = 8 * (part_count - 1) if part_count >= 2 else 0
+    if any(data[start + size:]):
+        raise ValueError("unexpected data after the top-level tree")
+    return data[start:start + size]
 
 
 def _ptr(data, at):

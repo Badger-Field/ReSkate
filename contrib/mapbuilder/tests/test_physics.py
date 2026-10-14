@@ -5,8 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from reskate_mapbuilder.physics import (MAGIC, Part, Shape, compute_edge_data, read_physics,  # noqa: E402
-                                        write_physics)
+from reskate_mapbuilder.physics import (MAGIC, Part, Shape, compute_edge_data, physics_tail,  # noqa: E402
+                                        read_physics, write_physics)
 
 
 def grid(n=3, size=1.0, height=lambda x, z: 0.0):
@@ -138,3 +138,45 @@ def test_vertex_runs_and_face_offsets():
         assert all(starts[e] == vert for e in run[offsets[vert]:offsets[vert + 1]])
     assert struct.unpack_from("<3H", data, slot(7)) == (0, 3, 6)
     assert data[slot(11):slot(11) + 8] == bytes(8)
+
+
+def test_arrays_sit_at_natural_alignment():
+    # As in the game's files: u16 arrays follow each other on 2-byte boundaries, no 16-byte padding.
+    shapes = [grid(1)]
+    parts = [Part(0)]
+    compute_edge_data(shapes, parts)
+    data = write_physics(shapes, parts)
+    rec = 0x84
+    targets = [rec + 36 + 4 * k + struct.unpack_from("<I", data, rec + 36 + 4 * k)[0] for k in range(8)]
+    sizes = [12 * 4, 2 * 5, 2 * 6, 2 * 6, 4 * 6, 4, 4, 2 * 3]
+    assert targets[0] == 0x84 + 84 + 72
+    for k in range(1, 8):
+        end = targets[k - 1] + sizes[k - 1]
+        assert targets[k] == end + (-end % {4: 4, 5: 4, 6: 4}.get(k, 2)), k
+
+
+def test_version_0_layout_matches_the_base_map():
+    # Header words of a base staticmodelgroup.physics with 1 shape and 3 parts:
+    # (0, magic, 0, 3, 3, 1, 1, 0, 4) and pointers 20, 16, 96, 92, 304.
+    shapes = [grid(2)]
+    parts = [Part(0, (float(i), 190.0, 0.0), word_34=w) for i, w in enumerate((2, 0, 1))]
+    compute_edge_data(shapes, parts)
+    data = write_physics(shapes, parts, version=0)
+    assert struct.unpack_from("<14I", data, 0) == (0, MAGIC, 0, 3, 3, 1, 1, 0, 4, 20, 16, 96, 92, 304)
+    # The data start holds the world box of every part's geometry, then three zeros.
+    assert struct.unpack_from("<9f", data, 0x164) == (0.0, 190.0, 0.0, 4.0, 190.0, 2.0, 0.0, 0.0, 0.0)
+    assert len(data) % 16 == 0
+    # Arrays grouped by slot across shapes; vertices first, right after the box.
+    assert 0x38 + 36 + struct.unpack_from("<I", data, 0x38 + 36)[0] == 0x164 + 36
+    back_shapes, back_parts, version = read_physics(data)
+    assert version == 0 and [p.word_34 for p in back_parts] == [2, 0, 1]
+    assert write_physics(back_shapes, back_parts, 0, physics_tail(data)) == data
+
+
+def test_version_0_keeps_the_source_part_tree():
+    shapes = [grid(2)]
+    parts = [Part(0, (float(i), 0.0, 0.0)) for i in range(3)]
+    compute_edge_data(shapes, parts)
+    tree = bytes(range(1, 17))
+    data = write_physics(shapes, parts, version=0, tail=tree)
+    assert physics_tail(data) == tree and len(data) % 16 == 0

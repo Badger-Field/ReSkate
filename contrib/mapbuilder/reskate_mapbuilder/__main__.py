@@ -18,7 +18,8 @@ import sys
 
 from .game import Game
 from .mod import ModBuilder
-from .physics import KIND_TRIANGLE_MESH, Shape, compute_edge_data, read_physics, replace_shape, write_physics
+from .physics import (KIND_TRIANGLE_MESH, Shape, compute_edge_data, physics_tail, read_physics, replace_shape,
+                      write_physics)
 
 
 def _box(part, shape):
@@ -71,7 +72,8 @@ def raise_ground(args):
 
 
 def rebuild(args):
-    """Rewrites a whole resource with write_physics (version 2, from scratch), optionally raised."""
+    """Rewrites a whole resource with write_physics in the source's own version, optionally raised.
+    A version-0 source keeps its top-level part tree (it moves with the parts and the world box)."""
     game = Game(args.game)
     mod = ModBuilder(game, args.name, description=f"Collision test: resource rebuilt from scratch, raised {args.by} m")
     data = mod.resource(args.superbundle, args.bundle, args.resource)
@@ -83,10 +85,10 @@ def rebuild(args):
         sys.exit("a shape is too large to rewrite as triangles")
     new = [Shape([(x, y + args.by, z) for x, y, z in s.vertices], s.triangles) for s in shapes]
     compute_edge_data(new, parts)
-    out = write_physics(new, parts)
+    out = write_physics(new, parts, version, physics_tail(data) if version == 0 else None)
     mod.replace_resource(args.superbundle, args.bundle, args.resource, out)
     root = mod.write(args.mods)
-    print(f"wrote {root}: version {version} resource of {len(data)} bytes rebuilt as version 2, {len(out)} bytes, "
+    print(f"wrote {root}: version {version} resource of {len(data)} bytes rebuilt as version {version}, {len(out)} bytes, "
           f"{len(new)} shapes, {len(parts)} parts, raised {args.by} m")
 
 
