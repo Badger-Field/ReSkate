@@ -13,9 +13,10 @@ Control does not block it) and is tested on Linux CI.
 | --- | --- |
 | Superbundle TOC writer and reader, perfect hashes | done, byte-identical to ReSkate's C++ (`tests/test_crosscheck.py`) |
 | Bundle region and binary manifest | done, byte-identical to ReSkate's C++ |
-| CAS archive (raw blocks) | done |
-| Mod folder (layout, stamp, superbundle TOCs, cas) | next |
-| Collision (`PhysicsResource`, half-edge shapes, edge data) | layout verified on a PC; writer next |
+| CAS archive | raw blocks written; raw, zlib and (on Windows, via the game's own Oodle DLL) Oodle read |
+| Game data access (layout.toc, archives, Huffman-named TOCs) | done; not yet run against the real game |
+| Mod folder (layout, stamp, superbundle TOCs, cas) | done for resource overrides |
+| Collision (`PhysicsResource`, half-edge shapes, edge data, zero tree) | written and unit-tested; in-game check pending |
 | Visible meshes (rigid `MeshSet` and geometry chunks) | layout verified on a PC; writer next |
 | Level registration, start point, world-partition tiles (EBX) | not started |
 
@@ -23,6 +24,18 @@ What has been verified in the game so far: a mod written this way that overrides
 collision resource loads; ground raised by exactly the amount written; zeroed
 collision tree nodes still work; and a collision shape written from scratch (a ramp)
 can be stood on.
+
+## Try it on the PC
+
+    python -m reskate_mapbuilder inspect --game "<Skate>" --superbundle <path under Data/Win32> \
+        --bundle <bundle> --resource <...staticmodelgroup.physics> --near X Z
+    python -m reskate_mapbuilder raise-ground --game "<Skate>" --mods <out> --name zz-... \
+        --superbundle ... --bundle ... --resource ... --parts 157,161,165 --by 1.0
+
+`raise-ground` repeats the collision test already proven in game with the C++ tools, written
+entirely by this package.
+
+The format reference is `contrib/mapbuilder/FORMAT-NOTES.md`.
 
 ## Tests
 

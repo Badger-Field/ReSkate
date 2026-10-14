@@ -194,6 +194,57 @@ def write_patch_toc(bundles: list[TocBundle], chunks: list[TocChunk] | None = No
     return bytes(out)
 
 
+class _HuffmanNames:
+    """Huffman-coded bundle names (port of HuffmanNames in toc.cpp)."""
+
+    def __init__(self, body, names_offset, names_count, table_offset, table_count):
+        self.words = struct.unpack_from(f">{names_count}I", body, names_offset)
+        values = struct.unpack_from(f">{table_count}I", body, table_offset)
+        self.nodes = []  # (value, left, right); left is None for a leaf
+        by_value = {}
+        left = None
+        counter = 0
+        self.root = None
+        for value in values:
+            node = by_value.get(value)
+            if node is None:
+                node = len(self.nodes)
+                self.nodes.append((value, None, None))
+                by_value[value] = node
+            if left is None:
+                left = node
+                continue
+            parent = len(self.nodes)
+            self.nodes.append((counter, left, node))
+            by_value.setdefault(counter, parent)
+            self.root = parent
+            counter += 1
+            left = None
+        if left is not None:
+            raise ValueError("TOC Huffman tree has an unmatched branch")
+
+    def decode(self, bit: int) -> str:
+        if self.root is None:
+            return ""
+        total = len(self.words) * 32
+        out = []
+        while bit < total:
+            node = self.root
+            while self.nodes[node][1] is not None:
+                if bit >= total:
+                    raise ValueError("TOC Huffman name exceeds its bitstream")
+                one = (self.words[bit >> 5] >> (bit & 31)) & 1
+                node = self.nodes[node][2] if one else self.nodes[node][1]
+                bit += 1
+            char = (~self.nodes[node][0]) & 0xFFFF
+            if char == 0:
+                return "".join(out)
+            if char > 0x7F:
+                raise ValueError("TOC Huffman name is not ASCII")
+            out.append(chr(char))
+        raise ValueError("TOC Huffman name is unterminated")
+
+
 def read_toc(data: bytes, external_bundle_data: bytes = b"") -> TocDocument:
     if len(data) < TOC_ENVELOPE_SIZE + 48 or data[:4] != b"\x00\xd1\xce\x01":
         raise ValueError("TOC envelope is invalid")
@@ -202,8 +253,10 @@ def read_toc(data: bytes, external_bundle_data: bytes = b"") -> TocDocument:
      chunk_count, _, _, names_offset, chunk_data_offset, data_count, flags) = struct.unpack_from(">IIiIIiIIIIiI", body, 0)
     if bundle_count < 0 or chunk_count < 0 or data_count < 0:
         raise ValueError("TOC has negative table counts")
+    huffman = None
     if flags & _COMPRESSED_NAMES:
-        raise NotImplementedError("Huffman-compressed TOC names are not supported by this reader")
+        names_count, table_count, table_offset = struct.unpack_from(">III", body, 48)
+        huffman = _HuffmanNames(body, names_offset, names_count, table_offset, table_count)
     doc = TocDocument(flags=flags)
     doc.bundle_hash_map = list(struct.unpack_from(f">{bundle_count}i", body, bundle_hash_offset))
     for i in range(bundle_count):
@@ -213,8 +266,11 @@ def read_toc(data: bytes, external_bundle_data: bytes = b"") -> TocDocument:
         source = body if load_flag == 1 else external_bundle_data
         if region_offset + size > len(source):
             raise ValueError("TOC bundle region exceeds the file")
-        start = names_offset + name_offset
-        name = body[start:body.index(b"\0", start)].decode("latin-1")
+        if huffman:
+            name = huffman.decode(name_offset)
+        else:
+            start = names_offset + name_offset
+            name = body[start:body.index(b"\0", start)].decode("latin-1")
         doc.bundles.append(TocBundle(name, bytes(source[region_offset:region_offset + size]), 1))
     if chunk_count:
         doc.chunk_hash_map = list(struct.unpack_from(f">{chunk_count}i", body, chunk_hash_offset))
