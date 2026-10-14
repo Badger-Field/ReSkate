@@ -33,6 +33,8 @@ the launcher, the runtime that loads into the game, and the dedicated server.
   - Browse and install mods from the [Thunderstore community](https://thunderstore.io/c/reskate/) in the
     launcher.
   - Most mod changes apply in game without a restart.
+  - Turn a LiDAR scan of a real skatepark into a park mod of Build Kit objects with
+    [LiDAR parks](contrib/lidar-parks/README.md).
 - **Launcher.**
   - Checks that you have the supported game build, and can download exactly that build with your Steam
     account.
