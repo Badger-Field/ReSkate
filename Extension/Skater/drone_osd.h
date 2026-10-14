@@ -75,17 +75,20 @@ inline Layout build() {
     const bool low = volts < 14.0f;
     const bool blink = (static_cast<long long>(seconds * 2.0f) & 1) != 0;
     const int total = static_cast<int>(seconds);
-    add(knob(kShowBattery) >= 0.5f, m, m, Align::left, false, std::format("{:.1f}V", volts), low && blink);
+    // The goggle display as a whole (`osd`): off hides every readout. The range warnings below
+    // still show, since flying on without them loses the drone.
+    const bool osd = knob(kOsd) >= 0.5f;
+    add(osd && knob(kShowBattery) >= 0.5f, m, m, Align::left, false, std::format("{:.1f}V", volts), low && blink);
     const bool armed_now = t.armed.load(std::memory_order_relaxed);
-    add(knob(kShowArmed) >= 0.5f, 0.5f, m, Align::centre, false, armed_now ? "ARMED" : "DISARMED", !armed_now);
-    add(knob(kShowTimer) >= 0.5f, 1.0f - m, m, Align::right, false, std::format("{:02}:{:02}", total / 60, total % 60));
-    add(knob(kShowThrottle) >= 0.5f, m, 1.0f - m, Align::left, true, std::format("THR {:.0f}%", throttle * 100.0f));
-    add(knob(kShowAlt) >= 0.5f, 0.5f, 1.0f - m, Align::centre, true, std::format("ALT {:.1f}M", altitude));
-    add(knob(kShowSpeed) >= 0.5f, 1.0f - m, 1.0f - m, Align::right, true, std::format("{:.0f}KM/H", speed * 3.6f));
+    add(osd && knob(kShowArmed) >= 0.5f, 0.5f, m, Align::centre, false, armed_now ? "ARMED" : "DISARMED", !armed_now);
+    add(osd && knob(kShowTimer) >= 0.5f, 1.0f - m, m, Align::right, false, std::format("{:02}:{:02}", total / 60, total % 60));
+    add(osd && knob(kShowThrottle) >= 0.5f, m, 1.0f - m, Align::left, true, std::format("THR {:.0f}%", throttle * 100.0f));
+    add(osd && knob(kShowAlt) >= 0.5f, 0.5f, 1.0f - m, Align::centre, true, std::format("ALT {:.1f}M", altitude));
+    add(osd && knob(kShowSpeed) >= 0.5f, 1.0f - m, 1.0f - m, Align::right, true, std::format("{:.0f}KM/H", speed * 3.6f));
     // Range: link quality and the way home, and what happens at the edge.
     if (knob(kRange) > 0.0f) {
         const float signal = t.signal.load(std::memory_order_relaxed);
-        add(true, 1.0f - m, m + 0.05f, Align::right, false,
+        add(osd, 1.0f - m, m + 0.05f, Align::right, false,
             std::format("RSSI {:.0f}%  {:.0f}M", signal * 100.0f, t.home_distance.load(std::memory_order_relaxed)), signal < 0.35f && blink);
         if (t.failsafe.load(std::memory_order_relaxed)) add(true, 0.5f, 0.42f, Align::centre, false, "FAILSAFE - RESET TO FLY AGAIN", true);
         else if (signal <= 0.0f) {
