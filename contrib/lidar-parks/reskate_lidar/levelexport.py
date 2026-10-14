@@ -31,6 +31,11 @@ has triangles there is one object:
 `visual` objects are the full-detail meshes; `collision` ones the coarser copy (half-resolution
 ground, buildings as plain blocks) to build the level's collision from.
 
+Collision parts are welded first: positions equal to the last bit share one index, and
+triangles left with a repeated corner, or repeating another, are dropped. `collision_checks` in
+level.json counts what was fixed, and the edges a half-edge structure couldn't hold (used by
+three or more triangles, or twice in the same direction), which are reported, not fixed.
+
 Collision objects come in spatially compact chunks of at most 256 triangles (`"chunk": k` of
 `"chunks": n` for the same `name`): a collision shape keeps its counts in 16 bits. A vertex
 shared by neighbouring chunks (or tiles) has bit-identical coordinates in each, so edges can be
@@ -88,6 +93,34 @@ def _parts(model, collision: bool, tile: float):
         yield name, extras.get(name, {}), vertices, faces
 
 
+def weld(vertices: np.ndarray, faces: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
+    """For collision: one index per position (positions equal to the last bit merge, nothing
+    else moves), then drop the triangles that leaves with a repeated corner or that repeat
+    another triangle. A half-edge shape needs each edge's two sides to share their vertices."""
+    bits = np.ascontiguousarray(vertices.astype("<f4")).view(np.uint32).reshape(-1, 3)
+    _, first, inverse = np.unique(bits, axis=0, return_index=True, return_inverse=True)
+    inverse = inverse.reshape(-1)
+    welded_faces = inverse[faces]
+    keep = ((welded_faces[:, 0] != welded_faces[:, 1]) & (welded_faces[:, 1] != welded_faces[:, 2])
+            & (welded_faces[:, 0] != welded_faces[:, 2]))
+    degenerate = int((~keep).sum())
+    welded_faces = welded_faces[keep]
+    _, unique_rows = np.unique(np.sort(welded_faces, axis=1), axis=0, return_index=True)
+    repeated = len(welded_faces) - len(unique_rows)
+    welded_faces = welded_faces[np.sort(unique_rows)]
+    return vertices[first], welded_faces, {"merged_vertices": int(len(vertices) - len(first)),
+                                           "dropped_degenerate": degenerate, "dropped_repeated": int(repeated)}
+
+
+def edge_checks(faces: np.ndarray) -> dict[str, int]:
+    """Edges a half-edge structure can't hold: used by more than two triangles, or twice the same way."""
+    directed = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
+    _, same_way = np.unique(directed, axis=0, return_counts=True)
+    _, either_way = np.unique(np.sort(directed, axis=1), axis=0, return_counts=True)
+    return {"edges_same_direction_twice": int((same_way > 1).sum()),
+            "edges_shared_by_3_or_more": int((either_way > 2).sum())}
+
+
 def chunks(vertices: np.ndarray, faces: np.ndarray, limit: int = CHUNK_TRIANGLES) -> list[np.ndarray]:
     """Faces split into spatially compact groups of at most `limit`: halved at the median of
     their centroids along the longest side, until each is small enough."""
@@ -115,8 +148,16 @@ def export(model, out_dir: str | Path, tile_size: float = 50.0, attribution: lis
     for old in list(out.glob("tile_*.json")) + list(out.glob("tile_*.bin")):
         old.unlink()
     tiles: dict[tuple[int, int], list[tuple]] = {}
+    checks = {"merged_vertices": 0, "dropped_degenerate": 0, "dropped_repeated": 0,
+              "edges_same_direction_twice": 0, "edges_shared_by_3_or_more": 0}
     for role in ("visual", "collision"):
         for name, part_extras, vertices, faces in _parts(model, role == "collision", tile_size):
+            if role == "collision":
+                vertices, faces, fixed = weld(vertices, faces)
+                for key, value in {**fixed, **edge_checks(faces)}.items():
+                    checks[key] += value
+                if not len(faces):
+                    continue
             centroids = vertices[faces].mean(axis=1)
             keys = np.floor(centroids[:, [0, 2]] / tile_size).astype(int)
             # float32 once, for the whole part: a vertex shared by two chunks or tiles is the same bits in each.
@@ -171,6 +212,7 @@ def export(model, out_dir: str | Path, tile_size: float = 50.0, attribution: lis
         "binary": {"vertices": "float32 x, y, z little-endian", "indices": "uint32 little-endian, per object"},
         "origin": {**(origin or {}), "elevation": float(model.origin_elevation)},
         "tile_size": tile_size, "materials": list(MATERIALS), "collision_chunk_triangles": CHUNK_TRIANGLES,
+        "collision_checks": checks,
         "spawn": [round(float(c), 3) for c in from_local(spawn, model.origin_elevation)[0]],
         "grinds": grinds, "tiles": listed, "attribution": list(attribution),
     }

@@ -112,21 +112,36 @@ def _wedge(spot: Spot, origin_elevation: float):
     return trimesh.Trimesh(vertices=to_gltf(hull.vertices, origin_elevation), faces=hull.faces, process=False)
 
 
+def _stairs(spot: Spot, origin_elevation: float):
+    """A flight as one closed solid: its sawtooth profile (rising along the feature's yaw, from
+    the footing to each step's top) extruded across its width. One shell, so every edge has
+    exactly two faces, as a collision shape's half-edges need."""
+    import shapely
+    import trimesh
+    f = spot.feature
+    steps = max(f.steps, 2)
+    tread, riser = f.along / steps, f.height / steps
+    a = f.along / 2
+    profile = [(-a, spot.footing)]
+    for k in range(steps):
+        profile += [(-a + k * tread, spot.ground + riser * (k + 1)), (-a + (k + 1) * tread, spot.ground + riser * (k + 1))]
+    profile.append((a, spot.footing))
+    solid = trimesh.creation.extrude_polygon(shapely.Polygon(profile), f.across)
+    # Profile x along the flight, profile y up, extrusion across it towards -v: a proper
+    # rotation of (along, across, up), so the faces stay outward.
+    u = np.array([math.cos(f.yaw), math.sin(f.yaw)])
+    v = np.array([-u[1], u[0]])
+    s_, h, w = solid.vertices.T
+    xy = np.array(f.centre) + np.outer(s_, u) - np.outer(w - f.across / 2, v)
+    local = np.column_stack([xy, h])
+    return trimesh.Trimesh(vertices=to_gltf(local, origin_elevation), faces=solid.faces, process=False)
+
+
 def spot_mesh(spot: Spot, origin_elevation: float):
     import trimesh
     f = spot.feature
     if f.kind == "stairs":
-        u = np.array([math.cos(f.yaw), math.sin(f.yaw)])
-        steps = max(f.steps, 2)
-        tread, riser = f.along / steps, f.height / steps
-        parts = []
-        for k in range(steps):
-            # Step k covers its own tread up to the top of the flight, so the flight is solid.
-            start = -f.along / 2 + k * tread
-            centre = np.array(f.centre) + u * (start + (f.along / 2 - start) / 2)
-            parts.append(_box(centre, f.yaw, f.along / 2 - start, f.across, spot.footing,
-                              spot.ground + riser * (k + 1), origin_elevation=origin_elevation))
-        return trimesh.util.concatenate(parts)
+        return _stairs(spot, origin_elevation)
     if f.kind == "rail":
         # A bar on posts, its top at the feature's height.
         bar = _box(f.centre, f.yaw, f.along, 0.05, spot.ground + f.height - 0.05, spot.ground + f.height,

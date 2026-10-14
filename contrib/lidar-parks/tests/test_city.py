@@ -593,3 +593,25 @@ def test_city_writes_level_tiles(tmp_path):
     manifest = json.loads((tmp_path / "level" / "level.json").read_text())
     assert len(manifest["tiles"]) == 4                            # 80 m round the origin: 2 x 2 tiles of 50 m
     assert "OpenStreetMap" in (tmp_path / "level" / "ATTRIBUTION.txt").read_text()
+
+
+def test_collision_meshes_suit_half_edges(model, tmp_path):
+    from reskate_lidar import levelexport
+    # Every spot is closed and outward-facing; stairs are one solid, not boxes sharing edges.
+    for spot in model.spots:
+        if spot.feature.kind == "rail":
+            continue                                              # a bar on posts: separate closed boxes
+        mesh = citymesh.spot_mesh(spot, model.origin_elevation)
+        assert mesh.is_watertight and mesh.volume > 0, spot.what
+    checks = levelexport.export(model, tmp_path / "level")["collision_checks"]
+    assert checks == {"merged_vertices": 0, "dropped_degenerate": 0, "dropped_repeated": 0,
+                      "edges_same_direction_twice": 0, "edges_shared_by_3_or_more": 0}
+
+
+def test_weld_merges_exact_duplicates_only():
+    from reskate_lidar import levelexport
+    v = np.array([[0, 0, 0], [1, 0, 0], [0, 0, 1], [1, 0, 0], [1, 0, 1], [1 + 1e-6, 0, 0]], float)
+    f = np.array([[0, 2, 1], [3, 2, 4], [0, 2, 1], [1, 3, 2]])
+    welded_v, welded_f, fixed = levelexport.weld(v, f)
+    assert fixed == {"merged_vertices": 1, "dropped_degenerate": 1, "dropped_repeated": 1}
+    assert len(welded_v) == 5 and len(welded_f) == 2              # the 1e-6 neighbour stays apart

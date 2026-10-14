@@ -137,29 +137,33 @@ These apply to every phase:
 ## Next
 
 Done since the last list:
-- **The Studio-ready mesh:** `sk8_*` extras, a `spawn` node, grind curves, and `studio_prep.py`. Since then, the custom-map route has been dropped (Questions, 1).
+- **Level tiles for the map builder** (`city --level`): 50 m tiles of triangle lists with materials, visual and collision, in the park frame.
+  - Collision is split into chunks of at most 256 triangles, with bit-identical shared vertices.
+  - Collision parts are welded, and degenerate and repeated triangles dropped.
+  - Edges a half-edge shape can't hold are counted in `collision_checks`. The synthetic block has none.
+- **Stairs as one solid:** the sawtooth profile extruded across the flight. Before, they were boxes sharing edges, which a half-edge collision shape can't hold. Every spot solid is closed and outward-facing (tested).
 - **Skatepark bowls as park mods.** `city --skatepark --mods …` builds each measured bowl as a ring of Build Kit quarter pipes, rising to its depth with the coping on its real coping line. Venice: 78 quarter pipes round 4 bowls (examples/).
 - **Anchor check:** `anchor probe` / `anchor check` measure the base map under a park with the trainer's ground probe.
 - **Kerbs from the ground.** Where a road's edge runs along a sidewalk or plaza and the ground steps 8-30 cm up from the road, each straight stretch of at least 2 m is a low ledge (a slappy curb in the park). Kerbs come after every other spot, at most 12 (`Settings.kerbs`).
 - **LiDAR outside the US.** `--lidar` reads LAS, LAZ and COPC tiles on disk (AHN, the UK Environment Agency, Denmark, Finland), and EPT, in any CRS. Reprojection goes through `pyproj`. `--lidar-credit` carries the survey's credit into every output. It is tested on the synthetic block placed in Amsterdam, written as AHN-style tiles in the Dutch RD grid.
 - **Stricter residential handling.** On residential parcels (residential land that is not street, footway or park), no spot is ever placed. Homes (houses, detached, terraces, apartments, and any building on residential land) are their footprint's smallest rectangle, with the height rounded to 2 m.
 
-1. **Downloading national LiDAR.** Reading it works (above). Next is finding and fetching the tiles over an area:
+1. **Whatever the map builder needs next.**
+   - **Possible additions:** level of detail for visual tiles, grass split out of the ground, and texture coordinates.
+   - **Waiting on the builder's first in-game level**, built from these tiles.
+2. **Downloading national LiDAR.** Reading it works (above). Next is finding and fetching the tiles over an area:
    - AHN's tile index on PDOK;
    - the UK Environment Agency's survey catalogue;
    - Denmark, Finland, and OpenTopography.
 
    These hosts are blocked from this cloud environment, so it needs a run on the PC to record their answers first.
-2. **Skatepark bowls in game.** Each bowl is now a ring of quarter pipes (done, above). Next:
-   - load Venice as a park mod and check the bowls skate;
-   - fill the gaps at round ends with smaller quarters, or with banks set at an angle;
-   - add a deck at coping height where the real park has one.
-3. **Surfaces.** Carry `surface=*` (asphalt, paving_stones, concrete, wood, metal) into the report, and into the choice of stand-in where the catalog has variants.
-4. **Better stand-ins for big spots.** A 20 m bench ledge is several boxes end to end. Tune `catalog.json` once the sizes are calibrated in game.
-5. **Street-level imagery** (DATA-SOURCES.md). At Venice, Panoramax and KartaView have nothing within 100 m. Mapillary is unknown until a client token is set. Then:
-   - check the stand-ins against photos;
-   - see what aerial LiDAR misses (rails, under canopies).
-6. **Leisure=skatepark.** Report mapped skateparks in the area, and point to `convert` (phone scan) for their real shapes.
+3. **Surfaces.** Carry `surface=*` (asphalt, paving_stones, concrete, wood, metal) into the level materials and the report.
+4. **Street-level imagery** (DATA-SOURCES.md). At Venice, Panoramax and KartaView have nothing within 100 m. Mapillary is unknown until a client token is set. Then:
+   - colours and textures for level meshes;
+   - checking geometry against photos.
+5. **Leisure=skatepark.** Report mapped skateparks in the area, and point to `convert` (phone scan) for their real shapes.
+
+*Paused with park mods:* skatepark bowls as quarter pipes in game, and better Build Kit stand-ins.
 
 ## Known limits
 
