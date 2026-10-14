@@ -141,6 +141,7 @@ Done since the last list:
   - Collision is split into chunks of at most 256 triangles, with bit-identical shared vertices.
   - Collision parts are welded, and degenerate and repeated triangles dropped.
   - Edges a half-edge shape can't hold are counted in `collision_checks`. The synthetic block has none.
+- **Spot materials from the map:** `material=*` (benches, walls, rails) or `surface=*` (steps) set a spot's material in the mesh, the level tiles and the report. A metal bench is now metal, not the default wood. Overture's value fills in where OpenStreetMap's copy lacks one.
 - **Stairs as one solid:** the sawtooth profile extruded across the flight. Before, they were boxes sharing edges, which a half-edge collision shape can't hold. Every spot solid is closed and outward-facing (tested).
 - **Skatepark bowls as park mods.** `city --skatepark --mods …` builds each measured bowl as a ring of Build Kit quarter pipes, rising to its depth with the coping on its real coping line. Venice: 78 quarter pipes round 4 bowls (examples/).
 - **Anchor check:** `anchor probe` / `anchor check` measure the base map under a park with the trainer's ground probe.
@@ -157,7 +158,7 @@ Done since the last list:
    - Denmark, Finland, and OpenTopography.
 
    These hosts are blocked from this cloud environment, so it needs a run on the PC to record their answers first.
-3. **Surfaces.** Carry `surface=*` (asphalt, paving_stones, concrete, wood, metal) into the level materials and the report.
+3. **Surfaces of the ground.** The spots' materials now come from the map (done, above). Next is the ground: hard plazas, asphalt and grass from the areas' `surface=*`, when the builder wants grass.
 4. **Street-level imagery** (DATA-SOURCES.md). At Venice, Panoramax and KartaView have nothing within 100 m. Mapillary is unknown until a client token is set. Then:
    - colours and textures for level meshes;
    - checking geometry against photos.

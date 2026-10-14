@@ -597,7 +597,7 @@ def city_report(label, bbox, model, placements, skipped, attribution, mesh_info)
                        "base": b.base, "height": b.height, "height_from": b.height_from, "source": b.source}
                       for b in model.buildings],
         "spots": [{**{k: v for k, v in s.feature.__dict__.items()}, "yaw_degrees": math.degrees(s.feature.yaw),
-                   "ground": s.ground, "source": s.source, "what": s.what} for s in model.spots],
+                   "ground": s.ground, "source": s.source, "what": s.what, "surface": s.surface} for s in model.spots],
         "placements": [{"item": p.item.item, "x": p.x, "y": p.y, "z": p.z, "yaw_degrees": math.degrees(p.yaw),
                         "pitch_degrees": math.degrees(p.pitch), "scale": p.scale, "spot": p.feature}
                        for p in placements],

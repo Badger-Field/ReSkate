@@ -113,6 +113,7 @@ class Spot:
     footing: float           # lowest ground beside it (a retaining wall's low side); == ground usually
     source: str              # "osm", "overture", "lidar" or "ground"
     what: str                # a short description: "bench", "steps", "retaining wall"...
+    surface: str | None = None  # what it is made of, from the map: "wood", "concrete", "metal", "stone"...
 
     @property
     def priority(self) -> int:
@@ -459,7 +460,7 @@ def _ledge_like(item: MapItem, what: str, a, b, measure: Measure) -> Spot | None
     width = mapdata.length_tag(item.tag("width")) or {"bench": 0.5, "kerb": 0.3, "handrail": 0.06}.get(what, 0.4)
     kind = "rail" if what == "handrail" else "ledge"
     feature = _linear_feature(kind, a, b, height, width, [f"{what}, {height:.2f} m ({source_note})"])
-    return Spot(feature, high, low, item.source, what)
+    return Spot(feature, high, low, item.source, what, surface_of(item.tags, what))
 
 
 def _point_bench(item: MapItem, measure: Measure, ground: Grid) -> list[Spot]:
@@ -480,7 +481,7 @@ def _point_bench(item: MapItem, measure: Measure, ground: Grid) -> list[Spot]:
     a, b = centre - u * length / 2, centre + u * length / 2
     height = measure.top(a, b, radius=0.35) or mapdata.length_tag(item.tag("height")) or 0.45
     feature = _linear_feature("ledge", a, b, min(height, MAX_FEATURE_HEIGHT), 0.5, [f"bench, {height:.2f} m"])
-    return [Spot(feature, base, base, item.source, "bench")]
+    return [Spot(feature, base, base, item.source, "bench", surface_of(item.tags, "bench"))]
 
 
 def _steps(item: MapItem, measure: Measure, ground: Grid, notes: list[str]) -> list[Spot]:
@@ -521,7 +522,7 @@ def _steps(item: MapItem, measure: Measure, ground: Grid, notes: list[str]) -> l
         centre = (a + b) / 2
         stairs = Feature("stairs", tuple(centre), yaw, run, width, rise, steps=steps,
                          notes=[f"{steps} steps, {rise:.2f} m rise over {run:.1f} m"])
-        spots.append(Spot(stairs, float(ends[0]), float(ends[0]), item.source, "steps"))
+        spots.append(Spot(stairs, float(ends[0]), float(ends[0]), item.source, "steps", surface_of(tags, "steps")))
         # Handrails: handrail=yes, or handrail:left/right/center.
         v = np.array([-u[1], u[0]])
         sides = []
@@ -536,7 +537,8 @@ def _steps(item: MapItem, measure: Measure, ground: Grid, notes: list[str]) -> l
             rail_centre = centre + v * side
             rail = Feature("rail", tuple(rail_centre), yaw, run / math.cos(pitch), 0.05, rise / 2 + 0.85,
                            pitch=pitch, notes=[f"handrail down {steps} steps"])
-            spots.append(Spot(rail, float(ends[0]), float(ends[0]), item.source, "handrail"))
+            spots.append(Spot(rail, float(ends[0]), float(ends[0]), item.source, "handrail",
+                              surface_of({"material": tags.get("handrail:material", "")}, "handrail")))
     if left_out:
         what = f"{len(left_out)} of {len(runs)} stretches were" if len(runs) > 1 else "it was"
         notes.append(f"steps {item.id or ''} ({item.source}): the ground does not climb like a flight, so "
@@ -702,6 +704,30 @@ def same_spot(a: Spot, b: Spot, distance: float = 0.5, length: float = 0.1, turn
     return min(d, (180 if fa.kind in ("ledge", "rail") and not fa.pitch else 360) - d) <= turn
 
 
+# OpenStreetMap's surface=* and material=* values, as the few materials a skater feels.
+SURFACES = {
+    "wood": "wood", "timber": "wood", "wooden": "wood", "plastic": "wood",
+    "metal": "metal", "steel": "metal", "iron": "metal", "aluminium": "metal", "metal_grid": "metal",
+    "concrete": "concrete", "concrete:plates": "concrete", "concrete:lanes": "concrete", "reinforced_concrete": "concrete",
+    "paving_stones": "concrete", "sett": "concrete", "unhewn_cobblestone": "concrete", "cobblestone": "concrete",
+    "stone": "stone", "granite": "stone", "marble": "stone", "sandstone": "stone", "brick": "stone", "bricks": "stone",
+    "asphalt": "asphalt", "paved": "concrete",
+    "grass": "grass", "grass_paver": "grass",
+}
+
+
+def surface_of(tags: dict[str, str], what: str) -> str | None:
+    """What a mapped spot is made of: material=* first for things (benches, walls, rails),
+    surface=* first for ground (steps, footways); None when the map doesn't say or the value is
+    not one a skater would feel."""
+    keys = ("surface", "material") if what in ("steps",) else ("material", "surface")
+    for key in keys:
+        value = (tags.get(key) or "").strip().lower()
+        if value in SURFACES:
+            return SURFACES[value]
+    return None
+
+
 def merge_sources(spots: list[Spot]) -> list[Spot]:
     """One spot for each thing mapped by both sources: OpenStreetMap's is kept, credited to both."""
     kept: list[Spot] = []
@@ -709,8 +735,10 @@ def merge_sources(spots: list[Spot]) -> list[Spot]:
         twin = next((k for k in kept if k.source != spot.source and same_spot(k, spot)), None)
         if twin is None:
             kept.append(spot)
-        elif spot.source not in twin.source.split("+"):
+            continue
+        if spot.source not in twin.source.split("+"):
             twin.source = f"{twin.source}+{spot.source}"
+        twin.surface = twin.surface or spot.surface   # Overture may carry a material OSM's copy lacks
     return kept
 
 

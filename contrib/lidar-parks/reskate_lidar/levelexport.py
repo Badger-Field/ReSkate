@@ -58,7 +58,7 @@ CREASE = {"ground": 45.0}  # degrees: split normals where neighbouring faces tur
 CREASE_DEFAULT = 30.0      # buildings and spots are boxes and wedges: sharp edges
 MATERIALS = ("ground", "concrete", "wood", "metal", "grass")
 _FROM_SURFACE = {"asphalt": "ground", "ground": "ground", "concrete": "concrete", "paving_stones": "concrete",
-                 "wood": "wood", "metal": "metal", "grass": "grass"}
+                 "stone": "concrete", "wood": "wood", "metal": "metal", "grass": "grass"}
 
 
 def material(part_extras: dict) -> str:

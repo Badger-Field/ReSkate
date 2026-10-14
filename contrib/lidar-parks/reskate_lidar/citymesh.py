@@ -244,7 +244,8 @@ def scene(model: CityModel, collision: bool = False, tile: float = 64.0):
                                      "reskate_part": "buildings"})
     grinds: list[Grind] = list(getattr(model, "grinds", []))
     for n, spot in enumerate(model.spots):
-        part_surface = "wood" if spot.what == "bench" else SURFACE.get(spot.feature.kind, "concrete")
+        part_surface = getattr(spot, "surface", None) or ("wood" if spot.what == "bench"
+                                                           else SURFACE.get(spot.feature.kind, "concrete"))
         add(spot_mesh(spot, model.origin_elevation), f"spot_{n}_{spot.feature.kind}",
             {"sk8_collision_mode": "triangle_mesh", "reskate_surface": part_surface, "reskate_part": spot.what,
              "reskate_source": spot.source})

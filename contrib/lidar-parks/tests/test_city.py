@@ -615,3 +615,22 @@ def test_weld_merges_exact_duplicates_only():
     welded_v, welded_f, fixed = levelexport.weld(v, f)
     assert fixed == {"merged_vertices": 1, "dropped_degenerate": 1, "dropped_repeated": 1}
     assert len(welded_v) == 5 and len(welded_f) == 2              # the 1e-6 neighbour stays apart
+
+
+def test_surfaces_from_the_map(tmp_path):
+    from reskate_lidar import levelexport
+    assert city.surface_of({"material": "Granite"}, "bench") == "stone"
+    assert city.surface_of({"surface": "paving_stones", "material": "wood"}, "steps") == "concrete"
+    assert city.surface_of({"surface": "paving_stones", "material": "wood"}, "bench") == "wood"
+    assert city.surface_of({"material": "recycled dreams"}, "bench") is None
+    items = synthcity.map_items()
+    for item in items:
+        if item.tags.get("amenity") == "bench":
+            item.tags["material"] = "metal"
+    model = city.build(synthcity.BOUNDS, items, synthcity.survey())
+    (bench,) = [s for s in model.spots if s.what == "bench"]
+    assert bench.surface == "metal"
+    manifest = levelexport.export(model, tmp_path / "level")
+    parts = {(o["part"], o["material"]) for t in manifest["tiles"]
+             for o in json.loads((tmp_path / "level" / t["json"]).read_text())["objects"]}
+    assert ("bench", "metal") in parts and ("bench", "wood") not in parts
