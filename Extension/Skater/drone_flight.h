@@ -93,10 +93,10 @@ inline std::atomic<bool>& armed_flag() {
 }
 inline bool armed() { return armed_flag().load(std::memory_order_acquire); }
 inline void set_armed(bool on) { armed_flag().store(on, std::memory_order_release); }
-// The drone's settings window in the overlay (UI/Overlay/drone_menu_overlay.cpp): shown while the
-// overlay is open; the X closes it and `dronemenu` brings it back.
+// `dronemenu` asks for the ReSkate menu to open on its DRONE page (UI/Overlay/drone_page.cpp);
+// the menu takes the request when it next draws.
 inline std::atomic<bool>& menu_flag() {
-    static std::atomic<bool> value{true};
+    static std::atomic<bool> value{false};
     return value;
 }
 // Asks the flight tick to put the drone back at its starting point and restart the timer and battery.
@@ -162,7 +162,7 @@ inline constexpr KnobInfo knob_info[] = {
     {"motorpitch", "Motor sound pitch. Higher sounds like a smaller drone", 0.4f, 2.5f, 1.0f},
     {"throttlecentre", "Your throttle stick springs back to the middle (gamepads): the middle hovers, up climbs, down descends", 0.0f, 1.0f, 0.0f},
     {"deadzone", "How far a stick must move before the drone reacts (0-0.3). Raise it if the drone drifts on its own", 0.0f, 0.3f, 0.03f},
-    {"goggles", "What your skater wears over their eyes while you fly: 0 = nothing, 1-8 = one of the eyewear choices in the drone window", 0.0f, 8.0f, 1.0f},
+    {"goggles", "What your skater wears over their eyes while you fly: 0 = nothing, 1-8 = one of the eyewear choices on the DRONE page", 0.0f, 8.0f, 1.0f},
     {"hideui", "Hide the game's own interface while you fly (Start flying hides it, Stop flying brings it back)", 0.0f, 1.0f, 1.0f},
 };
 inline constexpr std::size_t knob_count = std::size(knob_info);
@@ -217,7 +217,7 @@ inline bool failsafe_due(float distance, float range, float seconds_lost) {
 }
 
 // Presets: whole drones in one choice. Each sets the handling, rates, size and motor sound, and
-// the top speed (the `flyspeed` setting). The drone window applies them through the same commands
+// the top speed (the `flyspeed` setting). The DRONE page applies them through the same commands
 // a player could type, so they are saved like any other change, and shows "Custom" once one is changed.
 struct PresetValue { Knob knob; float value; };
 struct Preset {

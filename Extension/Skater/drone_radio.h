@@ -94,7 +94,7 @@ struct Sample {
 // axis that moved furthest from rest, once it has been held well over for a moment, and takes the
 // direction it moved as "plus" (throttle up, yaw right, pitch forward, roll right). The stick must
 // come back to rest before the next one. Switches are any other axis that swings across, or a
-// button that was not already down at rest. Plain maths: driven by the drone window's frames.
+// button that was not already down at rest. Plain maths: driven by the DRONE page's frames.
 class Calibration {
 public:
     enum class Step { idle, rest, throttle, yaw, pitch, roll, arm, reset, done };
@@ -237,10 +237,10 @@ private:
         }
     }
 };
-// The one setup the drone window runs. Overlay thread only; the game thread reads calibrating().
+// The one setup the DRONE page runs. Overlay thread only; the game thread reads calibrating().
 inline Calibration& calibration() { static Calibration value; return value; }
 // While the setup is on screen the game holds the drone still instead of flying it with the sticks.
-// The drone window marks each frame it shows the setup; leaving the tab or closing the menu lets
+// The DRONE page marks each frame it shows the setup; leaving the tab or closing the menu lets
 // the drone fly again within half a second, even with the setup unfinished.
 inline std::atomic<std::int64_t>& calibration_seen() { static std::atomic<std::int64_t> value{0}; return value; }
 inline std::int64_t calibration_clock() {

@@ -315,7 +315,7 @@ void draw_nametags() {
                 const auto dim = with_alpha(IM_COL32(230, 230, 230, 255), 0.85f * alpha);
                 draw->AddText(font, detail, ImVec2(distance_at.x + offset, distance_at.y + offset), shadow, distance.c_str());
                 draw->AddText(font, detail, distance_at, dim, distance.c_str());
-                // Flying the FPV drone: said above the name, unless drones are hidden (drone window, Lobby).
+                // Flying the FPV drone: said above the name, unless drones are hidden (DRONE page, LOBBY tab).
                 if (tag.flying_drone &&
                     dingosdk::drone::knobs().value[dingosdk::drone::kShowBeacons].load(std::memory_order_relaxed) >= 0.5f) {
                     const char *label = "FLYING DRONE";
