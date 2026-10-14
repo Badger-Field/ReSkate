@@ -4,6 +4,9 @@
   python -m reskate_mapbuilder raise-ground --game <dir> --mods <dir> --name zz-... \\
         --superbundle S --bundle B --resource R --parts 157,161,165 --by 1.0
 
+  python -m reskate_mapbuilder rebuild --game <dir> --mods <dir> --name zz-... \\
+        --superbundle S --bundle B --resource R [--by 1.0]
+
 raise-ground repeats the collision test proven in game with ReSkate's C++ tools: it lifts the
 named parts' shapes, recomputes their edge data over the whole resource by the rule in
 FORMAT-NOTES 2.3, zeroes their tree nodes, and writes a one-resource override mod.
@@ -15,7 +18,7 @@ import sys
 
 from .game import Game
 from .mod import ModBuilder
-from .physics import Shape, compute_edge_data, read_physics, replace_shape
+from .physics import KIND_TRIANGLE_MESH, Shape, compute_edge_data, read_physics, replace_shape, write_physics
 
 
 def _box(part, shape):
@@ -67,10 +70,30 @@ def raise_ground(args):
     print(f"wrote {root} ({len(data)} byte resource, shapes {sorted(raised)} raised {args.by} m)")
 
 
+def rebuild(args):
+    """Rewrites a whole resource with write_physics (version 2, from scratch), optionally raised."""
+    game = Game(args.game)
+    mod = ModBuilder(game, args.name, description=f"Collision test: resource rebuilt from scratch, raised {args.by} m")
+    data = mod.resource(args.superbundle, args.bundle, args.resource)
+    shapes, parts, version = read_physics(data)
+    bad = [i for i, p in enumerate(parts) if p.shape < 0 or p.kind != KIND_TRIANGLE_MESH]
+    if bad:
+        sys.exit(f"parts {bad[:10]} are not triangle meshes (kind 5); this resource cannot be rebuilt yet")
+    if any(len(s.triangles) * 3 > 0xFFFF for s in shapes):
+        sys.exit("a shape is too large to rewrite as triangles")
+    new = [Shape([(x, y + args.by, z) for x, y, z in s.vertices], s.triangles) for s in shapes]
+    compute_edge_data(new, parts)
+    out = write_physics(new, parts)
+    mod.replace_resource(args.superbundle, args.bundle, args.resource, out)
+    root = mod.write(args.mods)
+    print(f"wrote {root}: version {version} resource of {len(data)} bytes rebuilt as version 2, {len(out)} bytes, "
+          f"{len(new)} shapes, {len(parts)} parts, raised {args.by} m")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m reskate_mapbuilder")
     sub = ap.add_subparsers(dest="command", required=True)
-    for name in ("inspect", "raise-ground"):
+    for name in ("inspect", "raise-ground", "rebuild"):
         p = sub.add_parser(name)
         p.add_argument("--game", required=True, help="the game folder (holding Data/)")
         p.add_argument("--superbundle", required=True, help="path under Data/Win32 without .toc")
@@ -81,10 +104,11 @@ def main(argv=None):
         else:
             p.add_argument("--mods", required=True, help="output folder; the mod is written inside it")
             p.add_argument("--name", required=True)
-            p.add_argument("--parts", required=True, help="comma-separated part indices")
-            p.add_argument("--by", type=float, default=1.0)
+            if name == "raise-ground":
+                p.add_argument("--parts", required=True, help="comma-separated part indices")
+            p.add_argument("--by", type=float, default=1.0 if name == "raise-ground" else 0.0)
     args = ap.parse_args(argv)
-    {"inspect": inspect, "raise-ground": raise_ground}[args.command](args)
+    {"inspect": inspect, "raise-ground": raise_ground, "rebuild": rebuild}[args.command](args)
 
 
 if __name__ == "__main__":
