@@ -159,6 +159,8 @@ python -m reskate_lidar city --centre 37.7955,-122.3952 --size 160 --level emb-l
 - **Tiles:** 50 m square (`--level-tile`), matching the game's world-partition tiles.
 - **Files:** `level.json` (the manifest, grind polylines and spawn), plus one `tile_<i>_<j>.json` and `tile_<i>_<j>.bin` per tile.
   - Each object is a float32 triangle list with uint32 indices, and a material: `ground`, `concrete`, `wood`, `metal` or `grass`.
+  - Collision objects come in compact chunks of at most 256 triangles. Where chunks meet, their vertices are bit-identical.
+  - Visual objects carry `crease_degrees`, for splitting normals.
 - **Frame:** metres, x east, y up, z north, which is the frame park mods are placed in. Triangles are wound so that `(b − a) × (c − a)` points out of the surface.
 - **Spec:** the full spec is in `reskate_lidar/levelexport.py`.
 

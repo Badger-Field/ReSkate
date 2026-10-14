@@ -31,6 +31,12 @@ has triangles there is one object:
 `visual` objects are the full-detail meshes; `collision` ones the coarser copy (half-resolution
 ground, buildings as plain blocks) to build the level's collision from.
 
+Collision objects come in spatially compact chunks of at most 256 triangles (`"chunk": k` of
+`"chunks": n` for the same `name`): a collision shape keeps its counts in 16 bits. A vertex
+shared by neighbouring chunks (or tiles) has bit-identical coordinates in each, so edges can be
+matched across shapes. Visual objects are not split, and carry `"crease_degrees"`: split the
+normals where neighbouring faces turn by more than that (45 for ground, 30 for boxes).
+
 **Grinds** (in level.json): polylines along ledge and bench edges, rails and coping, with their
 surface, in the same frame."""
 from __future__ import annotations
@@ -41,7 +47,10 @@ from pathlib import Path
 import numpy as np
 
 FORMAT = "reskate-level-tiles"
-VERSION = 1
+VERSION = 2
+CHUNK_TRIANGLES = 256      # a collision shape stores its counts as u16, and is scanned whole without a tree
+CREASE = {"ground": 45.0}  # degrees: split normals where neighbouring faces turn more than this
+CREASE_DEFAULT = 30.0      # buildings and spots are boxes and wedges: sharp edges
 MATERIALS = ("ground", "concrete", "wood", "metal", "grass")
 _FROM_SURFACE = {"asphalt": "ground", "ground": "ground", "concrete": "concrete", "paving_stones": "concrete",
                  "wood": "wood", "metal": "metal", "grass": "grass"}
@@ -79,6 +88,24 @@ def _parts(model, collision: bool, tile: float):
         yield name, extras.get(name, {}), vertices, faces
 
 
+def chunks(vertices: np.ndarray, faces: np.ndarray, limit: int = CHUNK_TRIANGLES) -> list[np.ndarray]:
+    """Faces split into spatially compact groups of at most `limit`: halved at the median of
+    their centroids along the longest side, until each is small enough."""
+    out, pending = [], [np.arange(len(faces))]
+    centroids = vertices[faces].mean(axis=1)
+    while pending:
+        group = pending.pop()
+        if len(group) <= limit:
+            out.append(faces[group])
+            continue
+        c = centroids[group]
+        axis = int(np.argmax(np.ptp(c, axis=0)))
+        order = group[np.argsort(c[:, axis], kind="stable")]
+        half = len(order) // 2
+        pending += [order[half:], order[:half]]
+    return out
+
+
 def export(model, out_dir: str | Path, tile_size: float = 50.0, attribution: list[str] = (),
            origin: dict | None = None) -> dict:
     """Write the tiles and manifest; return the manifest."""
@@ -92,27 +119,37 @@ def export(model, out_dir: str | Path, tile_size: float = 50.0, attribution: lis
         for name, part_extras, vertices, faces in _parts(model, role == "collision", tile_size):
             centroids = vertices[faces].mean(axis=1)
             keys = np.floor(centroids[:, [0, 2]] / tile_size).astype(int)
-            for key in {tuple(k) for k in keys}:
+            # float32 once, for the whole part: a vertex shared by two chunks or tiles is the same bits in each.
+            vertices = vertices.astype("<f4")
+            for key in sorted({tuple(k) for k in keys}):
                 mine = faces[np.all(keys == key, axis=1)]
-                used, local = np.unique(mine, return_inverse=True)
-                tiles.setdefault(key, []).append((name, role, part_extras, vertices[used],
-                                                  local.reshape(-1, 3).astype(np.uint32)))
+                groups = chunks(vertices, mine) if role == "collision" else [mine]
+                for k, group in enumerate(groups):
+                    used, local = np.unique(group, return_inverse=True)
+                    tiles.setdefault(key, []).append((name, role, part_extras, vertices[used],
+                                                      local.reshape(-1, 3).astype(np.uint32), k, len(groups)))
     listed = []
     for (i, j), objects in sorted(tiles.items()):
         i, j = int(i), int(j)
         stem = f"tile_{i}_{j}"
         blob, described = bytearray(), []
         lo, hi = np.full(3, np.inf), np.full(3, -np.inf)
-        for name, role, part_extras, vertices, faces in objects:
+        for name, role, part_extras, vertices, faces, k, n in objects:
             v = vertices.astype("<f4")
             f = faces.astype("<u4")
             lo, hi = np.minimum(lo, v.min(axis=0)), np.maximum(hi, v.max(axis=0))
-            described.append({
+            part = part_extras.get("reskate_part", name)
+            entry = {
                 "name": name, "role": role, "material": material(part_extras),
-                "part": part_extras.get("reskate_part", name), "source": part_extras.get("reskate_source"),
+                "part": part, "source": part_extras.get("reskate_source"),
                 "vertices": {"offset": len(blob), "count": int(len(v))},
                 "indices": {"offset": len(blob) + v.nbytes, "count": int(f.size)},
-            })
+            }
+            if role == "collision":
+                entry.update(chunk=int(k), chunks=int(n))
+            else:
+                entry["crease_degrees"] = CREASE.get(part, CREASE_DEFAULT)
+            described.append(entry)
             blob += v.tobytes() + f.tobytes()
         (out / f"{stem}.bin").write_bytes(bytes(blob))
         bounds = [round(float(c), 3) for c in (*lo, *hi)]
@@ -133,7 +170,7 @@ def export(model, out_dir: str | Path, tile_size: float = 50.0, attribution: lis
         "winding": "(b - a) x (c - a) points out of the surface",
         "binary": {"vertices": "float32 x, y, z little-endian", "indices": "uint32 little-endian, per object"},
         "origin": {**(origin or {}), "elevation": float(model.origin_elevation)},
-        "tile_size": tile_size, "materials": list(MATERIALS),
+        "tile_size": tile_size, "materials": list(MATERIALS), "collision_chunk_triangles": CHUNK_TRIANGLES,
         "spawn": [round(float(c), 3) for c in from_local(spawn, model.origin_elevation)[0]],
         "grinds": grinds, "tiles": listed, "attribution": list(attribution),
     }

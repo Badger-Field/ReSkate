@@ -556,7 +556,27 @@ def test_level_tiles_for_the_map_builder(model, tmp_path):
                 assert west[:, 2].min() == pytest.approx(-20, abs=0.6) and west[:, 2].max() == pytest.approx(-5, abs=0.6)
                 assert np.ptp(west[:, 1]) == pytest.approx(12, abs=1.5)
     assert min(ground_up) > 0.99                                  # wound for this frame: ground faces up
+    # Collision: chunks of at most 256 triangles; where they meet, the vertices are the same bits.
+    collision = [(listed, obj) for listed in manifest["tiles"]
+                 for obj in json.loads((tmp_path / "level" / listed["json"]).read_text())["objects"]
+                 if obj["role"] == "collision"]
+    assert collision and max(o["indices"]["count"] // 3 for _, o in collision) <= levelexport.CHUNK_TRIANGLES
+    assert any(o["chunks"] > 1 for _, o in collision)
+    for listed, obj in collision:
+        assert 0 <= obj["chunk"] < obj["chunks"] and "crease_degrees" not in obj
+    every = []
+    for listed, obj in collision:
+        tile = json.loads((tmp_path / "level" / listed["json"]).read_text())
+        every.append(levelexport.read_object(tmp_path / "level", tile, obj)[0])
+    every = np.vstack(every)
+    exact = len(np.unique(every.view(np.uint32).reshape(-1, 3), axis=0))
+    near = len(np.unique(np.round(every.astype(np.float64), 3), axis=0))
+    assert exact == near                                          # no shared corner differs in the last bits
     assert ("ground", "ground") in materials and ("bench", "wood") in materials
+    visual = [o for listed in manifest["tiles"]
+              for o in json.loads((tmp_path / "level" / listed["json"]).read_text())["objects"] if o["role"] == "visual"]
+    assert {o["crease_degrees"] for o in visual if o["part"] == "ground"} == {45.0}
+    assert all("chunk" not in o for o in visual)
     assert manifest["grinds"] and all(len(g["points"]) >= 2 for g in manifest["grinds"])
     assert manifest["spawn"] is not None and len(manifest["spawn"]) == 3
 
