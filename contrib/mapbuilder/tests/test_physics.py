@@ -167,7 +167,8 @@ def test_version_0_layout_matches_the_base_map():
     assert struct.unpack_from("<6f", data, 0x164) == (0.0, 190.0, 0.0, 4.0, 190.0, 2.0)
     # Then the part tree's node count (P - 1) and a pointer to it, as in the base file (2, 0x2E8, 0).
     count, pointer, zero = struct.unpack_from("<3I", data, 0x17C)
-    assert (count, zero) == (2, 0) and 0x180 + pointer == len(data) - 24
+    assert (count, zero) == (2, 0) and 0x180 + pointer + 16 <= len(data) - 8
+    assert not any(data[0x180 + pointer + 16:])
     assert len(data) % 16 == 0
     # Arrays grouped by slot across shapes; vertices first, right after the box.
     assert 0x38 + 36 + struct.unpack_from("<I", data, 0x38 + 36)[0] == 0x164 + 36

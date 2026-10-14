@@ -236,6 +236,7 @@ def write_physics(shapes: list[Shape], parts: list[Part], version: int = 2, tail
         if tail is None:
             tail = bytes(8 * (len(parts) - 1)) if len(parts) >= 2 else b""
         tree = _place(out, tail, 8)
+        out += bytes(8)  # base files end with at least 8 zero bytes after the tree, then pad to 16
         out += bytes(-len(out) % 16)
         if tail:
             # The world box is followed by the part tree's node count and a pointer to it.
