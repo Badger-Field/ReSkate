@@ -239,6 +239,8 @@ python -m reskate_lidar anchor search --map bam --around 627.1 1062.8 --radius 2
 
 ### A skatepark's real shape (`--skatepark`)
 
+When an area has mapped skateparks (`leisure=skatepark`, or `sport=skateboard`), `city` lists them, with their names. It doesn't build them as spots. It prints the `--skatepark` command that takes in each one, and the report has them under `skateparks`.
+
 For a park of bowls and transitions, which the Build Kit can't make:
 
 ```

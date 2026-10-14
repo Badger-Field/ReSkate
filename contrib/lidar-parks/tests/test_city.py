@@ -634,3 +634,24 @@ def test_surfaces_from_the_map(tmp_path):
     parts = {(o["part"], o["material"]) for t in manifest["tiles"]
              for o in json.loads((tmp_path / "level" / t["json"]).read_text())["objects"]}
     assert ("bench", "metal") in parts and ("bench", "wood") not in parts
+
+
+def test_city_reports_mapped_skateparks(tmp_path, capsys):
+    write_ept(tmp_path / "ept", synthcity.survey(density=10), FRAME)
+    items = synthcity.map_items() + [mapdata.MapItem(shapely.box(20, -35, 35, -20), {"leisure": "skatepark",
+                                                                                     "name": "Corner Bowl"},
+                                                     "osm", "way/99")]
+    answer = tmp_path / "overpass.json"
+    answer.write_text(json.dumps(overpass_answer(items, FRAME)))
+    corners = FRAME.to_lonlat(np.array([synthcity.BOUNDS[:2], synthcity.BOUNDS[2:]]))
+    bbox = ",".join(f"{v:.7f}" for v in corners.ravel())
+    assert main(["city", f"--bbox={bbox}", "--lidar", str(tmp_path / "ept"), "--sources", "osm",
+                 "--overpass", str(answer), "--cache", str(tmp_path / "cache"),
+                 "--report", str(tmp_path / "report.json")]) == 0
+    out = capsys.readouterr().out
+    assert "1 skatepark mapped here" in out and "Corner Bowl" in out and "--skatepark --level" in out
+    (park_found,) = json.loads((tmp_path / "report.json").read_text())["skateparks"]
+    assert park_found["name"] == "Corner Bowl" and park_found["area"] == pytest.approx(225, rel=0.02)
+    assert park_found["size"] == 40                              # 15 m across, 10 m round it
+    lon, lat = FRAME.to_lonlat(np.array([[27.5, -27.5]]))[0]
+    assert park_found["lat"] == pytest.approx(lat, abs=1e-6) and park_found["lon"] == pytest.approx(lon, abs=1e-6)

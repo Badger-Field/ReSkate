@@ -400,7 +400,17 @@ def run_city(args) -> int:
             print(f"  Overture not reachable ({error}); going on without it", file=sys.stderr)
     if not items:
         raise ValueError("No map data for the area (see the messages above)")
+    from . import skatepark as skatepark_module
+    # Names are not kept tags (a shop or an office is someone's), but a public skatepark's is useful.
+    park_names = {i.id: i.tags.get("name") for i in items if skatepark_module.is_skatepark(i)}
     items = mapdata.localise(items, frame)
+    parks = skatepark_module.mapped_parks(items, frame, park_names)
+    if parks and not args.skatepark:
+        print(f"{len(parks)} skatepark{'s' if len(parks) > 1 else ''} mapped here: their bowls and transitions are not "
+              "built as spots. For each one's real shape, measured in the LiDAR:")
+        for found in parks:
+            print(f"  {found['name'] or 'unnamed'} ({found['area']:,.0f} m², {found['source']}): "
+                  f"city --centre {found['lat']:.7f},{found['lon']:.7f} --size {found['size']} --skatepark --level <dir>")
     lidar, survey = _city_lidar(args, bbox, frame, bounds, cache)
 
     if args.turn:
@@ -464,7 +474,8 @@ def run_city(args) -> int:
         print(f"Wrote {args.preview}")
     if args.report:
         Path(args.report).write_text(json.dumps(city_report(label, bbox, model, placements, skipped, attribution,
-                                                            mesh_info), indent=2, default=float), encoding="utf-8")
+                                                            mesh_info) | {"skateparks": parks}, indent=2,
+                                                default=float), encoding="utf-8")
         print(f"Wrote {args.report}")
     print("\n" + "\n".join(attribution))
     return 0

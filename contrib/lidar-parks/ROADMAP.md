@@ -141,6 +141,7 @@ Done since the last list:
   - Collision is split into chunks of at most 256 triangles, with bit-identical shared vertices.
   - Collision parts are welded, and degenerate and repeated triangles dropped.
   - Edges a half-edge shape can't hold are counted in `collision_checks`. The synthetic block has none.
+- **Mapped skateparks reported:** `city` lists the skateparks mapped in its area (name, size, source). For each one it prints the `--skatepark --level` command that measures its real shape. The report has them under `skateparks`. Only skateparks keep their name; other names stay dropped.
 - **Spot materials from the map:** `material=*` (benches, walls, rails) or `surface=*` (steps) set a spot's material in the mesh, the level tiles and the report. A metal bench is now metal, not the default wood. Overture's value fills in where OpenStreetMap's copy lacks one.
 - **Stairs as one solid:** the sawtooth profile extruded across the flight. Before, they were boxes sharing edges, which a half-edge collision shape can't hold. Every spot solid is closed and outward-facing (tested).
 - **Skatepark bowls as park mods.** `city --skatepark --mods …` builds each measured bowl as a ring of Build Kit quarter pipes, rising to its depth with the coping on its real coping line. Venice: 78 quarter pipes round 4 bowls (examples/).
@@ -162,7 +163,6 @@ Done since the last list:
 4. **Street-level imagery** (DATA-SOURCES.md). At Venice, Panoramax and KartaView have nothing within 100 m. Mapillary is unknown until a client token is set. Then:
    - colours and textures for level meshes;
    - checking geometry against photos.
-5. **Leisure=skatepark.** Report mapped skateparks in the area, and point to `convert` (phone scan) for their real shapes.
 
 *Paused with park mods:* skatepark bowls as quarter pipes in game, and better Build Kit stand-ins.
 

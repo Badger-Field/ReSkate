@@ -346,3 +346,25 @@ def bowl_features(park: Park, max_height: float = 2.4) -> tuple[list[Feature], l
             notes.append(f"bowl {number}: too small for quarter pipes of {height:.1f} m")
         features += kept
     return features, notes
+
+
+# ---------------------------------------------------------------- what's mapped in an area
+
+def mapped_parks(items: list[MapItem], frame, names: dict[str, str | None] | None = None) -> list[dict]:
+    """The skateparks mapped in an area (localised items), largest first: where, how big, and
+    the `city --skatepark` area that would take in each with some margin."""
+    found = []
+    for item in items:
+        if not is_skatepark(item):
+            continue
+        shape = item.geometry
+        x0, y0, x1, y1 = shape.bounds
+        centre = shape.centroid
+        lon, lat = frame.to_lonlat(np.array([[centre.x, centre.y]]))[0]
+        found.append({
+            "name": (names or {}).get(item.id) or item.tag("name") or None, "id": item.id, "source": item.source,
+            "area": round(float(shape.area), 1), "centre_local": [round(centre.x, 1), round(centre.y, 1)],
+            "lat": round(float(lat), 7), "lon": round(float(lon), 7),
+            "size": int(math.ceil((max(x1 - x0, y1 - y0) + 20) / 10) * 10),   # metres, with 10 m round it
+        })
+    return sorted(found, key=lambda p: -p["area"])
