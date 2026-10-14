@@ -164,6 +164,12 @@ File order: header, shape table, part table, array data. In the base file the ar
 by kind across shapes. Appending new arrays at the end of the file and repointing a shape's slots
 works (tested in game, section 2.5).
 
+A version-2 rewrite of a base `staticmodelgroup.physics` (version 0) crashes the game when the
+skater reaches it, even with every part record byte-identical to the base (two runs, same crash: a
+bad free in physics teardown; the ground there read 192.7, neither the old nor the new top). Keeping
+the version-0 container and appending arrays never crashed. Working theory: that loader reads the
+file as version 0 regardless of the version word. Base files must be rewritten as version 0.
+
 ### Shape record (84 bytes)
 
 | Offset | Type | Meaning |
