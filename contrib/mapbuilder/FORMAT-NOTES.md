@@ -429,6 +429,37 @@ Checked on files, from the stage 1 inventory (`inventory.md` has the full detail
 
 Nothing in this section has been written or tested.
 
+### 6.1 Registering a level (read from the base game; not yet written)
+
+A level is reachable when four things exist:
+
+1. **Its own superbundle.** In `layout.toc`, an entry `{name: "Win32/levels/game/<new>/<new>"}` in
+   the top-level `superBundles` list, and the same name in the `superbundles` list of the install
+   chunk `configurations/layout/defaultinstallpackage` (persistentIndex 0x7837152C, the chunk mods
+   already use). The matching TOC goes under `Win32/`. The base level's TOC holds 1,838 bundles,
+   most of them world-partition tiles; the 333 map ships far fewer and is the better minimum.
+2. **A level description** at `<level>/description`: a `LevelDescriptionAsset` cloned from bam's
+   with a new `LevelName` and `LevelGuid`.
+3. **An `OnDemandBundles` entry** `{BundleHash, SuperBundle}` in
+   `levels/game/dingolevel_root/dingolevel_root/description`. `BundleHash` is djb2 with xor
+   (`h = 5381; h = h * 33 ^ c`, 32-bit) over the lower-cased superbundle path:
+   `toc.bundle_hash()`, checked against all five entries in the base game.
+4. **A detached sublevel** in `levels/game/dingolevel_root/dingolevel_root_dsublevelmanager_genprefab`
+   (a `DetachedSetBlueprint`): a `DetachedSubLevelInfo` {DetachedSubLevelName, StartPoints} and a
+   `SubWorldReferenceObjectData` {BundleName, IsDetachedSubLevel true, AutoLoad false,
+   StreamRealm 3, ObjectSubVariation 0xFFFFFFFF}.
+
+**Start points.** `LevelStartPoint` has three fields: `Name`, `AutoloadSublevels` (an array of
+sub-world paths) and `IsDefault`. Bam's `DefaultStartPoint` autoloads
+`Levels/Game/BAM_LevelRoot/StartPoint_Sublevels` and `Levels/game/BAM_LevelRoot/TOD_2_Noon`; the
+333 map copies exactly that pair, borrowing bam's start-point logic and time of day.
+`StartPointEntityData` (in bam's `startpoint_schematic`) carries only `Flags` and `StartName`, and
+`StartPoint_Sublevels` is logic (console-command triggers, sub-world references), not placement.
+
+**Spawn position.** No start-point or spawn asset found carries a transform; the position comes
+from game logic. The plan is to reuse bam's `DefaultStartPoint` entry as the 333 map does and have
+ReSkate place the skater after load.
+
 ## 7. Practical notes
 
 - Ground probing with `trainer ground x z` reports the height about 5 ms after the teleport, before
