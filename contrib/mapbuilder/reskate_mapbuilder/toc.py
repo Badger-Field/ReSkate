@@ -57,6 +57,17 @@ def _lower(name: str) -> bytes:
     return bytes(b + 32 if 65 <= b <= 90 else b for b in name.encode("latin-1"))
 
 
+def bundle_hash(superbundle: str) -> int:
+    """The BundleHash an OnDemandBundle entry carries for a superbundle path.
+
+    djb2 with xor (h = h * 33 ^ c, seed 5381) over the lower-cased path,
+    matched against every entry in dingolevel_root's description."""
+    value = 5381
+    for byte in _lower(superbundle):
+        value = ((value * 33) & 0xFFFFFFFF) ^ byte
+    return value
+
+
 def perfect_hash(keys: list[bytes]) -> tuple[list[int], list[int]]:
     """Returns (map, order): slot i of the table holds keys[order[i]]."""
     size = len(keys)
