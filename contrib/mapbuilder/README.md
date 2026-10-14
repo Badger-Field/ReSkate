@@ -18,6 +18,7 @@ Control does not block it) and is tested on Linux CI.
 | Mod folder (layout, stamp, superbundle TOCs, cas) | done for resource overrides |
 | Collision (`PhysicsResource`, half-edge shapes, edge data, zero tree) | written and unit-tested; in-game check pending |
 | Visible meshes (rigid `MeshSet` and geometry chunks) | layout verified on a PC; writer next |
+| EBX document reader and writer | done, byte-identical to ReSkate's C++ (`tests/test_ebx_crosscheck.py`) |
 | Level registration, start point, world-partition tiles (EBX) | not started |
 
 What has been verified in the game so far: a mod written this way that overrides one
@@ -43,4 +44,5 @@ The format reference is `contrib/mapbuilder/FORMAT-NOTES.md`.
 
 The cross-check builds a small C++ harness from `Engine/Resource/toc.cpp`,
 `binary_bundle.cpp` and `binary_io.cpp` and compares its output with the Python port's,
-byte for byte. It is skipped when no C++20 compiler is available.
+byte for byte. The EBX cross-check does the same with `ebx_document.cpp` and `ebx_writer.cpp`
+on synthetic documents. Both are skipped when no C++20 compiler is available.
