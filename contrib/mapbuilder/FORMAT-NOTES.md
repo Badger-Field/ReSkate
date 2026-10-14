@@ -170,6 +170,14 @@ bad free in physics teardown; the ground there read 192.7, neither the old nor t
 the version-0 container and appending arrays never crashed. Working theory: that loader reads the
 file as version 0 regardless of the version word. Base files must be rewritten as version 0.
 
+Version-0 layout (read from four base files): header 0x08 = 0, 0x10 = part count, 0x14 = 1,
+0x1C = number of 44-byte entries in the 0x2C table, 0x20 = 4, and 0x24 points at the shape table
+(at 0x38; there is no mass block). The data start (0x34) holds a 36-byte block: the world box of
+the whole resource (min xyz, max xyz), the top-level part tree's node count (P - 1), a pointer to
+that tree (relative to its own position) and a zero. The shape arrays follow grouped by slot across
+shapes, each at its natural alignment; the part tree (8-byte nodes) comes last, and the file is
+padded to 16. `write_physics(version=0)` writes this form.
+
 ### Shape record (84 bytes)
 
 | Offset | Type | Meaning |

@@ -163,8 +163,11 @@ def test_version_0_layout_matches_the_base_map():
     compute_edge_data(shapes, parts)
     data = write_physics(shapes, parts, version=0)
     assert struct.unpack_from("<14I", data, 0) == (0, MAGIC, 0, 3, 3, 1, 1, 0, 4, 20, 16, 96, 92, 304)
-    # The data start holds the world box of every part's geometry, then three zeros.
-    assert struct.unpack_from("<9f", data, 0x164) == (0.0, 190.0, 0.0, 4.0, 190.0, 2.0, 0.0, 0.0, 0.0)
+    # The data start holds the world box of every part's geometry.
+    assert struct.unpack_from("<6f", data, 0x164) == (0.0, 190.0, 0.0, 4.0, 190.0, 2.0)
+    # Then the part tree's node count (P - 1) and a pointer to it, as in the base file (2, 0x2E8, 0).
+    count, pointer, zero = struct.unpack_from("<3I", data, 0x17C)
+    assert (count, zero) == (2, 0) and 0x180 + pointer == len(data) - 24
     assert len(data) % 16 == 0
     # Arrays grouped by slot across shapes; vertices first, right after the box.
     assert 0x38 + 36 + struct.unpack_from("<I", data, 0x38 + 36)[0] == 0x164 + 36

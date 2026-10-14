@@ -195,8 +195,8 @@ def write_physics(shapes: list[Shape], parts: list[Part], version: int = 2, tail
     Version 2 is the custom map's and the base props' form: a mass block at 0x38, then the
     tables, then each shape's arrays in turn. Version 0 is the base map's staticmodelgroup
     form, which its loader expects (a version-2 file there crashed the game): no mass block,
-    a world box at the data start, arrays grouped by slot across shapes, then a top-level
-    tree over the parts. `tail` replaces that tree (zeroed by default, as zeroed shape trees
+    a world box at the data start (then the part tree's node count and a pointer to it), arrays
+    grouped by slot across shapes, then that top-level tree over the parts. `tail` replaces that tree (zeroed by default, as zeroed shape trees
     work); a rewrite of a base file passes the source's own."""
     if version not in (0, 2):
         raise ValueError("version must be 0 or 2")
@@ -235,8 +235,11 @@ def write_physics(shapes: list[Shape], parts: list[Part], version: int = 2, tail
     if version == 0:
         if tail is None:
             tail = bytes(8 * (len(parts) - 1)) if len(parts) >= 2 else b""
-        _place(out, tail, 8)
+        tree = _place(out, tail, 8)
         out += bytes(-len(out) % 16)
+        if tail:
+            # The world box is followed by the part tree's node count and a pointer to it.
+            struct.pack_into("<II", out, data + 0x18, len(tail) // 8, tree - (data + 0x1C))
     struct.pack_into("<I", out, 0x34, data - 0x34)
     for p_i, part in enumerate(parts):
         rec = part_table + p_i * PART_SIZE
