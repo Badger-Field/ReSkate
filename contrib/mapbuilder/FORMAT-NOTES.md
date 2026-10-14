@@ -211,7 +211,7 @@ Two families of shape exist:
 | +0x24 | u32 | kind: 5 (6,876 parts), 3 (755), 1 (488), 2 (248), 6 (119) |
 | +0x28, +0x2C | u32, u32 | hash-like; 0x859F4B83 / 0xE6686C9C on almost everything, 0xA7324F6E / 0xE6686C9C on the mod's water areas |
 | +0x30 | float | -0.073 on every part printed |
-| +0x34 | u32 | 0 in the mod |
+| +0x34 | u32 | distinct per part in multi-part files (2, 0, 1 in a three-part base file; 2904, 3315 in another); 0 in single-part mod files. Writing 0 for every part of a three-part file crashed the game (a bad free in physics teardown), so rewrites copy it through |
 | +0x38 | u32 | shape index; 0xFFFFFFFF for kind 1 |
 | +0x3C | u32 | 0x7FFFFFFF or 0 |
 | +0x40 | u32 | packed material: bits 0-5 flags, 6-18 material slot, 19-31 property slot |
@@ -475,6 +475,15 @@ TOC. That level TOC holds 4,729 bundles (all load flag 1):
 A first level could be: root, `wproot`, one tile, plus those 42 base bundles. The vista set,
 `busstops` and `behaviors/effects_0` look optional. Not yet checked: whether the 42 point at the
 base game's own data or are rebuilt copies.
+
+Checked since: they are copies in the level's own TOC (the base superbundle's TOC is not used
+when the level loads). `startpoint_sublevels` and `tod_2_noon` keep every payload pointing at the
+base archives and only re-store a same-size manifest; `bam_coregameassets` is extended with 1,251
+of the map's own files. The map's root bundle is the level's whole shared asset pool (46,948 EBX,
+of which about 41,800 are base-game animation, audio, UI and narrative assets duplicated in;
+5,132 under `world/custom/<map>/`). `wproot` holds just a `QuadrantSubWorldData` and a
+`QuadrantDefinitionAsset`. Open question: whether the base pool must be duplicated or resolves
+from bam's bundles.
 
 ## 7. Practical notes
 

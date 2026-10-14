@@ -104,6 +104,20 @@ def test_write_read_round_trip():
     assert write_physics(back, back_parts) == data
 
 
+def test_unmodelled_part_words_are_carried_through():
+    # A rebuild that wrote 0 for +0x34 on all three parts of a base file crashed the game.
+    shapes = [grid()]
+    raw_float = struct.unpack("<f", struct.pack("<I", 0xBD957D4A))[0]
+    parts = [Part(0, (float(i), 0.0, 0.0), word_20=7 + i, float_30=raw_float, word_34=w, word_3c=5, word_44=9)
+             for i, w in enumerate((2, 0, 1))]
+    compute_edge_data(shapes, parts)
+    data = write_physics(shapes, parts)
+    _, back, _ = read_physics(data)
+    assert [(p.word_20, p.word_34, p.word_3c, p.word_44) for p in back] == [(7, 2, 5, 9), (8, 0, 5, 9), (9, 1, 5, 9)]
+    assert all(struct.pack("<f", p.float_30) == struct.pack("<I", 0xBD957D4A) for p in back)
+    assert write_physics(shapes, back) == data
+
+
 def test_empty_resource_is_132_bytes():
     assert len(write_physics([], [])) == 0x84
 

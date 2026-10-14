@@ -66,6 +66,13 @@ class Part:
     material: int = 0                   # packed: bits 0-5 flags, 6-18 material slot, 19-31 property slot
     kind: int = KIND_TRIANGLE_MESH
     hashes: tuple[int, int] = DEFAULT_PART_HASHES
+    # Words not yet understood, kept so a rewritten file carries the source's values.
+    # +0x34 differs per part in multi-part files (2, 0, 1 in one); writing 0 for all crashed the game.
+    word_20: int = 0
+    float_30: float = DEFAULT_PART_FLOAT
+    word_34: int = 0
+    word_3c: int = 0x7FFFFFFF
+    word_44: int = 2048
 
     def to_world(self, p):
         x, y, z = (c * self.scale for c in p)
@@ -200,9 +207,9 @@ def write_physics(shapes: list[Shape], parts: list[Part], align: int = 16) -> by
     struct.pack_into("<I", out, 0x34, (first_array if first_array is not None else data) - 0x34)
     for p_i, part in enumerate(parts):
         rec = part_table + p_i * PART_SIZE
-        struct.pack_into("<4f3ffIIIIfIIIII", out, rec, *part.rotation, *part.translation, part.scale, 0,
-                         part.kind, part.hashes[0], part.hashes[1], DEFAULT_PART_FLOAT, 0, part.shape,
-                         0x7FFFFFFF, part.material, 2048)
+        struct.pack_into("<4f3ffIIIIfIIIII", out, rec, *part.rotation, *part.translation, part.scale, part.word_20,
+                         part.kind, part.hashes[0], part.hashes[1], part.float_30, part.word_34, part.shape,
+                         part.word_3c, part.material, part.word_44)
     return bytes(out)
 
 
@@ -246,11 +253,11 @@ def read_physics(data: bytes) -> tuple[list[Shape], list[Part], int]:
     for p_i in range(part_count):
         rec = part_table + p_i * PART_SIZE
         fields = struct.unpack_from("<4f3ffIIIIfIIIII", data, rec)
-        # rotation 0-3, translation 4-6, scale 7, (0) 8, kind 9, hashes 10-11, float 12, (0) 13,
-        # shape 14, 15, material 16, 17
+        # rotation 0-3, translation 4-6, scale 7, word 8, kind 9, hashes 10-11, float 12, word 13,
+        # shape 14, word 15, material 16, word 17
         # An analytic primitive has no shape (index -1); it is kept so part indices match the file.
         parts.append(Part(-1 if fields[14] == 0xFFFFFFFF else fields[14], fields[4:7], fields[0:4], fields[7], fields[16], fields[9],
-                          (fields[10], fields[11])))
+                          (fields[10], fields[11]), fields[8], fields[12], fields[13], fields[15], fields[17]))
     return shapes, parts, version
 
 
