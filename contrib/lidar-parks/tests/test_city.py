@@ -523,3 +523,53 @@ def test_best_slice_finds_the_busy_strip():
     assert offset == pytest.approx(30.0) and counts[30.0] == 3
     assert counts[-30.0] == 3                                    # as many, but kerbs: the benches win
     assert [s.what for s in model.spots if city.in_slice(s, 130, 20, offset)] == ["bench"] * 3
+
+
+def test_level_tiles_for_the_map_builder(model, tmp_path):
+    from reskate_lidar import levelexport
+    manifest = levelexport.export(model, tmp_path / "level", 50.0, ["credit"], {"lat": FRAME.lat, "lon": FRAME.lon})
+    assert manifest["format"] == "reskate-level-tiles" and manifest["tile_size"] == 50.0
+    assert json.loads((tmp_path / "level" / "level.json").read_text())["tiles"] == manifest["tiles"]
+    # Every triangle of the GLB's scenes is in exactly one tile.
+    for role, collision in (("visual", False), ("collision", True)):
+        scene, _ = citymesh.scene(model, collision=collision)
+        expected = sum(len(g.faces) for g in scene.geometry.values() if hasattr(g, "faces") and len(g.faces))
+        assert sum(t["triangles"][role] for t in manifest["tiles"]) == expected
+    materials, ground_up = set(), []
+    for listed in manifest["tiles"]:
+        tile = json.loads((tmp_path / "level" / listed["json"]).read_text())
+        size = (tmp_path / "level" / tile["bin"]).stat().st_size
+        i, j = tile["tile"]
+        for obj in tile["objects"]:
+            assert obj["material"] in levelexport.MATERIALS
+            materials.add((obj["part"], obj["material"]))
+            v, f = levelexport.read_object(tmp_path / "level", tile, obj)
+            assert obj["indices"]["offset"] + f.nbytes <= size and f.max() < len(v)
+            centre = v[f].mean(axis=1)
+            assert np.all(np.floor(centre[:, 0] / 50) == i) and np.all(np.floor(centre[:, 2] / 50) == j)
+            if obj["part"] == "ground":
+                normals = np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]])
+                ground_up.append(np.mean(normals[:, 1] > 0))
+            if obj["part"] == "buildings" and obj["role"] == "collision":
+                # The building west of the square: x -38..-32, z (north) -20..-5, 12 m tall.
+                west = v[v[:, 0] < -30]
+                assert west[:, 2].min() == pytest.approx(-20, abs=0.6) and west[:, 2].max() == pytest.approx(-5, abs=0.6)
+                assert np.ptp(west[:, 1]) == pytest.approx(12, abs=1.5)
+    assert min(ground_up) > 0.99                                  # wound for this frame: ground faces up
+    assert ("ground", "ground") in materials and ("bench", "wood") in materials
+    assert manifest["grinds"] and all(len(g["points"]) >= 2 for g in manifest["grinds"])
+    assert manifest["spawn"] is not None and len(manifest["spawn"]) == 3
+
+
+def test_city_writes_level_tiles(tmp_path):
+    points = synthcity.survey(density=20)
+    write_ept(tmp_path / "ept", points, FRAME)
+    answer = tmp_path / "overpass.json"
+    answer.write_text(json.dumps(overpass_answer(synthcity.map_items(), FRAME)))
+    corners = FRAME.to_lonlat(np.array([synthcity.BOUNDS[:2], synthcity.BOUNDS[2:]]))
+    bbox = ",".join(f"{v:.7f}" for v in corners.ravel())
+    assert main(["city", f"--bbox={bbox}", "--lidar", str(tmp_path / "ept"), "--sources", "osm",
+                 "--overpass", str(answer), "--cache", str(tmp_path / "cache"), "--level", str(tmp_path / "level")]) == 0
+    manifest = json.loads((tmp_path / "level" / "level.json").read_text())
+    assert len(manifest["tiles"]) == 4                            # 80 m round the origin: 2 x 2 tiles of 50 m
+    assert "OpenStreetMap" in (tmp_path / "level" / "ATTRIBUTION.txt").read_text()

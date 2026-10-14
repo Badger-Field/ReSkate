@@ -106,6 +106,11 @@ Load **LiDAR Calibration**. Where an object doesn't fill the gap between its sti
 
 ## Real places (`city`)
 
+> **Direction:** real places will ship as **custom levels** built by ReSkate's own map builder, with real ground and collision and no third-party tools. They will not ship as Build Kit park mods.
+> - **Why:** Venice built from quarter pipes looked wrong in game, and a skater fell through the gaps between pieces.
+> - **What this tool supplies:** the level's input data, `city --level` (below).
+> - **Park mods:** `--mods` / `--park` still work, but are paused: nothing more is built on them.
+
 `city` builds a real public place from open data:
 - OpenStreetMap and Overture Maps for footprints, steps, benches, walls and public space;
 - USGS 3DEP aerial LiDAR for the ground and heights.
@@ -141,6 +146,21 @@ What it finds:
 - **Attribution:** every output carries the data's credit. Keep it when you share. See [DATA-SOURCES.md](DATA-SOURCES.md) for licences and server rules.
 - **Limits:** areas are capped at 4 km². Downloads are cached in `~/.cache/reskate-lidar`, which `--cache` changes.
 - **Plans:** what's next, and what to check in game, is in [ROADMAP.md](ROADMAP.md).
+
+### Level tiles for the map builder (`--level`)
+
+```
+python -m reskate_lidar city --centre 37.7955,-122.3952 --size 160 --level emb-level
+```
+
+- **What it writes:** the same parts as `--mesh` (ground, buildings, and skate spots as solids), in two versions:
+  - visual, at full detail;
+  - collision: half-resolution ground, with buildings as plain blocks.
+- **Tiles:** 50 m square (`--level-tile`), matching the game's world-partition tiles.
+- **Files:** `level.json` (the manifest, grind polylines and spawn), plus one `tile_<i>_<j>.json` and `tile_<i>_<j>.bin` per tile.
+  - Each object is a float32 triangle list with uint32 indices, and a material: `ground`, `concrete`, `wood`, `metal` or `grass`.
+- **Frame:** metres, x east, y up, z north, which is the frame park mods are placed in. Triangles are wound so that `(b − a) × (c − a)` points out of the surface.
+- **Spec:** the full spec is in `reskate_lidar/levelexport.py`.
 
 ### LiDAR outside the US
 

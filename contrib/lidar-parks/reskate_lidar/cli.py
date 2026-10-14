@@ -105,6 +105,9 @@ def main(argv: list[str] | None = None) -> int:
                       help="place spots at their real heights (default: each on the base map's ground)")
     city.add_argument("--turn", type=float, default=0.0, help="turn the whole place (degrees, counter-clockwise "
                                                               "seen from above: east towards north)")
+    city.add_argument("--level", metavar="DIR", help="write the place as level tiles for the map builder: "
+                                                     "triangle lists with a material per object (levelexport.py)")
+    city.add_argument("--level-tile", type=float, default=50.0, help="level tile size, metres (default 50)")
     city.add_argument("--best-slice", type=float, metavar="METRES",
                       help="slide the --size area up to this far north and south, and keep the slice with the "
                            "most skate spots")
@@ -454,6 +457,8 @@ def run_city(args) -> int:
         print(f"Wrote {mesh_info['visual']} ({mesh_info['visual_triangles']:,} triangles) and "
               f"{mesh_info['collision']} ({mesh_info['collision_triangles']:,} triangles)")
         Path(args.mesh).with_suffix(".txt").write_text("\n".join(attribution) + "\n", encoding="utf-8")
+    if args.level:
+        _write_level(args, model, bbox, attribution)
     if args.preview:
         preview.render_city(model, placements, args.preview)
         print(f"Wrote {args.preview}")
@@ -463,6 +468,18 @@ def run_city(args) -> int:
         print(f"Wrote {args.report}")
     print("\n" + "\n".join(attribution))
     return 0
+
+
+def _write_level(args, model, bbox, attribution) -> None:
+    from . import levelexport
+    if args.turn:
+        print("note: --turn turns the level too; its frame is the turned place's")
+    manifest = levelexport.export(model, args.level, args.level_tile, attribution,
+                                  {"lat": bbox.centre[0], "lon": bbox.centre[1]})
+    tris = {role: sum(t["triangles"][role] for t in manifest["tiles"]) for role in ("visual", "collision")}
+    print(f"Wrote {len(manifest['tiles'])} level tiles of {args.level_tile:g} m to {args.level} "
+          f"({tris['visual']:,} visual and {tris['collision']:,} collision triangles, {len(manifest['grinds'])} grinds)")
+    (Path(args.level) / "ATTRIBUTION.txt").write_text("\n".join(attribution) + "\n", encoding="utf-8")
 
 
 def _write_place_park(args, cat, name, placements, attribution, readme_text) -> None:
@@ -544,6 +561,8 @@ def _run_skatepark(args, label, bbox, items, lidar, survey) -> int:
         Path(args.mesh).with_suffix(".txt").write_text("\n".join(attribution) + "\n", encoding="utf-8")
     else:
         print("(no mesh written: pass --mesh park.glb)")
+    if args.level:
+        _write_level(args, model, bbox, attribution)
     if args.preview:
         preview.render_city(model, placements, args.preview)
         print(f"Wrote {args.preview}")

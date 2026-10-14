@@ -3,6 +3,14 @@
 How `reskate_lidar` turns real places into skate. spots: what works, what is next, and what needs a
 human with the game.
 
+## Direction
+
+The owner, after Venice as quarter pipes looked wrong in game and a skater fell through it: "I don't want it created in ramps in the world I think we should make the map builder".
+- **How real places will ship:** as custom levels written by ReSkate's own map builder, with real ground and collision and no third-party tools.
+  - Proven on the PC so far: reading static meshes and the collision format, packing a mod that overrides a resource, and the game accepting our changed collision.
+- **This tool's part:** the input data, `city --level` (README): 50 m tiles of triangle lists with materials, visual and collision.
+- **Build Kit park mods:** paused. They are not the way real places will ship. What exists keeps working: anchor search, the bowls as quarter pipes, `--no-scales`, `--best-slice`.
+
 ## Questions
 
 These need a human.
