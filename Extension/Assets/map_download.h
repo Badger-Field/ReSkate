@@ -9,9 +9,11 @@
 // player is asked; on yes the package is downloaded, installed into Mods and applied as a live
 // mod (live_mods.h). The session stays connected meanwhile and loads the map once it is there;
 // on no, or when the map cannot be had, the session is left.
-// Checking, confirmation, transfer, installation, applying and joining share the session's
-// local monotonic 30-minute deadline. Confirmation gets two minutes; transfers at most 27,
-// leaving three for completion. A cancelled worker drains before another attempt can begin.
+// The session waits 30 minutes on its local monotonic clock for the whole of it (checking,
+// confirmation, download, installation, applying and joining); confirmation gets two of them.
+// A download that has begun is not cut short when the session stops waiting: it finishes,
+// installs and is applied, and the player is told to join again. A cancelled worker drains
+// before another attempt can begin.
 //
 // Only maps come in this way. The package has to be listed as a map in ReSkate's Thunderstore
 // community, not deprecated and not rejected by its moderators; what is installed has to be a
