@@ -1,5 +1,6 @@
 #include "skate_menu_internal.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -188,6 +189,47 @@ void movement_controls(SkateMenu& menu, const Model& model, const CallbacksV3& c
     end_card();
     board_break_deck_card(menu, model, callbacks);
 
+    // Grind exit control (Extension/Skater/grind_exit_control.h).
+    const auto& grind = model.grind_exit;
+    const bool grind_console = grind.available && callbacks.queue_console_command;
+    begin_card(menu, "grind-exits", "GRIND EXITS", "Choose the side you pop out of a grind using LT/RT");
+    bool grind_on = grind.enabled;
+    if (toggle_row(menu, "Grind exit triggers", "Press LT or RT while grinding to pick the side you pop out to.",
+            grind_on, grind_console))
+        send_console(menu, callbacks, grind_on ? "grindexit exits on" : "grindexit exits off");
+    field(menu, "Input Mode");
+    int grind_sides = grind.toe_heel ? 0 : 1;
+    if (choice(menu, "grind-sides", grind_sides, {"Toe / Heel", "Left / Right"}, grind_console, 0.0f,
+            {"Direction is based on your skater's toe/heel side", "Direction is based on left or right of your direction of travel"}))
+        send_console(menu, callbacks, grind_sides == 0 ? "grindexit sides toeheel" : "grindexit sides travel");
+    if (grind.toe_heel) {
+        field(menu, "Your stance");
+        int grind_stance = grind.stance == 2 ? 1 : grind.stance == 1 ? 0 : -1;
+        if (choice(menu, "grind-stance", grind_stance, {"Regular", "Goofy"}, grind_console))
+            send_console(menu, callbacks, grind_stance == 1 ? "grindexit stance goofy" : "grindexit stance regular");
+        if (grind.stance == 0) warn("Pick your stance. Until then LT / RT are left / right of travel.");
+    }
+    {
+        // Sent once the slider is let go (not every frame of a drag); the dragged value shows
+        // until the setting comes back, in steps of 5.
+        static int edited = -1;
+        static double edited_at = 0;
+        int strength = edited >= 0 ? edited : grind.strength;
+        field(menu, "Pop-out strength", "How far to the side a trigger exit pops. 100% is the full exit; lower it for rails next to a wall.");
+        ImGui::BeginDisabled(!grind_console);
+        if (ImGui::SliderInt("##grind-strength", &strength, 10, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp)) {
+            edited = std::clamp((strength + 2) / 5 * 5, 10, 100);
+            edited_at = ImGui::GetTime();
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit() && edited >= 0) {
+            send_console(menu, callbacks, "grindexit strength " + std::to_string(edited));
+            edited_at = ImGui::GetTime();
+        }
+        if (edited >= 0 && !ImGui::IsItemActive() && (grind.strength == edited || ImGui::GetTime() - edited_at > 2.0)) edited = -1;
+        ImGui::EndDisabled();
+    }
+    end_card();
+
     if (fold_card(menu, "boosts", "BOOSTS", "Buttons are set in Settings > Controls")) {
     ImGui::BeginDisabled(!callbacks.queue_debug);
     field(menu, "Forward boost");
@@ -203,34 +245,44 @@ void movement_controls(SkateMenu& menu, const Model& model, const CallbacksV3& c
     if (ImGui::SliderFloat("##offboard-up-velocity", &offboard_up_velocity, 1.0f, 25.0f, "+%.1f", ImGuiSliderFlags_AlwaysClamp))
         debug_request(menu, callbacks, {DebugAction::set_offboard_up_velocity_speed, false, offboard_up_velocity});
     ImGui::EndDisabled();
+    bool revert_boost = debug.revert_boost;
+    if (toggle_row(menu, "Revert Boost", "Speed boost when you land an auto revert or a board bend. Clean 180s get nothing.",
+            revert_boost, callbacks.queue_debug != nullptr))
+        debug_request(menu, callbacks, {DebugAction::set_revert_boost_enabled, revert_boost});
+    ImGui::BeginDisabled(!callbacks.queue_debug || !debug.revert_boost);
+    field(menu, "Revert Boost strength", "Auto reverts add 1.5 m/s and board bends 2 to 2.6 m/s, times this.");
+    float revert_speed = debug.revert_boost_speed;
+    if (ImGui::SliderFloat("##revert-boost-speed", &revert_speed, 0.5f, 5.0f, "x%.1f", ImGuiSliderFlags_AlwaysClamp))
+        debug_request(menu, callbacks, {DebugAction::set_revert_boost_speed, false, revert_speed});
+    ImGui::EndDisabled();
+    note("Dark Pop is on PHYSICS > TUNE > TRICKLINING.");
     note("Controller: left stick moves, right stick looks, RT / LT rise and fall, click the left stick to boost.");
     note("Keyboard: WASD / Q E, Shift to boost. Close the menu to fly.");
     }
     end_card();
 }
 
-// Dark Pop (Extension/Skater/no_bail.cpp, input_capture.cpp): shown with the tricklining tools on PHYSICS > TUNE > TRICKLINING.
+// Dark Pop (Extension/Skater/no_bail.cpp): shown with the tricklining tools on PHYSICS > TUNE > TRICKLINING.
+// Dark Pop 3.0 (Sivaes/darkpop): the pre-0.32.0 dark pop put back through the game's own sink-and-pop state. One switch;
+// everything that tested out is on by default. Not the auto-release version 0.5.0 shipped (which timed a D-pad Right
+// release through XInput and could not act when another XInput hook, such as Steam's overlay, answered first).
 void dark_pop_controls(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) {
     const auto& debug = model.debug;
-    if (fold_card(menu, "dark-pop", "DARK POP", "Catch with RB, then D-pad Right in the air")) {
+    if (fold_card(menu, "dark-pop", "DARK POP", "Catch a flip dark, press a D-pad direction in the air, land it dark")) {
     bool dark_pop = debug.dark_pop;
-    if (toggle_row(menu, "Dark Pop", "Catch your trick with RB, then press D-pad Right in the air and hold it or let go: the game sees it held and let go at the time set above, counted from your takeoff. D-pad Right without RB is left alone. From the press until the pop lands, bails are held off, and a landing the game would bail becomes the pop. Best on flat ground.",
+    if (toggle_row(menu, "Dark Pop", "The pre-0.32.0 dark pop, back: catch a flip trick dark (board upside down), press D-pad Left, Down or Right in the air and land it still dark. The body sinks into the ground and is thrown back up, about 8 m/s, and the flight is a normal one: tricks, camera, landing. Any trick, any height, 180s included. Turn the board back over before landing and you land normally. Play with Dark Catch Assist off, Legacy Dark Catches on; No Bail can stay off. Known: a landing caught exactly flat (board up -1.00 in the log) sometimes stays dark in the air and bails.",
             dark_pop, callbacks.queue_debug != nullptr))
         debug_request(menu, callbacks, {DebugAction::set_dark_pop_enabled, dark_pop});
-    field(menu, "Dark Pop release");
-    float dark_release = debug.dark_pop_release;
-    if (ImGui::SliderFloat("##dark-pop-release", &dark_release, 0.55f, 0.90f, "%.3f s after takeoff", ImGuiSliderFlags_AlwaysClamp))
-        debug_request(menu, callbacks, {DebugAction::set_dark_pop_release, false, dark_release});
-    field(menu, "Dark Pop extra pop");
-    float dark_strength = debug.dark_pop_strength;
-    if (ImGui::SliderFloat("##dark-pop-strength", &dark_strength, 0.0f, 25.0f, "+%.1f m/s", ImGuiSliderFlags_AlwaysClamp))
-        debug_request(menu, callbacks, {DebugAction::set_dark_pop_strength, false, dark_strength});
+    bool hide_dpad = debug.dark_pop_hide_dpad;
+    if (toggle_row(menu, "Hide the D-pad from the game in the air", "While you are in the air the game's own controller reads see D-pad Left, Down and Right let go (Dark Pop still sees them), and a press held through the landing stays hidden until you let go. So D-pad Right never opens the Quick Drop radial, and in keyboard/mouse mode the radial's release can't pick the object browser. On the ground the D-pad works as normal.",
+            hide_dpad, callbacks.queue_debug != nullptr))
+        debug_request(menu, callbacks, {DebugAction::set_dark_pop_hide_dpad, hide_dpad});
     bool probe = debug.probe;
     if (toggle_row(menu, "Dark pop probe", "Records what the game does to two files in the logs folder named dark-pop-probe-<time>.csv and dark-pop-fast-<time>.csv. A new pair is made each time you switch it on. Turn it on, do your attempts, turn it off, and send both files.",
             probe, callbacks.queue_debug != nullptr))
         debug_request(menu, callbacks, {DebugAction::set_probe_enabled, probe});
-    note("Start with the release at 0.60 to 0.68 s: on a flat kickflip the default 0.715 s is later than the landing and does nothing.");
-    note("Needs an Xbox-style (XInput) controller: the game reads a PlayStation controller another way, which this cannot reach unless Steam Input presents it as an Xbox one.");
+    note("Each dark landing and each pop's landing are written to logs\\ReSkate.log (lines starting \"Dark Pop:\").");
+    note("Works with any controller the game reads (Xbox or PlayStation): nothing is sent through XInput.");
     }
     end_card();
 }

@@ -41,6 +41,7 @@ struct Hooked {
     bool ollie_known{};
     std::atomic<std::uint32_t> launch_trick{0xff}; // CurrentFlipTrick as the trainer read it last tick
     std::atomic<std::uintptr_t> trick_at{};        // where the game keeps that number (0: not known)
+    std::atomic<TrajectoryModifier> modifier{};
     std::array<std::atomic<float>, 64> flip_launch{}; // least upward launch speed by trick, m/s; 0: the game's own
     // The last few launches, for the trainer's log line: written by the physics thread, read
     // by the client tick.
@@ -112,6 +113,15 @@ void raise_step() noexcept {
 void set_trajectory_hook(std::uintptr_t trajectory, float *parameters) {
     auto &h = hooked();
     const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - h.base;
+    if (const auto modifier = h.modifier.load(std::memory_order_acquire); modifier && parameters) {
+        float velocity[3]{parameters[velocity_y - 1], parameters[velocity_y], parameters[velocity_y + 1]};
+        modifier(caller - 5, trajectory, velocity);
+        if (std::isfinite(velocity[0]) && std::isfinite(velocity[1]) && std::isfinite(velocity[2])) {
+            parameters[velocity_y - 1] = velocity[0];
+            parameters[velocity_y] = velocity[1];
+            parameters[velocity_y + 1] = velocity[2];
+        }
+    }
     const auto trick_then = h.launch_trick.load(std::memory_order_relaxed), trick_live = live_trick(h.trick_at.load(std::memory_order_relaxed));
     if (parameters && (caller == no_comply_call + 5 || caller == boneless_call + 5)) {
         const auto watch = watched_physics_state(); // the local skater's
@@ -283,6 +293,42 @@ bool set_foot_gravity(float factor) noexcept {
     return true;
 }
 float foot_gravity_in_force() noexcept { return gravity_now.load(std::memory_order_relaxed); }
+// The speed limit on foot. The game cuts a walking skater's speed along the ground to one number of its own (10 m/s),
+// read by that code alone (FollowGround, 0x48318a0); the walkable slope angles 60, 55 and 75 follow it, which is how it
+// is recognised. Measured (2026-10-13): sprint speed 13 ran at 10.0 m/s with the game's own limit.
+namespace {
+constexpr std::uintptr_t foot_speed_cap = 0x65e8238;
+constexpr float foot_speed_cap_stock = 10.0f;
+std::atomic<int> cap_known{};
+std::atomic<float> cap_now{foot_speed_cap_stock};
+} // namespace
+bool set_foot_speed_cap(float metres_per_second) noexcept {
+    const auto base = hooked().base;
+    if (!base) return false;
+    if (!std::isfinite(metres_per_second) || metres_per_second < foot_speed_cap_stock) metres_per_second = foot_speed_cap_stock;
+    metres_per_second = std::min(metres_per_second, 1000.0f);
+    int known = cap_known.load(std::memory_order_relaxed);
+    if (known == 0) {
+        float value[4]{};
+        known = read_constant(base + foot_speed_cap, value[0]) && read_constant(base + foot_speed_cap + 4, value[1]) && read_constant(base + foot_speed_cap + 8, value[2]) &&
+                read_constant(base + foot_speed_cap + 12, value[3]) && value[0] == foot_speed_cap_stock && value[1] == 60.0f && value[2] == 55.0f && value[3] == 75.0f ? 1 : -1;
+        cap_known.store(known, std::memory_order_relaxed);
+    }
+    if (known < 0) return false;
+    if (cap_now.load(std::memory_order_relaxed) == metres_per_second) return true;
+    DWORD old{};
+    const auto at = base + foot_speed_cap;
+    if (!VirtualProtect(reinterpret_cast<void *>(at), sizeof(float), PAGE_READWRITE, &old)) return false;
+    bool done = false;
+    __try {
+        *reinterpret_cast<float *>(at) = metres_per_second;
+        done = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    DWORD again{};
+    VirtualProtect(reinterpret_cast<void *>(at), sizeof(float), old, &again);
+    if (done) cap_now.store(metres_per_second, std::memory_order_relaxed);
+    return done;
+}
 void set_trick_heights(float no_comply, float boneless) noexcept {
     const auto speed = [](float height) { return std::isfinite(height) && height > 0 ? std::sqrt(std::min(height, 1.0e6f)) : 1.0f; };
     hooked().no_comply.store(speed(no_comply), std::memory_order_relaxed);
@@ -348,5 +394,8 @@ bool take_trick_launch(TrickLaunch &out) noexcept {
     std::memcpy(&out.up_speed, &bits[0], 4);
     std::memcpy(&out.factor, &bits[1], 4);
     return true;
+}
+void set_trajectory_modifier(TrajectoryModifier modifier) noexcept {
+    hooked().modifier.store(modifier, std::memory_order_release);
 }
 } // namespace dingosdk::trainer

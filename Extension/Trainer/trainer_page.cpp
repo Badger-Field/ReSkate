@@ -1,5 +1,6 @@
 #include "trainer_page.h"
 #include "trainer.h"
+#include "trainer_classes.h"
 #include "Extension/UI/Overlay/skate_menu_internal.h"
 #include "Extension/UI/skate_theme.h"
 #include <algorithm>
@@ -1811,41 +1812,21 @@ void transition_section(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, 
                "pumping. It is found in the game about 15 seconds after a level loads.");
     if (view.pump_blocked) ImGui::TextDisabled("Off in this multiplayer game: the host's rules apply here.");
     else if (view.pump_power != 1.0f && !view.pump_live) ImGui::TextDisabled("Finding the game's pumping in memory: it acts about 15 seconds after a level loads.");
-    note("GAME SETTINGS: the next three rows are your game's own settings, the same ones its Settings menu shows. Changing one here changes it there, "
-         "and the other way round. They are yours, not the trainer's: no preset carries them, no reset touches them and they never count as MODIFIED.");
+    note("GAME SETTINGS: the next three rows are your game's own settings, shown here as the game holds them. The trainer never changes them: "
+         "change them in the game's own Settings menu. No preset carries them, no reset touches them and they never count as MODIFIED.");
     // The game's own options: the same values its Settings menu holds, changed from either place.
     ImGui::EndDisabled(); // these are the player's own game settings: theirs to change in any session
     for (std::size_t i = 0; i < trainer::transition_options.size(); ++i) {
         const auto &one = trainer::transition_options[i];
         const std::string label(one.label), help = std::string(one.help) + " GAME SETTING (" + std::string(one.setting) +
-                                                   "): this is your game's own setting. The game's Settings menu shows the same value, changing it here "
-                                                   "changes it there, and it is not part of presets, resets or the STOCK badge.";
+                                                   "): this is your game's own setting, shown as the game holds it. The trainer does not change it: use "
+                                                   "the game's Settings menu. It is not part of presets, resets or the STOCK badge.";
         ImGui::PushID(static_cast<int>(400 + i));
         field(menu, label.c_str());
-        if (one.boolean) {
-            bool on = view.tr_option[i] != 0;
-            if (ImGui::Checkbox("##on", &on)) trainer_command(menu, callbacks, std::format("transition {} {}", one.key, on ? "on" : "off"));
-            tip(help.c_str());
-        } else {
-            const auto key = std::string("transition-option:") + std::string(one.key);
-            int shown = p.active == key ? static_cast<int>(p.active_value) : view.tr_option[i];
-            ImGui::SetNextItemWidth(std::max(px(70), ImGui::GetContentRegionAvail().x - px(64) - px(104) - ImGui::GetStyle().ItemSpacing.x * 2));
-            ImGui::SliderInt("##value", &shown, one.low, one.high);
-            if (ImGui::IsItemActive()) {
-                p.active = key;
-                p.active_value = shown;
-            } else if (p.active == key && (shown == view.tr_option[i] || !ImGui::IsItemDeactivatedAfterEdit())) {
-                p.active.clear();
-            }
-            // Written once, when the slider is let go: every write is a write to the player's profile.
-            if (ImGui::IsItemDeactivatedAfterEdit()) trainer_command(menu, callbacks, std::format("transition {} {}", one.key, shown));
-            if (ImGui::IsItemHovered()) wrapped_tooltip("%s", help.c_str());
-            ImGui::SameLine();
-            int typed = view.tr_option[i];
-            ImGui::SetNextItemWidth(px(64));
-            if (ImGui::InputInt("##typed", &typed, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) trainer_command(menu, callbacks, std::format("transition {} {}", one.key, typed));
-            if (ImGui::IsItemHovered()) wrapped_tooltip("%s", "Type a number and press Enter.");
-        }
+        // Shown only: the trainer never writes the player's own game settings.
+        if (one.boolean) ImGui::TextUnformatted(view.tr_option[i] != 0 ? "On" : "Off");
+        else ImGui::Text("%d", view.tr_option[i]);
+        if (ImGui::IsItemHovered()) wrapped_tooltip("%s", help.c_str());
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "GAME SETTING");
         if (ImGui::IsItemHovered()) wrapped_tooltip("%s", help.c_str());
@@ -2035,6 +2016,15 @@ void trainer_page(SkateMenu &menu, const Model &model, const CallbacksV3 &callba
     if (ImGui::IsItemHovered())
         wrapped_tooltip("%s", "STOCK means nothing here is changing how the game plays. Your game's own settings (the rows marked GAME SETTING) are yours and never "
                               "count; a locked value that is still the game's own does not count either. Open TUNE: every section that holds a change says so on its bar.");
+    // The search for the game's tuning values reads all of the game's memory on a thread of its own: values set meanwhile
+    // reach the game when it ends, and on a machine short of memory the game can stutter while it runs.
+    if (const auto ms = trainer::class_search_ms()) {
+        ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1.0f), "Finding the game's tuning values... %llu s", static_cast<unsigned long long>(ms / 1000));
+        if (ImGui::IsItemHovered())
+            wrapped_tooltip("%s", "The trainer is reading the game's memory for the numbers it changes (after a level loads, a respawn or a new "
+                                  "setting). Changes you make meanwhile reach the game when it is done. It usually takes seconds; when the PC is "
+                                  "short of free memory it can take minutes and the game may stutter until it ends.");
+    }
     if (view->ready) preset_row(menu, callbacks, p, *view);
     // `preset export` leaves its line here; the clipboard belongs to this thread.
     if (!p.share_seen) {

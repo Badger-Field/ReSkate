@@ -1,5 +1,88 @@
 # Changelog
 
+## v0.7.0 - 2026-10-14 (not released yet)
+
+Built on ReSkate 2.0.9. Measured headlessly on San Vansterdam, 2026-10-13 and 14. Not played by a person yet.
+
+**Install in a new, empty folder.** From ReSkate 2.0.9 on, the launcher refuses to start from Steam's skate. folder: put
+`ReSkateLauncher.exe` and `ReSkate.dll` in a folder of their own (for example `C:\Games\ReSkate`). The first start installs
+the supported game build there (sign in to Steam when asked); later starts only check it.
+
+### Fixed
+
+- **The trainer no longer changes your game's own settings.** Its three GAME SETTINGS rows (pump assist, pumping
+  strength, forward to push) wrote a second copy of the setting into the profile, beside the one the game's Settings
+  menu keeps, and the game's scripts read that copy: what you set in the game could be overruled by the trainer's.
+  They now only show the game's value; change them in the game's Settings menu. `trainer transition pumpassist`
+  (and the other two) only reads.
+- **Dark Pop is Dark Pop 3.1** (Sivaes/darkpop, GPL-3.0; the trainer had carried the abandoned 0.4-era "auto release",
+  which could not act at all when Steam's overlay answered the controller first). It arms a flight on a real D-pad
+  press (Left, Down or Right) with the board upside down, routes the landing through the game's own sink state and
+  keeps it from bailing. While the skater is in the air the game's own controller reads see the D-pad let go, so
+  skate.'s Quick Drop radial no longer opens and takes the landing; this now also covers the read Steam's overlay
+  answers first. One switch under TRICKLINING > DARK POP, saved in the local profile like No Bail: on and off both (3.1 saved only the on, so turning it off did not stick and it came back on by itself). `darkpoprelease` and
+  `darkpopextra` are gone.
+- **Revert Boost 2.0** (Sivaes) under MOVEMENT > BOOSTS, off by default, with its own strength. It is a second
+  implementation of the board bending boost: use it or TRICKLINING's "Board bending boost", not both.
+- **Flip speed now changes late flips** (a flick in the air after the pop; reported by a player). While a late flip
+  runs, the game sets its speed on every update to the flick's speed held between 0.6 and 1, so the trainer's flip
+  speed never reached it (measured: x0.5, x1 and x2 all turned a late kickflip about 260 degrees at 1155 degrees/s).
+  The trainer now scales those two ends by the flip speed and the per-trick **Late flip** speed, which until now did
+  nothing (the game logs a late flip as a plain Kickflip or Heelflip). Played by the owner: late flips worked.
+  New under EVERYTHING: **Late flip start / Start After** (how long into the air before a late flip may start,
+  0.25 s) and **Late flip buffer / Flick Held** (how long a flick in the air is remembered, 0.13 s).
+- **The search for the game's values is faster and shows in the panel.** It walked all of the game's memory five
+  times and checked every word against each of the game states it looks for; it now walks it once (twice on the
+  first search) and skips words that start none of them. While it runs, the panel says "Finding the game's tuning
+  values..." with its time: changes made meanwhile reach the game when it ends.
+
+### New
+
+- **Wallies.** The game ships with its wallie switched off. POP AND TRICKS now has **Wallie: Wallies** (the
+  game's own switch): ride at a kerb, ledge or wall and pop just before it. Off: no wallie in 4 tries; on: every
+  time. With it come the numbers the game hard-codes in its wallie script:
+  - how early the pop may come on a tall obstacle (18 frames; at 120 a pop half a second early still wallies),
+  - extra pop per metre of obstacle and the most extra pop (x3: 11.2 m/s upward against 7.0),
+  - the lowest obstacle that adds pop, and the fastest speed a wallie works at (11 m/s; at 3 none went at 5.3 m/s),
+  - how early the pop may come on kerbs and steps (16 frames; at 120 a pop well before a building's steps wallied 2 of 2,
+    the game's own 0 of 3),
+  - the lowest obstacle it looks at (0.225 m; at 0.6 those steps no longer wallie),
+  - the forward push as it climbs (-0.2 m/s; at 3 the skater went over at 5.7 m/s against 4.2, at -6 it stalled to 1.7),
+  - **Wallie needs a quick ollie** (the game's switch; on, a normal ollie no longer wallies).
+  Dials: Big Wallies, Wallie At Speed, Easy Wallies.
+- **Double and triple jump on foot** (ON FOOT, the game's own switch "flying"). Press jump again right as you
+  land: 0.82 m, then 1.42 m, then 3.11 m. The game's own gives 0.82 m each time.
+- **Flips and spins on foot have real speed rows.** Jump, hold LT or RT (tuck) and push the left stick: forward
+  or back flips, sideways spins. The limits are numbers in the game's scripts. Fast Foot Flips x2: 1,646 deg
+  against 724; Fast Foot Spins x2: 890 against 598.
+- **No speed limit on foot.** The game cuts speed on foot to 10 m/s. The cut now rises with the sprint speed you
+  ask for: sprint speed 13 runs 13.2 m/s, 20 runs 20.1 (before: 10.0). At the game's own values nothing changes.
+- **Jump height on foot raises its own caps.** "On foot: jump height" moves the highest and lowest jump with it
+  (3 m alone rose 1.32 m before, 3.19 m now).
+- **Jump on release** (ON FOOT, the game's own switch): the jump goes when you let go of the button. Held 3 s, the jump
+  came 3 s later and went as high (0.89 m).
+- **Wipeout bounce** (ON FOOT, the game's own switch): a slam bounces and slides on. A 30 m drop slid 10 m, against
+  half a metre.
+- `trainer foot [<switch>|all game|off|on]`: 29 of the game's own hidden switches for moves on foot and on the
+  board (tackle, grab and throw, rope swinging, auto mantles, wallrun from a sprint, curb hops ...). Only the five
+  measured ones have a row in the menu. Careful with `foot nogetups on`: after a slam the skater stays down until it
+  goes back to `game`.
+
+### Removed (they changed nothing when measured)
+
+- **Landing: leg length** and the **Deep Landings** dial: the value belongs to footplants, the game never read it
+  in 30 landings and the crouch was the same at 0.3, 0.92 and 1.5.
+- **On foot: flip rotation speed** (replaced by the rows above), **jump speed limit**, **steering in the air**,
+  **sprint boost speed**, **roll speed** and **roll speed gain** (a roll stays at 7.5 m/s whatever they are).
+  They are still under EVERYTHING. Moon Jump and Fast On Foot lost those parts; Fast On Foot now really runs
+  11.7 m/s.
+
+### Not measured
+
+- Glide, torpedo, falling and wallrun rows: the scripted pad never got into those moves.
+- Wallrides; the straight-on wallie window; the side jump, trick and flip speeds of a wallie; kerb hops.
+- Mantles and wallruns from a sprint (no wall that stayed put was found), Splat (no change on a 30 m drop).
+
 ## v0.6.0 - 2026-10-12
 
 Built on ReSkate 2.0.7.

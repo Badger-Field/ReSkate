@@ -94,6 +94,8 @@ struct Found {
     bool ready{};
     std::atomic<bool> searching{};
     std::atomic<std::uint64_t> searches{};
+    std::atomic<std::uint64_t> search_started{}; // GetTickCount64 when the running search began
+    std::uintptr_t curve_type{};                 // the first eight bytes of any FloatCurve, once known
     bool dirty{};
 };
 Found &found() {
@@ -266,10 +268,10 @@ bool read_curve(std::uintptr_t curve, std::uint32_t count, float x0, float y0, F
 // OllieSpeedToFlipSpeed, two flick sensitivity curves. As they ship: the first runs
 // (0, 0.4)..(0.9, 1.4) on three points, the second starts at (0.35, 0.65), the fifth at
 // (0, 0.05), the sixth is flat at 1.
-std::vector<FlipCurve> find_flip_curves(std::uintptr_t curve_type) {
+// `objects`: every FloatCurve in memory (collect_typed).
+std::vector<FlipCurve> find_flip_curves(std::vector<std::uintptr_t> objects) {
     std::vector<FlipCurve> result;
-    std::vector<std::uintptr_t> objects, runs;
-    each_region([&](std::uintptr_t start, std::size_t size) { collect_typed(start, size, curve_type, objects); });
+    std::vector<std::uintptr_t> runs;
     std::ranges::sort(objects);
     if (objects.size() < 8) return result;
     each_region([&](std::uintptr_t start, std::size_t size) { collect_eights(start, size, objects, runs); });
@@ -356,14 +358,22 @@ DWORD WINAPI search(void *) noexcept {
         MirrorCopies fresh_mirrors;
         const auto started = GetTickCount64();
         std::size_t bytes{};
+        // One walk over memory for everything that can be looked for at once: under memory pressure each walk
+        // pages the whole game back in, and there were five.
+        std::vector<std::uintptr_t> gates, curve_objects;
+        const auto curve_type_known = f.curve_type; // only this thread writes it
         MEMORY_BASIC_INFORMATION info{};
         for (std::uintptr_t at = 0x10000; at < 0x7fffffff0000ull && VirtualQuery(reinterpret_cast<void *>(at), &info, sizeof(info)) == sizeof(info);
              at = reinterpret_cast<std::uintptr_t>(info.BaseAddress) + info.RegionSize) {
             if (info.State != MEM_COMMIT || info.Protect != PAGE_READWRITE || info.Type == MEM_IMAGE) continue;
-            search_region(reinterpret_cast<std::uintptr_t>(info.BaseAddress), info.RegionSize, anchors, filter, fresh, fresh_mirrors, f.mirror_fields,
-                          stock.data());
+            const auto start = reinterpret_cast<std::uintptr_t>(info.BaseAddress);
+            search_region(start, info.RegionSize, anchors, filter, fresh, fresh_mirrors, f.mirror_fields, stock.data());
+            find_state_objects(start, info.RegionSize); // the flip states' objects (trainer_gamestate.cpp)
+            collect_gates(start, info.RegionSize, gates);
+            if (curve_type_known) collect_typed(start, info.RegionSize, curve_type_known, curve_objects);
             bytes += info.RegionSize;
         }
+        const auto scanned = GetTickCount64();
         std::size_t classes{}, copies{}, native{};
         {
             std::lock_guard lock(f.mutex);
@@ -417,6 +427,11 @@ DWORD WINAPI search(void *) noexcept {
             std::uintptr_t curve{};
             if (push_copy && peek(push_copy + 0x10, curve) && curve) (void)peek(curve, curve_type);
         }
+        if (curve_type && curve_type != curve_type_known) {
+            curve_objects.clear(); // first search, or the type moved: one more walk for the curves
+            each_region([&](std::uintptr_t start, std::size_t size) { collect_typed(start, size, curve_type, curve_objects); });
+        }
+        if (curve_type) f.curve_type = curve_type;
         if (curve_type) {
             bool have;
             {
@@ -427,7 +442,7 @@ DWORD WINAPI search(void *) noexcept {
             // still hold what was written. Fresh ones (the game builds new ones with a new skater)
             // hold the game's own outputs and are brought level.
             (void)have;
-            auto curves = find_flip_curves(curve_type);
+            auto curves = find_flip_curves(std::move(curve_objects));
             std::lock_guard lock(f.mutex);
             std::erase_if(f.flip, [&](const FlipCurve &curve) {
                 float y{};
@@ -444,12 +459,8 @@ DWORD WINAPI search(void *) noexcept {
             flip_found = f.flip.size();
             f.dirty = true;
         }
-        // The flip states' objects (trainer_gamestate.cpp): the flip speed is driven through them.
-        each_region([](std::uintptr_t start, std::size_t size) { find_state_objects(start, size); });
         std::size_t gates_found{};
         {
-            std::vector<std::uintptr_t> gates;
-            each_region([&](std::uintptr_t start, std::size_t size) { collect_gates(start, size, gates); });
             std::lock_guard lock(f.mutex);
             // One already known may hold a number of the trainer's own that a search does not look for.
             for (const auto known : f.gates)
@@ -458,8 +469,9 @@ DWORD WINAPI search(void *) noexcept {
             gates_found = f.gates.size();
         }
         logging::write(logging::Level::info, logging::Channel::skater,
-                       std::format("Trainer: found {} of {} game tuning classes ({} copies, {} native), {} flip trick speed curves, {} flip landing limit and the flip states{} in {} MB, {} ms.",
-                                   classes, class_count, copies, native, flip_found, gates_found, flip_states_found() ? "" : " (not found)", bytes >> 20, GetTickCount64() - started));
+                       std::format("Trainer: found {} of {} game tuning classes ({} copies, {} native), {} flip trick speed curves, {} flip landing limit and the flip states{} in {} MB, {} ms ({} ms the walk over memory).",
+                                   classes, class_count, copies, native, flip_found, gates_found, flip_states_found() ? "" : " (not found)", bytes >> 20, GetTickCount64() - started,
+                                   scanned - started));
     } catch (...) {}
     f.searches.fetch_add(1, std::memory_order_release);
     f.searching.store(false, std::memory_order_release);
@@ -572,6 +584,7 @@ namespace {
 void find_classes() noexcept {
     auto &f = found();
     if (f.searching.exchange(true, std::memory_order_acq_rel)) return;
+    f.search_started.store(GetTickCount64(), std::memory_order_release);
     const auto thread = CreateThread(nullptr, 0, search, nullptr, 0, nullptr);
     if (thread) {
         SetThreadPriority(thread, THREAD_PRIORITY_BELOW_NORMAL);
@@ -581,6 +594,11 @@ void find_classes() noexcept {
     }
 }
 bool finding_classes() noexcept { return found().searching.load(std::memory_order_acquire); }
+std::uint64_t class_search_ms() noexcept {
+    auto &f = found();
+    if (!f.searching.load(std::memory_order_acquire)) return 0;
+    return GetTickCount64() - f.search_started.load(std::memory_order_acquire) + 1;
+}
 std::uint64_t class_searches() noexcept { return found().searches.load(std::memory_order_acquire); }
 std::uint64_t class_search_found() noexcept {
     auto &f = found();
@@ -619,6 +637,20 @@ void want_class_value(std::size_t field, float value) noexcept {
         f.wanted[field] = value;
         f.dirty = true;
     }
+}
+float class_value_wanted(const char *key, const char *field) noexcept {
+    for (std::size_t c = 0; c < class_count; ++c) {
+        if (_stricmp(class_specs[c].key, key) != 0) continue;
+        for (std::size_t i = 0; i < class_specs[c].count; ++i) {
+            const auto index = class_specs[c].first + i;
+            if (_stricmp(class_fields[index].name, field) != 0) continue;
+            auto &f = found();
+            std::lock_guard lock(f.mutex);
+            const float wanted = f.wanted[index];
+            return wanted == wanted ? wanted : class_fields[index].stock;
+        }
+    }
+    return 0;
 }
 bool classes_wanted() noexcept {
     auto &f = found();

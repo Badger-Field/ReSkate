@@ -20,6 +20,9 @@ void set_manual_pop(float height, std::int32_t intent) noexcept;
 // one, or it could not be written. (In the air on the board: set_air_gravity, client_source_spawn.h.)
 bool set_foot_gravity(float factor) noexcept;
 float foot_gravity_in_force() noexcept;
+// The fastest the game lets a skater on foot move along the ground (10 m/s its own). False while this game build's
+// number is not where it is known to be.
+bool set_foot_speed_cap(float metres_per_second) noexcept;
 
 // The pop out of a grind or slide: the part of its launch that goes sideways off the edge is multiplied by `side`
 // (1: the game's own). `travel_x/z` is the skater's velocity along the ground this tick and `grinding` whether it is on
@@ -42,4 +45,11 @@ bool raise_flight(float up, float &was, float &time) noexcept;
 int take_flight_raise() noexcept;
 // The scripted launches since the last call, oldest first; false when there are none.
 bool take_trick_launch(TrickLaunch &out) noexcept;
+// The grind exit control (Extension/Skater/grind_exit_control.h): may change the launch velocity
+// (x, y, z at parameters + 0x80) of any call of the game's jump-trajectory setter before the game
+// uses it, given the caller's address relative to the game image (the return address minus 5) and
+// the trajectory object it fills. Runs before the trainer's own trick multipliers. Physics thread;
+// nullptr for none. Requires start_trick_heights.
+using TrajectoryModifier = void (*)(std::uintptr_t caller_rva, std::uintptr_t trajectory, float (&velocity)[3]) noexcept;
+void set_trajectory_modifier(TrajectoryModifier modifier) noexcept;
 } // namespace dingosdk::trainer

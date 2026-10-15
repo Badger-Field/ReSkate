@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <format>
 #include <string>
 
 namespace dingosdk::trainer {
@@ -191,6 +192,25 @@ constexpr std::int8_t trick_slider[trick_count]{
     -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1};
+// A bit per possible first word of an object's id (hashed to 4096): most words of memory start no object, and
+// checking each against every object made this the slowest part of the search.
+const std::array<std::uint64_t, 64> &state_id_filter() noexcept {
+    static const auto bits = [] {
+        std::array<std::uint64_t, 64> result{};
+        const auto mark = [&](const StateObject &object) {
+            std::uint32_t first;
+            std::memcpy(&first, object.id, 4);
+            const auto h = (first * 0x9e3779b1u) >> 20;
+            result[h >> 6] |= std::uint64_t{1} << (h & 63);
+        };
+        for (const auto *object : objects) mark(*object);
+        for (const auto &object : grind_objects) mark(object);
+        for (const auto &object : grind_control_objects) mark(object);
+        for (const auto &object : transition_objects) mark(object);
+        return result;
+    }();
+    return bits;
+}
 }
 
 void find_state_objects(std::uintptr_t start, std::size_t size) noexcept {
@@ -209,7 +229,9 @@ void find_state_objects(std::uintptr_t start, std::size_t size) noexcept {
             if (known && (!peek(here + object_handle, handle) || !(handle >> 24))) return;
             object.at.store(here, std::memory_order_relaxed);
         };
+        const auto &filter = state_id_filter();
         for (std::size_t i = 0; i + 0x20 < size / 4; ++i) {
+            if (const auto h = (words[i] * 0x9e3779b1u) >> 20; !((filter[h >> 6] >> (h & 63)) & 1)) continue;
             for (auto *object : objects) look(*object, i);
             for (auto &object : grind_objects) look(object, i);
             for (auto &object : grind_control_objects) look(object, i);
@@ -313,7 +335,8 @@ struct ForcedSetting {
     std::atomic<int> mode{-1};
     std::atomic<std::uint32_t> asked{};
 };
-ForcedSetting forced_settings[grind_settings.size() + transition_settings.size()]; // the grind settings, then the transition ones
+ForcedSetting forced_settings[grind_settings.size() + transition_settings.size() + foot_settings.size()]; // grind, transition, then on-foot ones
+constexpr std::size_t foot_first = grind_settings.size() + transition_settings.size();
 // Which of forced_settings the setting asset at `asset` is (its key is the string at + 0x60); -1: none of them.
 int grind_setting_of(std::uintptr_t asset) noexcept {
     std::uintptr_t name{};
@@ -330,6 +353,8 @@ int grind_setting_of(std::uintptr_t asset) noexcept {
         if (_stricmp(text, std::string(grind_settings[i].setting).c_str()) == 0) return static_cast<int>(i);
     for (std::size_t i = 0; i < transition_settings.size(); ++i)
         if (_stricmp(text, std::string(transition_settings[i].setting).c_str()) == 0) return static_cast<int>(grind_settings.size() + i);
+    for (std::size_t i = 0; i < foot_settings.size(); ++i)
+        if (_stricmp(text, std::string(foot_settings[i].setting).c_str()) == 0) return static_cast<int>(foot_first + i);
     return -1;
 }
 
@@ -363,7 +388,8 @@ std::uintptr_t state_lookup_hook(std::uintptr_t object, std::uintptr_t context) 
         return reinterpret_cast<std::uintptr_t>(&held.value[0]);
     }
     const auto original = lookup_original.load(std::memory_order_acquire);
-    return original ? original(object, context) : 0;
+    const auto found = original ? original(object, context) : 0;
+    return found;
 }
 bool lookup_code_known(std::uintptr_t base) noexcept {
     __try {
@@ -400,6 +426,12 @@ void force_transition_setting(std::size_t index, int mode) noexcept {
 }
 std::uint32_t transition_setting_asked(std::size_t index) noexcept {
     return index < transition_settings.size() ? forced_settings[grind_settings.size() + index].asked.exchange(0, std::memory_order_relaxed) : 0;
+}
+void force_foot_setting(std::size_t index, int mode) noexcept {
+    if (index < foot_settings.size()) forced_settings[foot_first + index].mode.store(mode, std::memory_order_relaxed);
+}
+std::uint32_t foot_setting_asked(std::size_t index) noexcept {
+    return index < foot_settings.size() ? forced_settings[foot_first + index].asked.exchange(0, std::memory_order_relaxed) : 0;
 }
 TransitionState read_transition_state(std::uintptr_t base, std::uintptr_t entity) noexcept {
     TransitionState state;

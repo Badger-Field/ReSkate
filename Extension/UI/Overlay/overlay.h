@@ -77,10 +77,29 @@ enum class DebugAction {
     set_first_person_camera_cycle,
     reset_first_person_arm,
     set_free_camera_fov,  // 0 = the game's own FOV
+    set_revert_boost_enabled,
+    set_revert_boost_speed,
     set_probe_enabled,
     set_dark_pop_enabled,
+    set_dark_pop_unpatch,
+    set_dark_pop_hold,
+    set_dark_pop_one_press,
+    set_dark_pop_route_stay,
+    set_dark_pop_route_guard,
+    set_dark_pop_keep_speed,
+    set_dark_pop_catch,
+    set_dark_pop_feet,
+    set_dark_pop_adaptive,
+    set_dark_pop_timeout,
     set_dark_pop_strength,
-    set_dark_pop_release,
+    set_dark_pop_hold_landing,
+    set_dark_pop_dark_exit,
+    set_dark_pop_full_flight,
+    set_dark_pop_hold_flight,
+    set_dark_pop_stay_physical,
+    set_dark_pop_early_physics,
+    set_dark_pop_reaim,
+    set_dark_pop_hide_dpad,
     // Keep the last action in sync with the bound in request_scheduler.h.
 };
 
@@ -96,6 +115,16 @@ struct FlightInput {
     float right = 0, up = 0, forward = 0;
     float look_x = 0, look_y = 0;
 };
+
+// May change what the GAME reads from an XInput pad (never what ReSkate itself reads). `user` is
+// the XInput slot. Called on whatever thread the game polls from, once per poll that returns a
+// pad. The grind exit control's grab and lean guards (grind_exit_control.h).
+struct GamepadValues {
+    std::uint16_t buttons = 0;
+    std::uint8_t left_trigger = 0, right_trigger = 0;
+    std::int16_t left_x = 0, left_y = 0, right_x = 0, right_y = 0;
+};
+using GamepadFilter = void (*)(unsigned user, GamepadValues& pad) noexcept;
 
 struct DebugModel {
     bool available = false;
@@ -132,10 +161,31 @@ struct DebugModel {
     float forward_velocity_speed = 20.0f;
     float up_velocity_speed = 20.0f;
     float offboard_up_velocity_speed = 20.0f;
-    // Dark Pop: the mod times the release of D-pad Right for the game (see no_bail.cpp, input_capture.cpp).
+    // Revert Boost: a forward speed added when the game auto reverts a landing.
+    bool revert_boost = false;
+    float revert_boost_speed = 1.0f; // strength multiplier
+    std::uint64_t revert_boost_count = 0;
+    // Dark Pop: the pre-0.32.0 dark pop (see no_bail.cpp). The rest are its advanced settings.
     bool dark_pop = false;
-    float dark_pop_strength = 0.0f; // extra upward m/s after the pop
-    float dark_pop_release = 0.715f; // seconds after takeoff
+    bool dark_pop_unpatch = true;   // placement entered the pre-0.32.0 way at the dark landing
+    bool dark_pop_hold = true;      // the old hold (foot-attach mode 2) in the landing window
+    bool dark_pop_one_press = true; // the D-pad must be let go before the next arming
+    float dark_pop_route_stay = 0.0f;   // ticks of 601 before the stay bit is cancelled (the sink length; 1.9: 0, the 1.0 setting, by default)
+    float dark_pop_route_guard = 12.0f; // pop ticks guarded after a 601 exit
+    bool dark_pop_keep_speed = true;    // the landing's horizontal speed put back at the 601 exit
+    bool dark_pop_catch = true;         // 1.0: a dismount straight from the air on an armed dark flight is routed too
+    bool dark_pop_feet = false;         // 1.7: feet-only hold (1.9: off by default) (the plant's own foot attaches cleared in the sink, a two-tick one requested)
+    bool dark_pop_adaptive = true;      // 1.7: the sink ends the tick the board starts rolling over
+    bool dark_pop_timeout = true;       // 1.9: a landing 201 timed out on (board dark, resting) is routed to the sink too
+    float dark_pop_strength = 8.0f;     // 2.4: the launch (m/s) the bodies' vertical velocity is lifted to on the pop's second and third ticks; 0 = off
+    bool dark_pop_hold_landing = true;  // 2.0: +0x13cc bit 20 raised around the chooser so a timed-out landing can be staged by the game
+    bool dark_pop_dark_exit = true;     // 2.1: the board put back as it landed on the sink's exit tick
+    bool dark_pop_full_flight = true;   // 2.1: the landing countdown floored at the ballistic time on a pop's flight
+    bool dark_pop_hold_flight = true;   // 2.3: contact landings blocked on a pop's flight while the countdown runs
+    float dark_pop_stay_physical = 6.0f; // 2.5: ticks after the exit the pop stays in the physics air state (the jump-fired bit hidden); 0 = off
+    bool dark_pop_early_physics = true;  // 2.6: a pop whose jump fired on its first ticks (180 landings) stays physical for the whole flight
+    bool dark_pop_reaim = true;
+    bool dark_pop_hide_dpad = true;      // 3.1: in the air the game's polls see the D-pad let go (no Quick Drop radial)          // 2.7: instead, after Stay physical ticks the animation's flight curve is re-aimed from where the body is and handed over
     std::uint64_t dark_pop_count = 0;
     bool probe = false; // Dark pop probe: writes logs\dark-pop-probe.csv
     bool camera_position_valid = false;
@@ -233,6 +283,15 @@ struct BoardBreakModel {
     std::string deck = "None";
 };
 
+// Grind exit control's switches (Extension/Skater/grind_exit_control.h): started, switched on,
+// LT/RT toe/heel (else left/right of travel), and the player's stance (0 not set, 1 regular,
+// 2 goofy).
+struct GrindExitModel {
+    bool available = false, enabled = false, toe_heel = true;
+    int stance = 0;
+    int strength = 100; // pop-out strength, percent (10-100)
+};
+
 struct Model {
     std::string state = "Waiting for native state";
     std::string detail;
@@ -254,6 +313,7 @@ struct Model {
     HallOfMeatModel hall_of_meat;
     RoadRashModel road_rash;
     BoardBreakModel board_break;
+    GrindExitModel grind_exit;
     ObjectPersistenceModel object_persistence;
     ParkEditorModel editor;
     float menu_scale = default_menu_scale;
@@ -333,6 +393,13 @@ void set_map_vote_icons(const std::vector<MapVoteIcon>& icons) noexcept;
 // That vote's popup (map_download_card.cpp), for the runtime, which reads the controller and
 // holds the game's input while it is up: whether it is, moving the pick, voting for the pick
 // (the popup then closes), and closing it without a vote. Any thread.
+// A message the player has to see and say OK to, in the middle of the screen (message_card.cpp):
+// that they were kicked or banned from a server, and why. One at a time: a new one takes the
+// place of one still up. For the runtime, which reads the controller and holds the game's input
+// while it is up, as for the vote below: whether it is, and closing it. Any thread.
+void show_message(std::string title, std::string text) noexcept;
+bool message_asking() noexcept;
+void message_dismiss() noexcept;
 bool map_vote_asking() noexcept;
 void map_vote_move(int by) noexcept;
 void map_vote_take() noexcept;
@@ -396,12 +463,13 @@ void set_skate_hud_feed(SkateHudFeed) noexcept;
 struct NametagBubble {
     std::string text, raw;
     float appear{1}, fade{1};
+    bool hint{}; // grey typing discs, not a chat line. text is ".", "..", or "..." for 1, 2, or 3 discs
 };
 struct Nametag {
     std::array<float, 3> position{}; // above the skater's head, world space
     std::string name;
     std::uint32_t color{0xffffffffU}; // R, G, B, A bytes (IM_COL32)
-    std::string tag;                  // role badge before the name ("Dev", "Staff", "Content Creator", "Centrix", "Homie", "Admin", "Host", "Friend")
+    std::string tag;                  // role badge before the name ("Dev", "ReSkate Admin", "Content Creator", "Centrix", "Homie", "Admin", "Host", "Friend")
     float distance{};                 // metres from the local skater
     bool talking{};
     // Recent chat lines to show as bubbles above the head, oldest first ("" = none).
@@ -516,6 +584,8 @@ extern "C" unsigned DingoSDKOverlayReadPromptKeys();
 // allow_menu is used only by the Binds page while recording. Focus and lifetime
 // gates still apply. Gameplay callers leave it false.
 extern "C" void DingoSDKOverlayReadControllerInput(dingosdk::ControllerInput* input, bool allow_menu = false);
+// Installs (or, with nullptr, removes) the one gamepad filter. Any thread.
+extern "C" void DingoSDKOverlaySetGamepadFilter(dingosdk::overlay::GamepadFilter filter);
 
 // Optional direct integration for a host that already knows its exact pair.
 struct IDXGISwapChain;

@@ -42,6 +42,18 @@ The first section of TUNE is **PRESETS AND QUICK SETTINGS**.
   or with "Show hidden"). **Go to** opens the section the row lives in and scrolls to it, with the related settings around it.
   **Reset** puts that one row back to the game's own. The card's title folds the whole list away.
 
+## Wallies and moves on foot
+
+The game has switches of its own that it ships turned off. The trainer can turn them on (`trainer foot`, and rows in the menu for the measured ones):
+
+- **Wallie: Wallies** (TUNE > POP AND TRICKS). Ride at a kerb, ledge or wall and pop just before it; the board climbs it. The rows beside it
+  are the numbers of the game's wallie script: how early the pop may come, the lowest obstacle it looks at, the extra pop, the forward
+  push as it climbs, the fastest speed it works at.
+- **On foot: Double and triple jump** (TUNE > ON FOOT). Press jump again right as you land: 0.8 m, then 1.4 m, then 3.1 m.
+- **Flips and spins on foot**: jump, hold LT or RT and push the left stick (forward or back flips, sideways spins). Roll: LT and the stick on the ground.
+- **On foot: Jump on release**: the jump goes when you let go of the button. **On foot: Wipeout bounce**: a slam bounces and slides on.
+- **Sprint speed** has no 10 m/s limit any more: the game's cut rises with the speed you set.
+
 ## Gravity
 
 **Gravity** (TUNE > POP AND TRICKS) is gravity in the air, on the board and on foot, as a multiple of the game's own. Measured

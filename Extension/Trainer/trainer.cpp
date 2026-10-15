@@ -216,6 +216,8 @@ struct State {
         return a;
     }();
     std::array<std::int8_t, transition_settings.size()> tr_setting = [] { std::array<std::int8_t, transition_settings.size()> a{}; a.fill(-1); return a; }();
+    // The game's own hidden on-foot switches (foot_settings, trainer_gamestate.h): -1 the game's own, 0 forced off, 1 forced on.
+    std::array<std::int8_t, foot_settings.size()> foot_setting = [] { std::array<std::int8_t, foot_settings.size()> a{}; a.fill(-1); return a; }();
     // What the trainer knows of the transition the skater is on, from one tick to the next.
     struct TransitionTrack {
         std::uint64_t steep_at{};          // when the skater last rode steep ground
@@ -247,6 +249,7 @@ struct State {
     std::uint64_t class_search_seen{};      // the searches that had finished when this level loaded
     bool class_list_wanted{};               // the player has the list of every value open on this level
     float flip_applied{1};                  // the flip speed the catch times were last set for
+    float late_flip_applied{1};             // the factor the late flip's speed ends were last set for
     std::uint64_t class_entity{};           // the skater the last search was for
     std::uint64_t class_research_after{};   // no new search before this, however many skaters come and go
     std::uint64_t class_creations{};        // the skaters the game had built at the last look
@@ -416,6 +419,8 @@ void load_store() {
             s.tr_plant = std::clamp(o.value("transition.plant", 0.0f), 0.0f, 1.0f);
             for (std::size_t i = 0; i < transition_settings.size(); ++i)
                 s.tr_setting[i] = static_cast<std::int8_t>(std::clamp(o.value("transition.set." + std::string(transition_settings[i].key), -1), -1, 1));
+            for (std::size_t i = 0; i < foot_settings.size(); ++i)
+                s.foot_setting[i] = static_cast<std::int8_t>(std::clamp(o.value("foot.set." + std::string(foot_settings[i].key), -1), -1, 1));
             s.offboard_height = std::clamp(o.value("offboard_height", 1.0f), height_low, height_high);
             s.flip_speed = std::clamp(o.value("flip_speed", 1.0f), flip_low, flip_high);
             s.flip_advanced = o.value("flip_advanced", false);
@@ -444,8 +449,9 @@ void load_store() {
             }
         if (json->contains("active") && json->at("active").is_array())
             for (const auto &name : json->at("active"))
-                // (Fast Parkour Flips and Pump Power were presets of earlier versions that changed nothing.)
-                if (name.is_string() && name.string() != "Fast Parkour Flips" && name.string() != "Pump Power") s.active.push_back(name.string());
+                // (Fast Parkour Flips, Pump Power and Deep Landings were presets of earlier versions that changed nothing.)
+                if (name.is_string() && name.string() != "Fast Parkour Flips" && name.string() != "Pump Power" && name.string() != "Deep Landings")
+                    s.active.push_back(name.string());
         if (json->contains("revert") && json->at("revert").is_object()) {
             for (const auto &field : revert_fields)
                 if (const auto name = std::string(field.name); json->at("revert").contains(name) && json->at("revert").at(name).is_number())
@@ -501,6 +507,8 @@ void save_store() {
         options["transition.plant"] = s.tr_plant;
         for (std::size_t i = 0; i < transition_settings.size(); ++i)
             if (s.tr_setting[i] >= 0) options["transition.set." + std::string(transition_settings[i].key)] = static_cast<int>(s.tr_setting[i]);
+        for (std::size_t i = 0; i < foot_settings.size(); ++i)
+            if (s.foot_setting[i] >= 0) options["foot.set." + std::string(foot_settings[i].key)] = static_cast<int>(s.foot_setting[i]);
         options["offboard_height"] = s.offboard_height;
         options["flip_speed"] = s.flip_speed;
         options["flip_advanced"] = s.flip_advanced;
@@ -632,6 +640,19 @@ double sane(const Entry &e, double value) {
     return std::clamp(value, -1.0e12, 1.0e12);
 }
 // The held flip class's catch times: how long each kind of flip may take to come round.
+bool extras_blocked();
+// While a late flip runs the game sets its speed every update to clamp(the flick's speed, lateflip.MinSpeed, lateflip.MaxSpeed),
+// so the flip speed the trainer gives other flips never reaches it (measured 2026-10-15: x0.5, 1 and 2 all turned a late kickflip
+// about 260 deg at 1155 deg/s). Those two ends follow the flip speed and the Late flip per-trick speed instead.
+bool late_flip_speed(std::string_view key) { return key == "lateflip.maxspeed" || key == "lateflip.minspeed"; }
+float late_flip_factor() {
+    auto &s = state();
+    if (extras_blocked()) return 1.0f;
+    float factor = s.boosts.flip;
+    if (s.flip_advanced)
+        if (const auto index = flip_trick_index(40); index >= 0) factor *= s.flip_trick[static_cast<std::size_t>(index)]; // LateFlipTrick
+    return factor;
+}
 bool slowed_catch_time(std::string_view key) {
     return key.starts_with("heldflip.") && key.ends_with("catchtime");
 }
@@ -645,6 +666,7 @@ void want_class(const Entry &e) {
     // every flip speed below about x0.9 a kickflip turned at 360 degrees per 0.2 s, the stock
     // catch time). A flip slowed by the trick slider is given that much longer.
     if (s.boosts.flip < 1.0f && slowed_catch_time(e.key)) value /= std::max(s.boosts.flip, flip_low);
+    if (late_flip_speed(e.key)) value *= late_flip_factor();
     want_class_value(field, value);
 }
 void apply_entry(Entry &e) {
@@ -770,6 +792,8 @@ void build_entries() {
     for (std::size_t c = 0; c < class_count; ++c)
         for (std::size_t i = 0; i < class_specs[c].count; ++i) {
             const auto &field = class_fields[class_specs[c].first + i];
+            // A script block's integer words (Code<n>) only make its copy findable: no row, never written.
+            if (std::string_view(field.name).starts_with("Code")) continue;
             Entry e;
             e.id = std::format("{}.{}", class_specs[c].key, field.name);
             e.key = lower(e.id);
@@ -1113,6 +1137,11 @@ const std::vector<Setup> &setups() {
             mode("transition.set." + std::string(transition_settings[i].key), transition_settings[i].card == transition_card_pump ? topic_pumping : topic_transition,
                  &s.tr_setting[i]);
             all->back().title = (transition_settings[i].card == transition_card_pump ? "Pumping: " : "Transition: ") + std::string(transition_settings[i].label);
+        }
+        for (std::size_t i = 0; i < foot_settings.size(); ++i) {
+            if (!foot_settings[i].shown) continue;
+            mode("foot.set." + std::string(foot_settings[i].key), foot_settings[i].board ? topic_pop : topic_foot, &s.foot_setting[i]);
+            all->back().title = (foot_settings[i].board ? "Wallie: " : "On foot: ") + std::string(foot_settings[i].label);
         }
         for (const auto &field : revert_fields) {
             const auto member = field.member;
@@ -1973,6 +2002,7 @@ void drive_transition(std::uintptr_t base, std::uintptr_t client, std::uint64_t 
     const auto &m = s.motion;
     const bool blocked = extras_blocked();
     for (std::size_t i = 0; i < transition_settings.size(); ++i) force_transition_setting(i, blocked ? -1 : s.tr_setting[i]);
+    for (std::size_t i = 0; i < foot_settings.size(); ++i) force_foot_setting(i, blocked ? -1 : s.foot_setting[i]);
     if (now >= s.tr_option_at) {
         // The game's own options: whatever its Settings menu (or the trainer) last set.
         s.tr_option_at = now + 500;
@@ -2470,6 +2500,11 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool playing, const std::s
             for (const auto &e : s.entries)
                 if (e.class_field >= 0 && slowed_catch_time(e.key)) want_class(e);
         }
+        if (const float late = late_flip_factor(); late != s.late_flip_applied) {
+            s.late_flip_applied = late;
+            for (const auto &e : s.entries)
+                if (e.class_field >= 0 && late_flip_speed(e.key)) want_class(e);
+        }
         (void)apply_classes();
         // The game builds its tuning objects again with a new skater (a respawn, a teleport, a
         // session change) and they start at its own numbers: look again, but not in a flurry.
@@ -2635,6 +2670,9 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool playing, const std::s
                 s.gravity_live = live;
                 s.view_due = true;
             }
+            // No limit on foot: the game's own 10 m/s cut rises with the sprint speeds asked for, and is its own otherwise.
+            const float fastest = std::max(class_value_wanted("locomotion", "SprintSpeed"), class_value_wanted("locomotion", "SprintSpeedBoost"));
+            (void)set_foot_speed_cap(s.enforced || (multiplayer_session_active() && !session_boosts_allowed()) ? 10.0f : fastest * 1.05f);
         }
         drive_transition(base, client, now);
         // The revert boost adds speed, so it keeps to the session's rule for boosts and to a host's physics.
@@ -2806,18 +2844,14 @@ std::string transition_command(const std::vector<std::string> &a) {
         return std::format("{}: {:.2f}.", one.says, *one.value);
     }
     for (std::size_t i = 0; i < transition_options.size(); ++i) {
-        // The game's own options: the same value its Settings menu shows and sets.
+        // The game's own options: shown, never written. They are the player's, changed in the game's own Settings menu.
         const auto &one = transition_options[i];
         if (what != one.key) continue;
-        bool on{};
-        const auto value = one.boolean ? (flag(arg(1), on) ? std::optional<double>(on ? 1.0 : 0.0) : std::nullopt) : number(arg(1));
-        if (!value) return std::format("{} (the game's own option {}): {}. Set it with: trainer transition {} {}", one.label, one.setting, s.tr_option[i], one.key,
-                                       one.boolean ? "on|off" : "<number>");
-        if (!profile_runtime::set_local_game_option(one.setting, one.boolean ? *value : std::round(*value), one.boolean))
-            return "error: the game's settings could not be written (no local profile is active).";
-        s.tr_option_at = 0;
-        return std::format("{} = {} (the game's own option {}: its Settings menu shows the same).", one.label, one.boolean ? (*value != 0 ? "on" : "off") : std::format("{:.0f}", std::round(*value)),
-                           one.setting);
+        const auto shown = one.boolean ? std::string(s.tr_option[i] ? "on" : "off") : std::to_string(s.tr_option[i]);
+        if (!arg(1).empty())
+            return std::format("error: {} is your game's own setting ({}): the trainer does not change it. Change it in the game's Settings menu (now {}).",
+                               one.label, one.setting, shown);
+        return std::format("{} (the game's own option {}): {}. Change it in the game's Settings menu.", one.label, one.setting, shown);
     }
     if (what == "spine") {
         bool on{};
@@ -2837,6 +2871,32 @@ std::string transition_command(const std::vector<std::string> &a) {
             any = true;
         }
     if (!any) return "error: no transition setting is called \"" + what + "\". `trainer transition` lists them.";
+    changed();
+    return what + ": " + (mode < 0 ? "the game's own" : mode ? "forced on" : "forced off") + ".";
+}
+// trainer foot (lists the switches and how often the game asked for each) | foot <setting>|all game|off|on
+std::string foot_command(const std::vector<std::string> &a) {
+    auto &s = state();
+    const auto what = a.empty() ? std::string{} : lower(a[0]), to = a.size() > 1 ? lower(a[1]) : std::string{};
+    if (what.empty()) {
+        std::string out = "The game's own hidden on-foot switches:";
+        for (std::size_t i = 0; i < foot_settings.size(); ++i)
+            out += std::format("\n{} (setting {}, the game's default {}): {}; asked {} times since last listed", foot_settings[i].key, foot_settings[i].setting,
+                               foot_settings[i].stock ? "on" : "off", s.foot_setting[i] < 0 ? "game's own" : s.foot_setting[i] ? "forced on" : "forced off",
+                               foot_setting_asked(i));
+        return out;
+    }
+    const int mode = to == "on" || to == "1" ? 1 : to == "off" || to == "0" ? 0 : to == "game" || to == "-1" ? -1 : -2;
+    if (mode == -2) return "error: usage: trainer foot (lists them) | foot <setting>|all game|off|on";
+    std::string why;
+    if (mode >= 0 && !editable(&why)) return "error: " + why;
+    bool any = false;
+    for (std::size_t i = 0; i < foot_settings.size(); ++i)
+        if (what == "all" || what == foot_settings[i].key) {
+            s.foot_setting[i] = static_cast<std::int8_t>(mode);
+            any = true;
+        }
+    if (!any) return "error: no on-foot setting is called \"" + what + "\". `trainer foot` lists them.";
     changed();
     return what + ": " + (mode < 0 ? "the game's own" : mode ? "forced on" : "forced off") + ".";
 }
@@ -2914,15 +2974,20 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
             return std::format("Everything is the game's own again: {} values and settings put back, locks cleared, presets off.", count);
         }
         auto *e = find_entry(arg(0));
+        std::size_t at = 1; // where the number is: a graph's id ends in " x", which arrives as a word of its own
+        if (!e && a.size() > 1) {
+            e = find_entry(arg(0) + " " + arg(1));
+            if (e) at = 2;
+        }
         if (!e) return "error: no tuning value is called \"" + arg(0) + "\". Try: trainer find <text>";
         std::string why;
         if (v != "freeze" && !editable(&why)) return "error: " + why;
         if (v == "set") {
-            const auto value = number(arg(1));
+            const auto value = number(arg(at));
             if (!value) return "error: " + e->id + " needs a number.";
             set_entry(*e, *value);
         } else if (v == "freeze") {
-            if (!flag(arg(1), e->frozen)) return "error: freeze needs 0 or 1.";
+            if (!flag(arg(at), e->frozen)) return "error: freeze needs 0 or 1.";
             remember(*e);
         } else {
             set_entry(*e, e->stock);
@@ -3036,6 +3101,7 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
         return land_at((*s.waypoint)[0], (*s.waypoint)[2], (*s.waypoint)[1], "your map waypoint");
     }
     if (v == "transition") return transition_command(a);
+    if (v == "foot") return foot_command(a);
     if (v == "grind") {
         // trainer grind | grind watch 0|1 | grind side <x> | grind <key>|all game|off|on
         const auto what = lower(arg(0)), to = lower(arg(1));

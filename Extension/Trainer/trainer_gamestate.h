@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace dingosdk::trainer {
@@ -193,6 +194,53 @@ inline constexpr std::array<TransitionSetting, 12> transition_settings{{
 // mode: -1 the game's own, 0 forced off, 1 forced on.
 void force_transition_setting(std::size_t index, int mode) noexcept;
 std::uint32_t transition_setting_asked(std::size_t index) noexcept;
+// Off the board: the game's own hidden gameplay switches for moves on foot (not in its Settings menu; its data sets them).
+// Forced the same way as the grind and transition settings. Rows show only once a switch is measured to change play.
+struct FootSetting {
+    std::string_view key;     // `trainer foot <key>`, saved as foot.set.<key>
+    std::string_view label;   // in the menu
+    std::string_view help;
+    std::string_view setting; // the game's key for it
+    bool stock{};             // the game's default
+    bool board{};             // a move on the board (the wallie switches), not on foot
+    bool shown{};             // measured to change play: it has a row in the menu (the others: `trainer foot` only)
+};
+inline constexpr std::array<FootSetting, 29> foot_settings{{
+    {"tackle", "Tackle", "The game's own experimental switch for tackling on foot.", "egf_tackle", false},
+    {"throw", "Grab and throw", "The game's own switch for picking things up and throwing them.", "egf_grabandthrow", false},
+    {"aim", "Aim and shoot", "The game's own experimental switch for aiming on foot.", "egf_aimshoot", false},
+    {"flying", "Double and triple jump", "The game's own switch (it calls it flying): on foot, press jump again right as you land and the next jump goes higher, up to three in a row (0.8 m, then 1.4 m, then 3.1 m).", "egf_flying", false, false, true},
+    {"rope", "Rope swinging", "The game's own switch for grabbing and swinging on ropes. Off in the shipped game.", "egf_ropeswinging", false},
+    {"ledgewalk", "Tight ledge walking", "The game's own switch for walking along narrow ledges.", "egf_tightledgewalking", false},
+    {"backmantle", "Mantle backwards", "The game's own switch: climb up a ledge that is behind the skater.", "egf_mantlebackwards", false},
+    {"groundmantle", "Auto mantle from the ground", "The game's own switch: walking into a ledge climbs it by itself.", "egf_automantleground", false},
+    {"sprintmantle", "Sprint into an auto mantle", "The game's own switch: sprinting into a ledge climbs it by itself.", "egf_sprinttoautomantle", false},
+    {"lowmantle", "Auto mantle low ledges", "The game's own switch: low ledges are climbed by themselves.", "egf_automantlelowheight", true},
+    {"airmantle", "Auto mantle in the air", "The game's own switch: a ledge reached in the air is grabbed by itself.", "egf_automantleair", true},
+    {"sprintwallrun", "Wallrun from a sprint", "The game's own switch: sprinting at a wall runs up it by itself.", "egf_autowallrunsprint", false},
+    {"airwallrun", "Wallrun from the air", "The game's own switch: a wall reached in the air is run along by itself.", "egf_autowallrunair", true},
+    {"jumprelease", "Jump on release", "The game's own switch: on foot, the jump goes when you let go of the button, not when you press it (held 3 s, it jumped 3 s later, as high).", "egf_jumponrelease", false, false, true},
+    {"buttonjump", "Button jump off the board", "The game's own switch for its alternative on-foot controls (jump on a button).", "egf_buttonjump", true},
+    {"mountloco", "Experimental mount moves", "The game's own experimental switch for getting on the board while moving.", "expmountloco", false},
+    {"caveman", "Auto caveman", "The game's own switch: getting on the board from a run drops it and jumps on.", "auto_caveman", true},
+    {"bounce", "Off-board bounce", "The game's own experimental switch: a fall on foot can bounce.", "egf_offboardbounce", true},
+    {"wipeoutbounce", "Wipeout bounce", "The game's own experimental switch: a slam bounces and slides on (a 30 m drop on foot slid 10 m, against half a metre).", "egf_wipeoutbounce", false, false, true},
+    {"splat", "Wipeout splat", "The game's own switch for a flat splat on a hard bail.", "egf_wipeoutsplat", false},
+    {"nogetups", "Slams without get-ups", "The game's own switch: after a slam the skater stays down and does NOT get up again until this goes back to the game's own.", "egf_wipeoutsnogetups", false},
+    {"sketchy", "Sketchy landings", "The game's own experimental switch: rough landings play a sketchy recovery instead of landing clean or bailing.",
+     "exp_sketchy_landings", false},
+    {"touchsprint", "Touch sprinting", "The game's own experimental switch for how a sprint is asked for.", "exp_touchsprinting", true},
+    // On the board: the wallie (physics state 203). The game ships with it switched off.
+    {"wallies", "Wallies", "The game's own switch for the wallie: ride at a kerb, ledge or wall and pop to climb over it. Off in the shipped game.", "egf_wallies", false, true, true},
+    {"wallieollie", "Wallie needs an ollie", "The game's own switch: a wallie only goes with an ollie flick, not on any pop.", "egf_wallies_req_ollie", false, true},
+    {"walliequick", "Wallie needs a quick ollie", "The game's own switch: a wallie only goes with the quick ollie.", "egf_wallies_reqinput", false, true, true},
+    {"curbhop", "Auto curb hops", "The game's own switch: the board hops up small kerbs by itself.", "egf_wallies_curb", true, true},
+    {"curbhopsetup", "Auto curb hops in a trick setup", "The game's own switch: the board still hops kerbs by itself while the stick is held in a trick setup.", "egf_auto_curb_hop_setup", false, true},
+    {"wallride", "Experimental wallrides", "The game's own switch for its newer wallride.", "enh_wallride", true, true},
+}};
+// mode: -1 the game's own, 0 forced off, 1 forced on.
+void force_foot_setting(std::size_t index, int mode) noexcept;
+std::uint32_t foot_setting_asked(std::size_t index) noexcept;
 // Options of the game's OWN Settings menu that belong with transition skating. They are not the trainer's: it shows the
 // value the game holds and changing it here is the same as changing it there (and the other way round), so they are
 // not part of the trainer's "modified" state, its presets or its resets.

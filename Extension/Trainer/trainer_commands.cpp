@@ -33,6 +33,7 @@ void register_trainer_commands(Commands &registry) {
         {"grind", "Grinds: the feel, the game's own settings and switches, the pop off a grind", "[feel skate|skate3] | side <multiplier> | push <m/s> | range <degrees> | <setting or switch>|all game|off|on | watch 0|1", false},
         {"transition", "Transition skating: the feel, the help back into the ramp and the game's own settings",
          "[feel skate|skate3] | lean|carry|drop|unstick|lockout|plant <number> | spine on|off | <setting>|all game|off|on", false},
+        {"foot", "Off the board: the game's own hidden switches for moves on foot", "[<setting>|all game|off|on]", false},
         {"profile", "The preset this map applies on load", "set <preset>|clear", false},
         {"jumps", "The last measured jump", nullptr, false},
         {"where", "The skater's position, heading and speed", nullptr, false},

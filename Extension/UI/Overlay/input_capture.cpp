@@ -119,6 +119,32 @@ void neutral_hid(const InputCaptureHooks::HidRead& read, DWORD size) {
         "the game's buffer %lu.)", read.kind == PlayStationPad::dualsense ? "DualSense" : "DualShock 4",
         bluetooth ? "Bluetooth" : "USB", bytes[0], size, read.capacity);
 }
+void dark_pop_hide_hat(std::uint8_t& byte) noexcept;
+// Dark Pop: the hat nibble of a PlayStation report the game read, hidden the same way as the XInput D-pad.
+void hide_hid_dpad(const InputCaptureHooks::HidRead& read, DWORD size) {
+    if (overlay_input_access || !read.buffer || size > read.capacity || read.kind == PlayStationPad::none) return;
+    auto* bytes = static_cast<std::uint8_t*>(read.buffer);
+    const bool bluetooth = playstation_bluetooth(size);
+    if (!parse_playstation_report(read.kind, bluetooth, bytes, size)) return;
+    const bool sense_full = read.kind == PlayStationPad::dualsense && (bytes[0] == 0x31 || (bytes[0] == 1 && !bluetooth));
+    const unsigned offset = bytes[0] == 0x31 ? 2 : bytes[0] == 0x11 ? 3 : 1;
+    auto* data = bytes + offset;
+    auto& hat = data[sense_full ? 7 : 4];
+    const auto before = hat;
+    dark_pop_hide_hat(hat);
+    if (hat == before) return;
+    if (size == 78 && (bytes[0] == 0x31 || bytes[0] == 0x11)) {
+        std::uint32_t crc = 0xffffffffu;
+        const auto feed = [&](std::uint8_t byte) {
+            crc ^= byte;
+            for (unsigned bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+        };
+        feed(0xa1);
+        for (DWORD i = 0; i < size - 4; ++i) feed(bytes[i]);
+        crc = ~crc;
+        std::memcpy(bytes + size - 4, &crc, sizeof(crc));
+    }
+}
 void complete_hid(OVERLAPPED* request, DWORD bytes, bool success, bool finished) {
     auto& h = input_hooks();
     InputCaptureHooks::HidRead read{};
@@ -130,6 +156,7 @@ void complete_hid(OVERLAPPED* request, DWORD bytes, bool success, bool finished)
         if (finished) h.hid_reads.erase(found);
     }
     if (success) neutral_hid(read, bytes);
+    if (success) hide_hid_dpad(read, bytes);
 }
 BOOL WINAPI captured_read_file(HANDLE file, LPVOID buffer, DWORD size, LPDWORD bytes, LPOVERLAPPED request) {
     auto& h = input_hooks();
@@ -266,14 +293,37 @@ std::string xinput_entry_owners() {
     return text.empty() ? "none" : text;
 }
 
+std::atomic<dingosdk::overlay::GamepadFilter>& gamepad_filter() {
+    static std::atomic<dingosdk::overlay::GamepadFilter> value{};
+    return value;
+}
+// The game's own read only: not ReSkate's (overlay_input_access) and not an inner layer of a
+// read already being answered (Steam's hook going on to XInput runs inside OverlayInputAccess).
+void filter_pad(bool outer, DWORD user, XINPUT_STATE* output) noexcept {
+    if (!outer || !output) return;
+    const auto filter = gamepad_filter().load(std::memory_order_acquire);
+    if (!filter) return;
+    auto& g = output->Gamepad;
+    dingosdk::overlay::GamepadValues pad{g.wButtons, g.bLeftTrigger, g.bRightTrigger, g.sThumbLX, g.sThumbLY, g.sThumbRX, g.sThumbRY};
+    filter(static_cast<unsigned>(user), pad);
+    g.wButtons = pad.buttons;
+    g.bLeftTrigger = pad.left_trigger;
+    g.bRightTrigger = pad.right_trigger;
+    g.sThumbLX = pad.left_x;
+    g.sThumbLY = pad.left_y;
+    g.sThumbRX = pad.right_x;
+    g.sThumbRY = pad.right_y;
+}
 // Another program's hook on XInput that was put in front of the capture's own after it was
 // installed (Steam's overlay does, for Steam Input, and answers the game with its own pad
 // without going on to XInput): the capture then never sees the game's reads, and a menu that
 // holds the game's input does not hold its controller. That hook's own function is hooked
 // then, so the capture is in front of it again.
+void game_pad_read(DWORD user, XINPUT_STATE* output) noexcept;
 template<std::size_t I>
 DWORD WINAPI captured_front(DWORD user, XINPUT_STATE* output) {
     const bool capture = block_polled_input();
+    const bool outer = overlay_input_access == 0;
     note_prompt_read(prompt_xinput);
     DWORD result;
     { // It may go on to XInput's own entry point, which is hooked as well.
@@ -283,6 +333,8 @@ DWORD WINAPI captured_front(DWORD user, XINPUT_STATE* output) {
     if (result == ERROR_SUCCESS && output && capture) {
         output->Gamepad = {};
         output->dwPacketNumber ^= 0x80000000u;
+    } else if (result == ERROR_SUCCESS && output && outer) {
+        game_pad_read(user, output);
     }
     return result;
 }
@@ -569,20 +621,41 @@ BOOL WINAPI captured_cursor_position(LPPOINT output) {
     if (result && output && !overlay_input_access) { last = *output; sampled = true; }
     return result;
 }
-// ---- Dark Pop auto release ----------------------------------------------------------
-// Driven by the physics selector hook (Extension/Skater/no_bail.cpp) through the extern "C" functions at the end
-// of this file. During a timed flight it changes only what the game's own XInput polls see of D-pad Right. A trick
-// held with RB (the catch) primes the flight; pressing D-pad Right after that fires it: the game sees D-pad Right
-// held until the release time and then released until the player really lets go. D-pad Right without RB first is
-// left alone. ReSkate's own readers (overlay_input_access) always get the real pad.
-struct DarkPopRelease {
-    std::atomic<bool> enabled{}, primed{}, latched{}, released{}, hiding{}; // primed: RB held in this flight
-    std::atomic<std::int64_t> release_at{}; // QueryPerformanceCounter; 0 = no timed flight
-    std::atomic<std::int64_t> shown_release{}; // when the game was shown the release (QPC), 0 = not yet
-    std::atomic<unsigned> flags{}; // last change made: 1 = shown held, 2 = hidden (for the probe)
-    std::atomic<std::uint64_t> polls{}; // the game's own XInput polls while enabled
+// ---- Dark Pop: the D-pad hidden from the game in the air -----------------------------------------------------
+// skate. opens the Quick Drop radial on D-pad Right (and Down, held), and in keyboard/mouse mode letting the radial
+// go selects what the cursor sits on: the object browser. Dark Pop arms on a D-pad press in the air, so while the
+// local skater is in the air with Dark Pop on (a lease the physics selector hook renews every call, see
+// DingoSDKOverlayDarkPopAir) the game's own polls see D-pad Left, Down and Right let go, and a press still held at
+// the landing stays hidden until it is really let go, so its release is never a tap. On the ground the D-pad is the
+// game's. ReSkate's own readers (overlay_input_access), which Dark Pop reads through, always get the real pad.
+struct DarkPopHide {
+    std::atomic<std::uint64_t> until{};   // GetTickCount64 the air lease runs to; 0 = no lease
+    std::atomic<bool> latched{};          // a hidden press is still held past the lease
+    std::atomic<std::uint64_t> hidden{};  // game polls changed so far (for the log)
 };
-DarkPopRelease& dark_pop_release() { static auto* value = new DarkPopRelease; return *value; }
+DarkPopHide& dark_pop_hide() { static auto* value = new DarkPopHide; return *value; }
+constexpr std::uint64_t dark_pop_air_lease = 120; // ms; the selector hook runs every physics step
+constexpr WORD dark_pop_xinput_dpad = 0x0004 | 0x0002 | 0x0008; // XINPUT_GAMEPAD_DPAD_LEFT | DOWN | RIGHT
+// Whether the D-pad (Left, Down or Right, `down` = one of them is pressed in this poll) is hidden from this poll.
+bool dark_pop_hiding(bool down) noexcept {
+    auto& h = dark_pop_hide();
+    if (GetTickCount64() < h.until.load(std::memory_order_relaxed)) {
+        h.latched.store(down, std::memory_order_relaxed); // a press let go in the air leaves nothing to carry past the landing
+        return down;
+    }
+    if (!h.latched.load(std::memory_order_relaxed)) return false;
+    if (!down) { h.latched.store(false, std::memory_order_relaxed); return false; }
+    return true;
+}
+// A PlayStation report's hat nibble: 0 up, 1 up-right, 2 right, 3 down-right, 4 down, 5 down-left, 6 left, 7 up-left,
+// 8 released. Left, Down and Right (and their diagonals) are hidden; Up stays.
+void dark_pop_hide_hat(std::uint8_t& byte) noexcept {
+    const unsigned hat = byte & 0x0f;
+    if (!dark_pop_hiding(hat >= 1 && hat <= 7)) return;
+    const unsigned shown = (hat == 1 || hat == 7) ? 0u : 8u;
+    byte = static_cast<std::uint8_t>((byte & 0xf0) | shown);
+    dark_pop_hide().hidden.fetch_add(1, std::memory_order_relaxed);
+}
 // ---- The sticks on a grind (the trainer's "Grinds feel like Skate 3" and its lean into a ramp) -----------------
 // Both rewrites below only last while the trainer keeps asking for them: each `on` is good for half a second, so a
 // trainer that has stopped ticking cannot leave the game's own polls rewritten.
@@ -643,33 +716,17 @@ void lean_grind_stick(XINPUT_GAMEPAD& pad) noexcept {
     pad.sThumbLY = static_cast<SHORT>(std::clamp(lean.y.load(std::memory_order_relaxed), -1.0f, 1.0f) * 32767.0f);
     lean.given.fetch_add(1, std::memory_order_relaxed);
 }
-std::int64_t dark_pop_clock() noexcept { LARGE_INTEGER now{}; QueryPerformanceCounter(&now); return now.QuadPart; }
-// The game's own poll: returns 1 if D-pad Right was added, 2 if it was taken away, 0 if the pad is unchanged.
-unsigned dark_pop_filter(WORD& buttons) noexcept {
-    auto& r = dark_pop_release();
-    if (!r.enabled.load(std::memory_order_relaxed)) return 0;
-    r.polls.fetch_add(1, std::memory_order_relaxed);
-    const bool physical = (buttons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0;
-    const auto release_at = r.release_at.load(std::memory_order_acquire);
-    if (release_at && !r.released.load(std::memory_order_relaxed)) {
-        const auto now = dark_pop_clock();
-        if (now < release_at) {
-            if (buttons & XINPUT_GAMEPAD_RIGHT_SHOULDER) r.primed.store(true, std::memory_order_relaxed);
-            if (physical && r.primed.load(std::memory_order_relaxed)) r.latched.store(true, std::memory_order_relaxed);
-            if (!r.latched.load(std::memory_order_relaxed)) return 0;
-            buttons = static_cast<WORD>(buttons | XINPUT_GAMEPAD_DPAD_RIGHT); // held for the game, even if the player already let go
-            return physical ? 0u : 1u;
-        }
-        if (r.latched.load(std::memory_order_relaxed)) {
-            r.released.store(true, std::memory_order_relaxed);
-            r.shown_release.store(now, std::memory_order_relaxed);
-            r.hiding.store(true, std::memory_order_relaxed);
-        }
+// The game's own read of a controller (not ReSkate's and not an inner layer of one): ReSkate's gamepad filter, then
+// Dark Pop's D-pad hiding in the air and the grind sticks. From captured_xinput, and from captured_front when
+// another program's XInput hook (Steam's overlay) answers the game first.
+void game_pad_read(DWORD user, XINPUT_STATE* output) noexcept {
+    filter_pad(true, user, output);
+    if (dark_pop_hiding((output->Gamepad.wButtons & dark_pop_xinput_dpad) != 0)) {
+        output->Gamepad.wButtons = static_cast<WORD>(output->Gamepad.wButtons & ~dark_pop_xinput_dpad);
+        dark_pop_hide().hidden.fetch_add(1, std::memory_order_relaxed);
     }
-    if (!r.hiding.load(std::memory_order_relaxed)) return 0;
-    if (!physical) { r.hiding.store(false, std::memory_order_relaxed); return 0; } // the player let go too
-    buttons = static_cast<WORD>(buttons & ~XINPUT_GAMEPAD_DPAD_RIGHT);
-    return 2;
+    (void)turn_grind_stick(output->Gamepad);
+    lean_grind_stick(output->Gamepad);
 }
 template<std::size_t I, bool Extended = false>
 DWORD WINAPI captured_xinput(DWORD user, XINPUT_STATE* output) {
@@ -688,12 +745,7 @@ DWORD WINAPI captured_xinput(DWORD user, XINPUT_STATE* output) {
         // not change between opening the menu and its next controller poll.
         output->dwPacketNumber ^= 0x80000000u;
     } else if (result == ERROR_SUCCESS && output && game_poll) {
-        // A changed button needs a changed packet number, or the game may keep the state it already has.
-        const auto changed = dark_pop_filter(output->Gamepad.wButtons);
-        if (changed) output->dwPacketNumber ^= changed << 29;
-        dark_pop_release().flags.store(changed, std::memory_order_relaxed);
-        (void)turn_grind_stick(output->Gamepad);
-        lean_grind_stick(output->Gamepad);
+        game_pad_read(user, output);
     }
     return result;
 }
@@ -702,6 +754,9 @@ DWORD WINAPI captured_keystroke(DWORD user, DWORD reserved, PXINPUT_KEYSTROKE ou
     const auto result = original<DWORD(WINAPI*)(DWORD, DWORD, PXINPUT_KEYSTROKE)>(
         input_hooks().xinput_keystroke[I])(user, reserved, output);
     if (result == ERROR_SUCCESS && output && block_polled_input()) { *output = {}; return ERROR_EMPTY; }
+    // VK_PAD_DPAD_DOWN 0x5811, LEFT 0x5812, RIGHT 0x5813 (UP 0x5810 stays), while Dark Pop hides the D-pad.
+    if (result == ERROR_SUCCESS && output && !overlay_input_access && output->VirtualKey >= 0x5811 && output->VirtualKey <= 0x5813 &&
+        dark_pop_hiding((output->Flags & XINPUT_KEYSTROKE_KEYUP) == 0)) { *output = {}; return ERROR_EMPTY; }
     return result;
 }
 
@@ -987,47 +1042,13 @@ bool install_input_capture() {
 
 }
 
-// Dark Pop auto release, for the physics selector hook (Extension/Skater/no_bail.cpp) and the client tick.
-extern "C" void DingoSDKOverlayDarkPopEnable(bool enabled) noexcept {
-    auto& r = dingosdk::overlay::detail::dark_pop_release();
-    if (!r.enabled.exchange(enabled, std::memory_order_acq_rel) || enabled) return;
-    r.release_at.store(0, std::memory_order_release);
-    r.primed.store(false, std::memory_order_relaxed);
-    r.latched.store(false, std::memory_order_relaxed);
-    r.hiding.store(false, std::memory_order_relaxed);
+// Dark Pop: the local skater is in the air with the D-pad hide on; renewed every physics step (see DarkPopHide).
+extern "C" void DingoSDKOverlayDarkPopAir() noexcept {
+    dingosdk::overlay::detail::dark_pop_hide().until.store(GetTickCount64() + dingosdk::overlay::detail::dark_pop_air_lease, std::memory_order_relaxed);
 }
-// A timed flight starts: the game is shown D-pad Right released from `release_at` (QueryPerformanceCounter) on.
-extern "C" void DingoSDKOverlayDarkPopFlightStart(std::int64_t release_at) noexcept {
-    auto& r = dingosdk::overlay::detail::dark_pop_release();
-    r.primed.store(false, std::memory_order_relaxed);
-    r.latched.store(false, std::memory_order_relaxed);
-    r.released.store(false, std::memory_order_relaxed);
-    r.shown_release.store(0, std::memory_order_relaxed);
-    r.release_at.store(release_at, std::memory_order_release);
-}
-// The flight ended. Says whether the player pressed D-pad Right in it and when the game was shown the release (0 if the
-// landing came first; the game is then shown the release now).
-extern "C" bool DingoSDKOverlayDarkPopFlightEnd(std::int64_t* shown_release) noexcept {
-    auto& r = dingosdk::overlay::detail::dark_pop_release();
-    r.release_at.store(0, std::memory_order_release);
-    r.primed.store(false, std::memory_order_relaxed);
-    const bool latched = r.latched.exchange(false, std::memory_order_acq_rel);
-    if (latched && !r.released.exchange(true, std::memory_order_acq_rel)) r.hiding.store(true, std::memory_order_relaxed);
-    if (shown_release) *shown_release = r.shown_release.load(std::memory_order_relaxed);
-    return latched;
-}
-// D-pad Right has been pressed in the current timed flight (as the game's polls saw it).
-extern "C" bool DingoSDKOverlayDarkPopLatched() noexcept {
-    const auto& r = dingosdk::overlay::detail::dark_pop_release();
-    return r.release_at.load(std::memory_order_acquire) && r.latched.load(std::memory_order_relaxed);
-}
-// 1 = the game's last poll was shown D-pad Right held by the mod, 2 = hidden by the mod, 0 = untouched.
-extern "C" unsigned DingoSDKOverlayDarkPopInputFlags() noexcept {
-    return dingosdk::overlay::detail::dark_pop_release().flags.load(std::memory_order_relaxed);
-}
-// The game's own XInput polls counted while the auto release was on (0 means the game does not read the pad through XInput).
-extern "C" std::uint64_t DingoSDKOverlayDarkPopGamePolls() noexcept {
-    return dingosdk::overlay::detail::dark_pop_release().polls.load(std::memory_order_relaxed);
+// Game polls (XInput states, keystrokes, PlayStation reports) whose D-pad Dark Pop hid so far.
+extern "C" std::uint64_t DingoSDKOverlayDarkPopHidden() noexcept {
+    return dingosdk::overlay::detail::dark_pop_hide().hidden.load(std::memory_order_relaxed);
 }
 // Skate 3's turn on a grind: the right stick the game's own polls see (see GrindStickTurn). Asked for again every tick.
 extern "C" void DingoSDKOverlaySetGrindStickTurn(bool on, float x, float y_add, float y_scale) noexcept {
@@ -1068,4 +1089,7 @@ extern "C" std::uint64_t DingoSDKOverlayGrindStickLeaned() noexcept {
 // How many of the game's polls were given a made-up right stick so far.
 extern "C" std::uint64_t DingoSDKOverlayGrindStickMirrored() noexcept {
     return dingosdk::overlay::detail::grind_stick_mirrored().load(std::memory_order_relaxed);
+}
+extern "C" void DingoSDKOverlaySetGamepadFilter(dingosdk::overlay::GamepadFilter filter) {
+    dingosdk::overlay::detail::gamepad_filter().store(filter, std::memory_order_release);
 }

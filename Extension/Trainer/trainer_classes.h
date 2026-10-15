@@ -32,6 +32,8 @@ inline constexpr std::size_t class_field_count = sizeof(class_fields) / sizeof(c
 // that still hold what the trainer last wrote are kept.
 void find_classes() noexcept;
 bool finding_classes() noexcept;
+// How long the running search has taken, in ms (0: none is running).
+std::uint64_t class_search_ms() noexcept;
 // How many searches have finished (0: none yet).
 std::uint64_t class_searches() noexcept;
 // A number that changes when a search finds something it did not know (or loses something).
@@ -40,6 +42,8 @@ std::uint64_t class_search_found() noexcept;
 std::size_t class_copies(std::size_t index) noexcept;
 // What field `field` (an index into class_fields) should hold. Written by apply_classes.
 void want_class_value(std::size_t field, float value) noexcept;
+// What field `<key>.<field>` is wanted to hold (its default while nothing else is wanted); 0 when there is no such field.
+float class_value_wanted(const char *key, const char *field) noexcept;
 // Whether anything is wanted that is not the game's own (a field, or the flip speed): until
 // then there is nothing to write and no reason to search.
 bool classes_wanted() noexcept;
