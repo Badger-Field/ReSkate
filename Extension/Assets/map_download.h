@@ -60,4 +60,7 @@ void tick();
 // The Thunderstore package an enabled mod's level comes from (its folder and manifest), for a
 // host to tell its guests; empty when the level is the game's own or the mod is not a package.
 std::string package_of(std::string_view asset);
+// Reads the table package_of answers from, on a thread of its own, if it has not been (so the
+// first map offer does not wait on the Mods folder). Cheap to call each frame; tick() does.
+void warm_packages() noexcept;
 }

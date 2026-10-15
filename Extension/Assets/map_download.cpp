@@ -131,13 +131,52 @@ void ask() {
     ask_until.store(std::min(deadline.load(), multiplayer::now_us() + policy::confirmation_us));
     advance(Stage::checking, Stage::asking);
 }
-// The packages of the maps installed here, by level (package_of): forgotten when one is installed.
-struct Known {
-    std::string package;
-    std::uint64_t until{};
+// The packages of the maps installed here, by level (lower case), read from the Mods folder in
+// one pass (package_of). Forgotten when a map is installed; read again in the background two
+// minutes after it was read. It was read for each level asked, on the client thread, with every
+// map offer a host sends (a guest joining, a map change): tens of milliseconds, a second and more
+// with many mods (2026-10-15).
+struct KnownPackages {
+    std::map<std::string, std::string, std::less<>> by_level;
+    std::uint64_t read_at{};
+    bool valid{}, reading{};
 };
 std::mutex known_mutex;
-std::map<std::string, Known, std::less<>> known_packages;
+KnownPackages known_packages;
+
+std::map<std::string, std::string, std::less<>> read_known_packages() {
+    std::map<std::string, std::string, std::less<>> table;
+    const auto list = mods::scan_mods(mods::engine_data_root());
+    for (const auto& entry : list.entries) {
+        if (!entry.enabled || !entry.mod.provides_levels) continue;
+        const auto package = multiplayer::map_package_name(entry.mod.name, entry.mod.version);
+        for (auto level : entry.mod.levels) {
+            std::transform(level.begin(), level.end(), level.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            table.emplace(std::move(level), package); // (the first mod that has a level is the one)
+        }
+    }
+    return table;
+}
+// Reads the table on a thread of its own when there is none, or it is two minutes old. Under
+// known_mutex.
+void refresh_known_packages(std::uint64_t now) {
+    if (known_packages.reading || (known_packages.valid && now - known_packages.read_at < 120000)) return;
+    known_packages.reading = true;
+    try {
+        std::thread([] {
+            std::map<std::string, std::string, std::less<>> table;
+            bool ok{};
+            try { table = read_known_packages(); ok = true; } catch (...) {}
+            std::lock_guard lock(known_mutex);
+            if (ok) {
+                known_packages.by_level = std::move(table);
+                known_packages.read_at = GetTickCount64();
+                known_packages.valid = true;
+            }
+            known_packages.reading = false;
+        }).detach();
+    } catch (...) { known_packages.reading = false; }
+}
 
 // The mod's row in mods.json when its folder is here: whether it is switched on, and what it
 // says of itself.
@@ -273,7 +312,7 @@ void fetch() {
             if (!continuing()) return;
             {
                 std::lock_guard known(known_mutex);
-                known_packages.clear();
+                known_packages.valid = false;
             }
         } else {
             if (!advance(Stage::downloading, Stage::installing)) return;
@@ -451,6 +490,7 @@ View view() {
 }
 
 void tick() {
+    warm_packages();
     std::optional<multiplayer::MapNeed> next;
     {
         std::lock_guard lock(mutex);
@@ -540,26 +580,32 @@ void tick() {
     }
 }
 
+void warm_packages() noexcept {
+    try {
+        std::lock_guard lock(known_mutex);
+        if (!known_packages.valid) refresh_known_packages(GetTickCount64());
+    } catch (...) {}
+}
+
 std::string package_of(std::string_view asset) {
-    auto& cache_mutex = known_mutex;
-    auto& cache = known_packages;
     if (asset.empty()) return {};
     std::string key(asset);
     std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     const auto now = GetTickCount64();
-    std::lock_guard lock(cache_mutex);
-    if (const auto found = cache.find(key); found != cache.end() && now < found->second.until) return found->second.package;
-    // Asked with every map offer a host sends: the Mods folder is read at most every two
-    // minutes for a level.
-    std::string result;
-    const auto list = mods::scan_mods(mods::engine_data_root());
-    for (const auto& entry : list.entries) {
-        if (!entry.enabled || !entry.mod.provides_levels) continue;
-        if (std::none_of(entry.mod.levels.begin(), entry.mod.levels.end(), [&](const std::string& level) { return same(level, key); })) continue;
-        result = multiplayer::map_package_name(entry.mod.name, entry.mod.version);
-        break;
+    std::unique_lock lock(known_mutex);
+    // (Only with no table at all, just after a map was installed, is the Mods folder read here.)
+    if (!known_packages.valid) {
+        lock.unlock();
+        auto table = read_known_packages();
+        lock.lock();
+        if (!known_packages.valid) {
+            known_packages.by_level = std::move(table);
+            known_packages.read_at = now;
+            known_packages.valid = true;
+        }
     }
-    cache[key] = {result, now + 120000};
-    return result;
+    refresh_known_packages(now);
+    const auto found = known_packages.by_level.find(key);
+    return found != known_packages.by_level.end() ? found->second : std::string{};
 }
 }
