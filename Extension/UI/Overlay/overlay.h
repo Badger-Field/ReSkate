@@ -231,6 +231,12 @@ struct RoadRashModel {
 struct BoardBreakModel {
     bool available = false, enabled = false, has_deck = false;
     std::string deck = "None";
+    // Its settings (Extension/BoardBreak/board_break_feel.h) and how worn the board is (0 to 1, and
+    // its word).
+    bool always = false, rails = true, wear = true, crack_sounds = true, body_sounds = true;
+    int sensitivity = 100, joined = 50, wear_rate = 100;
+    float worn = 0;
+    std::string condition = "new";
 };
 
 // Grind exit control's switches (Extension/Skater/grind_exit_control.h): started, switched on,

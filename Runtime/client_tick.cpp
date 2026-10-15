@@ -970,6 +970,20 @@ void update_model(std::uintptr_t client, TickState& frame) {
     const auto breakable_deck = dingosdk::board_break::deck();
     model.board_break = {dingosdk::board_break::available(), dingosdk::board_break::enabled(), !breakable_deck.empty(),
                          dingosdk::board_break::deck_label(breakable_deck)};
+    {
+        const auto feel = dingosdk::board_break::settings();
+        auto& bb = model.board_break;
+        bb.always = feel.always;
+        bb.rails = feel.rails;
+        bb.wear = feel.wear;
+        bb.crack_sounds = feel.crack_sounds;
+        bb.body_sounds = feel.body_sounds;
+        bb.sensitivity = feel.sensitivity;
+        bb.joined = feel.joined;
+        bb.wear_rate = feel.wear_rate;
+        bb.worn = dingosdk::board_break::wear();
+        bb.condition = std::string(dingosdk::board_break::condition_name(bb.worn));
+    }
     model.grind_exit = {dingosdk::grind_exit_control::available(), dingosdk::grind_exit_control::enabled(),
                         dingosdk::grind_exit_control::toe_heel(), dingosdk::grind_exit_control::stance(),
                         dingosdk::grind_exit_control::strength()};
