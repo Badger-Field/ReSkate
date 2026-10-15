@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.7.1 - 2026-10-15
+
+Built on ReSkate 2.0.9, like 0.7.0.
+
+### Fixed
+
+- **Bailing no longer opens the trainer.** The trainer had its own controller combo for the menu, LB + RB + click
+  the right stick, which is also how you bail. It is gone, as standard ReSkate has none: open the menu with Insert.
+  `trainer option pad_menu` says so; a saved setting for it is ignored.
+
 ## v0.7.0 - 2026-10-14 (not released yet)
 
 Built on ReSkate 2.0.9. Measured headlessly on San Vansterdam, 2026-10-13 and 14. Not played by a person yet.

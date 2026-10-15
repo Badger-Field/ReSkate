@@ -639,7 +639,6 @@ void render(IDXGISwapChain* presented, UINT flags) {
     const bool perf_frame = perf_hud_pending() || trainer_hud_pending();
     const bool hub_frame = hub_page_pending();
     if (trainer_open_requested()) s.visible.store(true);
-    if (trainer_pad_menu_pressed(s.visible.load())) s.visible.store(!s.visible.load());
     const bool menu_frame = interactive_visible(s);
     if (!menu_frame) {
         if (s.ui_was_interactive) {

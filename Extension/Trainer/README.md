@@ -20,8 +20,8 @@ telemetry HUD. It ships no game data: the list of values is built at run time fr
 The HUD, the jump read-out and the controller shortcuts are off until you switch them on (MAP & HUD,
 PRACTICE): a player who never opens the trainer sees and feels nothing of it.
 
-Controller: **LB + RB + click the right stick** opens and closes the menu (D-pad or left stick moves, A presses, B goes back);
-it can be switched off on PRACTICE. With the marker shortcuts switched on: hold **LB + RB**, then D-pad **up** saves the marker,
+Open the menu with **Insert**, as in ReSkate (the trainer's own controller combo, LB + RB + click the right stick, is gone:
+it is also how you bail). With the menu open the controller works in it. With the marker shortcuts switched on: hold **LB + RB**, then D-pad **up** saves the marker,
 **down** goes to it, **left / right** pick the slot.
 
 Everything is also a console command (`~`): `trainer open [tune|practice|map|movement|presets|game|pop|speed|bails|grinds|tricklining|transition|pumping|foot|everything]`, `trainer status`, `trainer set <id> <value>`,

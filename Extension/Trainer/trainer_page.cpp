@@ -1288,10 +1288,6 @@ void practice_tab(SkateMenu &menu, const Model &model, const CallbacksV3 &callba
     bool pad = view.pad_shortcuts;
     if (toggle_row(menu, "Controller shortcuts", "Hold LB + RB, then D-pad: up saves, down goes, left / right pick the slot.", pad))
         trainer_command(menu, callbacks, std::format("option pad {}", pad ? 1 : 0));
-    bool pad_menu = view.pad_menu;
-    if (toggle_row(menu, "Open this menu from the controller",
-            "LB + RB + click the right stick opens and closes the menu. Inside: D-pad or left stick moves, A presses, B goes back, LB / RB change a slider in big steps.", pad_menu))
-        trainer_command(menu, callbacks, std::format("option pad_menu {}", pad_menu ? 1 : 0));
     }
     card_end(p);
 
@@ -2065,15 +2061,6 @@ void trainer_page(SkateMenu &menu, const Model &model, const CallbacksV3 &callba
 
 namespace dingosdk::overlay {
 bool trainer_open_requested() { return menu::trainer_take_open(); }
-bool trainer_pad_menu_pressed(bool menu_visible) {
-    static ControllerComboLatch latch;
-    ControllerInput input;
-    DingoSDKOverlayReadControllerInput(&input, true);
-    constexpr std::uint32_t combo = 0x100 | 0x200 | 0x80; // LB + RB + R3
-    if (!latch.update(combo, input, !trainer::view()->pad_menu)) return false;
-    if (!menu_visible) menu::page().show_page = true;
-    return true;
-}
 bool trainer_hud_pending() {
     const auto view = trainer::view();
     return (view->hud || view->hud_jump) && trainer::telemetry().skater;

@@ -129,7 +129,6 @@ struct State {
     MapFile map_file;
     int slot{};
     bool auto_return{}, pad_shortcuts{}, hud{}, hud_jump{}, logging{};
-    bool pad_menu{true}; // LB + RB + R3 opens and closes the menu
     // The hippy jump's height is set by the game's trick scripts, not by tuning: the trainer
     // scales the upward velocity when it sees one start.
     float hippy_height{1};
@@ -393,7 +392,6 @@ void load_store() {
             const auto &o = json->at("options");
             s.auto_return = o.value("auto_return", false);
             s.pad_shortcuts = o.value("pad_shortcuts", false);
-            s.pad_menu = o.value("pad_menu", true);
             s.hud = o.value("hud", false);
             s.hud_jump = o.value("hud_jump", false);
             s.return_delay = std::clamp(o.value("return_delay", 1.5f), 0.0f, 10.0f);
@@ -483,7 +481,6 @@ void save_store() {
         Json options = Json::object();
         options["auto_return"] = s.auto_return;
         options["pad_shortcuts"] = s.pad_shortcuts;
-        options["pad_menu"] = s.pad_menu;
         options["hud"] = s.hud;
         options["hud_jump"] = s.hud_jump;
         options["return_delay"] = s.return_delay;
@@ -2260,7 +2257,6 @@ void build_view() {
     next->revert = s.revert;
     next->return_delay = s.return_delay;
     next->pad_shortcuts = s.pad_shortcuts;
-    next->pad_menu = s.pad_menu;
     next->hud = s.hud;
     next->hud_jump = s.hud_jump;
     next->logging = s.logging;
@@ -3242,12 +3238,12 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
             if (!value) return "error: return_delay needs seconds.";
             s.return_delay = std::clamp(static_cast<float>(*value), 0.0f, 10.0f);
         } else if (!flag(arg(1), on)) {
-            return "error: usage: trainer option hud|hud_jump|auto_return|pad|pad_menu|flip_advanced|flip_pop|flip_flick|log 0|1";
+            return "error: usage: trainer option hud|hud_jump|auto_return|pad|flip_advanced|flip_pop|flip_flick|log 0|1";
         } else if (name == "hud") s.hud = on;
         else if (name == "hud_jump") s.hud_jump = on;
         else if (name == "auto_return") s.auto_return = on;
         else if (name == "pad") s.pad_shortcuts = on;
-        else if (name == "pad_menu") s.pad_menu = on;
+        else if (name == "pad_menu") return "That switch is gone: LB + RB + R3 is the game's bail. Open the menu with Insert.";
         else if (name == "flip_gate") return "That switch is gone: a flip set slower than the game's own stays slow by itself.";
         else if (name == "catch_at") return "That switch is gone: it did not work reliably. Use the flip trick speed.";
         else if (name == "flip_pop") {
