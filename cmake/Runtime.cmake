@@ -231,7 +231,8 @@ add_library(dingosdk_runtime SHARED
     Extension/Boot/ea_app_block.cpp
     Extension/Boot/ea_service_block.cpp
     Extension/Boot/eadp_errors_arena.cpp
-    Extension/Boot/descriptor_heap_size.cpp)
+    Extension/Boot/descriptor_heap_size.cpp
+    Extension/Boot/game_fatal_dump.cpp)
 
 target_link_libraries(dingosdk_runtime PRIVATE dingosdk_logging dingosdk_profiler dingosdk_supported_build dingosdk_overlay dingosdk_console_core dingosdk_steam_restart_guard
     dingosdk_startup_interventions dingosdk_fast_travel_unlock dingosdk_local_profile dingosdk_initfs dingosdk_mods dingosdk_mod_list dingosdk_launcher_support dingosdk_miniz shell32 dingosdk_startup_window dingosdk_custom_scripts dingosdk_world_layer_scan bcrypt

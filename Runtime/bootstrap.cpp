@@ -9,6 +9,7 @@
 #include "Extension/Boot/ea_app_block.h"
 #include "Extension/Boot/ea_service_block.h"
 #include "Extension/Boot/descriptor_heap_size.h"
+#include "Extension/Boot/game_fatal_dump.h"
 #include "Extension/Boot/eadp_errors_arena.h"
 #include "Extension/Assets/native_patch_support.h"
 #include "Extension/Assets/mod_layers.h"
@@ -48,6 +49,9 @@ bool initialize_bootstrap(std::uintptr_t base) {
     // The memory ledger, when RESKATE_MEMORY_TRACE asks for it: here, while the game is still
     // suspended and before the pools below are enlarged, so it sees who makes all of them.
     console::start_memory_trace_from_environment();
+    // (Not needed for the game to run: a mismatch leaves crash reports at what the game writes.)
+    error.clear(); ready = start_game_fatal_dump(base, error);
+    (void)stage(Channel::runtime, "Crash dumps from the game's own fatal handlers", ready, error);
     error.clear(); ready = start_native_patch_support(base, error);
     if (!stage(Channel::assets, "Native InitFS/package support", ready, error)) return false;
     error.clear(); ready = start_mod_layers(base, error);
