@@ -122,6 +122,7 @@ add_library(dingosdk_runtime SHARED
     Extension/World/native_entity_pages.cpp
     Extension/World/world_pool_usage.cpp
     Extension/World/physics_world_size.cpp
+    Extension/World/spatial_cull_ids.cpp
     Extension/Rendering/display_startup.cpp
     Extension/Rendering/replay_export.cpp
     Engine/Game/World/world_model.cpp
