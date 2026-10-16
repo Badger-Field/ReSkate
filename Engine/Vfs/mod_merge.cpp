@@ -289,8 +289,8 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
                 // Archive 1 stays the patch's own file, never a link to a mod's:
                 // a live apply appends manifests and new mods to it while the
                 // game has it open, and a linked file cannot be swapped for a
-                // private copy then (Windows keeps it in use).
-                claimed.insert(manifestArchive);
+                // private copy then (Windows keeps it in use). Placeholder indexes name no file.
+                claimed.insert({manifestArchive, CasStore::waiting_archive, CasStore::carried_archive});
                 if (number == manifestArchive) {
                     if (const auto free = claim(directory); free) {
                         spot.archive = *free;

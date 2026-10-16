@@ -84,19 +84,19 @@ CasStore CasStore::waiting() const {
     copy.held_.clear();
     copy.offsets_.clear();
     copy.carried_.clear();
-    copy.carriedIndex_.clear();
     copy.carriedAt_.clear();
     return copy;
 }
 
 fb::BundleFileInfo CasStore::carry(std::uint32_t installChunk, std::uint16_t archive, std::span<const std::byte> encoded) {
     if (!waiting_) throw std::logic_error("Only a waiting store carries payloads");
-    // An install chunk no package names fails here, for this payload alone, and not when it settles.
-    (void)archive_path(installChunk, archive);
-    const std::pair key{installChunk, sha1_of(encoded)};
-    const auto [found, fresh] = carriedIndex_.try_emplace(key, carried_.size());
-    if (fresh) carried_.push_back({installChunk, archive, key.second, encoded, {}});
-    return {{true, installChunk, carried_archive}, static_cast<std::uint32_t>(found->second),
+    if (placeholder(archive) || (archive_ && *archive_ != archive))
+        throw std::logic_error("A waiting store writes to one archive index");
+    // An install chunk no package names fails here, for this payload alone.
+    (void)directory(installChunk);
+    archive_ = archive;
+    carried_.push_back({installChunk, sha1_of(encoded), encoded, {}});
+    return {{true, installChunk, carried_archive}, static_cast<std::uint32_t>(carried_.size() - 1),
             static_cast<std::uint32_t>(encoded.size())};
 }
 
@@ -106,13 +106,12 @@ void CasStore::settle(CasStore& waiting) {
         held.at = append(fs::path(path), held.bytes);
         held.bytes = {};
     }
-    // Then the carried assets, in the order the superbundle first named them. An asset an
-    // earlier superbundle settled in this install chunk is not written again.
+    // Then the carried assets, each written once per install chunk.
     for (auto& carried : waiting.carried_) {
         const std::pair key{carried.installChunk, carried.sha1};
         auto found = carriedAt_.find(key);
         if (found == carriedAt_.end())
-            found = carriedAt_.emplace(key, write(carried.installChunk, carried.archive, carried.bytes)).first;
+            found = carriedAt_.emplace(key, write(carried.installChunk, *waiting.archive_, carried.bytes)).first;
         carried.at = found->second;
     }
 }

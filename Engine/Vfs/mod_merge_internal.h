@@ -132,8 +132,7 @@ public:
     // own has been settled, settle() appends what it holds to the real archives, and
     // settled() then moves a placement that points into it to where that went.
     static constexpr std::uint16_t waiting_archive = 0xFFFF;
-    // An asset carried into copies in several superbundles. A waiting store names it by its
-    // place in the store's carried list, and settle() writes it once per install chunk.
+    // A carried payload, by its index in the waiting store's list: settle() writes it once per install chunk.
     static constexpr std::uint16_t carried_archive = 0xFFFE;
     [[nodiscard]] CasStore waiting() const;
     [[nodiscard]] bool holding() const noexcept { return !held_.empty() || !carried_.empty(); }
@@ -169,16 +168,15 @@ private:
     bool waiting_{};
     std::optional<std::uint16_t> archive_;
     std::map<std::wstring, Held> held_;
+    // Carried payloads (waiting store) and where each landed (settling store).
     struct Carried {
         std::uint32_t installChunk{};
-        std::uint16_t archive{};
         fb::Sha1 sha1;
         std::span<const std::byte> bytes;
-        fb::BundleFileInfo at;   // where settle() put it
+        fb::BundleFileInfo at;
     };
-    std::vector<Carried> carried_;                                                // waiting: first-reference order
-    std::map<std::pair<std::uint32_t, fb::Sha1>, std::size_t> carriedIndex_;     // waiting: into carried_
-    std::map<std::pair<std::uint32_t, fb::Sha1>, fb::BundleFileInfo> carriedAt_; // settled: one per install chunk
+    std::vector<Carried> carried_;
+    std::map<std::pair<std::uint32_t, fb::Sha1>, fb::BundleFileInfo> carriedAt_;
 };
 
 using ArchiveUse = std::set<std::pair<std::uint32_t, std::uint16_t>>;
