@@ -4,6 +4,7 @@
 #include "drone_flight.h"
 #include "drone_outfit.h"
 #include "Extension/Multiplayer/Remote/native_prop.h"
+#include "Extension/Multiplayer/Remote/drone_sound.h"
 #include <algorithm>
 #include <cstdlib>
 #include <format>
@@ -191,6 +192,7 @@ void register_movement_commands(Commands &registry) {
         if (name.empty() || name == "status") {
             out(multiplayer::prop_test_status());
             out("Other players' drones: " + multiplayer::drone_models_status());
+            out("Their sound: " + multiplayer::drone_sounds_status());
             return;
         }
         if (name == "stop") {

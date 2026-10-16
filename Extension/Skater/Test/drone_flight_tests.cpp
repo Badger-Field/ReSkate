@@ -1,6 +1,7 @@
 // The FPV drone's flight model (drone_flight.h): hover and height hold, thrust and top speed,
 // motor and rate lag, angle mode, crashes against a wall and landing on a floor, and a gamepad's
 // sticks. Flown in a world of one floor (y = 0) and one wall (x = 20).
+#include "Extension/Skater/drone_beacon.h"
 #include "Extension/Skater/drone_flight.h"
 #include <cstdio>
 using namespace dingosdk::drone;
@@ -222,6 +223,36 @@ int main() {
             CHECK(std::abs(flat.motor - 0.22f) < 0.01f && std::abs(leaning.motor - flat.motor) < 0.01f,
                   "without height hold the throttle does not change with the lean");
         }
+    }
+    // Another player's drone, heard: the throttle it seems to be on, from how it moves.
+    {
+        namespace beacon = dingosdk::drone::beacon;
+        const float g = beacon::assumed_gravity, hover = beacon::assumed_hover;
+        CHECK(std::abs(beacon::estimate_throttle({0, 0, 0}, beacon::no_rotation) - hover) < 1e-4f, "a hovering drone is on its hover throttle");
+        CHECK(beacon::estimate_throttle({0, -g, 0}, beacon::no_rotation) < 1e-4f, "a falling drone is off the throttle");
+        CHECK(std::abs(beacon::estimate_throttle({0, g, 0}, beacon::no_rotation) - hover * std::pow(2.0f, 2.0f / 3.0f)) < 1e-3f,
+              "climbing at 1 g takes twice the hover thrust");
+        // Leant 45 degrees and holding its height: the thrust is 1/cos(45) of its weight.
+        const float half = 0.3926991f;
+        const beacon::Rotation leant{std::sin(half), 0, 0, std::cos(half)};
+        const auto up = beacon::basis_from_rotation(leant)[1];
+        const beacon::Position level{up[0] / up[1] * g, 0, up[2] / up[1] * g};
+        CHECK(std::abs(beacon::estimate_throttle(level, leant) - hover * std::pow(1.0f / std::cos(2 * half), 2.0f / 3.0f)) < 1e-3f,
+              "a leant drone holding its height is on more than its hover throttle");
+        // Through packets: still for a while, then climbing at 1 g.
+        const auto start = beacon::Clock::now();
+        const auto at_time = [&](int n) { return start + std::chrono::milliseconds(66 * n); };
+        int n = 0;
+        for (; n < 10; ++n) beacon::receive(7, "pilot", {0, 5, 0}, beacon::no_rotation, true, at_time(n));
+        auto heard = beacon::snapshot(at_time(n - 1));
+        CHECK(heard.size() == 1 && std::abs(heard[0].throttle - hover) < 0.01f && heard[0].speed < 0.01f, "a drone keeping still sounds like a hover");
+        for (int k = 0; k < 15; ++k, ++n) {
+            const float t = 0.066f * k;
+            beacon::receive(7, "pilot", {0, 5 + 0.5f * g * t * t, 0}, beacon::no_rotation, true, at_time(n));
+        }
+        heard = beacon::snapshot(at_time(n - 1));
+        CHECK(heard.size() == 1 && heard[0].throttle > 0.5f && heard[0].speed > 5.0f, "a drone climbing hard sounds busier and faster");
+        beacon::forget(7);
     }
     if (fails) return 1;
     std::puts("Drone flight tests passed.");
