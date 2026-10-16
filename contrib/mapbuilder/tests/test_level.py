@@ -18,8 +18,9 @@ from reskate_mapbuilder.cas import decode_raw, encode_raw  # noqa: E402
 from reskate_mapbuilder.ebx import (Document, FieldCategory as C, FieldType as T, FieldValue, InstanceRecord,  # noqa: E402
                                     Object, PointerKind, PointerReference, ensure_fixup_type, read_document,
                                     write_document)
-from reskate_mapbuilder.ebxedit import (clone_document, clone_instance, derived_guid, describe, find_objects,  # noqa: E402
-                                        pointer_arrays)
+from reskate_mapbuilder.ebxcheck import roundtrip  # noqa: E402
+from reskate_mapbuilder.ebxedit import (after_last_of_type, clone_document, clone_instance, derived_guid,  # noqa: E402
+                                        describe, find_objects, guid_flags, pointer_arrays)
 from reskate_mapbuilder.game import Game  # noqa: E402
 from reskate_mapbuilder.level import new_level  # noqa: E402
 from reskate_mapbuilder.mod import ModBuilder  # noqa: E402
@@ -52,12 +53,14 @@ TYPES = [
                                 ("IsDefault", enc(T.boolean, C.primitive), 0, 16)]),
     ("DetachedSubLevelInfo", 16, 8, [("DetachedSubLevelName", enc(T.cString, C.primitive), 0, 0),
                                      ("StartPoints", enc(T.structure, C.array), 4, 8)]),
-    ("SubWorldReferenceObjectData", 40, 8, [("$", enc(T.inherited, C.none), 0, 0),
-                                            ("BundleName", enc(T.cString, C.primitive), 0, 16),
-                                            ("IsDetachedSubLevel", enc(T.boolean, C.primitive), 0, 24),
-                                            ("AutoLoad", enc(T.boolean, C.primitive), 0, 25),
-                                            ("StreamRealm", enc(T.enumeration, C.enumeration), 0, 28),
-                                            ("ObjectSubVariation", enc(T.uint32, C.primitive), 0, 32)]),
+    ("SubWorldReferenceObjectData", 128, 16, [("$", enc(T.inherited, C.none), 0, 0),
+                                              ("BundleName", enc(T.cString, C.primitive), 0, 16),
+                                              ("IsDetachedSubLevel", enc(T.boolean, C.primitive), 0, 24),
+                                              ("AutoLoad", enc(T.boolean, C.primitive), 0, 25),
+                                              ("StreamRealm", enc(T.enumeration, C.enumeration), 0, 28),
+                                              ("ObjectSubVariation", enc(T.uint32, C.primitive), 0, 32),
+                                              ("BlueprintTransform", enc(T.structure, C.structure), 10, 48),
+                                              ("Blueprint", enc(T.pointer, C.pointer), 0, 112)]),
     ("DetachedSetBlueprint", 40, 8, [("$", enc(T.inherited, C.none), 1, 0),
                                      ("Objects", enc(T.pointer, C.array), 0, 24),
                                      ("DetachedSubLevels", enc(T.structure, C.array), 5, 32)]),
@@ -67,6 +70,10 @@ TYPES = [
                                      ("StartLocalServer", enc(T.boolean, C.primitive), 0, 32),
                                      ("UseExtendedStartPoints", enc(T.boolean, C.primitive), 0, 33),
                                      ("Objects", enc(T.pointer, C.array), 0, 40)]),
+    ("Vec3", 16, 16, [("x", enc(T.float32, C.primitive), 0, 0), ("y", enc(T.float32, C.primitive), 0, 4),
+                      ("z", enc(T.float32, C.primitive), 0, 8)]),
+    ("LinearTransform", 64, 16, [(n, enc(T.structure, C.structure), 9, o)
+                                 for n, o in (("right", 0), ("up", 16), ("forward", 32), ("trans", 48))]),
 ]
 INDEX = {t[0]: i for i, t in enumerate(TYPES)}
 
@@ -150,7 +157,8 @@ def bam_description():
 def root_description():
     def build(d):
         entries = [obj(d, "OnDemandBundle", SuperBundle=name, BundleHash=bundle_hash(name))
-                   for name in ("levels/game/BAM_LevelRoot/BAM_LevelRoot", "Levels/Game/DingoLevel_MPR/DingoLevel_MPR")]
+                   for name in ("Levels/game/BAM_LevelRoot/_DEBUG_/BuildkitPerfTests",
+                                "levels/game/BAM_LevelRoot/BAM_LevelRoot", "Levels/Game/DingoLevel_MPR/DingoLevel_MPR")]
         return obj(d, "LevelDescriptionAsset", Name="Levels/Game/DingoLevel_Root/DingoLevel_Root/Description",
                    OnDemandBundles=entries)
     return document(guid(5), [(build, guid(6))])
@@ -167,13 +175,22 @@ def genprefab():
                  obj(d, "DetachedSubLevelInfo", DetachedSubLevelName="Levels/Game/DingoLevel_MPR/DingoLevel_MPR",
                      StartPoints=[start(d, "DefaultStartPoint", True)])]
         return obj(d, "DetachedSetBlueprint", Name="Levels/Game/DingoLevel_Root/DingoLevel_Root_DSubLevelManager_GenPrefab",
-                   Objects=[ptr(1), ptr(2)], DetachedSubLevels=infos)
+                   Objects=[ptr(1), ptr(2), ptr(3)], DetachedSubLevels=infos)
+
+    def transform(d, x):
+        return obj(d, "LinearTransform", trans=obj(d, "Vec3", x=x, y=2.0, z=3.0), right=obj(d, "Vec3", x=0.0, z=1.0))
+    debug = "Levels/Game/BAM_LevelRoot/_DEBUG_/BuildkitPerfTests"
     return document(guid(7), [
         (blueprint, guid(8)),
-        (lambda d: obj(d, "SubWorldReferenceObjectData", Flags=77, BundleName="Levels/Game/BAM_LevelRoot/BAM_LevelRoot",
-                       IsDetachedSubLevel=True, StreamRealm=3, ObjectSubVariation=0xFFFFFFFF), guid(9)),
+        (lambda d: obj(d, "SubWorldReferenceObjectData", Flags=0x1000000 | 0x334455, BundleName=debug,
+                       IsDetachedSubLevel=True, StreamRealm=3), Guid.parse("00334455-0000-0000-0000-000000000001")),
+        (lambda d: obj(d, "SubWorldReferenceObjectData", Flags=0xB69B78, BundleName="Levels/Game/BAM_LevelRoot/BAM_LevelRoot",
+                       IsDetachedSubLevel=True, StreamRealm=3, ObjectSubVariation=0xFFFFFFFF,
+                       BlueprintTransform=transform(d, 5.0), Blueprint=ptr(4)),
+         Guid.parse("6ab69b78-1111-2222-3333-444455556666")),
         (lambda d: obj(d, "SubWorldReferenceObjectData", BundleName="Levels/Game/DingoLevel_MPR/DingoLevel_MPR",
-                       IsDetachedSubLevel=True, StreamRealm=3), None)])
+                       IsDetachedSubLevel=True, StreamRealm=3), guid(10)),
+        (lambda d: obj(d, "Asset", Name="a later instance of another kind"), guid(11))])
 
 
 def node(type_, name=None, payload=b"", children=None):
@@ -252,16 +269,41 @@ def test_layout_round_trips_and_gains_a_superbundle_in_both_lists():
 def test_clone_instance_renumbers_pointers_and_joins_the_arrays():
     doc = genprefab()
     found = find_objects(doc, "SubWorldReferenceObjectData")
-    assert [f.instance for f in found] == [1, 2]
-    holders = pointer_arrays(doc, 1)
-    index = clone_instance(doc, 1, derived_guid("t"))
-    assert index == 2                      # after the last exported instance
+    assert [f.instance for f in found] == [1, 2, 3]
+    holders = pointer_arrays(doc, 2)
+    index = clone_instance(doc, 2, derived_guid("t"), after_last_of_type(doc, 2))
+    assert index == 4                      # after the last of its kind, as the 333 map puts its own
     holders[0][1].append(PointerReference(PointerKind.internal, index))
     back = read_document(write_document(doc))
     objects = back.instances[0].object.get("Objects")
-    assert [p.index for p in objects] == [1, 3, 2]
-    assert back.instances[3].object.get("BundleName").endswith("DingoLevel_MPR")
-    assert back.instances[2].instance_guid == derived_guid("t") and back.instances[2].exported
+    assert [p.index for p in objects] == [1, 2, 3, 4]
+    assert back.instances[5].object.get("Name") == "a later instance of another kind"
+    assert back.instances[4].object.get("Blueprint").index == 5     # moved with the instance it points at
+    assert back.instances[4].instance_guid == derived_guid("t") and back.instances[4].exported
+    with pytest.raises(ValueError):
+        clone_instance(doc, 2, derived_guid("u"), at=0)     # the root stays first
+
+
+def test_flags_follow_the_guid_first_group():
+    for text, template, flags in (("742c6106-0000-0000-0000-000000000000", 0, 0x2C6106),
+                                  ("6ab69b78-0000-0000-0000-000000000000", 0xB69B78, 11967352),
+                                  ("8fd8c2da-0000-0000-0000-000000000000", 0x1000000, 0x1D8C2DA),
+                                  ("4914e18a-0000-0000-0000-000000000000", 0x1ABCDEF, 0x114E18A)):
+        g = Guid.parse(text)
+        assert g.string() == text
+        assert guid_flags(g, template) == flags
+
+
+def test_roundtrip_explains_a_rewrite_that_differs():
+    from test_ebx_crosscheck import synthetic
+    doc = synthetic(2)
+    doc.root().object.set("Numbers", [1, 2, 3])
+    doc.root().object.set("Empty", [4, 5])
+    data = write_document(doc)            # two int32 arrays with their own hashes: a rewrite borrows one
+    report = roundtrip(data)
+    assert report[0].startswith("rewrite DIFFERS") and "EBXX" in report[0] and "SEMANTICALLY EQUAL" in report[0]
+    assert any("array records without offsets" in line and "first differs" in line for line in report)
+    assert roundtrip(write_document(read_document(data))) == [f"rewrite identical ({len(write_document(read_document(data)))} bytes)"]
 
 
 def test_clone_document_takes_new_guids_and_keeps_the_rest():
@@ -280,7 +322,7 @@ def test_new_level_writes_the_registration(tmp_path):
     game = Game(fake_game(tmp_path / "game"))
     mod = ModBuilder(game, "zz-new-level")
     report = new_level(game, mod, LEVEL, "Test level")
-    assert any("rewrite identical" in line for line in report)
+    assert sum("rewrite identical" in line for line in report) == 4
     assert not any("DIFFERS" in line or "MISSING" in line or "NOT match" in line for line in report)
     root = mod.write(tmp_path / "Mods")
     view = Game(tmp_path / "game", mod=root)
@@ -319,7 +361,7 @@ def test_new_level_writes_the_registration(tmp_path):
     assert d.get("LevelName") == f"Levels/Game/{LEVEL}/{LEVEL}" and d.get("LevelGuid") == new_root.file_guid
     assert d.get("Name") == f"Levels/Game/{LEVEL}/{LEVEL}/Description"
     entries = read_document(view.ebx(region, manifest, ROOT + "/description")).instances[0].object.get("OnDemandBundles")
-    assert [(e.get("SuperBundle"), e.get("BundleHash")) for e in entries][2] == (
+    assert len(entries) == 4 and (entries[3].get("SuperBundle"), entries[3].get("BundleHash")) == (
         f"levels/game/{LEVEL}/{LEVEL}", bundle_hash(NEW))
 
     # The root level: a detached sublevel and its sub-world reference.
@@ -335,12 +377,20 @@ def test_new_level_writes_the_registration(tmp_path):
     assert len(infos[0].get("StartPoints")) == 2           # bam's own entry is untouched
     objects = doc.instances[0].object.get("Objects")
     targets = [doc.instances[p.index].object.get("BundleName") for p in objects]
-    assert targets == ["Levels/Game/BAM_LevelRoot/BAM_LevelRoot", "Levels/Game/DingoLevel_MPR/DingoLevel_MPR",
-                       f"Levels/Game/{LEVEL}/{LEVEL}"]
-    added = doc.instances[objects[2].index]
-    assert added.exported and added.instance_guid != guid(9)
-    assert [added.object.get(k) for k in ("IsDetachedSubLevel", "AutoLoad", "StreamRealm", "ObjectSubVariation")] == [
+    assert targets == ["Levels/Game/BAM_LevelRoot/_DEBUG_/BuildkitPerfTests", "Levels/Game/BAM_LevelRoot/BAM_LevelRoot",
+                       "Levels/Game/DingoLevel_MPR/DingoLevel_MPR", f"Levels/Game/{LEVEL}/{LEVEL}"]
+    assert objects[3].index == 4 and doc.instances[5].object.get("Name") == "a later instance of another kind"
+    added = doc.instances[4]
+    assert added.exported and added.instance_guid != doc.instances[2].instance_guid
+    a = added.object
+    assert [a.get(k) for k in ("IsDetachedSubLevel", "AutoLoad", "StreamRealm", "ObjectSubVariation")] == [
         True, False, 3, 0xFFFFFFFF]
+    assert a.get("Flags") == int.from_bytes(added.instance_guid.bytes[:4], "little") & 0xFFFFFF
+    assert a.get("Blueprint").kind == PointerKind.null
+    t = a.get("BlueprintTransform")
+    assert [[t.get(r).get(c) for c in "xyz"] for r in ("right", "up", "forward", "trans")] == [
+        [1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, 0]]
+    assert doc.instances[2].object.get("BlueprintTransform").get("trans").get("x") == 5.0   # bam's untouched
 
     # bam's own TOC is not part of the mod.
     assert not (root / "Win32" / (BAM + ".toc")).exists()
@@ -382,4 +432,6 @@ def test_cli_dry_run_writes_nothing(tmp_path, capsys):
     assert "dry run: nothing written" in out and f"Win32/{NEW}.toc" in out and str(bundle_hash(NEW)) in out
     assert not (tmp_path / "Mods").exists()
     main(["dump-ebx", "--game", str(game_dir), "--superbundle", "globals", "--ebx", ROOT + "/description"])
-    assert "OnDemandBundles: [2]" in capsys.readouterr().out
+    assert "OnDemandBundles: [3]" in capsys.readouterr().out
+    main(["ebx-roundtrip", "--game", str(game_dir), "--superbundle", "globals", "--ebx", ROOT + "/description"])
+    assert "rewrite identical" in capsys.readouterr().out

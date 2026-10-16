@@ -18,8 +18,10 @@ from collections import Counter
 
 from . import nativedb
 from .bundle import read_bundle_region
-from .ebx import Document, PointerKind, PointerReference, read_document, write_document
-from .ebxedit import Found, clone_document, clone_instance, derived_guid, find_objects, pointer_arrays, set_fields, strings
+from .ebx import Document, Object, PointerKind, PointerReference, read_document, write_document
+from .ebxcheck import roundtrip
+from .ebxedit import (Found, after_last_of_type, clone_document, clone_instance, derived_guid, find_objects, guid_flags,
+                      pointer_arrays, set_fields, strings)
 from .toc import bundle_hash
 
 # The base level the new one clones, and the segment of its names swapped for the new level's.
@@ -45,6 +47,9 @@ SUBLEVEL_INFO_TYPE = "DetachedSubLevelInfo"
 SUBWORLD_REFERENCE_TYPE = "SubWorldReferenceObjectData"
 START_POINT = "DefaultStartPoint"
 AUTOLOAD_SUBLEVELS = ["Levels/Game/BAM_LevelRoot/StartPoint_Sublevels", "Levels/game/BAM_LevelRoot/TOD_2_Noon"]
+# As the 333 map's own reference: identity transform, no blueprint or template (GUESS: field names).
+REFERENCE_TRANSFORM = "BlueprintTransform"
+REFERENCE_NULLED = ("Blueprint", "Template")
 SUBWORLD_REFERENCE = {"IsDetachedSubLevel": True, "AutoLoad": False, "StreamRealm": 3, "ObjectSubVariation": 0xFFFFFFFF}
 ROOT_WORLD = {"WorldSizeXZ": 4096, "WorldSizeY": 1024, "StartLocalServer": True, "UseExtendedStartPoints": True}
 
@@ -72,9 +77,9 @@ def _locate(game, searched: tuple[str, ...], ebx_name: str) -> tuple[str, str]:
 
 def _read(raw: bytes, label: str, log: list[str]) -> Document:
     doc = read_document(raw)
-    same = write_document(doc) == raw
     log.append(f"  {label}: {len(raw)} bytes, root {doc.root_type}, {len(doc.instances)} instances, "
-               f"file guid {doc.file_guid.string()}, rewrite {'identical' if same else 'DIFFERS from the original'}")
+               f"file guid {doc.file_guid.string()}")
+    log.extend("    " + line for line in roundtrip(raw, brief=True))
     return doc
 
 
@@ -89,7 +94,8 @@ def _clone_found(doc: Document, found: Found, guid_salt: str) -> object:
         source = doc.instances[found.instance]
         holders = pointer_arrays(doc, found.instance)
         index = clone_instance(doc, found.instance,
-                               derived_guid(guid_salt, source.instance_guid.string()) if source.exported else None)
+                               derived_guid(guid_salt, source.instance_guid.string()) if source.exported else None,
+                               after_last_of_type(doc, found.instance))
         for _, array in holders:
             array.append(PointerReference(PointerKind.internal, index))
         return doc.instances[index].object
@@ -98,6 +104,33 @@ def _clone_found(doc: Document, found: Found, guid_salt: str) -> object:
 
 def _named(found: list[Found], field: str, needle: str) -> list[Found]:
     return [f for f in found if needle.lower() in str(f.object.get(field) or "").lower()]
+
+
+def _whole(found: list[Found], field: str, tail: str) -> list[Found]:
+    return [f for f in found if str(f.object.get(field) or "").lower().endswith("/" + tail)]
+
+
+def _flags_text(doc: Document, found: Found) -> str:
+    flags = found.object.get("Flags")
+    if not isinstance(flags, int):
+        return repr(flags)
+    instance = doc.instances[found.instance] if found.instance >= 0 else None
+    if instance is None or not instance.exported:
+        return f"{flags:#x}"
+    same = guid_flags(instance.instance_guid, flags) == flags
+    return f"{flags:#x} (guid {instance.instance_guid.string()}, {'follows' if same else 'does NOT follow'} the guid rule)"
+
+
+def _identity(transform: Object) -> bool:
+    """Sets a LinearTransform {right, up, forward, trans} of Vec3 {x, y, z} to identity."""
+    rows = {"right": (1.0, 0.0, 0.0), "up": (0.0, 1.0, 0.0), "forward": (0.0, 0.0, 1.0), "trans": (0.0, 0.0, 0.0)}
+    vectors = {name: transform.get(name) for name in rows}
+    if not all(isinstance(v, Object) and all(v.find(a) is not None for a in "xyz") for v in vectors.values()):
+        return False
+    for name, values in rows.items():
+        for axis, value in zip("xyz", values):
+            vectors[name].set(axis, value)
+    return True
 
 
 def new_level(game, mod, level: str, display_name: str | None = None) -> list[str]:
@@ -193,10 +226,12 @@ def new_level(game, mod, level: str, display_name: str | None = None) -> list[st
                    f"({'matches bundle_hash' if bundle_hash(name or '') == value else 'does NOT match bundle_hash'})")
         if level in (name or "").lower():
             raise ValueError(f"{level} is already registered")
-    template = next((e for e in entries if BASE_LEVEL in (e.get("SuperBundle") or "").lower()), entries[0])
+    # bam's own entry: the root list holds others naming bam (e.g. levels/game/BAM_LevelRoot/_DEBUG_/...).
+    template = next((e for e in entries if (e.get("SuperBundle") or "").lower() == BASE_SUPERBUNDLE), None)
+    if template is None:
+        raise KeyError(f"no {ON_DEMAND_FIELD} entry is {BASE_SUPERBUNDLE}")
     entry = copy.deepcopy(template)
-    named = template.get("SuperBundle") or ""
-    superbundle_field = swap_level(named, level) if BASE_LEVEL in named.lower() else path
+    superbundle_field = swap_level(template.get("SuperBundle"), level)
     set_fields(entry, {"SuperBundle": superbundle_field, "BundleHash": bundle_hash(superbundle_field)})
     entries.append(entry)
     log.append(f"  adds {superbundle_field!r} {bundle_hash(superbundle_field)}")
@@ -213,14 +248,13 @@ def new_level(game, mod, level: str, display_name: str | None = None) -> list[st
         log.append(f"  {SUBLEVEL_INFO_TYPE} {f.path}: {f.object.get('DetachedSubLevelName')!r}, start points {points}")
     for f in references:
         log.append(f"  {SUBWORLD_REFERENCE_TYPE} {f.path}: {f.object.get('BundleName')!r}, "
-                   f"detached {f.object.get('IsDetachedSubLevel')}, flags {f.object.get('Flags')}")
+                   f"detached {f.object.get('IsDetachedSubLevel')}, flags {_flags_text(doc, f)}")
     if _named(infos, "DetachedSubLevelName", level) or _named(references, "BundleName", level):
         raise ValueError(f"{level} is already a detached sublevel")
-    whole = f"{BASE_LEVEL}/{BASE_LEVEL}"     # bam's own entry, rather than one of its sublevels
-    templates = _named(infos, "DetachedSubLevelName", BASE_LEVEL)
-    templates.sort(key=lambda f: not str(f.object.get("DetachedSubLevelName")).lower().endswith(whole))
+    whole = f"{BASE_LEVEL}/{BASE_LEVEL}"     # bam's own entry, not one of its sublevels or _DEBUG_ levels
+    templates = _whole(infos, "DetachedSubLevelName", whole)
     if not templates:
-        raise KeyError(f"no {SUBLEVEL_INFO_TYPE} names {BASE_LEVEL}")
+        raise KeyError(f"no {SUBLEVEL_INFO_TYPE} names .../{whole}")
     info = _clone_found(doc, templates[0], level + ":info")
     info.set("DetachedSubLevelName", swap_level(info.get("DetachedSubLevelName"), level))
     points = info.get("StartPoints")
@@ -233,16 +267,27 @@ def new_level(game, mod, level: str, display_name: str | None = None) -> list[st
     points[:] = [point]
     log.append(f"  adds {SUBLEVEL_INFO_TYPE} {info.get('DetachedSubLevelName')!r} with {START_POINT} "
                f"autoloading {AUTOLOAD_SUBLEVELS}")
-    templates = _named(references, "BundleName", BASE_LEVEL)
-    templates.sort(key=lambda f: (f.object.get("IsDetachedSubLevel") is not True,
-                                  not str(f.object.get("BundleName")).lower().endswith(whole)))
+    templates = _whole(references, "BundleName", whole)
+    templates.sort(key=lambda f: f.object.get("IsDetachedSubLevel") is not True)
     if not templates:
-        raise KeyError(f"no {SUBWORLD_REFERENCE_TYPE} names {BASE_LEVEL}")
-    reference = _clone_found(doc, templates[0], level + ":reference")
+        raise KeyError(f"no {SUBWORLD_REFERENCE_TYPE} names .../{whole}")
+    template = templates[0]
+    reference = _clone_found(doc, template, level + ":reference")
     changes = dict(SUBWORLD_REFERENCE, BundleName=swap_level(reference.get("BundleName"), level))
+    for name in REFERENCE_NULLED:
+        if isinstance(reference.get(name), PointerReference):
+            changes[name] = PointerReference()
+    transform = reference.get(REFERENCE_TRANSFORM)
+    if isinstance(transform, Object) and not _identity(transform):
+        log.append(f"  WARNING: {REFERENCE_TRANSFORM} is not a LinearTransform; left as bam's")
+    new_index = next((i for i, r in enumerate(doc.instances) if r.object is reference), -1)
+    if new_index >= 0 and doc.instances[new_index].exported and isinstance(reference.get("Flags"), int):
+        changes["Flags"] = guid_flags(doc.instances[new_index].instance_guid, reference.get("Flags"))
     missing = set_fields(reference, changes)
-    log.append(f"  adds {SUBWORLD_REFERENCE_TYPE} {reference.get('BundleName')!r} (copy of {templates[0].path})"
-               + (f", MISSING fields {missing}" if missing else ""))
+    where_put = f"instance #{new_index}" if new_index >= 0 else "a struct"
+    log.append(f"  adds {SUBWORLD_REFERENCE_TYPE} {reference.get('BundleName')!r} as {where_put} (copy of "
+               f"{template.path}), guid {doc.instances[new_index].instance_guid.string() if new_index >= 0 else '-'}, "
+               f"flags {reference.get('Flags')}" + (f", MISSING fields {missing}" if missing else ""))
     mod.replace_ebx(*where, GENPREFAB_EBX, write_document(doc))
 
     mod.levels.append({"asset": path, "displayName": display_name or level, "startPoints": [START_POINT]})

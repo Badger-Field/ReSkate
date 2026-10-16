@@ -38,12 +38,15 @@ can be stood on.
         --level dingolevel_reskate_test --dry-run
     python -m reskate_mapbuilder new-level --game "<Skate>" --mods "<Skate>\Mods" --name zz-new-level \
         --level dingolevel_reskate_test --display-name "ReSkate test level"
+    python -m reskate_mapbuilder ebx-roundtrip --game "<Skate>" --superbundle globals \
+        --ebx levels/game/dingolevel_root/dingolevel_root/description
     python -m reskate_mapbuilder dump-ebx --game "<Skate>" [--mod "<a mod folder>"] \
         --superbundle globals --ebx levels/game/dingolevel_root/dingolevel_root/description
 
 `raise-ground` repeats the collision test already proven in game with the C++ tools, written
 entirely by this package. `new-level` adds a level that is, for now, a clone of the base
-map (FORMAT-NOTES 6.2); `--dry-run` reads and reports only. `dump-ebx` prints an EBX document.
+map (FORMAT-NOTES 6.2); `--dry-run` reads and reports only. `dump-ebx` prints an EBX document; `ebx-roundtrip` says where and why rewriting one unchanged
+changes its bytes.
 
 The format reference is `contrib/mapbuilder/FORMAT-NOTES.md`.
 

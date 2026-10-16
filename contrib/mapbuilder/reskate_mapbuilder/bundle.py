@@ -17,6 +17,14 @@ class Guid:
         if len(self.bytes) != 16:
             raise ValueError("GUID must be 16 bytes")
 
+    @staticmethod
+    def parse(text: str) -> "Guid":
+        """The inverse of string()."""
+        b = bytes.fromhex(text.replace("-", ""))
+        if len(b) != 16:
+            raise ValueError("GUID text must hold 32 hex digits")
+        return Guid(b[3::-1] + b[5:3:-1] + b[7:5:-1] + b[8:])
+
     def string(self) -> str:
         b = self.bytes
         canonical = b[3::-1] + b[5:3:-1] + b[7:5:-1] + b[8:]

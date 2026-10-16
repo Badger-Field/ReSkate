@@ -85,26 +85,47 @@ def _remap(value: Any, shift) -> Any:
     return value
 
 
-def insert_instance(doc: Document, record: InstanceRecord) -> int:
-    """Adds an instance (exported ones after the last exported, others at the end) and renumbers
-    the internal pointers that the insertion moves. Returns its index."""
-    at = sum(1 for i in doc.instances if i.exported) if record.exported else len(doc.instances)
-    for instance in doc.instances:
+def insert_instance(doc: Document, record: InstanceRecord, at: int | None = None) -> int:
+    """Adds an instance at `at` (default: exported ones after the last exported, others at the
+    end) and renumbers the internal pointers that the insertion moves. Returns its index."""
+    exported = sum(1 for i in doc.instances if i.exported)
+    if at is None:
+        at = exported if record.exported else len(doc.instances)
+    if not (0 < at <= exported if record.exported else exported <= at <= len(doc.instances)):
+        raise ValueError("exported EBX instances must precede internal ones (and the root stays first)")
+    for instance in doc.instances + [record]:
         if instance.object is not None:
             _remap(instance.object, lambda index: index + 1 if index >= at else index)
     doc.instances.insert(at, record)
     return at
 
 
-def clone_instance(doc: Document, index: int, guid: Guid | None = None) -> int:
-    """A copy of instance `index` (its values and raw image) added to the same document. An
-    exported copy needs its own GUID."""
+def clone_instance(doc: Document, index: int, guid: Guid | None = None, at: int | None = None) -> int:
+    """A copy of instance `index` (its values and raw image) added to the same document, at `at`
+    as insert_instance places it. An exported copy needs its own GUID."""
     source = doc.instances[index]
     if source.exported and guid is None:
         raise ValueError("an exported instance needs a new GUID")
     record = copy.deepcopy(source)
     record.instance_guid = guid if source.exported else source.instance_guid
-    return insert_instance(doc, record)
+    return insert_instance(doc, record, at)
+
+
+def after_last_of_type(doc: Document, index: int) -> int | None:
+    """The position just after the last instance of instance `index`'s type, where the 333 map
+    puts its added sub-world reference; None when an instance of that kind cannot go there."""
+    kind = doc.instances[index].descriptor
+    last = max(i for i, instance in enumerate(doc.instances) if instance.descriptor == kind)
+    exported = sum(1 for i in doc.instances if i.exported)
+    at = last + 1
+    ok = 0 < at <= exported if doc.instances[index].exported else exported <= at <= len(doc.instances)
+    return at if ok else None
+
+
+def guid_flags(guid: Guid, template_flags: int) -> int:
+    """Flags of a data-bus object: the low 24 bits of its GUID's first group as printed, under the
+    template's bits 24-31 (bit 24 is set on some, the 333 map's added one among them)."""
+    return (template_flags & 0xFF000000) | (int.from_bytes(guid.bytes[:4], "little") & 0xFFFFFF)
 
 
 def pointer_arrays(doc: Document, index: int) -> list[tuple[str, list]]:

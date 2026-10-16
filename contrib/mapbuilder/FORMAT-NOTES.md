@@ -516,8 +516,8 @@ for this first test, is a clone of bam. Everything here is tested only on a synt
 | `Win32/levels/game/<new>/<new>.toc` | every bundle of `bam_levelroot.toc` except its root, region copied as is (manifest and payloads stay in the base archives), and bam's TOC chunk list |
 | root bundle `win32/levels/game/<new>/<new>` | bam's root bundle under the new name: its manifest rewritten into the mod's archive with one more EBX, `levels/game/<new>/<new>`, a clone of bam's root (new file GUID, new GUIDs for exported instances, `Name` renamed, `WorldSizeXZ` 4096, `WorldSizeY` 1024, `StartLocalServer`, `UseExtendedStartPoints`) |
 | `levels/game/<new>/<new>/description` | a clone of bam's description, added to the bundle that holds bam's (found by search, globals first); `Name` and `LevelName` renamed; `LevelGuid` set to the new root's file GUID or instance GUID when bam's equals its root's, otherwise a new GUID |
-| root description | one `OnDemandBundles` entry copied from bam's, `SuperBundle` renamed (bam's is `levels/game/BAM_LevelRoot/BAM_LevelRoot`, so the new one is `levels/game/<new>/<new>`), `BundleHash` = `bundle_hash` of it |
-| genprefab | bam's `DetachedSubLevelInfo` copied (to the same array, or as a new instance), renamed, start points cut to `DefaultStartPoint` autoloading the 333 map's pair; bam's `SubWorldReferenceObjectData` copied as a new instance (new GUID if exported), added to every pointer array holding bam's, with `BundleName` renamed and the 6.1 values |
+| root description | one `OnDemandBundles` entry copied from bam's own, the one whose `SuperBundle` is `levels/game/BAM_LevelRoot/BAM_LevelRoot` ignoring case (the list also holds others naming bam, such as `Levels/game/BAM_LevelRoot/_DEBUG_/BuildkitPerfTests`, which comes first), renamed to `levels/game/<new>/<new>`, `BundleHash` = `bundle_hash` of it; appended last, as the 333 map's single entry is |
+| genprefab | bam's `DetachedSubLevelInfo` (the one ending `BAM_LevelRoot/BAM_LevelRoot`) appended to the same array, renamed, start points cut to `DefaultStartPoint` autoloading the 333 map's pair; bam's `SubWorldReferenceObjectData` copied as a new instance right after the last one of its kind (later instances move up one, as in the 333 map, where it is #4), with a new GUID, appended to every pointer array holding bam's (`Objects`), `BundleName` renamed, the 6.1 values, identity `BlueprintTransform`, null `Blueprint` and `Template`, and `Flags` from its GUID (below); no connections |
 | `reskate-levels.json` | `{"schema": 1, "levels": [{"asset": "levels/game/<new>/<new>", "displayName": …, "startPoints": ["DefaultStartPoint"]}]}` (the format `custom_level_manifest.cpp` reads; it also marks the mod as a map for the merge) |
 
 New EBX are stored like resources: raw CAS blocks in the mod's archive of the bundle manifest's
@@ -536,16 +536,35 @@ Guesses, each a constant at the top of `level.py` and each printed by `--dry-run
   needs it).
 - `DetachedSubLevelName` and `BundleName` take bam's value with its level segment swapped
   (`Levels/Game/<new>/<new>`).
-- Copying a `SubWorldReferenceObjectData` keeps its `Flags`; if `Flags` carries a per-object id the
-  copy duplicates it. The dry run prints every entry's `Flags`.
-- The copy is not wired into the blueprint's event, link or property connections.
+- `Flags` of a `SubWorldReferenceObjectData` (checked on files, the PC's dumps of bam's and the 333
+  map's genprefab): the low 24 bits are the low 24 bits of the instance GUID's first group as
+  printed (`6ab69b78` gives 0xB69B78, bam's), sometimes with bit 24 set (`8fd8c2da` gives
+  0x1D8C2DA; the 333 map's own `4914e18a` gives 0x114E18A and works). That group is the GUID's
+  first four stored bytes read little-endian. The copy gets
+  `(template Flags & 0xFF000000) | (first group & 0xFFFFFF)`; the dry run says whether each
+  existing entry follows the rule.
+- The copy is not wired into the blueprint's event, link or property connections; the 333 map's
+  genprefab has none at all.
 - Copying all 1,838 bam bundles (rather than the 333 map's 42 plus its own) keeps every sub-world
   bam's root names resolvable; `COPY_BASE_BUNDLES` selects fewer.
 - bam's TOC chunk list is carried into the new TOC (`COPY_BASE_CHUNKS`).
 
+**Rewriting unchanged real documents.** On the game's files (bam's root, 271,012 bytes, 88
+instances; bam's description; the root description; the genprefab) the writer's output was not
+byte-identical to the input; `layout.toc` was. Two layout choices of the writer, shared with the
+C++ writer the merge already uses on real documents, are known to change bytes without changing
+values: each array record's hash is taken from the first record the document read with the same
+element type (so arrays of one type but different fields, which have their own hashes, end up
+sharing one), and the writer always puts EBXD first and reserves a 32-byte empty-array block.
+Whether those are the only causes on real files is not known yet: `ebx-roundtrip` reports, for
+any document, both sizes, the first differing byte and its region (header, instance data with
+the instance and field, arrays, boxed values, strings, fixup tables, array records, reflection),
+each table compared, and whether the rewrite reads back to the same values. The dry run prints
+the one-line form for each document it edits.
+
 Read-only checks: `new-level --dry-run` reads, edits and encodes everything in memory and prints
 each source document's rewrite check, the GUIDs, hashes and bundle counts, and writes nothing.
-`dump-ebx` prints a document; with `--mod <folder>` it reads a mod's TOCs and archives over the
+`dump-ebx` prints a document and `ebx-roundtrip` diagnoses its rewrite; with `--mod <folder>` it reads a mod's TOCs and archives over the
 game's, which is how the 333 map's own registration can be compared with ours.
 
 ## 7. Practical notes

@@ -8,6 +8,7 @@
         --superbundle S --bundle B --resource R [--by 1.0]
 
   python -m reskate_mapbuilder new-level --game <dir> --mods <dir> --name zz-... --level <name> [--dry-run]
+  python -m reskate_mapbuilder ebx-roundtrip --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME
   python -m reskate_mapbuilder dump-ebx --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME
 
 raise-ground repeats the collision test proven in game with ReSkate's C++ tools: it lifts the
@@ -20,6 +21,7 @@ import argparse
 import sys
 
 from .ebx import read_document
+from .ebxcheck import roundtrip
 from .ebxedit import describe
 from .game import Game
 from .level import new_level
@@ -117,14 +119,24 @@ def new_level_command(args):
     print(f"wrote {mod.write(args.mods)}")
 
 
-def dump_ebx(args):
+def _read_ebx(args) -> bytes:
     game = Game(args.game, args.mod)
     bundle = args.bundle or game.find_ebx(args.superbundle, args.ebx)
     if not bundle:
         sys.exit(f"{args.ebx} is in no bundle of {args.superbundle}")
     _, region, manifest = game.bundle(game.superbundle(args.superbundle), bundle)
     print(f"{args.ebx} in {bundle}")
-    for line in describe(read_document(game.ebx(region, manifest, args.ebx)), args.limit):
+    return game.ebx(region, manifest, args.ebx)
+
+
+def dump_ebx(args):
+    for line in describe(read_document(_read_ebx(args)), args.limit):
+        print(line)
+
+
+def ebx_roundtrip(args):
+    """Rewrites a document unchanged, in memory, and says where and why the bytes differ."""
+    for line in roundtrip(_read_ebx(args)):
         print(line)
 
 
@@ -152,16 +164,19 @@ def main(argv=None):
     p.add_argument("--level", required=True, help="the level's name, e.g. dingolevel_reskate_test")
     p.add_argument("--display-name")
     p.add_argument("--dry-run", action="store_true", help="read and report only")
-    p = sub.add_parser("dump-ebx", help="print an EBX document (read-only)")
-    p.add_argument("--game", required=True)
-    p.add_argument("--mod", help="a mod folder laid over the game, to read its TOCs and archives")
-    p.add_argument("--superbundle", required=True, help="path under Data/Win32 without .toc")
-    p.add_argument("--bundle", help="default: the first bundle listing the EBX")
-    p.add_argument("--ebx", required=True)
-    p.add_argument("--limit", type=int, default=20, help="array elements printed")
+    for name, text in (("dump-ebx", "print an EBX document (read-only)"),
+                       ("ebx-roundtrip", "rewrite an EBX document in memory and compare (read-only)")):
+        p = sub.add_parser(name, help=text)
+        p.add_argument("--game", required=True)
+        p.add_argument("--mod", help="a mod folder laid over the game, to read its TOCs and archives")
+        p.add_argument("--superbundle", required=True, help="path under Data/Win32 without .toc")
+        p.add_argument("--bundle", help="default: the first bundle listing the EBX")
+        p.add_argument("--ebx", required=True)
+        if name == "dump-ebx":
+            p.add_argument("--limit", type=int, default=20, help="array elements printed")
     args = ap.parse_args(argv)
     {"inspect": inspect, "raise-ground": raise_ground, "rebuild": rebuild, "new-level": new_level_command,
-     "dump-ebx": dump_ebx}[args.command](args)
+     "dump-ebx": dump_ebx, "ebx-roundtrip": ebx_roundtrip}[args.command](args)
 
 
 if __name__ == "__main__":
