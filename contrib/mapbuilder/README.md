@@ -19,7 +19,8 @@ Control does not block it) and is tested on Linux CI.
 | Collision (`PhysicsResource`, half-edge shapes, edge data, zero tree) | written and unit-tested; in-game check pending |
 | Visible meshes (rigid `MeshSet` and geometry chunks) | layout verified on a PC; writer next |
 | EBX document reader and writer | done, byte-identical to ReSkate's C++ (`tests/test_ebx_crosscheck.py`) |
-| Level registration, start point, world-partition tiles (EBX) | not started |
+| Level registration (layout, level TOC, description, on-demand entry, detached sublevel) | written as a clone of bam, tested on a synthetic game; not yet run on the PC |
+| World-partition tiles, own ground | not started |
 
 What has been verified in the game so far: a mod written this way that overrides one
 collision resource loads; ground raised by exactly the amount written; zeroed
@@ -33,8 +34,16 @@ can be stood on.
     python -m reskate_mapbuilder raise-ground --game "<Skate>" --mods <out> --name zz-... \
         --superbundle ... --bundle ... --resource ... --parts 157,161,165 --by 1.0
 
+    python -m reskate_mapbuilder new-level --game "<Skate>" --name zz-new-level \
+        --level dingolevel_reskate_test --dry-run
+    python -m reskate_mapbuilder new-level --game "<Skate>" --mods "<Skate>\Mods" --name zz-new-level \
+        --level dingolevel_reskate_test --display-name "ReSkate test level"
+    python -m reskate_mapbuilder dump-ebx --game "<Skate>" [--mod "<a mod folder>"] \
+        --superbundle globals --ebx levels/game/dingolevel_root/dingolevel_root/description
+
 `raise-ground` repeats the collision test already proven in game with the C++ tools, written
-entirely by this package.
+entirely by this package. `new-level` adds a level that is, for now, a clone of the base
+map (FORMAT-NOTES 6.2); `--dry-run` reads and reports only. `dump-ebx` prints an EBX document.
 
 The format reference is `contrib/mapbuilder/FORMAT-NOTES.md`.
 

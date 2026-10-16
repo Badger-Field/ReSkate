@@ -7,6 +7,9 @@
   python -m reskate_mapbuilder rebuild --game <dir> --mods <dir> --name zz-... \\
         --superbundle S --bundle B --resource R [--by 1.0]
 
+  python -m reskate_mapbuilder new-level --game <dir> --mods <dir> --name zz-... --level <name> [--dry-run]
+  python -m reskate_mapbuilder dump-ebx --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME
+
 raise-ground repeats the collision test proven in game with ReSkate's C++ tools: it lifts the
 named parts' shapes, recomputes their edge data over the whole resource by the rule in
 FORMAT-NOTES 2.3, zeroes their tree nodes, and writes a one-resource override mod.
@@ -16,7 +19,10 @@ from __future__ import annotations
 import argparse
 import sys
 
+from .ebx import read_document
+from .ebxedit import describe
 from .game import Game
+from .level import new_level
 from .mod import ModBuilder
 from .physics import (KIND_TRIANGLE_MESH, Shape, compute_edge_data, physics_tail, read_physics, replace_shape,
                       write_physics)
@@ -92,6 +98,36 @@ def rebuild(args):
           f"{len(new)} shapes, {len(parts)} parts, raised {args.by} m")
 
 
+def new_level_command(args):
+    """Builds the new-level mod (FORMAT-NOTES 6.2). With --dry-run every file is read, edited and
+    encoded in memory and nothing is written."""
+    game = Game(args.game)
+    mod = ModBuilder(game, args.name, description=f"New level {args.level} (a clone of the base map)")
+    for line in new_level(game, mod, args.level, args.display_name):
+        print(line)
+    files = mod.build()
+    print("Mod files:")
+    for relative, data in sorted(files.items()):
+        print(f"  {relative}: {len(data)} bytes")
+    if args.dry_run:
+        print("dry run: nothing written")
+        return
+    if not args.mods:
+        sys.exit("--mods is required unless --dry-run")
+    print(f"wrote {mod.write(args.mods)}")
+
+
+def dump_ebx(args):
+    game = Game(args.game, args.mod)
+    bundle = args.bundle or game.find_ebx(args.superbundle, args.ebx)
+    if not bundle:
+        sys.exit(f"{args.ebx} is in no bundle of {args.superbundle}")
+    _, region, manifest = game.bundle(game.superbundle(args.superbundle), bundle)
+    print(f"{args.ebx} in {bundle}")
+    for line in describe(read_document(game.ebx(region, manifest, args.ebx)), args.limit):
+        print(line)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m reskate_mapbuilder")
     sub = ap.add_subparsers(dest="command", required=True)
@@ -109,8 +145,23 @@ def main(argv=None):
             if name == "raise-ground":
                 p.add_argument("--parts", required=True, help="comma-separated part indices")
             p.add_argument("--by", type=float, default=1.0 if name == "raise-ground" else 0.0)
+    p = sub.add_parser("new-level", help="a mod adding a level that clones the base map")
+    p.add_argument("--game", required=True, help="the game folder (holding Data/)")
+    p.add_argument("--mods", help="output folder; the mod is written inside it")
+    p.add_argument("--name", required=True, help="the mod's folder name, e.g. zz-new-level")
+    p.add_argument("--level", required=True, help="the level's name, e.g. dingolevel_reskate_test")
+    p.add_argument("--display-name")
+    p.add_argument("--dry-run", action="store_true", help="read and report only")
+    p = sub.add_parser("dump-ebx", help="print an EBX document (read-only)")
+    p.add_argument("--game", required=True)
+    p.add_argument("--mod", help="a mod folder laid over the game, to read its TOCs and archives")
+    p.add_argument("--superbundle", required=True, help="path under Data/Win32 without .toc")
+    p.add_argument("--bundle", help="default: the first bundle listing the EBX")
+    p.add_argument("--ebx", required=True)
+    p.add_argument("--limit", type=int, default=20, help="array elements printed")
     args = ap.parse_args(argv)
-    {"inspect": inspect, "raise-ground": raise_ground, "rebuild": rebuild}[args.command](args)
+    {"inspect": inspect, "raise-ground": raise_ground, "rebuild": rebuild, "new-level": new_level_command,
+     "dump-ebx": dump_ebx}[args.command](args)
 
 
 if __name__ == "__main__":

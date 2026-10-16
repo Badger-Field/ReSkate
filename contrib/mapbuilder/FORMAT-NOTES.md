@@ -433,7 +433,7 @@ any block header.
 | Level list and start point names | `Engine/Game/World/custom_level_manifest.cpp`, `world_model.cpp` |
 | Park mod loading | `Extension/Objects/ParkEditor/` |
 
-## 6. Level structure seen in the custom map (not yet writable)
+## 6. Level structure seen in the custom map
 
 Checked on files, from the stage 1 inventory (`inventory.md` has the full detail).
 
@@ -446,7 +446,7 @@ Checked on files, from the stage 1 inventory (`inventory.md` has the full detail
   `reskate-levels.json` names a start point `DefaultStartPoint`, which appears in no asset; where
   the player lands was not found.
 
-Nothing in this section has been written or tested.
+Nothing in this section has been tested in game; 6.2 says what is now written.
 
 ### 6.1 Registering a level (read from the base game; not yet written)
 
@@ -503,6 +503,50 @@ of which about 41,800 are base-game animation, audio, UI and narrative assets du
 5,132 under `world/custom/<map>/`). `wproot` holds just a `QuadrantSubWorldData` and a
 `QuadrantDefinitionAsset`. Open question: whether the base pool must be duplicated or resolves
 from bam's bundles.
+
+### 6.2 Writing a level (written by `new-level`; not yet run on the game)
+
+`python -m reskate_mapbuilder new-level` (`level.py`) builds a mod that adds a level whose content,
+for this first test, is a clone of bam. Everything here is tested only on a synthetic game in
+`tests/test_level.py`; nothing has been read from the real files or loaded in game.
+
+| Piece | What is written |
+|---|---|
+| `layout.toc` | the game's, rewritten from its parse (the unchanged parse must rewrite to the same bytes, or the command stops), plus `{name: "Win32/levels/game/<new>/<new>"}` in `superBundles` and the same string in `defaultinstallpackage`'s `superbundles`, each inserted in name order (lower-cased compare), as the C++ merge inserts them |
+| `Win32/levels/game/<new>/<new>.toc` | every bundle of `bam_levelroot.toc` except its root, region copied as is (manifest and payloads stay in the base archives), and bam's TOC chunk list |
+| root bundle `win32/levels/game/<new>/<new>` | bam's root bundle under the new name: its manifest rewritten into the mod's archive with one more EBX, `levels/game/<new>/<new>`, a clone of bam's root (new file GUID, new GUIDs for exported instances, `Name` renamed, `WorldSizeXZ` 4096, `WorldSizeY` 1024, `StartLocalServer`, `UseExtendedStartPoints`) |
+| `levels/game/<new>/<new>/description` | a clone of bam's description, added to the bundle that holds bam's (found by search, globals first); `Name` and `LevelName` renamed; `LevelGuid` set to the new root's file GUID or instance GUID when bam's equals its root's, otherwise a new GUID |
+| root description | one `OnDemandBundles` entry copied from bam's, `SuperBundle` renamed (bam's is `levels/game/BAM_LevelRoot/BAM_LevelRoot`, so the new one is `levels/game/<new>/<new>`), `BundleHash` = `bundle_hash` of it |
+| genprefab | bam's `DetachedSubLevelInfo` copied (to the same array, or as a new instance), renamed, start points cut to `DefaultStartPoint` autoloading the 333 map's pair; bam's `SubWorldReferenceObjectData` copied as a new instance (new GUID if exported), added to every pointer array holding bam's, with `BundleName` renamed and the 6.1 values |
+| `reskate-levels.json` | `{"schema": 1, "levels": [{"asset": "levels/game/<new>/<new>", "displayName": …, "startPoints": ["DefaultStartPoint"]}]}` (the format `custom_level_manifest.cpp` reads; it also marks the mod as a map for the merge) |
+
+New EBX are stored like resources: raw CAS blocks in the mod's archive of the bundle manifest's
+install chunk, listed after the bundle's other EBX, with `originalSize` and `sha1` = SHA-1 of the
+document (whether the game checks an EBX's sha1 is unknown; it does not check a resource's). New
+GUIDs are MD5s of the level name and the source GUID, so a rebuild gives the same ones.
+
+Guesses, each a constant at the top of `level.py` and each printed by `--dry-run`:
+
+- bam's description is named `levels/game/bam_levelroot/bam_levelroot/description`, and it and the
+  root's description are in `globals` (from `mod_merge.cpp` and `live_mods.h`).
+- The new description belongs in the same bundle as bam's.
+- The field and type names `OnDemandBundles`, `SuperBundle`, `BundleHash`, `DetachedSubLevelInfo`,
+  `DetachedSubLevelName`, `StartPoints`, `SubWorldReferenceObjectData`, `BundleName` and the root's
+  fields (from the 333 inventory; a missing field is reported, not fatal, except where the step
+  needs it).
+- `DetachedSubLevelName` and `BundleName` take bam's value with its level segment swapped
+  (`Levels/Game/<new>/<new>`).
+- Copying a `SubWorldReferenceObjectData` keeps its `Flags`; if `Flags` carries a per-object id the
+  copy duplicates it. The dry run prints every entry's `Flags`.
+- The copy is not wired into the blueprint's event, link or property connections.
+- Copying all 1,838 bam bundles (rather than the 333 map's 42 plus its own) keeps every sub-world
+  bam's root names resolvable; `COPY_BASE_BUNDLES` selects fewer.
+- bam's TOC chunk list is carried into the new TOC (`COPY_BASE_CHUNKS`).
+
+Read-only checks: `new-level --dry-run` reads, edits and encodes everything in memory and prints
+each source document's rewrite check, the GUIDs, hashes and bundle counts, and writes nothing.
+`dump-ebx` prints a document; with `--mod <folder>` it reads a mod's TOCs and archives over the
+game's, which is how the 333 map's own registration can be compared with ours.
 
 ## 7. Practical notes
 

@@ -121,3 +121,60 @@ def read_layout(data: bytes) -> Node:
     if len(data) <= ENVELOPE_SIZE or data[:4] != MAGIC:
         raise ValueError("Unrecognized native envelope in layout.toc")
     return read(data[ENVELOPE_SIZE:], unique_fields=False)
+
+
+DEFAULT_INSTALL_CHUNK = "configurations/layout/defaultinstallpackage"
+
+
+def _ascii_lower(text: str) -> str:
+    return "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in text)
+
+
+def _string(text: str, name: str | None = None) -> Node:
+    return Node(7, name is not None, False, name or "", text.encode("latin-1") + b"\0")
+
+
+def _insert_sorted(nodes: list[Node], added: Node, text_of) -> None:
+    # The engine searches these lists by name, so an entry goes where the order puts it
+    # (the C++ merge inserts the same way: before the first name that sorts after it).
+    key = _ascii_lower(text_of(added))
+    at = next((i for i, n in enumerate(nodes) if text_of(n) is not None and _ascii_lower(text_of(n)) > key), len(nodes))
+    nodes.insert(at, added)
+
+
+def layout_superbundles(root: Node) -> list[str]:
+    listing = root.field("superBundles")
+    names = [row.field("name") for row in (listing.children if listing else [])]
+    return [n.text for n in names if n is not None and n.type == 7]
+
+
+def install_chunk(root: Node, name: str) -> Node:
+    manifest = root.field("installManifest")
+    chunks = manifest.field("installChunks") if manifest else None
+    for chunk in (chunks.children if chunks else []):
+        found = chunk.field("name")
+        if found is not None and found.type == 7 and _ascii_lower(found.text) == _ascii_lower(name):
+            return chunk
+    raise KeyError(f"layout has no install chunk {name}")
+
+
+def add_superbundle(layout_bytes: bytes, name: str, chunk_name: str = DEFAULT_INSTALL_CHUNK) -> bytes:
+    """layout.toc with a superbundle added to the top-level superBundles list and to the
+    superbundles list of an install chunk (FORMAT-NOTES 6.1); the rest stays byte for byte."""
+    root = read_layout(layout_bytes)
+    listing = root.field("superBundles")
+    if listing is None or listing.type != 1:
+        raise ValueError("layout.toc has no superBundles list")
+    if _ascii_lower(name) in {_ascii_lower(n) for n in layout_superbundles(root)}:
+        raise ValueError(f"layout.toc already lists {name}")
+    record = Node(2, False, True, "", b"", [_string(name, "name")])   # as native_db::make_named_record
+
+    def row_name(row):
+        found = row.field("name")
+        return found.text if found is not None and found.type == 7 else None
+    _insert_sorted(listing.children, record, row_name)
+    held = install_chunk(root, chunk_name).field("superbundles")
+    if held is None or held.type != 1:
+        raise ValueError(f"install chunk {chunk_name} has no superbundles list")
+    _insert_sorted(held.children, _string(name), lambda n: n.text if n.type == 7 else None)
+    return layout_bytes[:ENVELOPE_SIZE] + write(root)

@@ -3,6 +3,10 @@
 <game>/Data/layout.toc names each install chunk's package directory; archives live at
 <game>/Data/Win32/<package>/cas_NN.cas. Compressed payloads are decoded with the game's own
 Oodle DLL (Windows only).
+
+With `mod`, a mod folder is laid over the game for reading: its TOCs replace the game's and
+its patch locations ({patch, chunk, archive N}) read <mod>/Win32/<package>/cas_NN.cas. That is
+how another mod (the 333 map) is dumped for comparison.
 """
 from __future__ import annotations
 
@@ -21,8 +25,9 @@ def archive_file(archive: int) -> str:
 
 
 class Game:
-    def __init__(self, game_root: str | Path):
+    def __init__(self, game_root: str | Path, mod: str | Path | None = None):
         self.root = Path(game_root)
+        self.mod = Path(mod) if mod else None
         self.data = self.root / "Data"
         self.layout_bytes = (self.data / "layout.toc").read_bytes()
         self.layout = nativedb.read_layout(self.layout_bytes)
@@ -63,10 +68,18 @@ class Game:
         except KeyError:
             raise KeyError(f"install chunk {install_chunk} has no known package directory") from None
 
+    def chunk_index(self, name: str) -> int:
+        """The persistentIndex of an install chunk, by its (package directory) name."""
+        for index, directory in self.chunk_directory.items():
+            if directory == name.lower():
+                return index
+        raise KeyError(f"layout has no install chunk {name}")
+
     def read(self, location: CasIdentifier, offset: int, size: int) -> bytes:
-        if location.patch:
+        if location.patch and not self.mod:
             raise ValueError("patch locations point into a mod, not the game's data")
-        path = self.data / "Win32" / self.directory(location.install_chunk) / archive_file(location.archive)
+        base = self.mod if location.patch else self.data
+        path = base / "Win32" / self.directory(location.install_chunk) / archive_file(location.archive)
         with open(path, "rb") as f:
             f.seek(offset)
             data = f.read(size)
@@ -76,6 +89,8 @@ class Game:
 
     def superbundle(self, relative: str):
         """A superbundle TOC by its path under Data/Win32, e.g. 'levels/game/bam_levelroot/bam_levelroot'."""
+        if self.mod and (self.mod / "Win32" / (relative + ".toc")).is_file():
+            return read_toc((self.mod / "Win32" / (relative + ".toc")).read_bytes())
         return read_toc((self.data / "Win32" / (relative + ".toc")).read_bytes())
 
     def bundle(self, toc, name: str) -> tuple[TocBundle, BundleRegion, BinaryBundle]:
@@ -94,6 +109,23 @@ class Game:
                         manifest = read_binary_bundle(decode_cas(raw, self.root))
                 return b, region, manifest
         raise KeyError(f"bundle {name} not found")
+
+    def find_ebx(self, superbundle: str, ebx_name: str) -> str | None:
+        """The name of the first bundle in a superbundle whose manifest lists this EBX (reads every
+        manifest until one does, so it can take a while on a large superbundle)."""
+        wanted = ebx_name.lower()
+        toc = self.superbundle(superbundle)
+        for b in toc.bundles:
+            _, _, manifest = self.bundle(toc, b.name)
+            if any(asset.name.lower() == wanted for asset in manifest.ebx):
+                return b.name
+        return None
+
+    def ebx(self, region: BundleRegion, manifest: BinaryBundle, ebx_name: str) -> bytes:
+        for i, asset in enumerate(manifest.ebx):
+            if asset.name.lower() == ebx_name.lower():
+                return self.payload(region, (0 if region.inline_manifest else 1) + i)
+        raise KeyError(f"EBX {ebx_name} not in the bundle")
 
     def payload(self, region: BundleRegion, file_index: int) -> bytes:
         f = region.files[file_index]
