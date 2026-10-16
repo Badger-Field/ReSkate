@@ -492,6 +492,13 @@ void carried_payload_written_once() {
         expect(first->location == second->location && first->offset == second->offset,
                "carried once: the two copies read different payloads (byte " + std::to_string(first->offset) + " and byte " +
                    std::to_string(second->offset) + ")");
+    if (first) {
+        const auto archive = read(fixture.catalog.root / mods::generated_folder / "Win32" / "pkg" / vfs::archive_file(first->location.archive));
+        const auto song = encoded(ebx_document(guid(10), {guid(11)}));
+        expect(std::uint64_t{first->offset} + first->size <= archive.size() &&
+                   Bytes(archive.begin() + first->offset, archive.begin() + first->offset + first->size) == song,
+               "carried once: the placement does not hold the song's bytes");
+    }
 }
 
 // Every placement in every merged TOC lies inside an archive that exists, and the merged layout
