@@ -96,6 +96,14 @@ struct ArrayRecord {
     std::uint16_t classRef{};
 };
 
+// A 12-byte record of the RFL2 group table: one per array type the document uses, sorted by
+// hash (first[i + 1] = first[i] + count[i]). Every array record's hash is one of these keys.
+struct ReflectionGroup {
+    std::uint32_t hash{};
+    std::uint32_t count{};
+    std::uint32_t first{};
+};
+
 struct BoxedValueRecord {
     std::uint32_t offset{};
     std::uint32_t count{};
@@ -196,6 +204,7 @@ struct Document {
     // The EBXD bytes the document was read from (offsets as in the fixup tables): what boxed
     // values point at (arrays, strings) is carried from here when the document is written.
     std::vector<std::byte> payload;
+    std::vector<ReflectionGroup> reflectionGroups;
 
     [[nodiscard]] const InstanceRecord* root() const noexcept;
 };
