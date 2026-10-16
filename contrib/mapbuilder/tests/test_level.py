@@ -435,3 +435,21 @@ def test_cli_dry_run_writes_nothing(tmp_path, capsys):
     assert "OnDemandBundles: [3]" in capsys.readouterr().out
     main(["ebx-roundtrip", "--game", str(game_dir), "--superbundle", "globals", "--ebx", ROOT + "/description"])
     assert "rewrite identical" in capsys.readouterr().out
+
+
+def test_roundtrip_detail_names_what_a_boxed_value_reaches():
+    from test_ebx_crosscheck import boxed_pointing
+    from reskate_mapbuilder.ebxcheck import semantic, semantically_equal
+    data = boxed_pointing()
+    assert any("string b'Gameflow test running'" in line for line in semantic(read_document(data)))
+    assert semantically_equal(data)
+    report = roundtrip(data, detail=5)
+    assert any("from ['boxed #0" in line for line in report)
+
+
+def test_new_level_refuses_a_document_that_does_not_survive_a_rewrite(tmp_path, monkeypatch):
+    import reskate_mapbuilder.level as level
+    monkeypatch.setattr(level, "roundtrip", lambda raw, brief=False: ["rewrite DIFFERS: ...; read back NOT semantically equal"])
+    game = Game(fake_game(tmp_path / "game"))
+    with pytest.raises(ValueError, match="loses or changes data"):
+        new_level(game, ModBuilder(game, "zz-new-level"), LEVEL)

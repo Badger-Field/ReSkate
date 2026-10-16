@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Iterator
 
 from .bundle import Guid
-from .ebx import Document, InstanceRecord, Object, PointerKind, PointerReference
+from .ebx import BoxedReference, Document, InstanceRecord, Object, PointerKind, PointerReference
 
 
 def derived_guid(*parts: str) -> Guid:
@@ -183,6 +183,10 @@ def describe(doc: Document, limit: int = 20) -> Iterator[str]:
             return "null"
         if isinstance(value, Guid):
             return value.string()
+        if isinstance(value, BoxedReference):
+            # By the boxed value it reaches, not its offset, which moves on every rewrite.
+            index = next((i for i, b in enumerate(boxed) if b.offset == value.data_offset), None)
+            return f"boxed {value.encoded_type:#x} -> #{index}" if index is not None else f"boxed {value.encoded_type:#x} -> ?"
         return repr(value)
 
     def walk(value: Any, label: str, depth: int):
@@ -200,6 +204,7 @@ def describe(doc: Document, limit: int = 20) -> Iterator[str]:
         else:
             yield f"{pad}{label}: {value_text(value)}"
 
+    boxed = sorted(doc.boxed_values, key=lambda b: b.offset)
     yield f"file guid {doc.file_guid.string()}, root {doc.root_type}, {len(doc.instances)} instances, {len(doc.imports)} imports"
     for index, instance in enumerate(doc.instances):
         guid = f" guid {instance.instance_guid.string()}" if instance.exported else ""

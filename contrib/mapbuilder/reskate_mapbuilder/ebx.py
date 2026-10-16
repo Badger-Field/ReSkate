@@ -265,6 +265,9 @@ class Document:
     import_offsets: list[int] = field(default_factory=list)
     type_info_offsets: list[int] = field(default_factory=list)
     boxed_value_slots: list[int] = field(default_factory=list)
+    # The EBXD bytes the document was read from (offsets as in the fixup tables): what boxed
+    # values point at (arrays, strings) is carried from here on a rewrite.
+    payload: bytes = b""
 
     def root(self) -> Optional[InstanceRecord]:
         return self.instances[0] if self.instances else None
@@ -718,6 +721,7 @@ def read_document(data: bytes) -> Document:
     ids = _read_reflection(reader, reflection, rfl2 is not None, doc)
     doc.hashed_reflection_names = rfl2 is not None
     doc.reflection_data = data[reflection.begin:reflection.end]
+    doc.payload = data[doc.data_start:doc.data_end]
     _map_instances(doc, ids)
     _ValueReader(data, doc).read_instances()
     doc.boxed_values.sort(key=lambda b: b.offset)
@@ -839,6 +843,8 @@ class _Builder:
         self.arrays_offset = 0
         self.boxed_offset = 0
         self.empty_array_target = 0
+        self.carried: dict[int, int] = {}                 # old array offset -> new
+        self.boxed_targets: list[tuple[int, int]] = []    # (new slot, old target in the boxed section)
 
     def run(self) -> bytes:
         self.validate()
@@ -1011,6 +1017,72 @@ class _Builder:
             if not self.arrays_pending[index].emitted:
                 self.emit_array(index)
             index += 1
+        self.carry_boxed_arrays()
+
+    # What a boxed value points at is not in the document's values: its bytes are carried as they
+    # were, so the arrays and strings its pointers reach are carried with them and the pointers
+    # moved to the new places.
+
+    def old_target(self, slot: int) -> tuple[str, int]:
+        return pointer_target(self.doc, slot, self.old_arrays, self.old_instances)
+
+    def old_slots(self, start: int, length: int, offsets: list[int]) -> list[int]:
+        return [o for o in offsets if start <= o < start + length]
+
+    def carry_boxed_arrays(self) -> None:
+        doc = self.doc
+        if not doc.payload:
+            return
+        self.old_arrays = {record.offset: record for record in doc.arrays}
+        self.old_instances = {instance.data_offset: index for index, instance in enumerate(doc.instances)}
+        for source in sorted(doc.boxed_values, key=lambda b: b.offset):
+            for slot in self.old_slots(source.offset, len(source.raw_bytes), sorted(doc.pointer_offsets)):
+                kind, key = self.old_target(slot)
+                if kind == "array":
+                    self.carry_array(self.old_arrays[key])
+
+    def carry_array(self, record: ArrayRecord) -> None:
+        if record.offset in self.carried:
+            return
+        stride, alignment = array_element(self.doc, record)
+        length = stride * record.count
+        if record.offset + length > len(self.doc.payload):
+            raise ValueError("EBX carried array exceeds EBXD")
+        data = _wrap_align(len(self.payload) + 4, alignment)
+        self.put_number(data - 4, "<I", record.count)
+        self.put(data, self.doc.payload[record.offset:record.offset + length])
+        self.carried[record.offset] = _checked(data, "EBX array data")
+        self.arrays.append(ArrayRecord(self.carried[record.offset], record.count, record.hash, record.encoded_type,
+                                       record.class_ref))
+        self.relocate(record.offset, length, data)
+
+    def relocate(self, old_start: int, length: int, new_start: int) -> None:
+        """Re-lists the fixups of carried bytes (old_start..+length, now at new_start) and points
+        their pointers at where the targets now are."""
+        doc = self.doc
+        for old_offsets, new_offsets in ((doc.resource_ref_offsets, self.resource_offsets),
+                                         (doc.import_offsets, self.import_offsets),
+                                         (doc.type_info_offsets, self.type_info_offsets)):
+            for old in self.old_slots(old_start, length, old_offsets):
+                new_offsets.append(_checked(new_start + old - old_start, "EBX carried relocation"))
+        for old in self.old_slots(old_start, length, sorted(set(doc.pointer_offsets))):
+            slot = _checked(new_start + old - old_start, "EBX carried relocation")
+            self.pointer_offsets.append(slot)
+            if not doc.payload:
+                continue
+            kind, key = self.old_target(old)
+            if kind == "array":
+                self.carry_array(self.old_arrays[key])
+                self.put_number(slot, "<I", (self.carried[key] - slot) & _U32)
+            elif kind == "string":
+                end = doc.payload.find(b"\0", key)
+                self.strings_pending.append((slot, doc.payload[key:end if end >= 0 else len(doc.payload)]))
+            elif kind == "instance":
+                self.put_number(slot, "<I", (self.instance_offsets[key] - slot) & _U32)
+            elif kind == "empty":
+                self.put_number(slot, "<I", (self.empty_array_target - slot) & _U32)
+            elif kind == "boxed":
+                self.boxed_targets.append((slot, key))
 
     def emit_array(self, index: int) -> None:
         pending = self.arrays_pending[index]
@@ -1052,17 +1124,12 @@ class _Builder:
                 raise ValueError("EBX boxed record precedes its section")
             offset = self.boxed_offset + source.offset - doc.boxed_values_offset
             self.put(offset, source.raw_bytes)
-            for old_offsets, new_offsets in ((doc.pointer_offsets, self.pointer_offsets),
-                                             (doc.resource_ref_offsets, self.resource_offsets),
-                                             (doc.import_offsets, self.import_offsets),
-                                             (doc.type_info_offsets, self.type_info_offsets)):
-                for old in old_offsets:
-                    if old < source.offset or old - source.offset >= len(source.raw_bytes):
-                        continue
-                    new_offsets.append(_checked(offset + old - source.offset, "EBX boxed relocation"))
+            self.relocate(source.offset, len(source.raw_bytes), offset)
             moved[source.offset] = _checked(offset, "EBX boxed value")
             self.boxed.append(BoxedValueRecord(moved[source.offset], source.count, source.hash,
                                                source.encoded_type, source.class_ref, source.raw_bytes))
+        for slot, target in self.boxed_targets:
+            self.put_number(slot, "<I", (self.boxed_offset + target - doc.boxed_values_offset - slot) & _U32)
         for slot, value in self.boxes_pending:
             self.put(slot, struct.pack("<II", value.encoded_type, 0))
             key = value.data_offset & _U32
@@ -1167,6 +1234,44 @@ def ensure_fixup_type(doc: Document, descriptor: int) -> int:
     doc.fixup_type_guids.insert(count, t.guid)
     doc.fixup_type_signatures.append(t.signature)
     return count
+
+
+def pointer_target(doc: Document, slot: int, arrays: dict[int, ArrayRecord] | None = None,
+                   instances: dict[int, int] | None = None) -> tuple[str, int]:
+    """What the pointer at a slot of the read EBXD (`doc.payload`) reaches: ("array", offset),
+    ("string", offset), ("instance", index), ("boxed", offset), ("empty", offset) for an empty
+    array's target, or ("unknown", offset)."""
+    if arrays is None:
+        arrays = {record.offset: record for record in doc.arrays}
+    if instances is None:
+        instances = {instance.data_offset: index for index, instance in enumerate(doc.instances)}
+    target = slot + struct.unpack_from("<i", doc.payload, slot)[0]
+    if target in arrays:
+        return "array", target
+    if doc.strings_offset <= target < len(doc.payload):
+        return "string", target
+    if target in instances:
+        return "instance", instances[target]
+    if doc.boxed_values_offset <= target < doc.strings_offset:
+        return "boxed", target
+    if 4 <= target <= len(doc.payload) and doc.payload[target - 4:target] == bytes(4):
+        return "empty", target
+    return "unknown", target
+
+
+def array_element(doc: Document, record: ArrayRecord) -> tuple[int, int]:
+    """(stride, alignment) of an array the document read, from its record."""
+    kind = _type_of(record.encoded_type >> 1)
+    if kind == FieldType.structure:
+        slot = record.class_ref
+        if slot < len(doc.fixup_type_guids) and slot < len(doc.fixup_type_signatures):
+            key = (doc.fixup_type_guids[slot], doc.fixup_type_signatures[slot])
+            for t in doc.types:
+                if (t.guid, t.signature) == key:
+                    return max(t.size, 1), max(t.alignment, 1)
+        raise ValueError("EBX array record has an unknown struct type")
+    stride = _scalar_size(kind)
+    return stride, max(min(stride, 8), 1)
 
 
 def write_document(doc: Document) -> bytes:

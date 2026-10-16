@@ -549,18 +549,36 @@ Guesses, each a constant at the top of `level.py` and each printed by `--dry-run
   bam's root names resolvable; `COPY_BASE_BUNDLES` selects fewer.
 - bam's TOC chunk list is carried into the new TOC (`COPY_BASE_CHUNKS`).
 
-**Rewriting unchanged real documents.** On the game's files (bam's root, 271,012 bytes, 88
-instances; bam's description; the root description; the genprefab) the writer's output was not
-byte-identical to the input; `layout.toc` was. Two layout choices of the writer, shared with the
-C++ writer the merge already uses on real documents, are known to change bytes without changing
-values: each array record's hash is taken from the first record the document read with the same
-element type (so arrays of one type but different fields, which have their own hashes, end up
-sharing one), and the writer always puts EBXD first and reserves a 32-byte empty-array block.
-Whether those are the only causes on real files is not known yet: `ebx-roundtrip` reports, for
-any document, both sizes, the first differing byte and its region (header, instance data with
-the instance and field, arrays, boxed values, strings, fixup tables, array records, reflection),
-each table compared, and whether the rewrite reads back to the same values. The dry run prints
-the one-line form for each document it edits.
+**Rewriting unchanged real documents.** On the game's files the writer's output differed from
+the input for all four documents `new-level` edits; `layout.toc` rewrote identically. Three causes,
+the third a data-loss bug fixed on 2026-10-16 in both the Python port and ReSkate's C++ writer
+(`Engine/Resource/ebx_writer.cpp`, which the mod merge uses on real documents):
+
+- Ordering. bam's description, the root description and the genprefab read back to the same
+  values at the same size. The 333 map's genprefab rewrites byte for byte, so its tool writes the
+  same order this writer does.
+- Array hashes. Each array record's hash is taken from the first record the document read with
+  the same element type, so arrays of one type in different fields (which have their own hashes)
+  end up sharing one: type 104 records came out as 0xCAEEB6C5, record 0's hash. The C++ writer
+  does the same; values are unaffected.
+- Boxed values (the bug). A boxed value's bytes were copied as they were, pointers included, but
+  the arrays and strings those pointers reach were written only when a field reached them too.
+  So a rewrite dropped them and left the boxed value's pointers aimed at whatever moved into
+  their old place. On bam's root (271,012 bytes, 88 instances) that lost the string
+  `Gameflow test running` and about 1,120 bytes of arrays. The writer now carries everything a
+  boxed value's pointers reach: arrays, with their own record and hash and with nested pointers
+  followed; strings; instances; other boxed values. Each pointer is aimed at the new place. To
+  do that a read document keeps its EBXD bytes (`payload`). A pointer whose target is none of
+  those keeps its old displacement, as before. Reproduced synthetically
+  (`boxed_pointing` in `tests/test_ebx_crosscheck.py`; both writers now agree on it). Not yet
+  re-run on bam's root.
+
+`ebx-roundtrip` reports, for any document: both sizes; the first differing byte and its region
+(header, instance data with the instance and field, arrays, boxed values, strings, fixup tables,
+array records, reflection); each table compared; and whether the rewrite reads back to the same
+values. The comparison of values follows boxed values' pointers. `--detail [N]` adds the arrays
+and strings found on only one side and the differing array records, each with what reaches it.
+`new-level` refuses to edit a document that does not read back to the same values.
 
 Read-only checks: `new-level --dry-run` reads, edits and encodes everything in memory and prints
 each source document's rewrite check, the GUIDs, hashes and bundle counts, and writes nothing.

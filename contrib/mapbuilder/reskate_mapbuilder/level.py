@@ -79,7 +79,11 @@ def _read(raw: bytes, label: str, log: list[str]) -> Document:
     doc = read_document(raw)
     log.append(f"  {label}: {len(raw)} bytes, root {doc.root_type}, {len(doc.instances)} instances, "
                f"file guid {doc.file_guid.string()}")
-    log.extend("    " + line for line in roundtrip(raw, brief=True))
+    report = roundtrip(raw, brief=True)
+    log.extend("    " + line for line in report)
+    if "NOT semantically equal" in report[0]:
+        raise ValueError(f"{label}: rewriting it unchanged loses or changes data, so it is not edited "
+                         f"(run ebx-roundtrip --detail on it)")
     return doc
 
 

@@ -6,7 +6,10 @@ same values (a semantic dump of both).
 from __future__ import annotations
 
 from . import ebx
-from .ebx import Document, FieldType, read_document, write_document
+import struct
+from collections import Counter
+
+from .ebx import ArrayRecord, Document, FieldType, array_element, pointer_target, read_document, write_document
 from .ebxedit import describe
 
 _CHUNK_ROLE = {ebx._EFIX: "fixup tables", ebx._EBXX: "array and boxed records", ebx._REFL: "reflection",
@@ -81,14 +84,155 @@ def _compare(label: str, a, b) -> str:
             + (", same entries in another order" if same_set else ""))
 
 
-def semantic(doc: Document) -> list[str]:
-    lines = list(describe(doc, limit=1 << 30))
-    lines += [f"import {i.file_guid.string()} {i.class_guid.string()}" for i in doc.imports]
-    lines += [f"boxed {b.count} {b.hash:#x} {b.encoded_type:#x} {b.class_ref} {b.raw_bytes.hex()}" for b in doc.boxed_values]
+class _Maps:
+    def __init__(self, doc: Document):
+        self.arrays = {r.offset: r for r in doc.arrays}
+        self.instances = {i.data_offset: n for n, i in enumerate(doc.instances)}
+        self.pointers = sorted(set(doc.pointer_offsets))
+
+
+def _slots(maps: _Maps, start: int, length: int) -> list[int]:
+    return [o for o in maps.pointers if start <= o < start + length]
+
+
+def _array_type(doc: Document, record: ArrayRecord) -> str:
+    kind = (record.encoded_type >> 5) & 0x1F
+    if kind == FieldType.structure:
+        slot = record.class_ref
+        key = (doc.fixup_type_guids[slot], doc.fixup_type_signatures[slot]) if slot < len(doc.fixup_type_signatures) else None
+        return next((t.name for t in doc.types if (t.guid, t.signature) == key), "struct ?")
+    return FieldType(kind).name if kind <= 0x1C else str(kind)
+
+
+def _array_length(doc: Document, record: ArrayRecord) -> int:
+    try:
+        return array_element(doc, record)[0] * record.count
+    except ValueError:   # a struct type the fixup table does not name: up to the next array
+        later = [r.offset - 4 for r in doc.arrays if r.offset > record.offset]
+        return max(0, min(later + [doc.boxed_values_offset]) - record.offset)
+
+
+def _masked(doc: Document, maps: _Maps, start: int, length: int) -> bytes:
+    """The bytes with each pointer's displacement blanked (it changes whenever anything moves)."""
+    out = bytearray(doc.payload[start:start + length])
+    for o in _slots(maps, start, length):
+        out[o - start:o - start + 4] = b"\xff" * 4
+    return bytes(out)
+
+
+def _block(doc: Document, maps: _Maps, start: int, length: int, depth: int, seen: set) -> list[str]:
+    """What a span of carried bytes holds and reaches, by value."""
+    pad = "  " * depth
+    lines = [f"{pad}bytes {_masked(doc, maps, start, length).hex()}"]
+    for o in _slots(maps, start, length):
+        kind, key = pointer_target(doc, o, maps.arrays, maps.instances)
+        label = f"{pad}+{o - start}:"
+        if kind == "string":
+            end = doc.payload.find(b"\0", key)
+            lines.append(f"{label} string {doc.payload[key:end]!r}")
+        elif kind == "array":
+            record = maps.arrays[key]
+            lines.append(f"{label} array {record.count} x {_array_type(doc, record)}")
+            if key not in seen and depth < 16:
+                lines += _block(doc, maps, key, _array_length(doc, record), depth + 1, seen | {key})
+        elif kind == "instance":
+            lines.append(f"{label} -> #{key}")
+        elif kind == "boxed":
+            index = next((i for i, b in enumerate(sorted(doc.boxed_values, key=lambda b: b.offset))
+                          if b.offset <= key < b.offset + len(b.raw_bytes)), None)
+            lines.append(f"{label} boxed #{index}")
+        else:
+            lines.append(f"{label} {kind}")
     return lines
 
 
-def roundtrip(raw: bytes, brief: bool = False) -> list[str]:
+def semantic(doc: Document) -> list[str]:
+    lines = list(describe(doc, limit=1 << 30))
+    lines += [f"import {i.file_guid.string()} {i.class_guid.string()}" for i in doc.imports]
+    maps = _Maps(doc)
+    for index, b in enumerate(sorted(doc.boxed_values, key=lambda b: b.offset)):
+        lines.append(f"boxed #{index} {b.count} {b.hash:#x} {b.encoded_type:#x} {b.class_ref}")
+        if doc.payload:
+            lines += _block(doc, maps, b.offset, len(b.raw_bytes), 1, set())
+        else:
+            lines.append(f"  bytes {b.raw_bytes.hex()}")
+    return lines
+
+
+def semantically_equal(raw: bytes) -> bool:
+    doc = read_document(raw)
+    return semantic(doc) == semantic(read_document(write_document(doc)))
+
+
+def _where(doc: Document, maps: _Maps, slot: int) -> str:
+    if slot < doc.arrays_offset:
+        return _where_in_instances(doc, slot)
+    if slot < doc.boxed_values_offset:
+        for record in doc.arrays:
+            if record.offset <= slot < record.offset + _array_length(doc, record):
+                return f"array @{record.offset} ({record.count} x {_array_type(doc, record)}) at +{slot - record.offset}"
+        return f"arrays section at {slot}"
+    if slot < doc.strings_offset:
+        for index, b in enumerate(sorted(doc.boxed_values, key=lambda b: b.offset)):
+            if b.offset <= slot < b.offset + len(b.raw_bytes):
+                return f"boxed #{index} (type {b.encoded_type:#x}) at +{slot - b.offset}"
+    return f"offset {slot}"
+
+
+def _referrers(doc: Document, maps: _Maps) -> dict[int, list[str]]:
+    out: dict[int, list[str]] = {}
+    for slot in maps.pointers:
+        target = slot + struct.unpack_from("<i", doc.payload, slot)[0]
+        out.setdefault(target, []).append(_where(doc, maps, slot))
+    return out
+
+
+def _detail(doc: Document, back: Document, limit: int) -> list[str]:
+    lines = ["detail:"]
+    sides = []
+    for d in (doc, back):
+        maps = _Maps(d)
+        refs = _referrers(d, maps)
+        arrays = {}
+        for r in d.arrays:
+            key = (_array_type(d, r), r.count, _masked(d, maps, r.offset, _array_length(d, r)))
+            arrays.setdefault(key, []).append(r)
+        strings = {}
+        at = d.strings_offset
+        while at < len(d.payload):
+            end = d.payload.find(b"\0", at)
+            end = len(d.payload) if end < 0 else end
+            strings.setdefault(d.payload[at:end], []).append(at)
+            at = end + 1
+        sides.append((d, refs, arrays, strings))
+    for (d, refs, arrays, strings), (_, _, other_arrays, other_strings), label in (
+            (sides[0], sides[1], "only in the original"), (sides[1], sides[0], "only in the rewrite")):
+        missing = Counter({k: len(v) for k, v in arrays.items()}) - Counter({k: len(v) for k, v in other_arrays.items()})
+        lines.append(f"  arrays {label}: {sum(missing.values())}")
+        for key in list(missing)[:limit]:
+            for r in arrays[key][:missing[key]]:
+                lines.append(f"    @{r.offset}: {r.count} x {key[0]}, {len(key[2])} bytes, hash {r.hash}, "
+                             f"reached from {refs.get(r.offset, ['nothing'])}")
+        gone = [t for t in strings if t not in other_strings]
+        lines.append(f"  strings {label}: {len(gone)}")
+        for text in gone:
+            for offset in strings[text]:
+                lines.append(f"    {text!r} @{offset}, reached from {refs.get(offset, ['nothing'])}")
+    changed = [(a, b) for a, b in zip(doc.arrays, back.arrays)
+               if (a.count, a.hash, a.encoded_type, a.class_ref) != (b.count, b.hash, b.encoded_type, b.class_ref)]
+    lines.append(f"  array records that differ at the same index: {len(changed)}")
+    refs = (sides[0][1], sides[1][1])
+    for a, b in changed[:limit]:
+        lines.append(f"    original @{a.offset} {a.count} x {_array_type(doc, a)} hash {a.hash} "
+                     f"({_array_length(doc, a)} bytes) from {refs[0].get(a.offset, ['nothing'])}")
+        lines.append(f"    rewrite  @{b.offset} {b.count} x {_array_type(back, b)} hash {b.hash} "
+                     f"({_array_length(back, b)} bytes) from {refs[1].get(b.offset, ['nothing'])}")
+    return lines
+
+
+def roundtrip(raw: bytes, brief: bool = False, detail: int = 0) -> list[str]:
+    """The diagnosis; `detail` > 0 adds, for that many differing arrays and every lost or added
+    string, where each is reached from."""
     doc = read_document(raw)
     out = write_document(doc)
     if out == raw:
@@ -141,4 +285,6 @@ def roundtrip(raw: bytes, brief: bool = False) -> list[str]:
         line = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
         lines.append(f"  dump differs at line {line}: {a[line] if line < len(a) else '-'!r} vs "
                      f"{b[line] if line < len(b) else '-'!r}")
+    if detail:
+        lines += _detail(doc, back, detail)
     return lines

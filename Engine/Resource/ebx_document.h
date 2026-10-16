@@ -189,6 +189,9 @@ struct Document {
     std::vector<std::uint32_t> importOffsets;
     std::vector<std::uint32_t> typeInfoOffsets;
     std::vector<std::uint32_t> boxedValueSlots;
+    // The EBXD bytes the document was read from (offsets as in the fixup tables): what boxed
+    // values point at (arrays, strings) is carried from here when the document is written.
+    std::vector<std::byte> payload;
 
     [[nodiscard]] const InstanceRecord* root() const noexcept;
 };

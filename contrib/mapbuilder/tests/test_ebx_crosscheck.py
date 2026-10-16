@@ -481,3 +481,51 @@ def test_array_hash_is_borrowed_on_rewrite(harness, tmp_path):
     assert rewritten != data
     assert len({a.hash for a in read_document(rewritten).arrays if a.encoded_type == enc(T.int32, C.array) << 1}) == 1
     assert check_against_cpp(harness, tmp_path, rewritten) == rewritten
+
+
+# ---- What a boxed value points at -----------------------------------------------------------------
+
+def boxed_pointing(seed=3):
+    """A document whose boxed value points at a string and an int32 array that nothing else
+    reaches (the shape of bam's root on the game's files, where 'Gameflow test running' and
+    about 1 KB of arrays went missing on a rewrite before the writer carried them)."""
+    doc = synthetic(seed)
+    doc.root().object.set("Name", "Gameflow test running")
+    doc.root().object.set("Numbers", [11, 22, 33])
+    doc.boxed_values[0].raw_bytes = bytes(24)
+    doc.pointer_offsets = [0, 8]           # two pointers in the boxed value
+    doc.resource_ref_offsets = []
+    written = read_document(write_document(doc))
+    data = bytearray(write_document(written))
+    start = written.data_start
+    root = written.instances[0].data_offset
+    name_slot, numbers_slot = root + 16, root + 232
+    string = name_slot + struct.unpack_from("<i", data, start + name_slot)[0]
+    array = numbers_slot + struct.unpack_from("<i", data, start + numbers_slot)[0]
+    boxed = written.boxed_values[0].offset
+    struct.pack_into("<iI", data, start + boxed, string - boxed, 0)
+    struct.pack_into("<iI", data, start + boxed + 8, array - (boxed + 8), 0)
+    # The fields no longer reach them: the name is empty, the list points at the empty-array block.
+    struct.pack_into("<I", data, start + name_slot, 0xFFFFFFFF)
+    struct.pack_into("<i", data, start + numbers_slot, written.arrays_offset + 16 - numbers_slot)
+    return bytes(data)
+
+
+def test_boxed_targets_survive_a_rewrite():
+    data = boxed_pointing()
+    doc = read_document(data)
+    assert doc.root().object.get("Name") == "" and doc.root().object.get("Numbers") == []
+    rewritten = write_document(doc)
+    back = read_document(rewritten)
+    boxed = back.boxed_values[0].offset
+    string = boxed + struct.unpack_from("<i", back.payload, boxed)[0]
+    array = boxed + 8 + struct.unpack_from("<i", back.payload, boxed + 8)[0]
+    assert back.payload[string:string + 22] == b"Gameflow test running\0"
+    assert struct.unpack_from("<i3i", back.payload, array - 4) == (3, 11, 22, 33)
+    assert any(r.offset == array and r.count == 3 for r in back.arrays)
+    assert sorted({boxed, boxed + 8} - set(back.pointer_offsets)) == []
+    assert write_document(back) == rewritten          # a fixed point from then on
+
+
+def test_boxed_targets_agree_with_cpp(harness, tmp_path):
+    check_against_cpp(harness, tmp_path, boxed_pointing())

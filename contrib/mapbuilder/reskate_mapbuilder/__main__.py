@@ -8,7 +8,7 @@
         --superbundle S --bundle B --resource R [--by 1.0]
 
   python -m reskate_mapbuilder new-level --game <dir> --mods <dir> --name zz-... --level <name> [--dry-run]
-  python -m reskate_mapbuilder ebx-roundtrip --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME
+  python -m reskate_mapbuilder ebx-roundtrip --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME [--detail [N]]
   python -m reskate_mapbuilder dump-ebx --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME
 
 raise-ground repeats the collision test proven in game with ReSkate's C++ tools: it lifts the
@@ -136,7 +136,7 @@ def dump_ebx(args):
 
 def ebx_roundtrip(args):
     """Rewrites a document unchanged, in memory, and says where and why the bytes differ."""
-    for line in roundtrip(_read_ebx(args)):
+    for line in roundtrip(_read_ebx(args), detail=args.detail):
         print(line)
 
 
@@ -174,6 +174,9 @@ def main(argv=None):
         p.add_argument("--ebx", required=True)
         if name == "dump-ebx":
             p.add_argument("--limit", type=int, default=20, help="array elements printed")
+        else:
+            p.add_argument("--detail", type=int, nargs="?", const=20, default=0, metavar="N",
+                           help="also say where differing arrays (the first N, default 20) and strings are reached from")
     args = ap.parse_args(argv)
     {"inspect": inspect, "raise-ground": raise_ground, "rebuild": rebuild, "new-level": new_level_command,
      "dump-ebx": dump_ebx, "ebx-roundtrip": ebx_roundtrip}[args.command](args)
