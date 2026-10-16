@@ -4,7 +4,7 @@ Layout and edge rules from contrib/mapbuilder/FORMAT-NOTES.md, section 2.
 What has been tested in game: a resource with a shape replaced by one
 built this way (vertices, half-edge arrays, edge data by the rule below, zeroed tree nodes)
 loads, and the skater stands on it. A base map file (version 0) rewritten whole as version 2
-crashed the game; whole files are now written in the source's version, not yet tested in game.
+crashed the game; rewritten as version 0, it loads and the skater stands on the raised ground.
 
 Pointers in this format are u32 distances from the pointer's own position (0 = none).
 """

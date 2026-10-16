@@ -170,6 +170,11 @@ bad free in physics teardown; the ground there read 192.7, neither the old nor t
 the version-0 container and appending arrays never crashed. Working theory: that loader reads the
 file as version 0 regardless of the version word. Base files must be rewritten as version 0.
 
+Rewritten as version 0 (`rebuild`, `write_physics(version=0)` with the source's part tree), the
+same three-part file loads and the skater stands 1.00 m higher at all three spots, no crash. A
+rebuild with no raise matches the base byte for byte apart from the shape arrays (fanned into
+triangles) and the size-dependent tree pointer.
+
 Version-0 layout (read from four base files): header 0x08 = 0, 0x10 = part count, 0x14 = 1,
 0x1C = number of 44-byte entries in the 0x2C table, 0x20 = 4, and 0x24 points at the shape table
 (at 0x38; there is no mass block). The data start (0x34) holds a 36-byte block: the world box of
