@@ -262,7 +262,7 @@ Useful launcher flags:
 | `DINGOSDK_VERSION` | `0.0.0` | version stamped into the binaries |
 | `DINGOSDK_LAUNCHER_AUTO_UPDATE` | `OFF` | let the launcher replace itself and `ReSkate.dll`, and the server replace itself (release builds) |
 | `DINGOSDK_RELEASE_REPO` | `Dingo-Shenanigans/ReSkate` | public GitHub repository whose latest release carries `launcher.json` and the files it pins |
-| `DINGOSDK_CRASH_REPORT_URL` | the project's endpoint | Sentry minidump endpoint URL; empty turns crash uploads off |
+| `DINGOSDK_CRASH_REPORT_URL` | empty (or `RESKATE_CRASH_REPORT_URL` from the environment) | Sentry minidump endpoint URL; empty turns crash uploads off |
 | `DINGOSDK_TEST_GAME_ROOT` | empty | a Skate folder, for the tests that read real game data |
 
 ### Tests
@@ -324,8 +324,8 @@ long frames. Nothing about your account is included. Turning crash reports off t
 Crash reports are on only when the environment variable `RESKATE_CRASH_REPORTING` is `1`, which the
 launcher sets when the box is ticked; Skate started without the launcher sends nothing. Setting
 `RESKATE_NO_CRASH_UPLOAD=1` stops every upload (crash reports and timings) whatever the settings say;
-crash dumps are still kept in the logs folder. Builds made with `-DDINGOSDK_CRASH_REPORT_URL=` (empty),
-as CI's are, cannot upload at all.
+crash dumps are still kept in the logs folder. Builds made without a crash-report endpoint (the default;
+only releases pass one) cannot upload at all.
 
 ReSkate also keeps the game off EA's online services: the game's own crash reports, telemetry and
 remote configuration requests are turned off and blocked. Fast-travel artwork still comes from EA's

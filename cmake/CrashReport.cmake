@@ -1,5 +1,7 @@
-# The sentry_key is the project's public DSN key: it grants report submission only. Never use an auth token.
-set(crash_report_default_url "https://sentry.reskate.dev/api/2/minidump/?sentry_key=8efcb389bdc033445093a7af0c66f9be")
+# No endpoint unless one is given: this fork must never send reports to upstream's server. Releases pass
+# the fork's own (release.yml, RESKATE_CRASH_REPORT_URL). A sentry_key is a public DSN key that grants
+# report submission only; never use an auth token.
+set(crash_report_default_url "")
 if(NOT "$ENV{RESKATE_CRASH_REPORT_URL}" STREQUAL "")
     set(crash_report_default_url "$ENV{RESKATE_CRASH_REPORT_URL}")
 endif()
