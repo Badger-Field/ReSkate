@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <span>
 #include <memory>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -149,6 +150,9 @@ struct Value {
                                  PointerReference, TypeReference, BoxedReference,
                                  std::shared_ptr<struct Object>, Array>;
     Storage data;
+    // An array's own record hash, kept when the document is written again; a new array has none
+    // and borrows one (ebx_writer.cpp, array_hash).
+    std::optional<std::uint32_t> arrayHash;
 };
 
 struct FieldValue {

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <ranges>
 #include <stdexcept>
 #include <string_view>
@@ -106,6 +107,7 @@ private:
         std::uint32_t slot{};
         const Value::Array* values{};
         std::size_t descriptor{};
+        std::optional<std::uint32_t> hash;
         bool emitted{};
     };
 
@@ -208,7 +210,7 @@ private:
                 static const Value::Array empty;
                 const auto* array = value ? std::get_if<Value::Array>(&value->data) : nullptr;
                 arraysPending_.push_back({checked_u32(position, "EBX array slot"), array ? array : &empty,
-                                          descriptorIndex});
+                                          descriptorIndex, value ? value->arrayHash : std::nullopt});
             } else if (field.type() == FieldType::structure) {
                 if (field.classRef >= document_.types.size()) throw std::runtime_error("EBX struct type is invalid");
                 const auto nestedStart = align_up(position, std::max<std::size_t>(document_.types[field.classRef].alignment, 1));
@@ -505,8 +507,10 @@ private:
                 write_scalar(field, elementStart, &value);
             }
         }
+        // An array read from a record keeps that record's hash; a new one borrows (array_hash).
+        const auto hash = arraysPending_[index].hash ? *arraysPending_[index].hash : array_hash(field);
         arrays_.push_back({checked_u32(data, "EBX array data"), checked_u32(values->size(), "EBX array count"),
-                           array_hash(field), static_cast<std::uint16_t>(field.encodedType << 1),
+                           hash, static_cast<std::uint16_t>(field.encodedType << 1),
                            field.type() == FieldType::structure
                                ? fixup_slot_for_descriptor(field.classRef)
                                : static_cast<std::uint16_t>(0xFFFF)});
