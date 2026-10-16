@@ -1,4 +1,5 @@
 #include "board_break_audio.h"
+#include "Engine/Core/Platform/path_text.h"
 #include "Engine/Core/Log/logging.h"
 #include <Windows.h>
 #include <mmsystem.h>
@@ -137,7 +138,7 @@ void load(Kind kind, const std::vector<std::filesystem::path>& files) noexcept {
             Sound sound;
             if (read_wave(file, sound)) read.push_back(std::move(sound));
             else logging::log(logging::Level::warning, logging::Channel::skater, "Board Break: {} is not a wave file it can play.",
-                              file.filename().string());
+                              path_utf8(file.filename()));
         } catch (...) {}
     }
     std::lock_guard lock(e.mutex);

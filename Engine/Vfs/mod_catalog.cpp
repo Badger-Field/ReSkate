@@ -1,4 +1,5 @@
 #include "mod_catalog.h"
+#include "Engine/Core/Platform/path_text.h"
 #include "builtin_packs.h"
 
 #include "mod_merge.h"
@@ -128,7 +129,7 @@ std::vector<std::pair<std::string, fs::path>> decks_inside(const fs::path& mod) 
     std::error_code error;
     for (fs::directory_iterator at(mod / L"decks", error), end; !error && at != end; at.increment(error)) {
         if (!at->is_directory(error) || !fs::is_regular_file(at->path() / L"layout.toc", error)) continue;
-        auto name = lower(at->path().filename().string());
+        auto name = lower(path_utf8(at->path().filename()));
         if (deck_name(name)) found.emplace_back(std::move(name), at->path());
     }
     std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return deck_before(a.first, b.first); });
@@ -144,7 +145,7 @@ std::vector<std::pair<std::string, fs::path>> installed_decks() {
         auto inside = decks_inside(at->path());
         for (auto& one : inside) decks.emplace_back(std::move(one.first), at->path());
         if (!inside.empty()) continue;
-        if (auto deck = board_break_deck_of(at->path().filename().string()); !deck.empty()) decks.emplace_back(std::move(deck), at->path());
+        if (auto deck = board_break_deck_of(path_utf8(at->path().filename())); !deck.empty()) decks.emplace_back(std::move(deck), at->path());
     }
     std::stable_sort(decks.begin(), decks.end(), [](const auto& a, const auto& b) { return deck_before(a.first, b.first); });
     return decks;
@@ -230,7 +231,7 @@ std::filesystem::path board_break_deck_folder(std::string_view deck) noexcept {
             const auto inside = decks_inside(at->path());
             for (const auto& one : inside)
                 if (one.first == wanted) return one.second;
-            if (inside.empty() && board_break_deck_of(at->path().filename().string()) == wanted) return at->path();
+            if (inside.empty() && board_break_deck_of(path_utf8(at->path().filename())) == wanted) return at->path();
         }
     } catch (...) {}
     return {};
