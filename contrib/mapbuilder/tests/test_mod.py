@@ -18,6 +18,8 @@ from reskate_mapbuilder.toc import TocBundle, read_toc, verify_toc, write_patch_
 
 CHUNK = 7
 PACKAGE = "configurations/layout/defaultinstallpackage"
+CHUNK_EN = 8
+PACKAGE_EN = "configurations/layout/initialinstallpackage/en"
 SUPER = "levels/game/test_levelroot/test_levelroot"
 BUNDLE = "win32/levels/game/test_levelroot/wproot/s200_x0z0_sublevel"
 RES = "levels/game/test_levelroot/wproot/s200_x0z0_sublevel/staticmodelgroup.physics"
@@ -27,12 +29,16 @@ def node(type_, name=None, payload=b"", children=None):
     return nativedb.Node(type_, name is not None, children is not None, name or "", payload, children or [])
 
 
-def fake_game(tmp_path):
+def fake_game(tmp_path, manifest_chunk=CHUNK):
+    """One bundle; its manifest lives in `manifest_chunk`'s package, its payloads in CHUNK's."""
     data = tmp_path / "Data"
     (data / "Win32" / PACKAGE).mkdir(parents=True)
+    (data / "Win32" / PACKAGE_EN).mkdir(parents=True)
     layout = node(2, None, children=[node(2, "installManifest", children=[node(1, "installChunks", children=[
         node(2, None, children=[node(7, "name", b"Configurations/Layout/DefaultInstallPackage\0"),
-                                node(8, "persistentIndex", struct.pack("<I", CHUNK))])])])])
+                                node(8, "persistentIndex", struct.pack("<I", CHUNK))]),
+        node(2, None, children=[node(7, "name", b"Configurations/Layout/InitialInstallPackage/en\0"),
+                                node(8, "persistentIndex", struct.pack("<I", CHUNK_EN))])])])])
     (data / "layout.toc").write_bytes(nativedb.MAGIC + bytes(nativedb.ENVELOPE_SIZE - 4) + nativedb.write(layout))
 
     floor = Shape([(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (0.0, 0.0, 10.0), (10.0, 0.0, 10.0)], [(0, 2, 1), (1, 2, 3)])
@@ -50,8 +56,12 @@ def fake_game(tmp_path):
                          original_size=len(ebx_payload))],
         resources=[BundleAsset(RESOURCE, RES, b"\1" * 20, resource_type=0x41759364, original_size=len(physics))])
     raw_manifest = write_binary_bundle(manifest)
-    files = [BundleFileInfo(CasIdentifier(False, CHUNK, 2), len(cas), len(raw_manifest))] + entries
-    cas += raw_manifest
+    if manifest_chunk == CHUNK:
+        files = [BundleFileInfo(CasIdentifier(False, CHUNK, 2), len(cas), len(raw_manifest))] + entries
+        cas += raw_manifest
+    else:
+        files = [BundleFileInfo(CasIdentifier(False, manifest_chunk, 2), 0, len(raw_manifest))] + entries
+        (data / "Win32" / PACKAGE_EN / "cas_02.cas").write_bytes(raw_manifest)
     (data / "Win32" / PACKAGE / "cas_02.cas").write_bytes(bytes(cas))
     toc = write_patch_toc([TocBundle(BUNDLE, write_bundle_region(files), 1)])
     (data / "Win32" / (SUPER + ".toc")).parent.mkdir(parents=True)
@@ -97,3 +107,23 @@ def test_override_mod_raises_ground_and_keeps_the_rest(tmp_path):
     assert manifest.resources[0].sha1 == hashlib.sha1(decoded).digest()
     back, back_parts, _ = read_physics(decoded)
     assert [v[1] for v in back[0].vertices] == [1.0, 1.0, 1.0, 1.0]
+
+
+def test_files_in_two_install_packages_get_an_archive_each(tmp_path):
+    # The manifest sits in one package and the replaced payload in another: each package gets its
+    # own cas_01.cas, with offsets local to that archive (the merger rejects anything else).
+    game = Game(fake_game(tmp_path / "game", manifest_chunk=CHUNK_EN))
+    mod = ModBuilder(game, "zz-two-packages")
+    original = mod.resource(SUPER, BUNDLE, RES)
+    mod.replace_resource(SUPER, BUNDLE, RES, original)
+    root = mod.write(tmp_path / "Mods")
+    region = read_bundle_region(read_toc((root / "Win32" / (SUPER + ".toc")).read_bytes()).bundles[0].region)
+    manifest_file, res_file = region.files[0], region.files[2]
+    assert manifest_file.location == CasIdentifier(True, CHUNK_EN, 1)
+    assert res_file.location == CasIdentifier(True, CHUNK, 1)
+    en = (root / "Win32" / PACKAGE_EN / "cas_01.cas").read_bytes()
+    default = (root / "Win32" / PACKAGE / "cas_01.cas").read_bytes()
+    assert manifest_file.offset == 0 and manifest_file.size == len(en)
+    assert res_file.offset == 0 and res_file.size == len(default)
+    assert read_binary_bundle(en).resources[0].name == RES
+    assert decode_raw(default) == original
