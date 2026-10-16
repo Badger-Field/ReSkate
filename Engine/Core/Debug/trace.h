@@ -16,7 +16,8 @@ using Measurements = std::vector<Measurement>;
 // Called once logging is up: true when this launch sends timings. Until then,
 // and in programs that never call it, record() does nothing. Timings are off
 // unless RESKATE_TRACING=1 (the launcher's "Send performance timings" setting),
-// and off whenever crash reporting is (RESKATE_CRASH_REPORTING=0).
+// and off whenever crash reporting is (it is on only with RESKATE_CRASH_REPORTING=1, and never with
+// RESKATE_NO_CRASH_UPLOAD set).
 bool start() noexcept;
 // Whether this launch sends timings (start() succeeded).
 bool active() noexcept;

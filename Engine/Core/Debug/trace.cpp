@@ -52,7 +52,7 @@ std::string timestamp(Clock::time_point time) {
 }
 void configure(State& s) {
     using crash_report::environment;
-    if (environment(L"RESKATE_TRACING") != L"1" || environment(L"RESKATE_CRASH_REPORTING") == L"0") return;
+    if (environment(L"RESKATE_TRACING") != L"1" || !crash_report::reporting_enabled()) return;
     auto url = environment(L"RESKATE_CRASH_REPORT_URL");
     if (url.empty()) url = crash_report::configured_url;
     url = envelope_url(url);
@@ -84,6 +84,7 @@ struct Pacing {
     std::atomic<std::uint64_t> last{}, frames{}, total{}, hitches{}, worst{};
 } pacing;
 void post(const State& s, const std::string& body) {
+    if (crash_report::uploads_forbidden()) return;
     Internet session{WinHttpOpen(L"ReSkate-Trace/1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, nullptr, nullptr, 0)};
     if (!session.value || !WinHttpSetTimeouts(session.value, 5000, 5000, 5000, 5000)) return;
     Internet connection{WinHttpConnect(session.value, s.host.c_str(), s.port, 0)};

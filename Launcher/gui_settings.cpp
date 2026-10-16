@@ -480,7 +480,8 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
                       settings.gpu_diagnostics);
         setting_check("Send crash reports",
                       "When the launcher or Skate crashes, upload a crash dump and that session's log so the ReSkate "
-                      "developers can fix it. The launcher picks a change up when it next starts.",
+                      "developers can fix it. Off unless you tick it. The launcher picks a change up when it next "
+                      "starts.",
                       settings.crash_reports);
         setting_check("Send performance timings",
                       "Send how long downloads, mod installs, the mod merge, level loads and joining a "

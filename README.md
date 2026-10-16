@@ -310,8 +310,9 @@ bytes they expect before touching them, so code from the wrong build is refused 
 
 ## Crash reports and privacy
 
-When the launcher or the game crashes, ReSkate uploads a minidump and that session's log to the
-project's self-hosted Sentry server, so crashes can be fixed. The log never contains your Steam password or
+Crash reports are off unless you turn them on. With **Send crash reports** ticked in the launcher's
+Settings (ADVANCED), when the launcher or the game crashes, ReSkate uploads a minidump and that
+session's log to the crash-report server the build was made with, so crashes can be fixed. The log never contains your Steam password or
 login name.
 
 With **Send performance timings** ticked in the launcher's Settings (ADVANCED; off unless you turn it on),
@@ -320,8 +321,11 @@ installs (with the package name), the mod merge, starting the game, each level l
 session and fetching the ReSkate lists. Time spent in a level adds its name, average frame rate and count of
 long frames. Nothing about your account is included. Turning crash reports off turns this off too.
 
-To turn crash reports off, untick **Send crash reports** in the launcher's Settings (ADVANCED), or set the
-environment variable `RESKATE_CRASH_REPORTING=0`.
+Crash reports are on only when the environment variable `RESKATE_CRASH_REPORTING` is `1`, which the
+launcher sets when the box is ticked; Skate started without the launcher sends nothing. Setting
+`RESKATE_NO_CRASH_UPLOAD=1` stops every upload (crash reports and timings) whatever the settings say;
+crash dumps are still kept in the logs folder. Builds made with `-DDINGOSDK_CRASH_REPORT_URL=` (empty),
+as CI's are, cannot upload at all.
 
 ReSkate also keeps the game off EA's online services: the game's own crash reports, telemetry and
 remote configuration requests are turned off and blocked. Fast-travel artwork still comes from EA's

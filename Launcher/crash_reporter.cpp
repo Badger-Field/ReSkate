@@ -118,7 +118,9 @@ int run(int argc, wchar_t** argv) {
     const auto directory = queue_directory(shared->directory.data(), url);
     std::filesystem::create_directories(directory);
     // Uploading an old queue must never delay capturing a new crash.
-    std::jthread uploader([&] { upload_pending(url, directory); });
+    // RESKATE_NO_CRASH_UPLOAD: dumps are kept in the queue, nothing is sent.
+    const bool send = !uploads_forbidden();
+    std::jthread uploader([&] { if (send) upload_pending(url, directory); });
     SetEvent(handles[ready].value);
     const HANDLE wait_for[]{handles[requested].value, handles[stopping].value, handles[parent].value};
     const auto reason = WaitForMultipleObjects(3, wait_for, FALSE, INFINITE);
@@ -139,7 +141,7 @@ int run(int argc, wchar_t** argv) {
             saved ? "queued its native crash dump." : "no native dump matched this process and start time.");
     } else return 0;
     uploader.join();
-    if (saved) upload_pending(url, directory);
+    if (saved && send && !uploads_forbidden()) upload_pending(url, directory);
     return saved ? 0 : 4;
 }
 }

@@ -67,7 +67,7 @@ Settings load_settings(const fs::path& path) {
         // Keep the original settings key so existing launcher preferences survive.
         settings.keep_open_after_launch = !json.value("close_on_launch", !settings.keep_open_after_launch);
         settings.updates = json.value("updates", settings.updates);
-        settings.crash_reports = json.value("crash_reports", settings.crash_reports);
+        settings.crash_reports = json.value("send_crash_reports", settings.crash_reports);
         settings.performance_timings = json.value("performance_timings", settings.performance_timings);
         settings.prereleases = json.value("prereleases", settings.prereleases);
         settings.steam_username = json.value("steam_username", std::string());
@@ -94,7 +94,7 @@ void save_settings(const fs::path& path, const Settings& settings) {
     json["arguments"] = settings.arguments;
     json["close_on_launch"] = !settings.keep_open_after_launch;
     json["updates"] = settings.updates;
-    json["crash_reports"] = settings.crash_reports;
+    json["send_crash_reports"] = settings.crash_reports;
     json["performance_timings"] = settings.performance_timings;
     json["prereleases"] = settings.prereleases;
     json["steam_username"] = settings.steam_username;
@@ -161,7 +161,7 @@ void Launcher::save() {
     save_settings(settings_path(session_), settings_);
     // The game inherits the launcher's environment, so this reaches the next launch; the
     // launcher's own crash reporting follows the setting from its next start.
-    SetEnvironmentVariableW(L"RESKATE_CRASH_REPORTING", settings_.crash_reports ? nullptr : L"0");
+    SetEnvironmentVariableW(L"RESKATE_CRASH_REPORTING", settings_.crash_reports ? L"1" : L"0");
     SetEnvironmentVariableW(L"RESKATE_TRACING", settings_.performance_timings ? L"1" : L"0");
 }
 
@@ -609,7 +609,8 @@ void apply_crash_report_setting() noexcept {
         if (!length || length >= path.size()) return;
         path.resize(length);
         const auto settings = detail::load_settings(std::filesystem::path(path).parent_path() / L"ReSkateLauncher.settings.json");
-        if (!settings.crash_reports) SetEnvironmentVariableW(L"RESKATE_CRASH_REPORTING", L"0");
+        // Opt-in: on only when ticked (RESKATE_NO_CRASH_UPLOAD still stops every upload).
+        SetEnvironmentVariableW(L"RESKATE_CRASH_REPORTING", settings.crash_reports ? L"1" : L"0");
         // A RESKATE_TRACING already set (to test with, or to refuse) is left alone.
         if (settings.performance_timings && !GetEnvironmentVariableW(L"RESKATE_TRACING", nullptr, 0))
             SetEnvironmentVariableW(L"RESKATE_TRACING", L"1");

@@ -76,6 +76,7 @@ std::filesystem::path queue_directory(const std::filesystem::path& root, const s
 }
 UploadResult upload_report(const std::wstring& url, const std::filesystem::path& dump, const Json& attributes) {
     UploadResult result;
+    if (uploads_forbidden()) { result.error = ERROR_ACCESS_DISABLED_BY_POLICY; return result; }
     Endpoint endpoint;
     if (!parse_endpoint(url, endpoint) || !attributes.is_object()) { result.error = ERROR_INVALID_PARAMETER; return result; }
     const auto boundary = std::format("ReSkate-{:x}-{:x}", GetCurrentProcessId(), GetTickCount64());

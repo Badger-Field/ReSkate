@@ -285,6 +285,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (argc == 2 && std::wstring_view(argv[1]) == L"--submit-trace") {
             SetEnvironmentVariableW(L"RESKATE_TRACING", L"1");
+            SetEnvironmentVariableW(L"RESKATE_CRASH_REPORTING", L"1");
             check(trace::start(), "Timings are not configured for this build");
             trace::record("integration.test", "test", std::chrono::milliseconds(1234), true, {{"integration.test", "true"}},
                 {{"fps_avg", 60.0}});
@@ -336,11 +337,22 @@ int wmain(int argc, wchar_t** argv) {
             return 3;
         }
         check(argc == 2, "Pass a fixture root");
+        // Everything below posts only to loopback or invalid endpoints, so a harness's
+        // RESKATE_NO_CRASH_UPLOAD does not change what these checks expect.
+        SetEnvironmentVariableW(L"RESKATE_NO_CRASH_UPLOAD", nullptr);
         trace_checks();
         const auto root = std::filesystem::path(argv[1]) / std::format(L"run-{}-{}", GetCurrentProcessId(), GetTickCount64());
         std::filesystem::create_directories(root);
+        SetEnvironmentVariableW(L"RESKATE_CRASH_REPORTING", nullptr);
+        check(start(root) == StartResult::disabled, "Crash reports on without opting in");
         SetEnvironmentVariableW(L"RESKATE_CRASH_REPORTING", L"0");
         check(start(root) == StartResult::disabled, "Explicit opt-out ignored");
+        SetEnvironmentVariableW(L"RESKATE_CRASH_REPORTING", L"1");
+        SetEnvironmentVariableW(L"RESKATE_NO_CRASH_UPLOAD", L"1");
+        check(start(root) == StartResult::disabled, "RESKATE_NO_CRASH_UPLOAD ignored");
+        check(!upload_report(L"https://127.0.0.1:1/test/minidump", root / L"none.dmp", Json::object()).accepted,
+            "Upload attempted with RESKATE_NO_CRASH_UPLOAD");
+        SetEnvironmentVariableW(L"RESKATE_NO_CRASH_UPLOAD", nullptr);
         SetEnvironmentVariableW(L"RESKATE_CRASH_REPORTING", L"1");
         SetEnvironmentVariableW(L"RESKATE_CRASH_REPORT_URL", L"http://invalid/post");
         check(start(root) == StartResult::failed, "Invalid endpoint enabled reporter");

@@ -5,7 +5,8 @@
 
 namespace dingosdk::crash_report {
 enum class StartResult { disabled, ready, failed };
-// Called outside DllMain. A missing endpoint or RESKATE_CRASH_REPORTING=0 disables reporting.
+// Called outside DllMain. Reporting is opt-in: it is disabled unless RESKATE_CRASH_REPORTING=1,
+// and by RESKATE_NO_CRASH_UPLOAD (protocol.h) or a missing endpoint.
 StartResult start(const std::filesystem::path& log_directory) noexcept;
 void stop() noexcept;
 // Last-chance path: only signals the prestarted helper and waits at most 15 seconds.

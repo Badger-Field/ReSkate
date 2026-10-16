@@ -31,7 +31,7 @@ template<std::size_t N> void copy_cut(std::array<wchar_t, N>& target, std::wstri
 StartResult start(const std::filesystem::path& log_directory) noexcept {
     try {
         if (report) return StartResult::ready;
-        if (environment(L"RESKATE_CRASH_REPORTING") == L"0") return StartResult::disabled;
+        if (!reporting_enabled()) return StartResult::disabled;
         auto url = environment(L"RESKATE_CRASH_REPORT_URL");
         if (url.empty()) url = configured_url;
         if (url.empty()) return StartResult::disabled;

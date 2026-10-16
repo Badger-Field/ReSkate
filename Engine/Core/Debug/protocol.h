@@ -41,4 +41,17 @@ inline std::wstring environment(const wchar_t* name) {
     const auto size = GetEnvironmentVariableW(name, buffer.data(), static_cast<DWORD>(buffer.size()));
     return size && size < buffer.size() ? std::wstring(buffer.data(), size) : std::wstring{};
 }
+// RESKATE_NO_CRASH_UPLOAD set (to anything but "0"): nothing is sent, whatever the launcher's
+// settings or RESKATE_CRASH_REPORTING say, for test runs and unattended machines. Checked
+// before every upload (crash dumps and performance timings); dumps are still kept on disk.
+inline bool uploads_forbidden() {
+    const auto value = environment(L"RESKATE_NO_CRASH_UPLOAD");
+    return !value.empty() && value != L"0";
+}
+// Crash reports are opt-in: on only with RESKATE_CRASH_REPORTING=1, which the launcher sets when
+// "Send crash reports" is ticked (off by default). Unset, as when Skate.exe is started without
+// the launcher, they are off.
+inline bool reporting_enabled() {
+    return !uploads_forbidden() && environment(L"RESKATE_CRASH_REPORTING") == L"1";
+}
 }

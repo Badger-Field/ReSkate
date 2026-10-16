@@ -190,8 +190,11 @@ struct Settings {
     bool keep_open_after_launch{};
     // Off: never replace ReSkate.dll or the launcher (keeps a test build someone handed out).
     bool updates{true};
-    // Off: a crash uploads nothing (RESKATE_CRASH_REPORTING=0 for the launcher and the game).
-    bool crash_reports{true};
+    // On: a crash uploads its dump and log (RESKATE_CRASH_REPORTING=1 for the launcher and the
+    // game). Off by default: crash reports are opt-in, and RESKATE_NO_CRASH_UPLOAD=1 stops them
+    // whatever this says. Saved as "send_crash_reports"; the old "crash_reports" key (on by
+    // default upstream) is not read, so no one is opted in without ticking it.
+    bool crash_reports{};
     // On: launches send how long their steps took (RESKATE_TRACING=1 for the launcher and the game).
     bool performance_timings{};
     // On: update to the newest pre-release on GitHub when there is one newer than the latest
