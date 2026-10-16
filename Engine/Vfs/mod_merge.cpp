@@ -442,7 +442,7 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
                     for (std::size_t index = 0; index < job.merged.bundles.size(); ++index) {
                         auto region = fb::read_bundle_region(job.merged.bundles[index].region);
                         if (std::ranges::any_of(region.files, [](const fb::BundleFileInfo& file) {
-                                return CasStore::waits(file.location); }))
+                                return CasStore::placeholder(file.location); }))
                             job.held.emplace_back(index, std::move(region));
                     }
             } catch (...) {
@@ -509,7 +509,7 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
             }
             for (auto& chunk : job.merged.chunks) job.store->settled(chunk.location, chunk.offset);
             for (const auto& [installChunk, archive] : job.used)
-                used.emplace(installChunk, archive == CasStore::waiting_archive ? manifestArchive : archive);
+                used.emplace(installChunk, CasStore::placeholder(archive) ? manifestArchive : archive);
             report.mergedBundles += job.report.mergedBundles;
             report.mergedAssets += job.report.mergedAssets;
             report.notes.insert(report.notes.end(), std::make_move_iterator(job.report.notes.begin()),

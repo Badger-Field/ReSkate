@@ -61,7 +61,7 @@ fb::BundleFileInfo CasStore::write(std::uint32_t installChunk, std::uint16_t arc
     const auto path = archive_path(installChunk, archive);
     if (waiting_) {
         // A placement that waits names no archive, so there can be only the one to settle into.
-        if (archive == waiting_archive || (archive_ && *archive_ != archive))
+        if (placeholder(archive) || (archive_ && *archive_ != archive))
             throw std::logic_error("A waiting store writes to one archive index");
         archive_ = archive;
         auto& held = held_[path.wstring()].bytes;
@@ -83,7 +83,19 @@ CasStore CasStore::waiting() const {
     copy.archive_.reset();
     copy.held_.clear();
     copy.offsets_.clear();
+    copy.carried_.clear();
+    copy.carriedIndex_.clear();
+    copy.carriedAt_.clear();
     return copy;
+}
+
+fb::BundleFileInfo CasStore::carry(std::uint32_t installChunk, std::uint16_t archive, std::span<const std::byte> encoded) {
+    if (!waiting_) throw std::logic_error("Only a waiting store carries payloads");
+    const std::pair key{installChunk, sha1_of(encoded)};
+    const auto [found, fresh] = carriedIndex_.try_emplace(key, carried_.size());
+    if (fresh) carried_.push_back({installChunk, archive, key.second, encoded, {}});
+    return {{true, installChunk, carried_archive}, static_cast<std::uint32_t>(found->second),
+            static_cast<std::uint32_t>(encoded.size())};
 }
 
 void CasStore::settle(CasStore& waiting) {
@@ -92,10 +104,26 @@ void CasStore::settle(CasStore& waiting) {
         held.at = append(fs::path(path), held.bytes);
         held.bytes = {};
     }
+    // Then the carried assets, in the order the superbundle first named them. An asset an
+    // earlier superbundle settled in this install chunk is not written again.
+    for (auto& carried : waiting.carried_) {
+        const std::pair key{carried.installChunk, carried.sha1};
+        auto found = carriedAt_.find(key);
+        if (found == carriedAt_.end())
+            found = carriedAt_.emplace(key, write(carried.installChunk, carried.archive, carried.bytes)).first;
+        carried.at = found->second;
+    }
 }
 
 bool CasStore::settled(fb::CasIdentifier& location, std::uint32_t& offset) const {
-    if (!waits(location)) return false;
+    if (!placeholder(location)) return false;
+    if (location.archive == carried_archive) {
+        if (offset >= carried_.size()) throw std::logic_error("A carried placement names no asset its store holds");
+        const auto& at = carried_[offset].at;
+        location = at.location;
+        offset = at.offset;
+        return true;
+    }
     const auto found = archive_ ? held_.find(archive_path(location.installChunk, *archive_).wstring()) : held_.end();
     if (found == held_.end()) throw std::logic_error("A placement waits in a store that holds nothing for it");
     const auto moved = found->second.at + offset;
