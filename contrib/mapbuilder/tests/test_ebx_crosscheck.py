@@ -469,18 +469,24 @@ def test_hand_built_document(harness, tmp_path, trailing):
     assert read_file_guid(data) == guid(9)
 
 
-def test_array_hash_is_borrowed_on_rewrite(harness, tmp_path):
-    # Two int32 arrays with their own name hashes: the first write gives each its own, but a
-    # rewrite takes the hash of the first record of the same element type the document read.
+def test_array_hash_is_kept_on_rewrite(harness, tmp_path):
+    # Two int32 arrays with their own name hashes: a rewrite keeps each array's own hash (the
+    # game's files have a hash per field), and only an array no record described borrows one.
     doc = synthetic(2)
     doc.root().object.set("Numbers", [1, 2, 3])
     doc.root().object.set("Empty", [4, 5])
     data = write_document(doc)
-    assert len({a.hash for a in read_document(data).arrays if a.encoded_type == enc(T.int32, C.array) << 1}) == 2
+    int32 = enc(T.int32, C.array) << 1
+    assert len({a.hash for a in read_document(data).arrays if a.encoded_type == int32}) == 2
     rewritten = check_against_cpp(harness, tmp_path, data)
-    assert rewritten != data
-    assert len({a.hash for a in read_document(rewritten).arrays if a.encoded_type == enc(T.int32, C.array) << 1}) == 1
-    assert check_against_cpp(harness, tmp_path, rewritten) == rewritten
+    assert rewritten == data
+    edited = read_document(data)
+    edited.root().object.get("Numbers").append(4)          # an edited array keeps its hash too
+    edited.root().object.find("Empty").array_hash = None   # as if new: borrows
+    again = read_document(write_document(edited))
+    hashes = {a.count: a.hash for a in again.arrays if a.encoded_type == int32}
+    assert hashes[4] == next(a.hash for a in read_document(data).arrays if a.count == 3 and a.encoded_type == int32)
+    assert hashes[2] == hashes[4]
 
 
 # ---- What a boxed value points at -----------------------------------------------------------------

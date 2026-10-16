@@ -9,6 +9,7 @@
 
   python -m reskate_mapbuilder new-level --game <dir> --mods <dir> --name zz-... --level <name> [--dry-run]
   python -m reskate_mapbuilder ebx-roundtrip --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME [--detail [N]]
+  python -m reskate_mapbuilder ebx-arrayhash --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME
   python -m reskate_mapbuilder dump-ebx --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME
 
 raise-ground repeats the collision test proven in game with ReSkate's C++ tools: it lifts the
@@ -21,7 +22,7 @@ import argparse
 import sys
 
 from .ebx import read_document
-from .ebxcheck import roundtrip
+from .ebxcheck import array_hash_report, roundtrip
 from .ebxedit import describe
 from .game import Game
 from .level import new_level
@@ -140,6 +141,12 @@ def ebx_roundtrip(args):
         print(line)
 
 
+def ebx_arrayhash(args):
+    """Scores candidate rules for what an array record's hash is made from."""
+    for line in array_hash_report(read_document(_read_ebx(args)), args.samples):
+        print(line)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m reskate_mapbuilder")
     sub = ap.add_subparsers(dest="command", required=True)
@@ -165,7 +172,8 @@ def main(argv=None):
     p.add_argument("--display-name")
     p.add_argument("--dry-run", action="store_true", help="read and report only")
     for name, text in (("dump-ebx", "print an EBX document (read-only)"),
-                       ("ebx-roundtrip", "rewrite an EBX document in memory and compare (read-only)")):
+                       ("ebx-roundtrip", "rewrite an EBX document in memory and compare (read-only)"),
+                       ("ebx-arrayhash", "score rules for the array records' hashes (read-only)")):
         p = sub.add_parser(name, help=text)
         p.add_argument("--game", required=True)
         p.add_argument("--mod", help="a mod folder laid over the game, to read its TOCs and archives")
@@ -174,12 +182,14 @@ def main(argv=None):
         p.add_argument("--ebx", required=True)
         if name == "dump-ebx":
             p.add_argument("--limit", type=int, default=20, help="array elements printed")
+        elif name == "ebx-arrayhash":
+            p.add_argument("--samples", type=int, default=20)
         else:
             p.add_argument("--detail", type=int, nargs="?", const=20, default=0, metavar="N",
                            help="also say where differing arrays (the first N, default 20) and strings are reached from")
     args = ap.parse_args(argv)
     {"inspect": inspect, "raise-ground": raise_ground, "rebuild": rebuild, "new-level": new_level_command,
-     "dump-ebx": dump_ebx, "ebx-roundtrip": ebx_roundtrip}[args.command](args)
+     "dump-ebx": dump_ebx, "ebx-roundtrip": ebx_roundtrip, "ebx-arrayhash": ebx_arrayhash}[args.command](args)
 
 
 if __name__ == "__main__":

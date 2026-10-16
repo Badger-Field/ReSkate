@@ -295,15 +295,13 @@ def test_flags_follow_the_guid_first_group():
 
 
 def test_roundtrip_explains_a_rewrite_that_differs():
-    from test_ebx_crosscheck import synthetic
-    doc = synthetic(2)
-    doc.root().object.set("Numbers", [1, 2, 3])
-    doc.root().object.set("Empty", [4, 5])
-    data = write_document(doc)            # two int32 arrays with their own hashes: a rewrite borrows one
+    from test_ebx_crosscheck import imports_only
+    data = imports_only(True)            # hand-built: EFIX first, no empty-array block
     report = roundtrip(data)
-    assert report[0].startswith("rewrite DIFFERS") and "EBXX" in report[0] and "SEMANTICALLY EQUAL" in report[0]
-    assert any("array records without offsets" in line and "first differs" in line for line in report)
-    assert roundtrip(write_document(read_document(data))) == [f"rewrite identical ({len(write_document(read_document(data)))} bytes)"]
+    assert report[0].startswith("rewrite DIFFERS") and "SEMANTICALLY EQUAL" in report[0]
+    assert any("DIFFERENT ORDER" in line for line in report)
+    rewritten = write_document(read_document(data))
+    assert roundtrip(rewritten) == [f"rewrite identical ({len(rewritten)} bytes)"]
 
 
 def test_clone_document_takes_new_guids_and_keeps_the_rest():
@@ -453,3 +451,10 @@ def test_new_level_refuses_a_document_that_does_not_survive_a_rewrite(tmp_path, 
     game = Game(fake_game(tmp_path / "game"))
     with pytest.raises(ValueError, match="loses or changes data"):
         new_level(game, ModBuilder(game, "zz-new-level"), LEVEL)
+
+
+def test_array_hash_report_scores_rules():
+    from test_ebx_crosscheck import synthetic
+    from reskate_mapbuilder.ebxcheck import array_hash_report
+    report = array_hash_report(read_document(write_document(synthetic(2, hashed=True))))
+    assert report[0].startswith("3 arrays") and any("djb2-xor(field)" in line for line in report)

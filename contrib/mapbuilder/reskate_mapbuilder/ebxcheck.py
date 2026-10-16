@@ -10,6 +10,7 @@ import struct
 from collections import Counter
 
 from .ebx import ArrayRecord, Document, FieldType, array_element, pointer_target, read_document, write_document
+from .ebx import Object
 from .ebxedit import describe
 
 _CHUNK_ROLE = {ebx._EFIX: "fixup tables", ebx._EBXX: "array and boxed records", ebx._REFL: "reflection",
@@ -287,4 +288,122 @@ def roundtrip(raw: bytes, brief: bool = False, detail: int = 0) -> list[str]:
                      f"{b[line] if line < len(b) else '-'!r}")
     if detail:
         lines += _detail(doc, back, detail)
+    return lines
+
+
+# ---- What an array record's hash is made from ------------------------------------------------------
+
+def _djb2_xor(text: str) -> int:
+    value = 5381
+    for byte in text.encode("utf-8", "surrogateescape"):
+        value = ((value * 33) & 0xFFFFFFFF) ^ byte
+    return value
+
+
+def _djb2_add(text: str) -> int:
+    value = 5381
+    for byte in text.encode("utf-8", "surrogateescape"):
+        value = (value * 33 + byte) & 0xFFFFFFFF
+    return value
+
+
+def _fnv1(text: str) -> int:
+    value = 0x811C9DC5
+    for byte in text.encode("utf-8", "surrogateescape"):
+        value = ((value * 0x01000193) & 0xFFFFFFFF) ^ byte
+    return value
+
+
+def _fnv1a(text: str) -> int:
+    value = 0x811C9DC5
+    for byte in text.encode("utf-8", "surrogateescape"):
+        value = ((value ^ byte) * 0x01000193) & 0xFFFFFFFF
+    return value
+
+
+def _array_fields(doc: Document):
+    """(type declaring the field, field descriptor, element type name or '', record hash, type of
+    the object holding it) for every array read with a record."""
+    owner_of = {}
+    for t in doc.types:
+        for i in range(t.field_index, t.field_index + t.field_count):
+            owner_of.setdefault(i, t)
+
+    def walk(value):
+        if isinstance(value, Object):
+            for f in value.fields:
+                if f.array_hash is not None:
+                    d = doc.fields[f.descriptor]
+                    element = doc.types[d.class_ref].name if d.type in (FieldType.structure, FieldType.pointer) \
+                        and d.class_ref < len(doc.types) else ""
+                    yield owner_of.get(f.descriptor), d, element, f.array_hash, doc.types[value.descriptor]
+                yield from walk(f.value)
+        elif isinstance(value, list):
+            for v in value:
+                yield from walk(v)
+    for instance in doc.instances:
+        yield from walk(instance.object)
+
+
+def array_hash_report(doc: Document, samples: int = 20) -> list[str]:
+    """Scores candidate rules for the array records' hashes against every array the document read
+    with a record, and prints samples with what each is reached from."""
+    from .toc import toc_hash
+    rows = list(_array_fields(doc))
+    type_hashes = {t.name_hash: t.name for t in doc.types}
+    functions = {"djb2-xor": _djb2_xor, "djb2-add": _djb2_add, "fnv1": _fnv1, "fnv1a": _fnv1a,
+                 "toc_hash": lambda s: toc_hash(s.encode("latin-1", "replace"))}
+
+    def texts(owner, d, element, holder):
+        o = owner.name if owner else ""
+        kind = d.type.name if isinstance(d.type, FieldType) else str(d.type)
+        base = {"field": d.name, "owner": o, "owner.field": f"{o}.{d.name}", "element": element,
+                "element-Array": f"{element or kind}-Array", "elementArray": f"{element or kind}Array",
+                "Array<element>": f"Array<{element or kind}>", "field type": kind, "element[]": f"{element or kind}[]",
+                "holder": holder.name, "holder.field": f"{holder.name}.{d.name}"}
+        out = {}
+        for label, text in base.items():
+            out[label] = text
+            out[label + " (lower)"] = text.lower()
+        return out
+
+    scores: Counter = Counter()
+    for owner, d, element, value, holder in rows:
+        found = set()
+        if value == d.name_hash:
+            found.add("field name_hash (reflection)")
+        if owner is not None and value == owner.name_hash:
+            found.add("owner type name_hash")
+        if d.class_ref < len(doc.types) and value == doc.types[d.class_ref].name_hash:
+            found.add("class_ref type name_hash")
+        if value in type_hashes:
+            found.add("some reflection type's name_hash")
+        if owner is not None and value == (owner.name_hash ^ d.name_hash):
+            found.add("owner ^ field name_hash")
+        if value == holder.name_hash or value == (holder.name_hash ^ d.name_hash):
+            found.add("holder type name_hash (^ field)")
+        for label, text in texts(owner, d, element, holder).items():
+            for name, function in functions.items():
+                if function(text) == value:
+                    found.add(f"{name}({label})")
+        scores.update(found)
+    lines = [f"{len(rows)} arrays read with a record; {len(set(r[3] for r in rows))} distinct hashes"]
+    if scores:
+        lines += [f"  {count} of {len(rows)}: {rule}" for rule, count in scores.most_common(12)]
+    else:
+        lines.append("  no candidate rule matched any array")
+    by_hash: dict[int, set] = {}
+    for owner, d, element, value, holder in rows:
+        by_hash.setdefault(value, set()).add(f"{holder.name}.{d.name}")
+    shared = {h: n for h, n in by_hash.items() if len(n) > 1}
+    lines.append(f"  hashes shared by more than one field: {len(shared)}")
+    by_field: dict[int, set] = {}
+    for _, d, _, value, _ in rows:
+        by_field.setdefault(id(d), set()).add(value)
+    lines.append(f"  fields whose arrays carry more than one hash: {sum(len(v) > 1 for v in by_field.values())}")
+    for owner, d, element, value, holder in rows[:samples]:
+        hit = type_hashes.get(value)
+        lines.append(f"  {holder.name} / {owner.name if owner else '?'}.{d.name} ({d.type.name if isinstance(d.type, FieldType) else d.type}"
+                     f"{' of ' + element if element else ''}): hash {value} ({value:#010x}), field name_hash "
+                     f"{d.name_hash:#010x}" + (f", = name_hash of type {hit}" if hit else ""))
     return lines

@@ -193,6 +193,7 @@ class FieldValue:
     descriptor: int
     name: str
     value: Any = None
+    array_hash: Optional[int] = None   # an array's own record hash, kept on a rewrite
 
 
 def _lower(name: str) -> str:
@@ -543,6 +544,9 @@ class _ValueReader:
         self.reader = _Reader(data)
         self.doc = doc
         self.depth = 0
+        self.array_hashes: dict[int, int] = {}
+        for record in doc.arrays:
+            self.array_hashes.setdefault(record.offset, record.hash)
 
     def read_instances(self) -> None:
         doc, reader = self.doc, self.reader
@@ -598,7 +602,12 @@ class _ValueReader:
             position = start + f.data_offset
             if position > doc.data_end:
                 raise ValueError("EBX field offset exceeds EBXD")
-            output.fields.append(FieldValue(index, f.name, self.read_field(f, position)))
+            value = self.read_field(f, position)
+            array_hash = None
+            if f.category == FieldCategory.array and value:
+                target = position + struct.unpack_from("<i", self.reader.data, position)[0] - doc.data_start
+                array_hash = self.array_hashes.get(target)
+            output.fields.append(FieldValue(index, f.name, value, array_hash))
 
     def read_field(self, f: FieldDescriptor, position: int) -> Any:
         doc, reader = self.doc, self.reader
@@ -822,6 +831,7 @@ class _PendingArray:
     slot: int
     values: list
     descriptor: int
+    hash: Optional[int] = None
     emitted: bool = False
 
 
@@ -903,6 +913,7 @@ class _Builder:
         t = doc.types[type_index]
         self.grow(start + t.size)
         values = {f.descriptor: f.value for f in reversed(obj.fields)} if obj is not None else {}
+        hashes = {f.descriptor: f.array_hash for f in reversed(obj.fields)} if obj is not None else {}
         for ordinal in range(t.field_count):
             index = t.field_index + ordinal
             if index >= len(doc.fields):
@@ -921,7 +932,7 @@ class _Builder:
                 slot = _checked(position, "EBX array slot")
                 self.pointer_offsets.append(slot)
                 self.arrays_pending.append(_PendingArray(slot, value if has and isinstance(value, list) else [],
-                                                         index))
+                                                         index, hashes.get(index)))
             elif f.type == FieldType.structure:
                 if f.class_ref >= len(doc.types):
                     raise ValueError("EBX struct type is invalid")
@@ -1106,7 +1117,9 @@ class _Builder:
             else:
                 self.write_scalar(f, start, value)
         class_ref = self.fixup_slot(f.class_ref) if f.type == FieldType.structure else 0xFFFF
-        self.arrays.append(ArrayRecord(_checked(data, "EBX array data"), count, self.array_hash(f),
+        # An array read from a record keeps that record's hash; a new one borrows (array_hash).
+        own = pending.hash if pending.hash is not None else self.array_hash(f)
+        self.arrays.append(ArrayRecord(_checked(data, "EBX array data"), count, own,
                                        (f.encoded_type << 1) & 0xFFFF, class_ref))
         child = first_child
         while child < len(self.arrays_pending):

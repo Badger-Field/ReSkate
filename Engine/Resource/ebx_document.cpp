@@ -1,6 +1,7 @@
 #include "ebx_document.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <unordered_map>
@@ -356,7 +357,9 @@ void map_instances(Document& document,
 class ValueReader final {
 public:
     ValueReader(const std::span<const std::byte> bytes, Document& document)
-        : bytes_(bytes), reader_(bytes), document_(document) {}
+        : bytes_(bytes), reader_(bytes), document_(document) {
+        for (const auto& record : document.arrays) arrayHashes_.emplace(record.offset, record.hash);
+    }
 
     void read_instances() {
         for (auto& instance : document_.instances) {
@@ -423,7 +426,19 @@ private:
             }
             const auto position = start + field.dataOffset;
             if (position > document_.dataEnd) throw std::runtime_error("EBX field offset exceeds EBXD");
-            output.fields.push_back({descriptorIndex, field.name, read_field(field, position)});
+            auto value = read_field(field, position);
+            if (field.category() == FieldCategory::array) {
+                const auto* values = std::get_if<Value::Array>(&value.data);
+                if (values && !values->empty()) {
+                    std::int32_t displacement{};
+                    std::memcpy(&displacement, bytes_.data() + position, sizeof(displacement));
+                    const auto target = static_cast<std::int64_t>(position) + displacement -
+                                        static_cast<std::int64_t>(document_.dataStart);
+                    if (const auto found = arrayHashes_.find(target); found != arrayHashes_.end())
+                        value.arrayHash = found->second;
+                }
+            }
+            output.fields.push_back({descriptorIndex, field.name, std::move(value)});
         }
     }
 
@@ -552,6 +567,7 @@ private:
     }
 
     std::span<const std::byte> bytes_;
+    std::unordered_map<std::int64_t, std::uint32_t> arrayHashes_;   // record offset -> its hash
     BinaryReader reader_;
     Document& document_;
     unsigned depth_{};

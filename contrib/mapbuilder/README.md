@@ -40,6 +40,7 @@ can be stood on.
         --level dingolevel_reskate_test --display-name "ReSkate test level"
     python -m reskate_mapbuilder ebx-roundtrip --game "<Skate>" --superbundle globals \
         --ebx levels/game/dingolevel_root/dingolevel_root/description
+    python -m reskate_mapbuilder ebx-arrayhash --game "<Skate>" --superbundle ... --ebx ...
     python -m reskate_mapbuilder dump-ebx --game "<Skate>" [--mod "<a mod folder>"] \
         --superbundle globals --ebx levels/game/dingolevel_root/dingolevel_root/description
 
