@@ -293,7 +293,14 @@ std::vector<ReflectionTypeId> read_reflection(BinaryReader& reader,
 
     const auto groupCount = static_cast<std::size_t>(nonnegative(reader, "reflection group"));
     ensure_records(reader, chunk.end, groupCount, 12, "reflection group");
-    reader.skip(static_cast<std::ptrdiff_t>(groupCount * 12));
+    document.reflectionGroups.reserve(groupCount);
+    for (std::size_t index = 0; index < groupCount; ++index) {
+        ReflectionGroup group;
+        group.hash = reader.u32();
+        group.count = reader.u32();
+        group.first = reader.u32();
+        document.reflectionGroups.push_back(group);
+    }
     const auto mappingCount = static_cast<std::size_t>(nonnegative(reader, "reflection mapping"));
     ensure_records(reader, chunk.end, mappingCount, 8, "reflection mapping");
     reader.skip(static_cast<std::ptrdiff_t>(mappingCount * 8));
@@ -568,6 +575,7 @@ private:
 
     std::span<const std::byte> bytes_;
     std::unordered_map<std::int64_t, std::uint32_t> arrayHashes_;   // record offset -> its hash
+
     BinaryReader reader_;
     Document& document_;
     unsigned depth_{};
