@@ -461,9 +461,7 @@ def test_array_hash_report_scores_rules():
     from test_ebx_crosscheck import grouped
     doc = read_document(grouped(1))
     report = array_hash_report(doc)
-    total = len(list(f for f in report if "arrays read with a record" in f))
-    assert total == 1 and "holds for every array read" in report[1]
     count = int(report[0].split()[0])
-    assert f"  {count} of {count}: group hash at index = field class_ref" in report
-    lines = roundtrip(write_document(doc))
-    assert "holds for every array read" in lines[1]
+    assert report[1].startswith("every array's hash found in the document's group table: yes")
+    assert f"  {count} of {count}: a key of the RFL2 group table" in report
+    assert roundtrip(write_document(doc))[1] == report[1]

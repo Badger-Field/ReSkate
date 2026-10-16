@@ -269,11 +269,9 @@ class Document:
     # The EBXD bytes the document was read from (offsets as in the fixup tables): what boxed
     # values point at (arrays, strings) is carried from here on a rewrite.
     payload: bytes = b""
-    # The reflection's 12-byte group records (index, hash, count), sorted by hash. An array
-    # record's hash is the hash of the group whose index is the array field's class_ref
-    # (array_hash_rule: every array this document was read with obeys that).
+    # The RFL2 group table: (hash, count, first) per array type the document uses, sorted by
+    # hash; every array record's hash is one of these keys.
     reflection_groups: list[tuple[int, int, int]] = field(default_factory=list)
-    array_hash_rule: bool = False
 
     def root(self) -> Optional[InstanceRecord]:
         return self.instances[0] if self.instances else None
@@ -494,7 +492,7 @@ def _read_reflection(reader: _Reader, chunk: _Chunk, hashed: bool, doc: Document
 
     group_count = _nonnegative(reader, "reflection group")
     _ensure_records(reader, chunk.end, group_count, 12, "reflection group")
-    doc.reflection_groups = [struct.unpack("<III", reader.view(12)) for _ in range(group_count)]
+    doc.reflection_groups = [struct.unpack("<III", reader.view(12)) for _ in range(group_count)]  # hash, count, first
     mapping_count = _nonnegative(reader, "reflection mapping")
     _ensure_records(reader, chunk.end, mapping_count, 8, "reflection mapping")
     reader.seek(reader.pos + mapping_count * 8)
@@ -552,8 +550,6 @@ class _ValueReader:
         self.array_hashes: dict[int, int] = {}
         for record in doc.arrays:
             self.array_hashes.setdefault(record.offset, record.hash)
-        self.groups = group_hashes(doc)
-        self.rule = [0, 0]   # arrays that obey the group rule, arrays that do not
 
     def read_instances(self) -> None:
         doc, reader = self.doc, self.reader
@@ -614,8 +610,6 @@ class _ValueReader:
             if f.category == FieldCategory.array and value:
                 target = position + struct.unpack_from("<i", self.reader.data, position)[0] - doc.data_start
                 array_hash = self.array_hashes.get(target)
-                if array_hash is not None:
-                    self.rule[self.groups.get(f.class_ref) != array_hash] += 1
             output.fields.append(FieldValue(index, f.name, value, array_hash))
 
     def read_field(self, f: FieldDescriptor, position: int) -> Any:
@@ -741,9 +735,7 @@ def read_document(data: bytes) -> Document:
     doc.reflection_data = data[reflection.begin:reflection.end]
     doc.payload = data[doc.data_start:doc.data_end]
     _map_instances(doc, ids)
-    values = _ValueReader(data, doc)
-    values.read_instances()
-    doc.array_hash_rule = values.rule[0] > 0 and values.rule[1] == 0
+    _ValueReader(data, doc).read_instances()
     doc.boxed_values.sort(key=lambda b: b.offset)
     for index, value in enumerate(doc.boxed_values):
         end = doc.boxed_values[index + 1].offset if index + 1 < len(doc.boxed_values) else doc.strings_offset
@@ -843,12 +835,14 @@ class _PendingArray:
     values: list
     descriptor: int
     hash: Optional[int] = None
+    holder: int = -1          # type of the object holding the field
     emitted: bool = False
 
 
 class _Builder:
-    def __init__(self, doc: Document):
+    def __init__(self, doc: Document, refuse_new_array_hashes: bool = False):
         self.doc = doc
+        self.refuse = refuse_new_array_hashes
         self.payload = bytearray()
         self.instance_offsets: list[int] = []
         self.pointer_offsets: list[int] = []
@@ -865,7 +859,7 @@ class _Builder:
         self.boxed_offset = 0
         self.empty_array_target = 0
         self.carried: dict[int, int] = {}                 # old array offset -> new
-        self.groups: dict[int, int] | None = None
+        self.known_hashes: dict[tuple[int, int], int] | None = None
         self.boxed_targets: list[tuple[int, int]] = []    # (new slot, old target in the boxed section)
 
     def run(self) -> bytes:
@@ -944,7 +938,8 @@ class _Builder:
                 slot = _checked(position, "EBX array slot")
                 self.pointer_offsets.append(slot)
                 self.arrays_pending.append(_PendingArray(slot, value if has and isinstance(value, list) else [],
-                                                         index, hashes.get(index)))
+                                                         index, hashes.get(index),
+                                                         obj.descriptor if obj is not None else type_index))
             elif f.type == FieldType.structure:
                 if f.class_ref >= len(doc.types):
                     raise ValueError("EBX struct type is invalid")
@@ -1030,6 +1025,23 @@ class _Builder:
         if self.doc.arrays:
             return self.doc.arrays[0].hash
         return f.name_hash
+
+    def new_array_hash(self, pending: _PendingArray, f: FieldDescriptor) -> int:
+        """An array read from a record keeps that record's hash (the caller). A new one takes the
+        hash of an array the document read for the same field of the same type; failing that it
+        borrows (array_hash), or with refuse_new_array_hashes the write is refused, since the
+        reflection's group table would need a new entry too."""
+        if self.known_hashes is None:
+            self.known_hashes = known_array_hashes(self.doc)
+        own = self.known_hashes.get((pending.holder, pending.descriptor))
+        label = f"{self.doc.types[pending.holder].name if 0 <= pending.holder < len(self.doc.types) else '?'}.{f.name}"
+        if self.refuse:
+            if own is None:
+                raise ValueError(f"EBX new array {label} has no array of its field to take a hash from")
+            keys = {g[0] for g in self.doc.reflection_groups}
+            if self.doc.hashed_reflection_names and own not in keys:
+                raise ValueError(f"EBX array hash {own:#x} of {label} is not in the reflection's group table")
+        return own if own is not None else self.array_hash(f)
 
     def write_arrays(self) -> None:
         self.arrays_offset = _checked(_align(len(self.payload), 16), "EBX array section")
@@ -1129,14 +1141,7 @@ class _Builder:
             else:
                 self.write_scalar(f, start, value)
         class_ref = self.fixup_slot(f.class_ref) if f.type == FieldType.structure else 0xFFFF
-        # An array read from a record keeps that record's hash; a new one borrows (array_hash).
-        own = pending.hash
-        if own is None and self.doc.array_hash_rule:
-            if self.groups is None:
-                self.groups = group_hashes(self.doc)
-            own = self.groups.get(f.class_ref)
-        if own is None:
-            own = self.array_hash(f)
+        own = self.new_array_hash(pending, f) if pending.hash is None else pending.hash
         self.arrays.append(ArrayRecord(_checked(data, "EBX array data"), count, own,
                                        (f.encoded_type << 1) & 0xFFFF, class_ref))
         child = first_child
@@ -1267,11 +1272,22 @@ def ensure_fixup_type(doc: Document, descriptor: int) -> int:
     return count
 
 
-def group_hashes(doc: Document) -> dict[int, int]:
-    """Reflection group hash by group index (the first of equal indices)."""
-    out: dict[int, int] = {}
-    for index, value, _ in doc.reflection_groups:
-        out.setdefault(index, value)
+def known_array_hashes(doc: Document) -> dict[tuple[int, int], int]:
+    """(holding type, field descriptor) -> the hash an array of that field was read with (on the
+    game's files each pair carries exactly one)."""
+    out: dict[tuple[int, int], int] = {}
+
+    def walk(value: Any) -> None:
+        if isinstance(value, Object):
+            for f in value.fields:
+                if f.array_hash is not None:
+                    out.setdefault((value.descriptor, f.descriptor), f.array_hash)
+                walk(f.value)
+        elif isinstance(value, list):
+            for v in value:
+                walk(v)
+    for instance in doc.instances:
+        walk(instance.object)
     return out
 
 
@@ -1313,5 +1329,7 @@ def array_element(doc: Document, record: ArrayRecord) -> tuple[int, int]:
     return stride, max(min(stride, 8), 1)
 
 
-def write_document(doc: Document) -> bytes:
-    return _Builder(doc).run()
+def write_document(doc: Document, refuse_new_array_hashes: bool = False) -> bytes:
+    """With refuse_new_array_hashes (the map builder's writes), a new array whose field has no
+    hash in the document is refused rather than given a borrowed one (what the C++ merge does)."""
+    return _Builder(doc, refuse_new_array_hashes).run()

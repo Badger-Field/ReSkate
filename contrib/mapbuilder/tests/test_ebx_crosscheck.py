@@ -6,6 +6,7 @@ the Python writer. The C++ harness (tests/crosscheck/ebx_crosscheck.cpp) then re
 and dumps it, rewrites it and rewrites it after edits; the Python port must parse to the
 same dump and write the same bytes. The C++ part is skipped when no C++20 compiler is available.
 """
+import copy
 import os
 import random
 import shutil
@@ -74,7 +75,7 @@ def name_hash(name):
     return value
 
 
-def reflection(hashed=False, odd=False, groups=None):
+def reflection(hashed=False, odd=False, groups=None, members=None):
     """A REFL (or RFL2, with hashed names) chunk body for TYPES."""
     names, strings = {}, bytearray()
 
@@ -98,9 +99,12 @@ def reflection(hashed=False, odd=False, groups=None):
             body += struct.pack("<IIHH", name(field_name), offset, encoded << 1, class_ref)
     if groups is None:
         body += struct.pack("<I", 1) + bytes(range(12))                     # a group
-    else:
+    else:                                                                   # (hash, count, first)
         body += struct.pack("<I", len(groups)) + b"".join(struct.pack("<III", *g) for g in groups)
-    body += struct.pack("<I", 1) + bytes(range(8))                          # a mapping
+    if members is None:
+        body += struct.pack("<I", 1) + bytes(range(8))                      # a member
+    else:                                                                   # (hash, code)
+        body += struct.pack("<I", len(members)) + b"".join(struct.pack("<II", *m) for m in members)
     if hashed:
         body += struct.pack("<I", len(names))
         for text, offset in names.items():
@@ -111,10 +115,10 @@ def reflection(hashed=False, odd=False, groups=None):
     return bytes(body)
 
 
-def empty_document(hashed=False, serialized=False, odd=False, groups=None):
+def empty_document(hashed=False, serialized=False, odd=False, groups=None, members=None):
     """The reflection and nothing else, read back so the types and fields are filled in."""
     doc = Document(file_guid=guid(1), serialized_layout=serialized, hashed_reflection_names=hashed,
-                   reflection_data=reflection(hashed, odd, groups))
+                   reflection_data=reflection(hashed, odd, groups, members))
     parsed = read_document(write_document(doc))
     assert [t.name for t in parsed.types] == [t[0] for t in TYPES]
     return parsed
@@ -139,9 +143,9 @@ def text(rng, longest=12):
     return "".join(rng.choice("abcdefghijklmnopqrstuvwxyz_/0123456789") for _ in range(rng.randint(0, longest)))
 
 
-def synthetic(seed, hashed=False, serialized=False, odd=False, groups=None):
+def synthetic(seed, hashed=False, serialized=False, odd=False, groups=None, members=None):
     rng = random.Random(seed)
-    doc = empty_document(hashed, serialized, odd, groups)
+    doc = empty_document(hashed, serialized, odd, groups, members)
     doc.imports = [ImportReference(guid(200 + i), guid(300 + i)) for i in range(3)]
 
     def struct_value():
@@ -541,29 +545,52 @@ def test_boxed_targets_agree_with_cpp(harness, tmp_path):
     check_against_cpp(harness, tmp_path, boxed_pointing())
 
 
-# ---- Array record hashes come from the reflection's groups ----------------------------------------
+# ---- Array record hashes and the RFL2 group table --------------------------------------------------
 
-GROUPS = [(0, 0xA0A0A0A0, 2), (1, 0xB1B1B1B1, 1), (7, 0x12345678, 1)]   # (index, hash, count)
+def field_hash(index):
+    """The hash the arrays of field `index` carry in grouped() documents."""
+    return 0xA0000000 + index * 0x1001
 
 
-def grouped(seed, sparse=False):
-    """A document whose every array record has the hash of the group indexed by its field's
-    class_ref, as on the game's files (RFL2 of bam's root). `sparse` leaves no int32 or float
-    array, so the old borrow rule would give a new int32 array another hash."""
-    doc = synthetic(seed, groups=sorted(GROUPS, key=lambda g: g[1]))
-    if sparse:
-        root = doc.root().object
-        root.set("Numbers", [])
-        for struct_value in [root.get("Inner")] + root.get("Structs"):
-            struct_value.set("Values", [])
-        root.set("Structs", root.get("Structs") or [root.get("Inner")])
-    by_index = {index: value for index, value, _ in GROUPS}
+def array_field_indices():
+    out, index = [], 0
+    for _, _, _, fields in TYPES:
+        for _, encoded, _, _ in fields:
+            if encoded & 0xF == C.array:
+                out.append(index)
+            index += 1
+    return out
+
+
+def group_table():
+    """As on the game's files: (hash, count, first) per array type sorted by hash, first[i + 1] =
+    first[i] + count[i]; then (member hash, code) pairs."""
+    hashes = sorted(field_hash(i) for i in array_field_indices())
+    groups, first = [], 0
+    for value in hashes:
+        groups.append((value, 2, first))
+        first += 2
+    members = [(0x1000 + i, 3) for i in range(first)]
+    return groups, members
+
+
+def grouped(seed):
+    """A document whose arrays carry one hash per field, every one a key of the group table.
+    Inner.Values is empty and the first of Structs has Values, so appending to Inner.Values makes a
+    new array whose field already has a hash."""
+    groups, members = group_table()
+    doc = synthetic(seed, hashed=True, groups=groups, members=members)
+    root = doc.root().object
+    root.get("Inner").set("Values", [])
+    if not root.get("Structs"):
+        root.set("Structs", [copy.deepcopy(root.get("Inner"))])
+    root.get("Structs")[0].set("Values", [0.5])
 
     def walk(value):
         if isinstance(value, Object):
             for f in value.fields:
                 if isinstance(f.value, list) and f.value:
-                    f.array_hash = by_index[doc.fields[f.descriptor].class_ref]
+                    f.array_hash = field_hash(f.descriptor)
                 walk(f.value)
         elif isinstance(value, list):
             for v in value:
@@ -573,29 +600,48 @@ def grouped(seed, sparse=False):
     return write_document(doc)
 
 
-def test_array_hash_rule_is_detected():
+def test_group_table_holds_every_array_hash():
+    from reskate_mapbuilder.ebxcheck import groups_line
     doc = read_document(grouped(1))
-    assert doc.array_hash_rule and doc.arrays
-    assert {r.hash for r in doc.arrays} <= {0xA0A0A0A0, 0xB1B1B1B1}
-    assert not read_document(write_document(synthetic(1))).array_hash_rule
+    assert doc.arrays and groups_line(doc).startswith("every array's hash found in the document's group table: yes")
+    firsts = [g[2] for g in doc.reflection_groups]
+    assert firsts == [sum(g[1] for g in doc.reflection_groups[:i]) for i in range(len(firsts))]
+    assert groups_line(read_document(write_document(synthetic(1)))).split(": ")[1].startswith("NO")
 
 
-def test_new_arrays_take_their_group_hash(harness, tmp_path):
-    data = grouped(1, sparse=True)
-    old_rule = read_document(data)
-    old_rule.array_hash_rule = False
-    old_rule.root().object.get("Empty").extend([5, 6])
-    borrowed = read_document(write_document(old_rule)).root().object.find("Empty").array_hash
-    assert borrowed != 0xA0A0A0A0                         # what the borrow rule would give
+def test_new_array_takes_the_hash_of_its_field(harness, tmp_path):
+    data = grouped(1)
     assert check_against_cpp(harness, tmp_path, data) == data
     source = tmp_path / "grouped.ebx"
     source.write_bytes(data)
-    specs = ["Empty+=i:5", "Empty+=i:6"]                  # an array with no record until now
+    specs = ["Inner.Values+=d:1.75"]                   # an array with no record until now
     cpp(harness, "edit", source, tmp_path / "cpp.ebx", *specs)
     doc = read_document(data)
     apply_edits(doc, specs)
     edited = write_document(doc)
     assert edited == (tmp_path / "cpp.ebx").read_bytes()
-    back = read_document(edited)
-    empty = next(f for f in back.root().object.fields if f.name == "Empty")
-    assert empty.value == [5, 6] and empty.array_hash == 0xA0A0A0A0
+    assert write_document(doc, refuse_new_array_hashes=True) == edited
+    inner = read_document(edited).root().object.get("Inner")
+    values = inner.find("Values")
+    assert values.value == [1.75] and values.array_hash == field_hash(values.descriptor)
+
+
+def test_a_field_with_no_hash_is_refused_or_borrowed(harness, tmp_path):
+    data = grouped(1)
+    doc = read_document(data)
+    doc.root().object.get("Empty").append(5)           # TestAsset.Empty has no array anywhere
+    with pytest.raises(ValueError, match="no array of its field"):
+        write_document(doc, refuse_new_array_hashes=True)
+    source = tmp_path / "grouped.ebx"
+    source.write_bytes(data)
+    cpp(harness, "edit", source, tmp_path / "cpp.ebx", "Empty+=i:5")   # the merge's writer borrows
+    assert write_document(doc) == (tmp_path / "cpp.ebx").read_bytes()
+
+
+def test_a_hash_outside_the_group_table_is_refused():
+    doc = read_document(grouped(1))
+    values = doc.root().object.get("Structs")[0].find("Values")
+    doc.reflection_groups = [g for g in doc.reflection_groups if g[0] != values.array_hash]
+    doc.root().object.get("Inner").get("Values").append(2.0)
+    with pytest.raises(ValueError, match="not in the reflection's group table"):
+        write_document(doc, refuse_new_array_hashes=True)

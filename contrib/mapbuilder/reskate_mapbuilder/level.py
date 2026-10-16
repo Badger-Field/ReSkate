@@ -185,7 +185,7 @@ def new_level(game, mod, level: str, display_name: str | None = None) -> list[st
     log.append(f"  new root {path}: file guid {new_root.file_guid.string()}, instance guid "
                f"{new_root.instances[0].instance_guid.string()}, set {sorted(set(changes) - set(missing))}"
                + (f", MISSING fields {missing}" if missing else ""))
-    mod.add_ebx(path, root_bundle, path, write_document(new_root))
+    mod.add_ebx(path, root_bundle, path, write_document(new_root, refuse_new_array_hashes=True))
 
     # 3. The level description, next to bam's.
     where = _locate(game, DESCRIPTION_SEARCH, BASE_DESCRIPTION_EBX)
@@ -213,7 +213,7 @@ def new_level(game, mod, level: str, display_name: str | None = None) -> list[st
     for at, text in strings(description):
         if BASE_LEVEL in text.lower():
             log.append(f"  still names bam: {at} = {text!r}")
-    mod.add_ebx(*where, description_name, write_document(description))
+    mod.add_ebx(*where, description_name, write_document(description, refuse_new_array_hashes=True))
 
     # 4. The OnDemandBundles entry in the root level's description.
     where = _locate(game, ROOT_DESCRIPTION_SEARCH, ROOT_DESCRIPTION_EBX)
@@ -239,7 +239,7 @@ def new_level(game, mod, level: str, display_name: str | None = None) -> list[st
     set_fields(entry, {"SuperBundle": superbundle_field, "BundleHash": bundle_hash(superbundle_field)})
     entries.append(entry)
     log.append(f"  adds {superbundle_field!r} {bundle_hash(superbundle_field)}")
-    mod.replace_ebx(*where, ROOT_DESCRIPTION_EBX, write_document(doc))
+    mod.replace_ebx(*where, ROOT_DESCRIPTION_EBX, write_document(doc, refuse_new_array_hashes=True))
 
     # 5. The detached sublevel in the root's DetachedSetBlueprint.
     where = _locate(game, GENPREFAB_SEARCH, GENPREFAB_EBX)
@@ -292,7 +292,7 @@ def new_level(game, mod, level: str, display_name: str | None = None) -> list[st
     log.append(f"  adds {SUBWORLD_REFERENCE_TYPE} {reference.get('BundleName')!r} as {where_put} (copy of "
                f"{template.path}), guid {doc.instances[new_index].instance_guid.string() if new_index >= 0 else '-'}, "
                f"flags {reference.get('Flags')}" + (f", MISSING fields {missing}" if missing else ""))
-    mod.replace_ebx(*where, GENPREFAB_EBX, write_document(doc))
+    mod.replace_ebx(*where, GENPREFAB_EBX, write_document(doc, refuse_new_array_hashes=True))
 
     mod.levels.append({"asset": path, "displayName": display_name or level, "startPoints": [START_POINT]})
     return log

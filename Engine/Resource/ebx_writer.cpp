@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <optional>
 #include <ranges>
 #include <stdexcept>
@@ -86,7 +87,8 @@ std::size_t scalar_size(const FieldType type) {
 
 class Builder final {
 public:
-    explicit Builder(const Document& document) : document_(document) {}
+    Builder(const Document& document, const bool refuseNewArrayHashes)
+        : document_(document), refuse_(refuseNewArrayHashes) {}
 
     std::vector<std::byte> run() {
         validate();
@@ -108,6 +110,7 @@ private:
         const Value::Array* values{};
         std::size_t descriptor{};
         std::optional<std::uint32_t> hash;
+        std::int32_t holder{-1};   // type of the object holding the field
         bool emitted{};
     };
 
@@ -210,7 +213,8 @@ private:
                 static const Value::Array empty;
                 const auto* array = value ? std::get_if<Value::Array>(&value->data) : nullptr;
                 arraysPending_.push_back({checked_u32(position, "EBX array slot"), array ? array : &empty,
-                                          descriptorIndex, value ? value->arrayHash : std::nullopt});
+                                          descriptorIndex, value ? value->arrayHash : std::nullopt,
+                                          object ? object->descriptor : static_cast<std::int32_t>(typeIndex)});
             } else if (field.type() == FieldType::structure) {
                 if (field.classRef >= document_.types.size()) throw std::runtime_error("EBX struct type is invalid");
                 const auto nestedStart = align_up(position, std::max<std::size_t>(document_.types[field.classRef].alignment, 1));
@@ -352,6 +356,44 @@ private:
         if (matching != document_.arrays.end()) return matching->hash;
         if (!document_.arrays.empty()) return document_.arrays.front().hash;
         return field.nameHash;
+    }
+
+    // A new array takes the hash of an array the document read for the same field of the same type;
+    // failing that it borrows (array_hash), or is refused (see write_document).
+    std::uint32_t new_array_hash(const PendingArray& pending, const FieldDescriptor& field) {
+        if (!knownWalked_) {
+            knownWalked_ = true;
+            for (const auto& instance : document_.instances)
+                if (instance.object) collect_hashes(*instance.object);
+        }
+        const auto found = knownHashes_.find({pending.holder, pending.descriptor});
+        if (refuse_) {
+            if (found == knownHashes_.end())
+                throw std::runtime_error("EBX new array " + std::string(field.name) +
+                                         " has no array of its field to take a hash from");
+            if (document_.hashedReflectionNames &&
+                std::ranges::none_of(document_.reflectionGroups,
+                                     [&](const ReflectionGroup& group) { return group.hash == found->second; }))
+                throw std::runtime_error("EBX array hash of " + std::string(field.name) +
+                                         " is not in the reflection's group table");
+        }
+        return found != knownHashes_.end() ? found->second : array_hash(field);
+    }
+
+    void collect_hashes(const Object& object) {
+        for (const auto& field : object.fields) {
+            if (field.value.arrayHash)
+                knownHashes_.emplace(std::pair{object.descriptor, field.descriptor}, *field.value.arrayHash);
+            collect_value(field.value);
+        }
+    }
+
+    void collect_value(const Value& value) {
+        if (const auto* nested = std::get_if<std::shared_ptr<Object>>(&value.data)) {
+            if (*nested) collect_hashes(**nested);
+        } else if (const auto* array = std::get_if<Value::Array>(&value.data)) {
+            for (const auto& element : *array) collect_value(element);
+        }
     }
 
     void write_arrays() {
@@ -509,10 +551,7 @@ private:
         }
         // An array read from a record keeps that record's hash; a new one borrows (array_hash).
         auto hash = arraysPending_[index].hash;
-        if (!hash && document_.arrayHashRule)
-            for (const auto& group : document_.reflectionGroups)
-                if (group.index == field.classRef) { hash = group.hash; break; }
-        if (!hash) hash = array_hash(field);
+        if (!hash) hash = new_array_hash(arraysPending_[index], field);
         arrays_.push_back({checked_u32(data, "EBX array data"), checked_u32(values->size(), "EBX array count"),
                            *hash, static_cast<std::uint16_t>(field.encodedType << 1),
                            field.type() == FieldType::structure
@@ -709,6 +748,9 @@ private:
     std::unordered_map<std::uint32_t, std::uint32_t> oldInstances_;
     std::unordered_map<std::uint32_t, std::uint32_t> carried_;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> boxedTargets_;
+    bool refuse_{};
+    bool knownWalked_{};
+    std::map<std::pair<std::int32_t, std::size_t>, std::uint32_t> knownHashes_;   // (holder, field) -> hash
 };
 
 }
@@ -732,8 +774,8 @@ std::uint16_t ensure_fixup_type(Document& document, const std::int32_t descripto
     return static_cast<std::uint16_t>(count);
 }
 
-std::vector<std::byte> write_document(const Document& document) {
-    return Builder(document).run();
+std::vector<std::byte> write_document(const Document& document, const bool refuseNewArrayHashes) {
+    return Builder(document, refuseNewArrayHashes).run();
 }
 
 }

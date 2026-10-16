@@ -558,23 +558,29 @@ the third a data-loss bug fixed on 2026-10-16 in both the Python port and ReSkat
   values at the same size. The 333 map's genprefab rewrites byte for byte, so its tool writes the
   same order this writer does.
 - Array hashes (fixed the same day, in both writers). Each array record's hash used to be taken
-  from the first record the document read with the same element type. On the game's files the
-  hash belongs to the array's type: `SubWorldData.Components` 0x4100379e and
-  `ComponentEntityData.Components` 0x7d532392 share a field name hash (0xb46bc058) but not an
-  array hash, and 346 records of bam's root changed. The PC found the hashes in the reflection
-  chunk's group table: 12-byte records `{index, hash, count}` sorted by hash, for example
-  `(0x12, 0x4100379e, 1)`. The working rule (reproduced synthetically; to be confirmed with
-  `ebx-arrayhash` on a real file) is that an array's record hash is the hash of the group whose
-  index is the array field's `class_ref`.
-  - Both readers now keep the group table (`reflection_groups` / `reflectionGroups`).
-  - They note whether every array read obeys the rule (`array_hash_rule` / `arrayHashRule`).
+  from the first record the document read with the same element type, which changed 346 records
+  of bam's root. On the game's files (checked on bam's root with 414 records, bam's description,
+  the root description and the genprefab):
+  - Every (holding type, field) pair carries exactly one hash, and no hash is shared between
+    fields. `SubWorldData.Components` 0x4100379e and `ComponentEntityData.Components` 0x7d532392
+    share a field name hash but not an array hash.
+  - Every record's hash is a key of the RFL2 group table: 12-byte `{hash, count, first}` records
+    sorted by hash, with `first[i + 1] = first[i] + count[i]`.
+  - The group table is followed by a u32 count and 8-byte `{hash, code}` member pairs (probably
+    member name hash and type code); the record's class column is never inside its group's range.
+
+  The table lists the array types a document uses; it does not say how a hash is made.
+  djb2, FNV-1, FNV-1a and the TOC hash of field, type and element names match nothing, nor do
+  the reflection's own name hashes, signatures or GUIDs. So:
   - An array read from a record keeps that record's hash through edits and copies
     (`FieldValue.array_hash` / `Value::arrayHash`).
-  - A new array takes its group's hash when the document obeys the rule, and otherwise borrows by
-    the old rule.
-
-  The same applies to arrays the merge builds anew (`ebx_merge.cpp`). djb2, FNV-1, FNV-1a and the
-  TOC hash of field, type and element names match nothing.
+  - A new array takes the hash of an array the document read for the same field of the same
+    holding type (instances and nested structs; boxed values are not searched).
+  - With none, the map builder's writes (`write_document(..., refuse_new_array_hashes=True)`)
+    refuse, and refuse too if the hash is not a key of the group table, which would need a new
+    group.
+  - The C++ default (`write_document(doc)`, the mod merge) still borrows by the old rule rather
+    than fail a merge.
 - Boxed values (the bug). A boxed value's bytes were copied as they were, pointers included, but
   the arrays and strings those pointers reach were written only when a field reached them too.
   So a rewrite dropped them and left the boxed value's pointers aimed at whatever moved into

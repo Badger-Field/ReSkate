@@ -96,12 +96,12 @@ struct ArrayRecord {
     std::uint16_t classRef{};
 };
 
-// A 12-byte group record of the reflection table (sorted by hash). An array record's hash is the
-// hash of the group whose index is the array field's classRef.
+// A 12-byte record of the RFL2 group table: one per array type the document uses, sorted by
+// hash (first[i + 1] = first[i] + count[i]). Every array record's hash is one of these keys.
 struct ReflectionGroup {
-    std::uint32_t index{};
     std::uint32_t hash{};
     std::uint32_t count{};
+    std::uint32_t first{};
 };
 
 struct BoxedValueRecord {
@@ -205,8 +205,6 @@ struct Document {
     // values point at (arrays, strings) is carried from here when the document is written.
     std::vector<std::byte> payload;
     std::vector<ReflectionGroup> reflectionGroups;
-    // Every array the document was read with has its group's hash: new arrays take theirs too.
-    bool arrayHashRule{};
 
     [[nodiscard]] const InstanceRecord* root() const noexcept;
 };
