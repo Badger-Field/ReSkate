@@ -1,5 +1,6 @@
 #include "gui_internal.h"
 #include "install_here.h"
+#include "local_game.h"
 #include "text_encoding.h"
 
 #include "depot_output.h"
@@ -8,6 +9,7 @@
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Core/Platform/launcher_support.h"
 #include "Engine/Core/Debug/trace.h"
+#include "Engine/Game/Build/supported_build.h"
 #include "Engine/Vfs/mod_catalog.h"
 
 #include <algorithm>
@@ -217,6 +219,8 @@ void Launcher::download(bool validate, bool qr, std::string password) {
     start([this, verify] { run_download(verify); });
 }
 
+void Launcher::copy_game(fs::path source) { start([this, source] { run_copy(source); }); }
+
 void Launcher::play() { start([this] { run_play(); }); }
 
 void Launcher::cancel() {
@@ -395,6 +399,21 @@ void Launcher::run_check() {
     if (!launcher_app::game_files_supported(session_.paths)) {
         std::error_code error;
         const bool installed = fs::is_regular_file(session_.paths.game, error);
+        // skate. already installed on this PC, as the supported build, is copied from there
+        // (GET THE GAME): no Steam account, no download, no update server needed.
+        auto local = launcher_app::find_local_games(session_.paths.directory);
+        const bool copyable = !local.empty() && local.front().supported;
+        const auto where = local.empty() ? std::string() : launcher_text::utf8(local.front().folder.wstring());
+        {
+            std::lock_guard lock(mutex_);
+            state_.local_games = std::move(local);
+        }
+        if (copyable) {
+            set(installed ? Phase::game_outdated : Phase::game_missing, "skate. is on this PC",
+                "Press INSTALL to copy it from\n" + where + "\ninto ReSkate's folder. Nothing is downloaded, Steam is "
+                "not opened, and the game there is left as it is.");
+            return;
+        }
         if (!config) {
             fail(installed ? "This Skate version is not supported, and the update server could not be reached."
                            : "Skate is not installed here, and the update server could not be reached.");
@@ -414,6 +433,10 @@ void Launcher::run_check() {
             "ReSkate needs the build below. Only the files that differ are downloaded.");
         else set(Phase::game_missing, "Skate is not installed here",
             "Download the build below from Steam, about 14 GB, with an account that owns skate.");
+        if (!where.empty()) {
+            std::lock_guard lock(mutex_);
+            state_.detail += "\nThe skate. in " + where + " is another build than ReSkate supports, so it cannot be copied.";
+        }
         return;
     }
     std::error_code error;
@@ -518,6 +541,58 @@ void Launcher::run_download(bool validate) {
     logging::log(logging::Level::warning, logging::Channel::launcher, "The Steam download did not finish (exit code {}). DepotDownloader's last lines:", code);
     for (const auto& line : last_lines) logging::write(logging::Level::warning, logging::Channel::launcher, "  " + line);
     fail(std::format("The Steam download did not finish (exit code {}). {}", code, output.message));
+}
+
+void Launcher::run_copy(const fs::path& source) {
+    trace::Scope timing("launcher.game_copy", "task");
+    const auto where = launcher_text::utf8(source.wstring());
+    const auto& target = session_.paths.directory;
+    set(Phase::copying, "Checking the game on this PC", where);
+    if (!launcher_app::local_game::looks_like_game(source))
+        return fail("The folder " + where + " is not a skate. folder: it has no Skate.exe and Data\\layout.toc.");
+    if (launcher_app::local_game::overlapping(source, target))
+        return fail("Choose the skate. folder Steam installed, not ReSkate's own folder or one that holds it.");
+    if (!launcher_app::game_folder_supported(source)) {
+        launcher::SiblingPaths paths;
+        paths.directory = source;
+        const auto build = launcher_app::game_data_build(paths);
+        return fail(std::format("The skate. in {} is not supported by this ReSkate: it is not Steam build {}{}. "
+            "Download the supported build with a Steam account instead.", where, supported_build::steam_build_id,
+            build.empty() ? std::string() : std::format(" (its data is build {}, ReSkate needs {})", build,
+                supported_build::game_data_changelist)));
+    }
+    const auto plan = launcher_app::local_game::plan_copy(source, target);
+    std::error_code error;
+    const auto space = fs::space(target, error);
+    if (!error && space.available < plan.bytes + (256ull << 20))
+        return fail(std::format("Not enough free space to copy skate.: it needs {} and the drive has {} free.",
+            format_bytes(plan.bytes), format_bytes(space.available)));
+    logging::log(logging::Level::info, logging::Channel::launcher, "Copying skate. from {}: {} files ({}), {} already in place.",
+        where, plan.files.size(), format_bytes(plan.bytes), plan.in_place);
+    set(Phase::copying, "Copying skate. from this PC", where, 0);
+    std::uint64_t done = 0;
+    for (const auto& file : plan.files) {
+        const auto name = launcher_app::local_game::text(file);
+        if (!launcher_app::local_game::copy_one(source / file, target / file, [&](std::uintmax_t bytes) {
+                done += bytes;
+                set_progress(std::format("{}  {} of {}", name, format_bytes(done), format_bytes(plan.bytes)),
+                    plan.bytes ? static_cast<float>(static_cast<double>(done) / static_cast<double>(plan.bytes)) : -1.0f);
+            }, cancel_))
+            break;
+    }
+    if (cancel_) {
+        timing.tag("cancelled", "true");
+        set(fs::is_regular_file(session_.paths.game, error) ? Phase::game_outdated : Phase::game_missing, "Copy cancelled",
+            "What was copied is kept; press INSTALL to carry on from there.");
+        return;
+    }
+    // The same check a finished download gets: Skate.exe, steam_api64.dll and the data's build.
+    if (launcher_app::game_files_supported(session_.paths)) {
+        set(Phase::ready, "Ready to skate", "skate. copied from this PC.");
+        return;
+    }
+    timing.fail();
+    fail("The copied game is not supported: its files do not match the supported build. Download it with a Steam account instead.");
 }
 
 // The merge the game does behind its splash, done here instead, so a mod that

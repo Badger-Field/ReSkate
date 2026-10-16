@@ -119,7 +119,7 @@ void run_headless(const app::Session& session, std::vector<std::wstring> argumen
     }
     if (!app::game_files_supported(session.paths))
         throw std::runtime_error("Skate.exe is missing or is not the supported build. "
-            "Open ReSkateLauncher.exe without --no-gui to download it from Steam.");
+            "Open ReSkateLauncher.exe without --no-gui to copy it from this PC or download it from Steam.");
     app::start_game(session, options);
 }
 

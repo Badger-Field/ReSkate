@@ -4,7 +4,8 @@
 #include <cstdint>
 #include <span>
 
-// The Steam panels: sign-in, password/Steam Guard prompts and the QR code.
+// Getting the game (from this PC, or from Steam), and the Steam panels: sign-in, password/Steam
+// Guard prompts and the QR code.
 namespace dingosdk::launcher_gui::detail {
 namespace {
 
@@ -67,6 +68,59 @@ void sign_in_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui)
     pop_primary_button();
     if (sign_in || (entered && valid)) start(false);
     ImGui::EndDisabled();
+    ImGui::End();
+}
+
+// GET THE GAME: copy skate. from this PC (the default, when the supported build is installed here),
+// a folder the player picks, or the Steam download with an account.
+void get_game_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, const State& state, HWND window) {
+    const auto panel = begin_panel("##get_game_panel", size, ImVec2(S(520), S(400)));
+    panel_title(fonts, "GET THE GAME");
+    const auto* local = !state.local_games.empty() && state.local_games.front().supported ? &state.local_games.front() : nullptr;
+    ImGui::PushTextWrapPos(0);
+    if (local) {
+        ImGui::TextUnformatted("skate. is installed on this PC, as the build ReSkate supports:");
+        ImGui::TextDisabled("%s", launcher_text::utf8(local->folder.wstring()).c_str());
+        ImGui::TextDisabled("ReSkate copies it into its own folder, so a Steam update cannot change ReSkate's game. "
+                            "Nothing is downloaded, Steam is not opened, and the game there is left as it is.");
+    } else {
+        ImGui::TextUnformatted("Choose the folder skate. is installed in (the one with Skate.exe), and ReSkate copies "
+                               "it into its own folder. It has to be the build ReSkate supports.");
+        if (!state.local_games.empty())
+            ImGui::TextDisabled("The skate. in %s is another build, so it cannot be copied.",
+                                launcher_text::utf8(state.local_games.front().folder.wstring()).c_str());
+    }
+    ImGui::PopTextWrapPos();
+    ImGui::Spacing();
+    if (local) {
+        push_primary_button();
+        const bool copy = ImGui::Button("COPY GAME FROM THIS PC", ImVec2(-1, S(46)));
+        pop_primary_button();
+        if (copy) {
+            ui.get_game = false;
+            launcher.copy_game(local->folder);
+        }
+    }
+    if (!local) push_primary_button();
+    const bool choose = ImGui::Button("CHOOSE GAME FOLDER...", ImVec2(-1, S(local ? 36 : 46)));
+    if (!local) pop_primary_button();
+    if (choose) {
+        const auto folder = pick_path(window, true, L"Choose your skate. folder (the one with Skate.exe)", nullptr, nullptr);
+        if (!folder.empty()) {
+            ui.get_game = false;
+            launcher.copy_game(folder);
+        }
+    }
+    ImGui::Spacing();
+    ImGui::PushFont(fonts.caption);
+    ImGui::TextDisabled("OR");
+    ImGui::PopFont();
+    if (ImGui::Button("DOWNLOAD WITH A STEAM ACCOUNT", ImVec2(-1, S(36)))) {
+        ui.get_game = false;
+        open_sign_in(launcher, ui, false);
+    }
+    ImGui::SetCursorPosY(panel.y - S(24) - ImGui::GetFrameHeight());
+    if (ImGui::Button("CANCEL", ImVec2(S(110), 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ui.get_game = false;
     ImGui::End();
 }
 

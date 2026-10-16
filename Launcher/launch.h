@@ -29,6 +29,16 @@ std::string game_data_build(const launcher::SiblingPaths& paths);
 // download stopped part-way. Such a game has to be verified against the supported build, file
 // by file, not only topped up. False when the data's build cannot be told.
 bool game_data_mismatched(const launcher::SiblingPaths& paths);
+// Whether the skate. in `folder` (somewhere other than ReSkate's own) is exactly the supported
+// build: game_files_supported for that folder. Only reads it.
+bool game_folder_supported(const std::filesystem::path& folder);
+// skate. as Steam installed it on this PC (local_game.h: Steam's own files, read as text; Steam is not
+// started or asked), never `self_folder`. The supported build first, `supported` saying which is.
+struct LocalGame {
+    std::filesystem::path folder;
+    bool supported{};
+};
+std::vector<LocalGame> find_local_games(const std::filesystem::path& self_folder);
 // The config's depot/manifest ships the build this launcher was compiled for.
 bool config_matches_build(const launcher_update::Config& config);
 void relaunch(const std::filesystem::path& self, const std::vector<std::wstring>& arguments);

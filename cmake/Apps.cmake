@@ -129,6 +129,13 @@ if(DINGOSDK_BUILD_LAUNCHER_TESTS AND WIN32)
     target_link_libraries(dingosdk_mod_mesh_check PRIVATE dingosdk_mods dingosdk_frostbite dingosdk_game_archives)
     target_include_directories(dingosdk_mod_mesh_check PRIVATE "${PROJECT_SOURCE_DIR}")
 endif()
+# "Use the game on this PC" (Launcher/local_game.h): plain std::filesystem, so it runs on Linux too.
+if(DINGOSDK_BUILD_LAUNCHER_TESTS)
+    enable_testing()
+    add_executable(dingosdk_local_game_tests Launcher/Test/local_game_tests.cpp)
+    target_include_directories(dingosdk_local_game_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    add_test(NAME launcher_local_game COMMAND dingosdk_local_game_tests)
+endif()
 
 if(WIN32)
     # Launcher fonts (OFL / Apache, licences beside them) and the background photo,

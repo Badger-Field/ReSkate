@@ -209,7 +209,7 @@ inline constexpr std::array<const char*, 7> log_levels{"trace", "debug", "info",
 
 // ---------------------------------------------------------------- state
 
-enum class Phase { checking, install_here, update_available, updating, game_missing, game_outdated, downloading,
+enum class Phase { checking, install_here, update_available, updating, game_missing, game_outdated, downloading, copying,
                    merging, mods_broken, ready, launching, failed };
 
 // A mod the pre-launch merge could not use, named so nobody has to guess which
@@ -232,6 +232,8 @@ struct State {
     std::vector<ModProblem> mod_problems;
     // install_here: the folder of a ReSkate already installed (install_here.h), to update.
     std::filesystem::path install_target;
+    // game_missing / game_outdated: skate. installed on this PC (Steam's library), supported build first.
+    std::vector<launcher_app::LocalGame> local_games;
 };
 
 // Update checks, the Steam download and the game launch, one at a time on a worker thread.
@@ -268,6 +270,9 @@ public:
     // The password only lives in memory until DepotDownloader asks for it; it
     // may be empty when DepotDownloader remembers the login.
     void download(bool validate, bool qr, std::string password);
+    // "Use the game on this PC": copies the skate. in `source` into ReSkate's folder, when it is the
+    // supported build. `source` is only read. No network, no Steam.
+    void copy_game(fs::path source);
     void play();
     void cancel();
     // Answers the pending Steam prompt; nothing cancels the download.
@@ -318,6 +323,7 @@ private:
     void run_check();
     void run_updates();
     void run_download(bool validate);
+    void run_copy(const fs::path& source);
     // False when mods were left out and the launch should wait for an answer.
     bool run_mod_merge();
     void run_play();
@@ -366,6 +372,7 @@ struct Ui {
     std::string key_error;
     bool mods{};
     bool sign_in{};
+    bool get_game{};            // the GET THE GAME panel: copy from this PC, choose a folder, or Steam
     bool sign_in_validate{};
     bool focus{};
     std::array<char, 65> username{};
@@ -596,6 +603,7 @@ void pick(Store& store, const std::string& full_name, bool on);
 
 void open_sign_in(Launcher& launcher, Ui& ui, bool validate);
 void sign_in_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui);
+void get_game_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, const State& state, HWND window);
 void prompt_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, const update::Prompt& prompt, Ui& ui);
 void qr_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, const std::vector<std::string>& rows);
 // What the newest release changed: its notes on GitHub.

@@ -3,7 +3,8 @@
 #include <optional>
 #include <string>
 
-// ReSkate lives in a folder of its own, with its own copy of the game that the launcher downloads
+// ReSkate lives in a folder of its own, with its own copy of the game that the launcher copies from
+// this PC (local_game.h) or downloads
 // there (never in Steam's skate. folder: main.cpp refuses to start from a Steam library). The
 // launcher in that folder makes Desktop and Start menu shortcuts and adds "Install as ReSkate mod"
 // to the right-click menu of .zip files. A launcher unzipped somewhere else later finds that

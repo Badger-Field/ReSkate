@@ -47,12 +47,18 @@ the launcher, the runtime that loads into the game, and the dedicated server.
    Steam) into **a new, empty folder of their own**, for
    example `C:\Games\ReSkate`. Do **not** put them in Steam's skate. folder: ReSkate keeps its own
    copy of the game there, so Steam updating skate. cannot break it.
-3. Run `ReSkateLauncher.exe`.
-   - It checks for ReSkate updates, then installs the supported build of the game into that folder
-     (about 14 GB of free space).
-   - Sign in to Steam when asked, with the account that owns skate. You can scan a QR code with the
-     Steam app, or use your username and password with Steam Guard.
-   - On later runs it checks the game files and downloads only what is missing.
+3. Run `ReSkateLauncher.exe`. It checks for ReSkate updates, then puts the supported build of the
+   game into that folder (about 14 GB of free space). Press **INSTALL** and pick one:
+   - **Copy game from this PC** (the default when skate. is installed here): when Steam's skate.
+     folder holds exactly the build ReSkate supports, the launcher copies it into ReSkate's folder.
+     It only reads Steam's files to find the game: Steam is not opened, you do not sign in, nothing
+     is downloaded, and the game in Steam's folder is left as it is. **Choose game folder…** does the
+     same for a skate. folder somewhere else. A copy that is cancelled carries on where it stopped.
+     If the installed skate. is another build (Steam updated it), the launcher says so and it cannot
+     be used.
+   - **Download with a Steam account**: sign in with the account that owns skate. (a QR code with
+     the Steam app, or your username and password with Steam Guard). On later runs it checks the
+     game files and downloads only what is missing.
 4. Press **PLAY**.
 
 Once the game is in that folder, the launcher adds ReSkate shortcuts to the Desktop and Start menu

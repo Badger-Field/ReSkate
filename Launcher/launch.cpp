@@ -5,6 +5,7 @@
 #include "Engine/Vfs/content_cache_install.h"
 #include "Engine/Vfs/world_layer_scan.h"
 #include "launch.h"
+#include "local_game.h"
 #include "text_encoding.h"
 #include "Engine/Game/Build/addresses.h"
 #include "Engine/Game/Build/20260929/runtime.h"
@@ -520,6 +521,32 @@ bool game_files_supported(const launcher::SiblingPaths& paths) {
             "Game files are not the supported build: {}", exception.what());
         return false;
     }
+}
+
+bool game_folder_supported(const fs::path& folder) {
+    launcher::SiblingPaths paths;
+    paths.directory = folder;
+    paths.game = folder / L"Skate.exe";
+    paths.dll = folder / L"ReSkate.dll";
+    paths.steam_api = folder / L"steam_api64.dll";
+    return game_files_supported(paths);
+}
+
+std::vector<LocalGame> find_local_games(const fs::path& self_folder) {
+    std::vector<LocalGame> found;
+    std::vector<fs::path> steams{steam_directory(), LR"(C:\Program Files (x86)\Steam)"};
+    for (const auto& steam : steams) {
+        if (steam.empty()) continue;
+        for (const auto& folder : local_game::steam_game_folders(steam)) {
+            std::error_code error;
+            if (fs::equivalent(folder, self_folder, error)) continue;
+            if (std::any_of(found.begin(), found.end(), [&](const LocalGame& seen) { return fs::equivalent(seen.folder, folder, error); }))
+                continue;
+            found.push_back({folder, game_folder_supported(folder)});
+        }
+    }
+    std::stable_partition(found.begin(), found.end(), [](const LocalGame& game) { return game.supported; });
+    return found;
 }
 
 bool config_matches_build(const launcher_update::Config& config) {
