@@ -16,15 +16,18 @@
 #include "Engine/Resource/toc.h"
 #include "Engine/Vfs/game_archives.h"
 #include "Engine/Vfs/mod_catalog.h"
+#include "Engine/Vfs/mod_merge_internal.h"
 #include "Engine/Vfs/native_db.h"
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -457,24 +460,48 @@ void replaced_while_the_game_runs() {
     report = mods::merge_mods(fixture.catalog, {}, {.live = true});
     expect(report.built && report.issue.empty() && !noted("placed again"), "replaced: placed again without a change\n" + describe(report));
 }
-// Where the merged copy of the bundle in `toc` keeps `asset`: its manifest is the region's first
-// file, stored raw in the patch's own archive, and the assets follow in manifest order.
-std::optional<fb::BundleFileInfo> merged_file(const Fixture& fixture, const std::string& toc, const std::string& asset) {
-    const auto patch = fixture.catalog.root / mods::generated_folder;
-    const auto path = patch / "Win32" / fs::path(toc);
-    if (!fs::exists(path)) return std::nullopt;
-    for (const auto& bundle : fb::read_toc(read(path)).bundles) {
-        if (bundle.name != bundle_name) continue;
-        const auto region = fb::read_bundle_region(bundle.region);
-        if (region.files.empty() || !region.inlineManifest.empty()) return std::nullopt;
-        const auto& first = region.files.front();
-        const auto archive = read((first.location.patch ? patch : fixture.catalog.data_root / "Data") / "Win32" / "pkg" /
-                                  vfs::archive_file(first.location.archive));
-        const auto manifest = fb::read_binary_bundle(std::span(archive).subspan(first.offset, first.size));
-        for (std::size_t index = 0; index < manifest.ebx.size(); ++index)
-            if (manifest.ebx[index].name == asset && 1 + index < region.files.size()) return region.files[1 + index];
+// The merged patch, read the way the merge reads it.
+struct Patch {
+    explicit Patch(const Fixture& fixture)
+        : root(fixture.catalog.root / mods::generated_folder), base(fixture.catalog.data_root / "Data"),
+          game(fixture.catalog.data_root), layout(vfs::read_layout(root / "layout.toc")), store(base, root, layout.root) {}
+    // The bytes a placement names; empty, with a FAIL, when they are not on disk.
+    Bytes bytes(const fb::CasIdentifier& location, std::uint32_t offset, std::uint32_t size, const std::string& what) {
+        try {
+            const auto& from = location.patch ? root : base;
+            const auto length = store.archive_size(from, location);
+            expect(length && std::uint64_t{offset} + size <= *length,
+                   what + " points at byte " + std::to_string(offset) + " of " + store.describe(location) +
+                       (length ? ", past its end" : ", which is not there"));
+            if (!length || std::uint64_t{offset} + size > *length) return {};
+            return store.read(from, location, offset, size);
+        } catch (const std::exception& error) {
+            expect(false, what + ": " + error.what());
+            return {};
+        }
     }
-    return std::nullopt;
+    // Where the merged copy of the bundle in `toc` keeps `asset`.
+    std::optional<fb::BundleFileInfo> file(const std::string& toc, const std::string& asset) {
+        const auto path = root / "Win32" / fs::path(toc);
+        if (!fs::exists(path)) return std::nullopt;
+        for (const auto& bundle : fb::read_toc(read(path)).bundles) {
+            if (bundle.name != bundle_name) continue;
+            const auto listing = mods::detail::list_bundle(store, root, base, bundle, game);
+            if (!listing) return std::nullopt;
+            for (std::size_t index = 0; index < listing->manifest.ebx.size(); ++index)
+                if (listing->manifest.ebx[index].name == asset) return listing->files.at(listing->first + index);
+        }
+        return std::nullopt;
+    }
+    fs::path root, base, game;
+    vfs::Layout layout;
+    mods::detail::CasStore store;
+};
+// How many times `part` is in `whole`.
+std::size_t occurrences(const Bytes& whole, const Bytes& part) {
+    std::size_t count{};
+    for (auto at = whole.begin(); (at = std::search(at, whole.end(), part.begin(), part.end())) != whole.end(); ++at) ++count;
+    return count;
 }
 
 // Two maps each carry the music mod's song. Both copies read the one payload.
@@ -485,20 +512,22 @@ void carried_payload_written_once() {
     fixture.add("map2", true, second_map_toc, {second_map_superbundle}, game_copy());
     const auto report = mods::merge_mods(fixture.catalog);
     expect(report.issue.empty() && report.built, "carried once: the merge builds the patch\n" + describe(report));
-    const auto first = merged_file(fixture, map_toc, "test/song");
-    const auto second = merged_file(fixture, second_map_toc, "test/song");
+    if (!report.built) return;
+    Patch patch(fixture);
+    const auto first = patch.file(map_toc, "test/song");
+    const auto second = patch.file(second_map_toc, "test/song");
     expect(first && second, "carried once: both maps' copies hold test/song");
-    if (first && second)
-        expect(first->location == second->location && first->offset == second->offset,
-               "carried once: the two copies read different payloads (byte " + std::to_string(first->offset) + " and byte " +
-                   std::to_string(second->offset) + ")");
-    if (first) {
-        const auto archive = read(fixture.catalog.root / mods::generated_folder / "Win32" / "pkg" / vfs::archive_file(first->location.archive));
-        const auto song = encoded(ebx_document(guid(10), {guid(11)}));
-        expect(std::uint64_t{first->offset} + first->size <= archive.size() &&
-                   Bytes(archive.begin() + first->offset, archive.begin() + first->offset + first->size) == song,
-               "carried once: the placement does not hold the song's bytes");
-    }
+    if (!first || !second) return;
+    expect(first->location == second->location && first->offset == second->offset,
+           "carried once: the two copies read different payloads (byte " + std::to_string(first->offset) + " and byte " +
+               std::to_string(second->offset) + ")");
+    const auto song = encoded(ebx_document(guid(10), {guid(11)}));
+    expect(patch.bytes(first->location, first->offset, first->size, "carried once: test/song") == song,
+           "carried once: the placement does not hold the song's bytes");
+    const auto size = patch.store.archive_size(patch.root, first->location);
+    const auto archive = size ? patch.bytes(first->location, 0, static_cast<std::uint32_t>(*size), "carried once: its archive") : Bytes{};
+    expect(occurrences(archive, song) == 1,
+           "carried once: the song is in its archive " + std::to_string(occurrences(archive, song)) + " times");
 }
 
 // Every placement in every merged TOC lies inside an archive that exists, and the merged layout
@@ -524,44 +553,64 @@ void every_placement_lands_in_an_archive() {
     fixture.add("map2", true, second_map_toc, {second_map_superbundle}, game_copy());
     const auto report = mods::merge_mods(fixture.catalog);
     expect(report.issue.empty() && report.built, "placements: the merge builds the patch\n" + describe(report));
-    const auto patch = fixture.catalog.root / mods::generated_folder;
-    const auto bytes_at = [&](const fb::CasIdentifier& location, std::uint32_t offset, std::uint32_t size, const std::string& what) {
-        const auto archive = (location.patch ? patch : fixture.catalog.data_root / "Data") / "Win32" / "pkg" / vfs::archive_file(location.archive);
-        std::error_code error;
-        const auto length = fs::file_size(archive, error);
-        expect(!error && std::uint64_t{offset} + size <= length,
-               "placements: " + what + " points at byte " + std::to_string(offset) + " of " + archive.filename().string() +
-                   (error ? ", which is not there" : ", past its end"));
-        if (error || std::uint64_t{offset} + size > length) return Bytes{};
-        const auto all = read(archive);
-        return Bytes(all.begin() + offset, all.begin() + offset + size);
-    };
+    if (!report.built) return;
+    Patch patch(fixture);
     std::size_t checked{};
-    std::set<std::string> waves;   // the TOCs whose song audio chunk holds its bytes
-    for (const auto& entry : fs::recursive_directory_iterator(patch / "Win32")) {
+    std::set<std::string> withAudio;
+    for (const auto& entry : fs::recursive_directory_iterator(patch.root / "Win32")) {
         if (entry.path().extension() != ".toc") continue;
         const auto document = fb::read_toc(read(entry.path()));
         for (const auto& bundle : document.bundles)
             for (const auto& file : fb::read_bundle_region(bundle.region).files) {
-                (void)bytes_at(file.location, file.offset, file.size, bundle.name);
+                (void)patch.bytes(file.location, file.offset, file.size, "placements: " + bundle.name);
                 ++checked;
             }
         for (const auto& chunk : document.chunks) {
-            const auto held = bytes_at(chunk.location, chunk.offset, chunk.size, "chunk " + chunk.guid.string());
+            const auto held = patch.bytes(chunk.location, chunk.offset, chunk.size, "placements: chunk " + chunk.guid.string());
             if (chunk.guid != guid(11)) continue;
-            const auto name = fs::relative(entry.path(), patch / "Win32").generic_string();
+            const auto name = fs::relative(entry.path(), patch.root / "Win32").generic_string();
             expect(held == wave, "placements: " + name + "'s chunk does not hold the song's audio");
-            if (held == wave) waves.insert(name);
+            if (held == wave) withAudio.insert(name);
         }
     }
     expect(checked > 0, "placements: the merged TOCs hold placements");
-    expect(waves.contains(map_toc) && waves.contains(second_map_toc), "placements: both maps' TOCs carry the song's audio chunk");
-    const auto layout = vfs::read_layout(patch / "layout.toc");
-    const auto* table = layout.root.field("layeredInstallChunkFiles");
+    expect(withAudio.contains(map_toc) && withAudio.contains(second_map_toc), "placements: both maps' TOCs carry the song's audio chunk");
+    const auto* table = patch.layout.root.field("layeredInstallChunkFiles");
     expect(table != nullptr, "placements: the merged layout declares archives");
     if (table)
         vfs::for_each_install_chunk_file(table->payload(), [&](std::uint32_t, std::uint16_t archive) {
-            expect(archive != 0xFFFE && archive != 0xFFFF, "placements: the layout declares marker archive " + std::to_string(archive));
+            expect(!mods::detail::CasStore::placeholder(archive), "placements: the layout declares placeholder archive " + std::to_string(archive));
+        });
+}
+
+// A mod archive numbered like a placeholder takes a free number: its placements land on its bytes,
+// and the layout never declares the placeholder.
+void a_mod_archive_numbered_like_a_placeholder() {
+    Fixture fixture("placeholder-number");
+    fixture.add("music", false, shared_toc, {}, music_assets(), music_resources());
+    fixture.add("map", true, map_toc, {map_superbundle}, game_copy());
+    const auto mod = fixture.catalog.root / "map";
+    const auto toc = mod / "Win32" / map_toc;
+    auto document = fb::read_toc(read(toc));
+    for (auto& bundle : document.bundles) {
+        auto region = fb::read_bundle_region(bundle.region);
+        for (auto& file : region.files) file.location.archive = mods::detail::CasStore::carried_archive;
+        bundle.region = fb::write_bundle_region(region.files, region.inlineManifest);
+    }
+    write(toc, fb::write_patch_toc(document.bundles, document.chunks, document.flags));
+    fs::rename(mod / "Win32" / "pkg" / "cas_01.cas", mod / "Win32" / "pkg" / vfs::archive_file(mods::detail::CasStore::carried_archive));
+    const auto report = mods::merge_mods(fixture.catalog);
+    expect(report.issue.empty() && report.built, "placeholder number: the merge builds the patch\n" + describe(report));
+    if (!report.built) return;
+    Patch patch(fixture);
+    const auto other = patch.file(map_toc, "test/other");
+    expect(other && !mods::detail::CasStore::placeholder(other->location) &&
+               patch.bytes(other->location, other->offset, other->size, "placeholder number: test/other") ==
+                   encoded(ebx_document(guid(2), {})),
+           "placeholder number: the map's own asset does not read its bytes");
+    if (const auto* table = patch.layout.root.field("layeredInstallChunkFiles"))
+        vfs::for_each_install_chunk_file(table->payload(), [&](std::uint32_t, std::uint16_t archive) {
+            expect(!mods::detail::CasStore::placeholder(archive), "placeholder number: the layout declares archive " + std::to_string(archive));
         });
 }
 
@@ -576,7 +625,7 @@ void two_merges_write_the_same_bytes() {
     expect(report.issue.empty() && report.built, "same bytes: the first merge\n" + describe(report));
     const auto archive = read(patch / "Win32" / "pkg" / "cas_01.cas");
     const auto toc = read(patch / "Win32" / fs::path(second_map_toc));
-    fs::remove(patch / "reskate-merge.stamp");
+    fs::remove(patch / mods::detail::stamp_file);
     report = mods::merge_mods(fixture.catalog);
     expect(report.issue.empty() && report.built && !report.reused, "same bytes: the second merge\n" + describe(report));
     expect(read(patch / "Win32" / "pkg" / "cas_01.cas") == archive, "same bytes: the patch's own archive differs");
@@ -598,6 +647,7 @@ int main() try {
     carried_into_another_bundle_with_the_list(false);
     carried_payload_written_once();
     every_placement_lands_in_an_archive();
+    a_mod_archive_numbered_like_a_placeholder();
     two_merges_write_the_same_bytes();
     if (failures) {
         std::cerr << failures << " failure(s)\n";
