@@ -285,6 +285,9 @@ void draw_notices();
 // chat_pending also refreshes the feed, so it runs every presented frame.
 bool chat_pending();
 void draw_chat();
+// The message to say OK to (message_card.cpp): whether one is up, and drawing it.
+bool message_pending();
+void draw_message();
 // The map download card (map_download_card.cpp): whether there is one this frame, and drawing it.
 bool map_download_pending();
 void draw_map_download();
@@ -304,6 +307,9 @@ void card_image_lost();
 // Game debug text (game_text_overlay.cpp): polled every presented frame.
 bool game_text_pending();
 void draw_game_text();
+// The FPV drone's goggle display and stick overlay (drone_hud_overlay.cpp): polled every presented frame.
+bool drone_hud_pending();
+void draw_drone_hud();
 // ReSkate's S.K.A.T.E. throwdown HUD (skate_hud_overlay.cpp): polled every presented frame.
 bool skate_hud_pending();
 void draw_skate_hud();

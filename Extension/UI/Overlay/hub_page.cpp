@@ -432,7 +432,9 @@ void browser_page(Ui &ui, ImVec2 a, ImVec2 z) {
     const auto &mp = ui.mp;
     const float u = ui.u, gap = 28 * u, bar = 96 * u, list_width = (z.x - a.x) * .62f;
     auto *draw = ui.draw;
-    if (!h.searched && !mp.lobby_searching) h.searched = true, queue_multiplayer_action("browse", "");
+    // Refreshing waits out the game-wide limit (multiplayer_browse_interval_us); the button counts it down.
+    const int wait = browse_wait(mp);
+    if (!h.searched && !wait) h.searched = true, queue_multiplayer_action("browse", "");
     bool changed{};
     // ---- the bar: search, filters, refresh
     {
@@ -459,11 +461,11 @@ void browser_page(Ui &ui, ImVec2 a, ImVec2 z) {
         if (chip("FRIENDS", h.friends_only)) h.friends_only = !h.friends_only, changed = true;
         if (chip("HIDE FULL", h.hide_full)) h.hide_full = !h.hide_full, changed = true;
         if (chip("MY MAP", h.same_map)) h.same_map = !h.same_map, changed = true;
-        if (button(ui, hash("refresh"), ImVec2(z.x - 420 * u, a.y), ImVec2(z.x, a.y + bar), mp.lobby_searching ? "SEARCHING..." : "REFRESH",
-                   Look::sticky, !mp.lobby_searching))
+        const auto refresh = wait ? "REFRESH IN " + std::to_string(wait) : std::string(mp.lobby_searching ? "SEARCHING..." : "REFRESH");
+        if (button(ui, hash("refresh"), ImVec2(z.x - 420 * u, a.y), ImVec2(z.x, a.y + bar), refresh.c_str(), Look::sticky, !wait))
             queue_multiplayer_action("browse", "");
     }
-    if (ui.input && !h.typing && (ui.pad.buttons & ~h.pad_before & 0x4000) && !mp.lobby_searching) queue_multiplayer_action("browse", ""); // X / Square
+    if (ui.input && !h.typing && (ui.pad.buttons & ~h.pad_before & 0x4000) && !wait) queue_multiplayer_action("browse", ""); // X / Square
     if (ui.input && !h.typing && (ui.pad.buttons & ~h.pad_before & 0x8000)) h.sort = static_cast<view::Sort>((static_cast<int>(h.sort) + 1) % 3), changed = true; // Y / Triangle
     // F marks the chosen server as a favorite, or takes the mark away.
     if (ui.input && !h.typing && !h.code_mode && ImGui::IsKeyPressed(ImGuiKey_F, false))
@@ -1173,6 +1175,7 @@ void tools_page(Ui &ui, ImVec2 a, ImVec2 z) {
         if (grind.toe_heel &&
             list.setting("Your stance", grind.stance == 2 ? "Goofy" : grind.stance == 1 ? "Regular" : "Not set", grind.available && console))
             act("grind-exit-stance");
+        if (list.setting("Pop-out strength", std::to_string(grind.strength) + "%", grind.available && console)) act("grind-exit-strength");
         const auto &wear = m.offline.board_wear;
         if (list.setting("Board wear", on_off(wear.effective), wear.available && cb.queue_offline_feature)) act("board-wear");
         if (list.setting("Reset board wear", {}, wear.available && wear.effective && console)) act("board-wear-reset");

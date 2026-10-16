@@ -55,6 +55,12 @@ void apply_guest_tools(Session &s, bool noclip, bool no_bail, bool boosts) {
 }
 } // namespace session_detail
 namespace {
+// Whether the lists may be searched now; saying yes starts the wait for the next search.
+bool take_browse(Session &s, std::uint64_t now) {
+    if (s.browsed && now - s.browsed < multiplayer_browse_interval_us) return false;
+    s.browsed = now;
+    return true;
+}
 std::string edit_distances(Session &s, std::string_view argument) {
     if (s.mode != Mode::host) return "Only the lobby host can change TPS distances.";
     MultiplayerDistances value;
@@ -623,15 +629,15 @@ bool offline_command(std::string_view action) {
 } // namespace
 bool queue_command(std::string_view action, std::string_view argument, std::string_view password) {
     if (launcher::offline_mode() && !offline_command(action)) return false;
-    if ((action != "host" && action != "host-config" && action != "join" && action != "rejoin" && action != "join-lobby" && action != "join-friend-lobby" && action != "stop" &&
+    if ((action != "host" && action != "host-config" && action != "join" && action != "rejoin" && action != "join-lobby" && action != "join-friend-lobby" && action != "stop" && action != "stop-map-fetch" &&
          action != "distances" && action != "object-placement" && action != "object-limit" && action != "kick" && action != "clear-objects" &&
          action != "nametags" && action != "chat-visible" && action != "chat-filter" &&
          action != "nametag-distance" && action != "nametag-dots" && action != "nametags-friends" && action != "player-distance" && action != "direct-connections" && action != "pose-dump" && action != "vote" && action != "voice-chat" &&
          action != "chat-bubbles" && action != "chat-bubbles-own" && action != "chat-bubbles-distance" &&
          action != "chat-bubbles-duration" && action != "chat-bubbles-history" &&
          !own_mark_command(action) &&
-         action != "voice" && action != "voice-mute" &&
-         action != "voice-volume" && action != "voice-allow" && action != "voice-range" && action != "chat" && action != "ban" && action != "unban" &&
+         action != "voice" && action != "voice-mute" && action != "objects-solid" &&
+         action != "voice-volume" && action != "voice-allow" && action != "voice-range" && action != "chat" && action != "typing" && action != "ban" && action != "unban" &&
          action != "world-layer-sync" && action != "noclip-allow" && action != "nobail-allow" && action != "boosts-allow" &&
          action != "tuning-enforce" && action != "tp" &&
          action != "tpall" && action != "tphere" && action != "browse" &&
@@ -729,6 +735,11 @@ std::string command(std::string_view action, std::string_view argument, std::str
             }
             if (!result.empty() && (s.mode == Mode::host || s.mode == Mode::join)) add_chat(s, 0, "ReSkate", result);
             return result.empty() ? "Command sent." : result;
+        }
+        if (action == "typing") {
+            if (argument != "0" && argument != "1") return "Invalid typing notice.";
+            send_typing(s, argument == "1");
+            return {};
         }
         if (action == "chat") {
             // The overlay queues chat and never sees this result, so a refusal
@@ -837,6 +848,24 @@ std::string command(std::string_view action, std::string_view argument, std::str
             publish(s);
             return enabled == "on" ? "Player voice muted." : "Player voice unmuted.";
         }
+        if (action == "objects-solid") {
+            const auto split = argument.find(' ');
+            if (split == std::string_view::npos) return "Choose a player whose objects to make solid.";
+            std::uint64_t id{};
+            const auto result = std::from_chars(argument.data(), argument.data() + split, id);
+            const auto enabled = argument.substr(split + 1);
+            // "server": the dedicated server's own objects (its parks), which no player row stands for.
+            if (argument.substr(0, split) == "server" && dedicated_host(s)) id = s.host_id;
+            else if (result.ec != std::errc{} || result.ptr != argument.data() + split) id = 0;
+            if (!id || !find_peer(s, id) || (enabled != "on" && enabled != "off"))
+                return "objects-solid <SteamID64 of a connected player, or server> on|off";
+            const bool solid = enabled == "on";
+            s.objects_solid[id] = solid;
+            set_network_object_owner_solid(id, solid);
+            profile_runtime::set_local_preference("SolidObjects." + std::to_string(id), solid);
+            publish(s);
+            return solid ? "That player's objects are solid for you." : "That player's objects are ghosts for you.";
+        }
         // Host-only settings check the mode themselves; guests get a refusal.
         using Setting = std::string (*)(Session &, std::string_view);
         static constexpr std::pair<std::string_view, Setting> settings[] = {
@@ -865,7 +894,15 @@ std::string command(std::string_view action, std::string_view argument, std::str
         if (action == "status")
             return s.status + " | Players " + std::to_string(player_count(s)) + "/" +
                    std::to_string(s.capacity);
-        if (action == "stop") {
+        if (action == "stop-map-fetch") {
+            std::uint64_t expected{};
+            const auto parsed = std::from_chars(argument.data(), argument.data() + argument.size(), expected);
+            // A worker's queued cancellation may execute after a fresh join command.
+            if (parsed.ec != std::errc{} || parsed.ptr != argument.data() + argument.size() ||
+                !expected || expected != s.map_fetch_deadline)
+                return s.status;
+        }
+        if (action == "stop" || action == "stop-map-fetch") {
             stop(s, "Multiplayer stopped.");
             publish(s);
             return s.status;
@@ -887,14 +924,17 @@ std::string command(std::string_view action, std::string_view argument, std::str
             // Without Steam: the lobby service's list; dedicated servers are Steam's.
             if (launcher::offline_mode() ? !open_direct_play(s.transport) : !s.transport.open())
                 s.status = s.transport.status().detail;
-            else {
-                s.lobbies.refresh(now_us());
-                if (!s.transport.direct()) s.servers.refresh(now_us());
+            else if (const auto now = now_us(); take_browse(s, now)) {
+                s.lobbies.refresh(now);
+                if (!s.transport.direct()) s.servers.refresh(now);
                 // And games on this player's own network.
                 if (s.transport.direct()) {
                     s.lan.search();
-                    s.lan_searched = now_us();
+                    s.lan_searched = now;
                 }
+            } else {
+                const auto left = multiplayer_browse_interval_us - (now - s.browsed);
+                return "The server list can be refreshed again in " + std::to_string((left + 999999) / 1000000) + " s.";
             }
             publish(s);
             return s.lobbies.status().browser;
@@ -937,7 +977,7 @@ std::string command(std::string_view action, std::string_view argument, std::str
             }
             // A friend on a server this game has not listed yet: only the list has its code.
             if (game_server_steam_id(id)) {
-                s.servers.refresh(now_us());
+                if (const auto now = now_us(); take_browse(s, now)) s.servers.refresh(now);
                 s.status = "That server is not in your server list yet. Open the server browser and join it there.";
                 publish(s);
                 return s.status;
@@ -966,6 +1006,8 @@ std::string command(std::string_view action, std::string_view argument, std::str
         if (action == "rejoin") {
             rejoin = std::exchange(s.rejoin, std::nullopt);
             if (!rejoin) return "There is no session to go back to.";
+            if (map_fetch_policy::expired(rejoin->deadline_us, now_us()))
+                return "Map download timed out. Please try joining the server again.";
         }
         if (action != "host" && action != "join" && action != "echo" && !rejoin)
             return "Unknown multiplayer action.";
@@ -1143,6 +1185,8 @@ std::string command(std::string_view action, std::string_view argument, std::str
             s.host_id = invitation->steam_id;
             s.awaiting_map = true;
             s.join_started = now_us();
+            s.map_fetch_deadline = rejoin ? rejoin->deadline_us : 0;
+            map_fetch_deadline_flag.store(s.map_fetch_deadline);
             s.status = "Connecting and checking the host's map...";
         }
         set_lobby_park_mode(s.mode == Mode::host || s.mode == Mode::join, s.mode == Mode::join);

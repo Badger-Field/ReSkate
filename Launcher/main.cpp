@@ -1,5 +1,7 @@
 #include "Engine/Core/Log/logging.h"
+#include "Engine/Core/Debug/trace.h"
 #include "crash_reporter.h"
+#include "install_here.h"
 #include "gui.h"
 #include "launch.h"
 #include "mod_manager.h"
@@ -112,13 +114,27 @@ void run_headless(const app::Session& session, std::vector<std::wstring> argumen
     if (!map.empty()) options.map = std::move(map);
     update::remove_previous_launcher(session.self);
     if (updates) {
-        const auto config = update::fetch_config();
+        const auto config = update::fetch_config(dingosdk::launcher_gui::prereleases_enabled(session));
         if (config && apply_headless_updates(session, *config, original, relaunched)) return;
     }
     if (!app::game_files_supported(session.paths))
         throw std::runtime_error("Skate.exe is missing or is not the supported build. "
             "Open ReSkateLauncher.exe without --no-gui to download it from Steam.");
     app::start_game(session, options);
+}
+
+// Whether the launcher was put in a game's folder of a Steam library (...\steamapps\common\<game>),
+// which is where Steam keeps skate. and updates it: ReSkate has a folder of its own, with its
+// own copy of the game. The same under Wine: on Proton, Steam is given the launcher's place in
+// that folder of its own (README, "Linux (Proton)").
+bool in_steam_library() {
+    std::wstring self(32768, L' ');
+    self.resize(GetModuleFileNameW(nullptr, self.data(), static_cast<DWORD>(self.size())));
+    if (self.empty()) return false;
+    const auto same = [](const fs::path& part, const wchar_t* name) { return _wcsicmp(part.c_str(), name) == 0; };
+    for (auto folder = fs::path(self).parent_path(); folder.has_parent_path() && folder != folder.parent_path(); folder = folder.parent_path())
+        if (same(folder.filename(), L"common") && same(folder.parent_path().filename(), L"steamapps")) return true;
+    return false;
 }
 
 } // namespace
@@ -132,12 +148,49 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return 1;
     }
     if (argc > 1 && std::wstring_view(argv[1]) == L"--reskate-crash-helper") {
-        const auto result = dingosdk::backtrace::run_reporter(argc, argv);
+        const auto result = dingosdk::crash_report::run_reporter(argc, argv);
         LocalFree(argv);
         return result;
     }
     const std::vector<std::wstring> original(argv + 1, argv + argc);
     LocalFree(argv);
+    // (Before anything is read or written there: the only thing to do is to close.)
+    if (in_steam_library()) {
+        // An earlier ReSkate's one-click INSTALL put it here (install_here.h): offer to take it
+        // back out, so the old shortcuts and right-click entry stop pointing at a launcher that
+        // can no longer start. skate. itself, mods and the player's folders stay.
+        std::wstring self(32768, L' ');
+        self.resize(GetModuleFileNameW(nullptr, self.data(), static_cast<DWORD>(self.size())));
+        const auto folder = fs::path(self).parent_path();
+        std::error_code error;
+        const bool installed_here = !self.empty() && fs::is_regular_file(folder / L"Skate.exe", error) &&
+                                    fs::is_regular_file(folder / L"ReSkate.dll", error);
+        const std::wstring move =
+            L"ReSkate cannot run from Steam's skate. folder.\n\n"
+            L"Put ReSkateLauncher.exe, ReSkate.dll and GameNetworkingSockets.dll (unzip the whole ReSkate download) "
+            L"in a new, empty folder of their own (for example C:\\Games\\ReSkate) and run the launcher from there. "
+            L"It installs its own copy of the game into that folder, so a Steam update cannot break it.";
+        if (installed_here &&
+            MessageBoxW(nullptr, (move + L"\n\nRemove ReSkate from Steam's skate. folder now? Its files there, its shortcuts and "
+                                         L"the \"Install as ReSkate mod\" right-click entry go; skate., your Mods folder and "
+                                         L"ReSkate's config, scripts and logs folders stay.").c_str(),
+                        L"ReSkate Launcher", MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND) == IDYES) {
+            try {
+                app::uninstall_from(folder);
+                MessageBoxW(nullptr, L"ReSkate was removed from Steam's skate. folder. Unzip ReSkate into a folder of its own "
+                                     L"and run the launcher from there.",
+                            L"ReSkate Launcher", MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
+            } catch (const std::exception& exception) {
+                MessageBoxW(nullptr, (L"ReSkate was not removed.\n\n" + widen(exception.what())).c_str(), L"ReSkate Launcher",
+                            MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+            }
+            return 1;
+        }
+        if (!installed_here)
+            MessageBoxW(nullptr, (move + L"\n\nThe launcher will now close.").c_str(), L"ReSkate Launcher",
+                        MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+        return 1;
+    }
     auto arguments = original;
     const bool headless = take_flag(arguments, L"--no-gui");
 
@@ -155,6 +208,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         if (installing_mod)
             result = install_mod(session, fs::path(*(mod + 1)));
         else if (headless) run_headless(session, arguments, original);
+        else if (app::relaunch_without_mangohud(session.self, original)) dingosdk::logging::flush();
         else result = dingosdk::launcher_gui::run(session, arguments);
     } catch (const std::exception& exception) {
         const auto message = widen(exception.what());
@@ -165,6 +219,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         MessageBoxW(nullptr, dialog.c_str(), L"ReSkate Launcher", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
         result = 1;
     }
+    dingosdk::trace::flush(std::chrono::seconds(3));
     dingosdk::logging::shutdown();
     return result;
 }

@@ -32,7 +32,7 @@ function Use-VisualStudio {
 }
 
 # No crash uploads from CI builds.
-$options = @("-DDINGOSDK_BACKTRACE_URL=", "-DDINGOSDK_BUILD_LAUNCHER_TESTS=ON")
+$options = @("-DDINGOSDK_CRASH_REPORT_URL=", "-DDINGOSDK_BUILD_LAUNCHER_TESTS=ON")
 if ($Ninja) {
     Use-VisualStudio
     if (Get-Command sccache.exe -ErrorAction SilentlyContinue) {

@@ -3,11 +3,14 @@
 #include "Engine/Core/Profiling/profiler.h"
 #include "overlay_internal.h"
 #include "Extension/Trainer/trainer_page.h"
+#include "Extension/Skater/drone_flight.h"
 #include "Extension/HallOfMeat/hall_of_meat_overlay.h"
 #include "park_previews.h"
 #include "chat_emotes.h"
 #include "input_capture.h"
 #include "cursor.h"
+#include <algorithm>
+#include <chrono>
 #include <dxgi1_6.h>
 #include <imgui_internal.h>
 
@@ -223,6 +226,8 @@ bool setup_graphics() {
     GetWindowThreadProcessId(description.OutputWindow, &pid);
     if (pid != GetCurrentProcessId()) return false;
     if (FAILED(s.swapchain->GetDevice(IID_PPV_ARGS(&s.device)))) return false;
+    dingosdk::overlay::record_gpu_identity(s.device.Get());
+    dingosdk::overlay::watch_device_removal(s.device.Get());
     const auto adapter = s.device->GetAdapterLuid();
     dingosdk::logging::printf(dingosdk::logging::Level::debug, dingosdk::logging::Channel::graphics, "Device=%p adapter_luid=%08lx:%08lx node_count=%u",
         s.device.Get(), static_cast<unsigned long>(adapter.HighPart),
@@ -344,6 +349,8 @@ bool setup_graphics() {
         return false;
     }
     s.commands->SetName(L"ReSkate overlay draw");
+    dingosdk::overlay::watch_draws(s.commands.Get());
+    dingosdk::overlay::watch_addresses(s.commands.Get());
     s.fence->SetName(L"ReSkate overlay fence");
     s.fence_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!s.fence_event) return false;
@@ -359,9 +366,16 @@ bool setup_graphics() {
     // Thumbnails are read from the game's own data at startup; the read is
     // normally long finished by the time the first frame gets here.
     // Emotes and Hall of Meat's images reserve their room before the park previews build the atlas, and fill it after.
-    const auto emote_count = reserve_chat_emotes(*ImGui::GetIO().Fonts, std::chrono::seconds(5));
-    reserve_hall_of_meat_images(*ImGui::GetIO().Fonts, std::chrono::seconds(5));
-    const auto preview_count = load_park_previews(*ImGui::GetIO().Fonts, std::chrono::seconds(5));
+    // (Five seconds for the three together, not each: this is the game's render thread, and three
+    // reads still under way at the first frame held it up to fifteen.)
+    const auto waited_until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    const auto left = [&] {
+        return std::max(std::chrono::milliseconds(0),
+            std::chrono::duration_cast<std::chrono::milliseconds>(waited_until - std::chrono::steady_clock::now()));
+    };
+    const auto emote_count = reserve_chat_emotes(*ImGui::GetIO().Fonts, left());
+    reserve_hall_of_meat_images(*ImGui::GetIO().Fonts, left());
+    const auto preview_count = load_park_previews(*ImGui::GetIO().Fonts, left());
     fill_chat_emotes(*ImGui::GetIO().Fonts);
     fill_hall_of_meat_images(*ImGui::GetIO().Fonts);
     if (emote_count)
@@ -594,6 +608,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     auto& s = state();
     if (flags & DXGI_PRESENT_TEST) return;
     dingosdk::profiler::record_present();
+    DINGO_PROFILE_ZONE("present/overlay");
     std::lock_guard lock(s.render_mutex);
     // Said once: a log without this line is a game whose presentations never reach the overlay.
     if (static bool said{}; !std::exchange(said, true))
@@ -632,6 +647,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     const bool chat_frame = chat_pending();
     const bool map_download_frame = map_download_pending();
     const bool game_text_frame = game_text_pending();
+    const bool drone_hud_frame = drone_hud_pending();
     const bool skate_hud_frame = skate_hud_pending();
     const bool nametag_frame = nametags_pending();
     const bool meat_frame = hall_of_meat_pending();
@@ -639,6 +655,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     const bool perf_frame = perf_hud_pending() || trainer_hud_pending();
     const bool hub_frame = hub_page_pending();
     if (trainer_open_requested()) s.visible.store(true);
+    if (dingosdk::drone::menu_flag().load()) s.visible.store(true); // `dronemenu`: the menu opens on its DRONE page
     const bool menu_frame = interactive_visible(s);
     if (!menu_frame) {
         if (s.ui_was_interactive) {
@@ -654,7 +671,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
             sync_menu_cursor();
         }
         // Hidden, the overlay still draws while a notice or chat line is on screen.
-        if (s.loaded_notice_posted && !notices_pending() && !chat_frame && !game_text_frame && !skate_hud_frame &&
+        if (s.loaded_notice_posted && !notices_pending() && !chat_frame && !game_text_frame && !drone_hud_frame && !skate_hud_frame &&
             !nametag_frame && !meat_frame && !item_browser_frame && !perf_frame && !hub_frame && !map_download_frame) return;
     } else if (!s.ui_was_interactive) {
         s.ui_was_interactive = true;
@@ -708,6 +725,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     draw_hall_of_meat();
     draw_nametags();
     draw_game_text();
+    draw_drone_hud();
     draw_skate_hud();
     draw_perf_hud();
     draw_trainer_hud();
