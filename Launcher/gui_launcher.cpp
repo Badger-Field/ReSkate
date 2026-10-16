@@ -533,6 +533,8 @@ void Launcher::run_download(bool validate) {
     }
     if (cancel_) {
         timing.tag("cancelled", "true");
+        logging::log(logging::Level::info, logging::Channel::launcher, "Copy cancelled after {}; what was copied is kept.",
+                     format_bytes(done));
         run_check();
         std::lock_guard lock(mutex_);
         state_.detail = "Download cancelled. It will resume where it stopped.";
@@ -587,16 +589,21 @@ void Launcher::run_copy(const fs::path& source) {
     }
     if (cancel_) {
         timing.tag("cancelled", "true");
+        logging::log(logging::Level::info, logging::Channel::launcher, "Copy cancelled after {}; what was copied is kept.",
+                     format_bytes(done));
         set(fs::is_regular_file(session_.paths.game, error) ? Phase::game_outdated : Phase::game_missing, "Copy cancelled",
             "What was copied is kept; press INSTALL to carry on from there.");
         return;
     }
     // The same check a finished download gets: Skate.exe, steam_api64.dll and the data's build.
     if (launcher_app::game_files_supported(session_.paths)) {
+        logging::log(logging::Level::info, logging::Channel::launcher, "Copy finished: {} copied; the game files are the supported build.",
+                     format_bytes(done));
         set(Phase::ready, "Ready to skate", "skate. copied from this PC.");
         return;
     }
     timing.fail();
+    logging::log(logging::Level::warning, logging::Channel::launcher, "Copy finished, but the copied files are not the supported build.");
     fail("The copied game is not supported: its files do not match the supported build. Download it with a Steam account instead.");
 }
 
