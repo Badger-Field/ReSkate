@@ -301,7 +301,7 @@ def test_roundtrip_explains_a_rewrite_that_differs():
     assert report[0].startswith("rewrite DIFFERS") and "SEMANTICALLY EQUAL" in report[0]
     assert any("DIFFERENT ORDER" in line for line in report)
     rewritten = write_document(read_document(data))
-    assert roundtrip(rewritten) == [f"rewrite identical ({len(rewritten)} bytes)"]
+    assert roundtrip(rewritten)[0] == f"rewrite identical ({len(rewritten)} bytes)"
 
 
 def test_clone_document_takes_new_guids_and_keeps_the_rest():
@@ -458,3 +458,12 @@ def test_array_hash_report_scores_rules():
     from reskate_mapbuilder.ebxcheck import array_hash_report
     report = array_hash_report(read_document(write_document(synthetic(2, hashed=True))))
     assert report[0].startswith("3 arrays") and any("djb2-xor(field)" in line for line in report)
+    from test_ebx_crosscheck import grouped
+    doc = read_document(grouped(1))
+    report = array_hash_report(doc)
+    total = len(list(f for f in report if "arrays read with a record" in f))
+    assert total == 1 and "holds for every array read" in report[1]
+    count = int(report[0].split()[0])
+    assert f"  {count} of {count}: group hash at index = field class_ref" in report
+    lines = roundtrip(write_document(doc))
+    assert "holds for every array read" in lines[1]

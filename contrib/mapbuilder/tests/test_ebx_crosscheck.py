@@ -74,7 +74,7 @@ def name_hash(name):
     return value
 
 
-def reflection(hashed=False, odd=False):
+def reflection(hashed=False, odd=False, groups=None):
     """A REFL (or RFL2, with hashed names) chunk body for TYPES."""
     names, strings = {}, bytearray()
 
@@ -96,7 +96,11 @@ def reflection(hashed=False, odd=False):
     for _, _, _, fields in TYPES:
         for field_name, encoded, class_ref, offset in fields:
             body += struct.pack("<IIHH", name(field_name), offset, encoded << 1, class_ref)
-    body += struct.pack("<I", 1) + bytes(range(12)) + struct.pack("<I", 1) + bytes(range(8))  # a group, a mapping
+    if groups is None:
+        body += struct.pack("<I", 1) + bytes(range(12))                     # a group
+    else:
+        body += struct.pack("<I", len(groups)) + b"".join(struct.pack("<III", *g) for g in groups)
+    body += struct.pack("<I", 1) + bytes(range(8))                          # a mapping
     if hashed:
         body += struct.pack("<I", len(names))
         for text, offset in names.items():
@@ -107,10 +111,10 @@ def reflection(hashed=False, odd=False):
     return bytes(body)
 
 
-def empty_document(hashed=False, serialized=False, odd=False):
+def empty_document(hashed=False, serialized=False, odd=False, groups=None):
     """The reflection and nothing else, read back so the types and fields are filled in."""
     doc = Document(file_guid=guid(1), serialized_layout=serialized, hashed_reflection_names=hashed,
-                   reflection_data=reflection(hashed, odd))
+                   reflection_data=reflection(hashed, odd, groups))
     parsed = read_document(write_document(doc))
     assert [t.name for t in parsed.types] == [t[0] for t in TYPES]
     return parsed
@@ -135,9 +139,9 @@ def text(rng, longest=12):
     return "".join(rng.choice("abcdefghijklmnopqrstuvwxyz_/0123456789") for _ in range(rng.randint(0, longest)))
 
 
-def synthetic(seed, hashed=False, serialized=False, odd=False):
+def synthetic(seed, hashed=False, serialized=False, odd=False, groups=None):
     rng = random.Random(seed)
-    doc = empty_document(hashed, serialized, odd)
+    doc = empty_document(hashed, serialized, odd, groups)
     doc.imports = [ImportReference(guid(200 + i), guid(300 + i)) for i in range(3)]
 
     def struct_value():
@@ -535,3 +539,63 @@ def test_boxed_targets_survive_a_rewrite():
 
 def test_boxed_targets_agree_with_cpp(harness, tmp_path):
     check_against_cpp(harness, tmp_path, boxed_pointing())
+
+
+# ---- Array record hashes come from the reflection's groups ----------------------------------------
+
+GROUPS = [(0, 0xA0A0A0A0, 2), (1, 0xB1B1B1B1, 1), (7, 0x12345678, 1)]   # (index, hash, count)
+
+
+def grouped(seed, sparse=False):
+    """A document whose every array record has the hash of the group indexed by its field's
+    class_ref, as on the game's files (RFL2 of bam's root). `sparse` leaves no int32 or float
+    array, so the old borrow rule would give a new int32 array another hash."""
+    doc = synthetic(seed, groups=sorted(GROUPS, key=lambda g: g[1]))
+    if sparse:
+        root = doc.root().object
+        root.set("Numbers", [])
+        for struct_value in [root.get("Inner")] + root.get("Structs"):
+            struct_value.set("Values", [])
+        root.set("Structs", root.get("Structs") or [root.get("Inner")])
+    by_index = {index: value for index, value, _ in GROUPS}
+
+    def walk(value):
+        if isinstance(value, Object):
+            for f in value.fields:
+                if isinstance(f.value, list) and f.value:
+                    f.array_hash = by_index[doc.fields[f.descriptor].class_ref]
+                walk(f.value)
+        elif isinstance(value, list):
+            for v in value:
+                walk(v)
+    for instance in doc.instances:
+        walk(instance.object)
+    return write_document(doc)
+
+
+def test_array_hash_rule_is_detected():
+    doc = read_document(grouped(1))
+    assert doc.array_hash_rule and doc.arrays
+    assert {r.hash for r in doc.arrays} <= {0xA0A0A0A0, 0xB1B1B1B1}
+    assert not read_document(write_document(synthetic(1))).array_hash_rule
+
+
+def test_new_arrays_take_their_group_hash(harness, tmp_path):
+    data = grouped(1, sparse=True)
+    old_rule = read_document(data)
+    old_rule.array_hash_rule = False
+    old_rule.root().object.get("Empty").extend([5, 6])
+    borrowed = read_document(write_document(old_rule)).root().object.find("Empty").array_hash
+    assert borrowed != 0xA0A0A0A0                         # what the borrow rule would give
+    assert check_against_cpp(harness, tmp_path, data) == data
+    source = tmp_path / "grouped.ebx"
+    source.write_bytes(data)
+    specs = ["Empty+=i:5", "Empty+=i:6"]                  # an array with no record until now
+    cpp(harness, "edit", source, tmp_path / "cpp.ebx", *specs)
+    doc = read_document(data)
+    apply_edits(doc, specs)
+    edited = write_document(doc)
+    assert edited == (tmp_path / "cpp.ebx").read_bytes()
+    back = read_document(edited)
+    empty = next(f for f in back.root().object.fields if f.name == "Empty")
+    assert empty.value == [5, 6] and empty.array_hash == 0xA0A0A0A0

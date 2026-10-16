@@ -9,7 +9,8 @@ from . import ebx
 import struct
 from collections import Counter
 
-from .ebx import ArrayRecord, Document, FieldType, array_element, pointer_target, read_document, write_document
+from .ebx import (ArrayRecord, Document, FieldType, array_element, group_hashes, pointer_target, read_document,
+                  write_document)
 from .ebx import Object
 from .ebxedit import describe
 
@@ -231,13 +232,36 @@ def _detail(doc: Document, back: Document, limit: int) -> list[str]:
     return lines
 
 
+def _record_key(doc: Document, r: ArrayRecord) -> tuple:
+    return (r.count, r.hash, r.encoded_type, _array_type(doc, r))
+
+
+def _records(doc: Document, back: Document) -> str:
+    """The array records compared as a multiset: offsets and order ignored, the class column read
+    as the type it names (its slot number may differ)."""
+    a = Counter(_record_key(doc, r) for r in doc.arrays)
+    b = Counter(_record_key(back, r) for r in back.arrays)
+    if a != b:
+        return (f"array records DIFFER: {sum((a - b).values())} only in the original, "
+                f"{sum((b - a).values())} only in the rewrite")
+    ordered = [_record_key(doc, r) for r in doc.arrays] == [_record_key(back, r) for r in back.arrays]
+    return f"array records the same ({len(doc.arrays)})" + ("" if ordered else ", same entries in another order")
+
+
+def _rule(doc: Document) -> str:
+    groups = group_hashes(doc)
+    return (f"array hash rule (group of the field's class_ref): "
+            f"{'holds for every array read' if doc.array_hash_rule else 'does NOT hold'}"
+            f" ({len(doc.arrays)} records, {len(groups)} groups)")
+
+
 def roundtrip(raw: bytes, brief: bool = False, detail: int = 0) -> list[str]:
     """The diagnosis; `detail` > 0 adds, for that many differing arrays and every lost or added
     string, where each is reached from."""
     doc = read_document(raw)
     out = write_document(doc)
     if out == raw:
-        return [f"rewrite identical ({len(raw)} bytes)"]
+        return [f"rewrite identical ({len(raw)} bytes)", _rule(doc)]
     back = read_document(out)
     old_parts, new_parts = regions(raw, doc), regions(out, back)
     first = _first_difference(raw, out)
@@ -247,7 +271,8 @@ def roundtrip(raw: bytes, brief: bool = False, detail: int = 0) -> list[str]:
     order = ([n for n, _, _ in old_parts] != [n for n, _, _ in new_parts])
     lines = [f"rewrite DIFFERS: {len(raw)} -> {len(out)} bytes, first at {first} ({_region_at(old_parts, first)}); "
              f"regions differing: {', '.join(differ) or 'none'}; read back "
-             + ("SEMANTICALLY EQUAL" if a == b else "NOT semantically equal")]
+             + ("SEMANTICALLY EQUAL" if a == b else "NOT semantically equal") + "; " + _records(doc, back),
+             _rule(doc)]
     if brief:
         return lines
     lines.append("regions (original -> rewrite)" + (", in a DIFFERENT ORDER:" if order else ":"))
@@ -271,9 +296,7 @@ def roundtrip(raw: bytes, brief: bool = False, detail: int = 0) -> list[str]:
     lines.append("  " + _compare("array records (offset, count, hash, type, class)",
                                  [(r.offset, r.count, r.hash, r.encoded_type, r.class_ref) for r in doc.arrays],
                                  [(r.offset, r.count, r.hash, r.encoded_type, r.class_ref) for r in back.arrays]))
-    lines.append("  " + _compare("array records without offsets",
-                                 [(r.count, r.hash, r.encoded_type, r.class_ref) for r in doc.arrays],
-                                 [(r.count, r.hash, r.encoded_type, r.class_ref) for r in back.arrays]))
+    lines.append("  " + _records(doc, back))
 
     def table(d: Document, data: bytes) -> list[bytes]:
         start = d.data_start + d.strings_offset
@@ -350,6 +373,7 @@ def array_hash_report(doc: Document, samples: int = 20) -> list[str]:
     with a record, and prints samples with what each is reached from."""
     from .toc import toc_hash
     rows = list(_array_fields(doc))
+    groups = group_hashes(doc)
     type_hashes = {t.name_hash: t.name for t in doc.types}
     functions = {"djb2-xor": _djb2_xor, "djb2-add": _djb2_add, "fnv1": _fnv1, "fnv1a": _fnv1a,
                  "toc_hash": lambda s: toc_hash(s.encode("latin-1", "replace"))}
@@ -380,6 +404,17 @@ def array_hash_report(doc: Document, samples: int = 20) -> list[str]:
             found.add("some reflection type's name_hash")
         if owner is not None and value == (owner.name_hash ^ d.name_hash):
             found.add("owner ^ field name_hash")
+        if groups.get(d.class_ref) == value:
+            found.add("group hash at index = field class_ref")
+        if d.class_ref < len(doc.reflection_groups) and doc.reflection_groups[d.class_ref][1] == value:
+            found.add("group record number class_ref")
+        if groups.get(doc.fields.index(d)) == value:
+            found.add("group hash at index = field descriptor")
+        if groups.get(doc.types.index(holder)) == value:
+            found.add("group hash at index = holder type")
+        if d.class_ref < len(doc.types) and value in (doc.types[d.class_ref].signature,
+                                                      int.from_bytes(doc.types[d.class_ref].guid.bytes[:4], "little")):
+            found.add("class_ref type signature or guid")
         if value == holder.name_hash or value == (holder.name_hash ^ d.name_hash):
             found.add("holder type name_hash (^ field)")
         for label, text in texts(owner, d, element, holder).items():
@@ -387,7 +422,8 @@ def array_hash_report(doc: Document, samples: int = 20) -> list[str]:
                 if function(text) == value:
                     found.add(f"{name}({label})")
         scores.update(found)
-    lines = [f"{len(rows)} arrays read with a record; {len(set(r[3] for r in rows))} distinct hashes"]
+    lines = [f"{len(rows)} arrays read with a record; {len(set(r[3] for r in rows))} distinct hashes; "
+             f"{len(doc.reflection_groups)} reflection groups", _rule(doc)]
     if scores:
         lines += [f"  {count} of {len(rows)}: {rule}" for rule, count in scores.most_common(12)]
     else:

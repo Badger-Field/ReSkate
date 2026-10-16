@@ -559,15 +559,22 @@ the third a data-loss bug fixed on 2026-10-16 in both the Python port and ReSkat
   same order this writer does.
 - Array hashes (fixed the same day, in both writers). Each array record's hash used to be taken
   from the first record the document read with the same element type. On the game's files the
-  hash belongs to the field: `DetachedSubWorldData.Components` 1090533278 and
-  `StaticModelGroupEntityData.Components` 2102600594 both came out as 1005087952, and 346 records
-  of bam's root changed. Now an array read from a record keeps that record's hash through edits
-  and copies (`FieldValue.array_hash` in Python, `Value::arrayHash` in C++). Only a new array
-  borrows by the old rule; arrays the merge builds anew (`ebx_merge.cpp`) still do. The rule
-  that makes the hash is not known: djb2 (xor and add), FNV-1, FNV-1a and the TOC hash of the
-  field, type and element names, in the forms tried (`Foo-Array`, `Array<Foo>`,
-  `Owner.Field`, lower case), match none of the PC's examples. `ebx-arrayhash` scores those and
-  the reflection's own name hashes on a real document.
+  hash belongs to the array's type: `SubWorldData.Components` 0x4100379e and
+  `ComponentEntityData.Components` 0x7d532392 share a field name hash (0xb46bc058) but not an
+  array hash, and 346 records of bam's root changed. The PC found the hashes in the reflection
+  chunk's group table: 12-byte records `{index, hash, count}` sorted by hash, for example
+  `(0x12, 0x4100379e, 1)`. The working rule (reproduced synthetically; to be confirmed with
+  `ebx-arrayhash` on a real file) is that an array's record hash is the hash of the group whose
+  index is the array field's `class_ref`.
+  - Both readers now keep the group table (`reflection_groups` / `reflectionGroups`).
+  - They note whether every array read obeys the rule (`array_hash_rule` / `arrayHashRule`).
+  - An array read from a record keeps that record's hash through edits and copies
+    (`FieldValue.array_hash` / `Value::arrayHash`).
+  - A new array takes its group's hash when the document obeys the rule, and otherwise borrows by
+    the old rule.
+
+  The same applies to arrays the merge builds anew (`ebx_merge.cpp`). djb2, FNV-1, FNV-1a and the
+  TOC hash of field, type and element names match nothing.
 - Boxed values (the bug). A boxed value's bytes were copied as they were, pointers included, but
   the arrays and strings those pointers reach were written only when a field reached them too.
   So a rewrite dropped them and left the boxed value's pointers aimed at whatever moved into

@@ -508,9 +508,13 @@ private:
             }
         }
         // An array read from a record keeps that record's hash; a new one borrows (array_hash).
-        const auto hash = arraysPending_[index].hash ? *arraysPending_[index].hash : array_hash(field);
+        auto hash = arraysPending_[index].hash;
+        if (!hash && document_.arrayHashRule)
+            for (const auto& group : document_.reflectionGroups)
+                if (group.index == field.classRef) { hash = group.hash; break; }
+        if (!hash) hash = array_hash(field);
         arrays_.push_back({checked_u32(data, "EBX array data"), checked_u32(values->size(), "EBX array count"),
-                           hash, static_cast<std::uint16_t>(field.encodedType << 1),
+                           *hash, static_cast<std::uint16_t>(field.encodedType << 1),
                            field.type() == FieldType::structure
                                ? fixup_slot_for_descriptor(field.classRef)
                                : static_cast<std::uint16_t>(0xFFFF)});

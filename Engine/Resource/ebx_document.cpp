@@ -293,7 +293,14 @@ std::vector<ReflectionTypeId> read_reflection(BinaryReader& reader,
 
     const auto groupCount = static_cast<std::size_t>(nonnegative(reader, "reflection group"));
     ensure_records(reader, chunk.end, groupCount, 12, "reflection group");
-    reader.skip(static_cast<std::ptrdiff_t>(groupCount * 12));
+    document.reflectionGroups.reserve(groupCount);
+    for (std::size_t index = 0; index < groupCount; ++index) {
+        ReflectionGroup group;
+        group.index = reader.u32();
+        group.hash = reader.u32();
+        group.count = reader.u32();
+        document.reflectionGroups.push_back(group);
+    }
     const auto mappingCount = static_cast<std::size_t>(nonnegative(reader, "reflection mapping"));
     ensure_records(reader, chunk.end, mappingCount, 8, "reflection mapping");
     reader.skip(static_cast<std::ptrdiff_t>(mappingCount * 8));
@@ -359,6 +366,7 @@ public:
     ValueReader(const std::span<const std::byte> bytes, Document& document)
         : bytes_(bytes), reader_(bytes), document_(document) {
         for (const auto& record : document.arrays) arrayHashes_.emplace(record.offset, record.hash);
+        for (const auto& group : document.reflectionGroups) groupHashes_.emplace(group.index, group.hash);
     }
 
     void read_instances() {
@@ -435,7 +443,11 @@ private:
                     const auto target = static_cast<std::int64_t>(position) + displacement -
                                         static_cast<std::int64_t>(document_.dataStart);
                     if (const auto found = arrayHashes_.find(target); found != arrayHashes_.end())
+                    {
                         value.arrayHash = found->second;
+                        const auto group = groupHashes_.find(field.classRef);
+                        ++(group != groupHashes_.end() && group->second == found->second ? ruleHeld : ruleBroken);
+                    }
                 }
             }
             output.fields.push_back({descriptorIndex, field.name, std::move(value)});
@@ -568,6 +580,11 @@ private:
 
     std::span<const std::byte> bytes_;
     std::unordered_map<std::int64_t, std::uint32_t> arrayHashes_;   // record offset -> its hash
+    std::unordered_map<std::uint32_t, std::uint32_t> groupHashes_;  // reflection group index -> its hash
+
+public:
+    std::size_t ruleHeld{};     // arrays whose hash is their field's group hash
+    std::size_t ruleBroken{};
     BinaryReader reader_;
     Document& document_;
     unsigned depth_{};
@@ -634,7 +651,9 @@ Document read_document(const std::span<const std::byte> bytes) {
     result.payload.assign(bytes.begin() + static_cast<std::ptrdiff_t>(result.dataStart),
                           bytes.begin() + static_cast<std::ptrdiff_t>(result.dataEnd));
     map_instances(result, fixup, reflectionIds);
-    ValueReader(bytes, result).read_instances();
+    ValueReader values(bytes, result);
+    values.read_instances();
+    result.arrayHashRule = values.ruleHeld > 0 && values.ruleBroken == 0;
     std::ranges::sort(result.boxedValues, {}, &BoxedValueRecord::offset);
     for (std::size_t index = 0; index < result.boxedValues.size(); ++index) {
         auto& value = result.boxedValues[index];

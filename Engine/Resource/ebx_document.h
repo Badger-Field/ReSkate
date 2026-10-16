@@ -96,6 +96,14 @@ struct ArrayRecord {
     std::uint16_t classRef{};
 };
 
+// A 12-byte group record of the reflection table (sorted by hash). An array record's hash is the
+// hash of the group whose index is the array field's classRef.
+struct ReflectionGroup {
+    std::uint32_t index{};
+    std::uint32_t hash{};
+    std::uint32_t count{};
+};
+
 struct BoxedValueRecord {
     std::uint32_t offset{};
     std::uint32_t count{};
@@ -196,6 +204,9 @@ struct Document {
     // The EBXD bytes the document was read from (offsets as in the fixup tables): what boxed
     // values point at (arrays, strings) is carried from here when the document is written.
     std::vector<std::byte> payload;
+    std::vector<ReflectionGroup> reflectionGroups;
+    // Every array the document was read with has its group's hash: new arrays take theirs too.
+    bool arrayHashRule{};
 
     [[nodiscard]] const InstanceRecord* root() const noexcept;
 };
