@@ -10,6 +10,9 @@ namespace dingosdk::overlay::detail {
 namespace {
 bool query_foreground(HWND window) {
     if (!window || !IsWindow(window)) return false;
+    // RESKATE_ASSUME_FOCUS (unattended runs): the game's window counts as in front, as the
+    // GetForegroundWindow hook (input_capture.cpp) tells the game itself.
+    if (assume_focus()) return true;
     const auto root = GetAncestor(window, GA_ROOT);
     return GetForegroundWindow() == (root ? root : window) && !IsIconic(root ? root : window);
 }
