@@ -504,7 +504,14 @@ of which about 41,800 are base-game animation, audio, UI and narrative assets du
 `QuadrantDefinitionAsset`. Open question: whether the base pool must be duplicated or resolves
 from bam's bundles.
 
-### 6.2 Writing a level (written by `new-level`; not yet run on the game)
+### 6.2 Writing a level (written by `new-level`; loads in game)
+
+Tested in game (3c51cd2, ReSkate's own game copy, only this mod in): ReSkate reports the mod
+"registers 1 level(s): levels/game/dingolevel_reskate_test/dingolevel_reskate_test" with no merge
+problem; the console command `load levels/game/dingolevel_reskate_test/dingolevel_reskate_test`
+loads it unattended at DefaultStartPoint ("Level content loaded: … DingoLevel_Root +
+…/dingolevel_reskate_test"), and the ground reads exactly as on bam (199.0 at 627, 1063), as a clone
+should. No crash.
 
 `python -m reskate_mapbuilder new-level` (`level.py`) builds a mod that adds a level whose content,
 for this first test, is a clone of bam. Everything here is tested only on a synthetic game in
