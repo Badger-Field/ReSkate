@@ -404,6 +404,11 @@ void Launcher::run_check() {
         auto local = launcher_app::find_local_games(session_.paths.directory);
         const bool copyable = !local.empty() && local.front().supported;
         const auto where = local.empty() ? std::string() : launcher_text::utf8(local.front().folder.wstring());
+        for (const auto& game : local)
+            logging::log(logging::Level::info, logging::Channel::launcher, "Found skate. at {} ({}).",
+                         launcher_text::utf8(game.folder.wstring()), game.supported ? "the supported build" : "another build");
+        if (local.empty())
+            logging::log(logging::Level::info, logging::Channel::launcher, "No skate. install found on this PC.");
         {
             std::lock_guard lock(mutex_);
             state_.local_games = std::move(local);

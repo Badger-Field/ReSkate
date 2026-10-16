@@ -102,7 +102,7 @@ void get_game_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
         }
     }
     if (!local) push_primary_button();
-    const bool choose = ImGui::Button("CHOOSE GAME FOLDER...", ImVec2(-1, S(local ? 36 : 46)));
+    const bool choose = ImGui::Button("CHOOSE GAME FOLDER...", ImVec2(-1, S(local ? 36.0f : 46.0f)));
     if (!local) pop_primary_button();
     if (choose) {
         const auto folder = pick_path(window, true, L"Choose your skate. folder (the one with Skate.exe)", nullptr, nullptr);
