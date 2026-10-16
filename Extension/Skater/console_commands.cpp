@@ -171,8 +171,8 @@ void register_movement_commands(Commands &registry) {
                : "Controller off. The drone uses the keyboard and mouse.");
     };
     radio_mode.reset = [](const Model &, const Output &) {
-        drone::radio::config().enabled = false;
-        profile_runtime::set_local_values({{"Drone.Radio", 0.0}});
+        drone::radio::config().enabled = true;
+        profile_runtime::set_local_values({{"Drone.Radio", 1.0}});
     };
     registry.add(std::move(radio_mode));
     auto radio_check = action("droneradiocheck", "Show what your controller is sending right now, and how the drone reads it", Group::movement);
