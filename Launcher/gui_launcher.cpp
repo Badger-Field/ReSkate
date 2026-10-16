@@ -533,8 +533,6 @@ void Launcher::run_download(bool validate) {
     }
     if (cancel_) {
         timing.tag("cancelled", "true");
-        logging::log(logging::Level::info, logging::Channel::launcher, "Copy cancelled after {}; what was copied is kept.",
-                     format_bytes(done));
         run_check();
         std::lock_guard lock(mutex_);
         state_.detail = "Download cancelled. It will resume where it stopped.";
