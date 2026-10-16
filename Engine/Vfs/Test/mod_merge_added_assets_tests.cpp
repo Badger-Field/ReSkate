@@ -506,27 +506,56 @@ void carried_payload_written_once() {
 void every_placement_lands_in_an_archive() {
     Fixture fixture("placements");
     fixture.add("music", false, shared_toc, {}, music_assets(), music_resources());
+    // The song's audio as a TOC chunk of the music mod's own, named by the song (its import):
+    // it follows the song into the maps' TOCs.
+    const Bytes wave{std::byte{7}, std::byte{8}, std::byte{9}, std::byte{10}};
+    {
+        const auto toc = fixture.catalog.root / "music" / "Win32" / shared_toc;
+        const auto archive = fixture.catalog.root / "music" / "Win32" / "pkg" / "cas_01.cas";
+        auto document = fb::read_toc(read(toc));
+        auto bytes = read(archive);
+        const auto location = fb::read_bundle_region(document.bundles.front().region).files.front().location;
+        document.chunks.push_back({guid(11), location, static_cast<std::uint32_t>(bytes.size()), static_cast<std::uint32_t>(wave.size())});
+        bytes.insert(bytes.end(), wave.begin(), wave.end());
+        write(archive, bytes);
+        write(toc, fb::write_patch_toc(document.bundles, document.chunks, document.flags));
+    }
     fixture.add("map", true, map_toc, {map_superbundle}, game_copy());
     fixture.add("map2", true, second_map_toc, {second_map_superbundle}, game_copy());
     const auto report = mods::merge_mods(fixture.catalog);
     expect(report.issue.empty() && report.built, "placements: the merge builds the patch\n" + describe(report));
     const auto patch = fixture.catalog.root / mods::generated_folder;
+    const auto bytes_at = [&](const fb::CasIdentifier& location, std::uint32_t offset, std::uint32_t size, const std::string& what) {
+        const auto archive = (location.patch ? patch : fixture.catalog.data_root / "Data") / "Win32" / "pkg" / vfs::archive_file(location.archive);
+        std::error_code error;
+        const auto length = fs::file_size(archive, error);
+        expect(!error && std::uint64_t{offset} + size <= length,
+               "placements: " + what + " points at byte " + std::to_string(offset) + " of " + archive.filename().string() +
+                   (error ? ", which is not there" : ", past its end"));
+        if (error || std::uint64_t{offset} + size > length) return Bytes{};
+        const auto all = read(archive);
+        return Bytes(all.begin() + offset, all.begin() + offset + size);
+    };
     std::size_t checked{};
+    std::set<std::string> waves;   // the TOCs whose song audio chunk holds its bytes
     for (const auto& entry : fs::recursive_directory_iterator(patch / "Win32")) {
         if (entry.path().extension() != ".toc") continue;
-        for (const auto& bundle : fb::read_toc(read(entry.path())).bundles)
+        const auto document = fb::read_toc(read(entry.path()));
+        for (const auto& bundle : document.bundles)
             for (const auto& file : fb::read_bundle_region(bundle.region).files) {
-                const auto archive = (file.location.patch ? patch : fixture.catalog.data_root / "Data") / "Win32" / "pkg" /
-                                     vfs::archive_file(file.location.archive);
-                std::error_code error;
-                const auto size = fs::file_size(archive, error);
-                expect(!error && std::uint64_t{file.offset} + file.size <= size,
-                       "placements: " + bundle.name + " points at byte " + std::to_string(file.offset) + " of " +
-                           archive.filename().string() + (error ? ", which is not there" : ", past its end"));
+                (void)bytes_at(file.location, file.offset, file.size, bundle.name);
                 ++checked;
             }
+        for (const auto& chunk : document.chunks) {
+            const auto held = bytes_at(chunk.location, chunk.offset, chunk.size, "chunk " + chunk.guid.string());
+            if (chunk.guid != guid(11)) continue;
+            const auto name = fs::relative(entry.path(), patch / "Win32").generic_string();
+            expect(held == wave, "placements: " + name + "'s chunk does not hold the song's audio");
+            if (held == wave) waves.insert(name);
+        }
     }
     expect(checked > 0, "placements: the merged TOCs hold placements");
+    expect(waves.contains(map_toc) && waves.contains(second_map_toc), "placements: both maps' TOCs carry the song's audio chunk");
     const auto layout = vfs::read_layout(patch / "layout.toc");
     const auto* table = layout.root.field("layeredInstallChunkFiles");
     expect(table != nullptr, "placements: the merged layout declares archives");
