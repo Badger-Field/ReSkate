@@ -91,6 +91,8 @@ CasStore CasStore::waiting() const {
 
 fb::BundleFileInfo CasStore::carry(std::uint32_t installChunk, std::uint16_t archive, std::span<const std::byte> encoded) {
     if (!waiting_) throw std::logic_error("Only a waiting store carries payloads");
+    // An install chunk no package names fails here, for this payload alone, and not when it settles.
+    (void)archive_path(installChunk, archive);
     const std::pair key{installChunk, sha1_of(encoded)};
     const auto [found, fresh] = carriedIndex_.try_emplace(key, carried_.size());
     if (fresh) carried_.push_back({installChunk, archive, key.second, encoded, {}});
