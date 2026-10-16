@@ -522,6 +522,7 @@ void lobby_tab(SkateMenu& menu, const CallbacksV3& callbacks) {
     toggle(menu, callbacks, Knob::kBeacon, "Let other players see my drone");
     toggle(menu, callbacks, Knob::kShowBeacons, "Show other players' drones");
     note("Other players only see drones if they are on a version of ReSkate with the drone.");
+    note("Drone model: FPV Drone by PinaPipe (CC BY 4.0), reduced and rescaled for the game.");
     end_card();
 }
 } // namespace
