@@ -615,6 +615,8 @@ Document read_document(const std::span<const std::byte> bytes) {
     result.hashedReflectionNames = reflection2 != nullptr;
     result.reflectionData.assign(bytes.begin() + static_cast<std::ptrdiff_t>(reflectionChunk.begin),
                                  bytes.begin() + static_cast<std::ptrdiff_t>(reflectionChunk.end));
+    result.payload.assign(bytes.begin() + static_cast<std::ptrdiff_t>(result.dataStart),
+                          bytes.begin() + static_cast<std::ptrdiff_t>(result.dataEnd));
     map_instances(result, fixup, reflectionIds);
     ValueReader(bytes, result).read_instances();
     std::ranges::sort(result.boxedValues, {}, &BoxedValueRecord::offset);
