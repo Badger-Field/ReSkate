@@ -20,7 +20,9 @@ settings), [replay_keyframes_commands.cpp](../Extension/ReplayKeyframes/replay_k
   in the editor at once.
 - `keysmooth amount 0..1`: 1 (the default) is the smoothest curve that still meets every key, 0 the
   game's own.
-- `keysmooth status`: the settings, and counts of the segments built and played, by camera mode.
+- `keysmooth status`: the settings, and counts of the segments built, by camera mode.
+- The amount is also in the menus: a slider beside the switch in the overlay, and Keyframe
+  smoothness (100, 75, 50, 25%) beside the switch in Mod Options > Visuals.
 - Kept in `%LOCALAPPDATA%\ReSkate\KeySmooth.settings`.
 
 ## How it works
@@ -46,6 +48,10 @@ settings), [replay_keyframes_commands.cpp](../Extension/ReplayKeyframes/replay_k
   builder (`slot_build`) and angle unwrapping (`slot_unwrap`), the way the game builds the
   neighbours. A segment whose own keys don't match those is left as the game built it and counted.
   Nothing runs per frame: the segments are built when keys change.
+- **Once per rebuild.** A rebuild builds one segment per key, and each needs every key's slot: the
+  game's rebuild is hooked too, and the slots built for its first segment are kept for the rest of
+  it (per Behaviour and Subject), so a rebuild builds each key's slot once instead of once per
+  segment. A segment built outside a rebuild builds its own.
 - **A change applies at once.** A new setting calls the game's own rebuild (`session_rebuild`) for
   the replay the builder saw last, after checking the editor still has it. Console commands run on
   the game thread.

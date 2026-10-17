@@ -1311,6 +1311,9 @@ void tools_page(Ui &ui, ImVec2 a, ImVec2 z) {
         if (list.setting("Restore default effects", {}, m.graphics.available && console)) act("graphics-reset");
         if (list.setting("Keyframe smoothing", on_off(m.keyframe_smoothing.enabled), m.keyframe_smoothing.available && console))
             act("keyframe-smoothing");
+        if (list.setting("Keyframe smoothness", std::to_string(keyframe_smoothness_percent(m.keyframe_smoothing)) + "%",
+                         m.keyframe_smoothing.available && m.keyframe_smoothing.enabled && console))
+            act("keyframe-smoothness");
         if (list.setting("Challenges", m.progression.challenges_hidden ? "Hidden" : "Shown", m.progression.challenges_enabled && console)) act("challenges");
         {
             const bool shuffle = dingosdk::profile_runtime::music_shuffle_enabled();

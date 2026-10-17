@@ -251,10 +251,14 @@ struct GrindExitModel {
     int strength = 100; // pop-out strength, percent (10-100)
 };
 
-// Keyframe smoothing's switch (Extension/ReplayKeyframes/replay_keyframes.h): started, and switched on.
+// Keyframe smoothing (Extension/ReplayKeyframes/replay_keyframes.h): started, switched on, and how
+// smooth (0..1) when on.
 struct KeyframeSmoothingModel {
     bool available = false, enabled = false;
+    float amount = 1.0f;
 };
+// The smoothness as the menus show it, in percent.
+inline int keyframe_smoothness_percent(const KeyframeSmoothingModel& k) { return static_cast<int>(k.amount * 100.0f + 0.5f); }
 
 struct Model {
     std::string state = "Waiting for native state";

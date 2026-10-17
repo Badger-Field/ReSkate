@@ -43,8 +43,8 @@ void register_replay_keyframes_commands(Commands &registry) {
     };
     registry.add(std::move(smooth));
 
-    auto status = action("keysmooth status", "Keyframe smoothing's settings, and how many framing segments were played and "
-                         "built, by Behaviour, since the last status", Group::graphics);
+    auto status = action("keysmooth status", "Keyframe smoothing's settings, and how many framing segments were built, by "
+                         "Behaviour, since the last status", Group::graphics);
     status.execution = Execution::local;
     status.run = [](const Model &, const Values &, const Output &out) { out(replay_keyframes::status()); };
     registry.add(std::move(status));

@@ -28,6 +28,6 @@ float smoothness() noexcept; // the amount when on
 // Game thread: the new setting, saved, with the framing keys of the session in play rebuilt; what was done.
 std::string set_on(bool value);
 std::string set_smoothness(float value);
-// The settings, and how many framing segments were played and built since the last status.
+// The settings, and how many framing segments were built since the last status.
 std::string status();
 } // namespace dingosdk::replay_keyframes

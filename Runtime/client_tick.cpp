@@ -1041,7 +1041,8 @@ void update_model(std::uintptr_t client, TickState& frame) {
     model.grind_exit = {dingosdk::grind_exit_control::available(), dingosdk::grind_exit_control::enabled(),
                         dingosdk::grind_exit_control::toe_heel(), dingosdk::grind_exit_control::stance(),
                         dingosdk::grind_exit_control::strength()};
-    model.keyframe_smoothing = {dingosdk::replay_keyframes::available(), dingosdk::replay_keyframes::on()};
+    model.keyframe_smoothing = {dingosdk::replay_keyframes::available(), dingosdk::replay_keyframes::on(),
+                                dingosdk::replay_keyframes::smoothness()};
     model.bindings = dingosdk::local_profile_controller_bindings();
     model.parks = dingosdk::local_profile_parks();
     model.world = dingosdk::local_profile_world_layers();

@@ -201,6 +201,17 @@ int main() {
         model.keyframe_smoothing = {true, true};
         activate(state, model, cb, "keyframe-smoothing", "");
         check(smoothing_row().title == "Keyframe smoothing: On" && capture.command == "keysmooth off", "and off again");
+        // Its smoothness steps down a quarter at a time and wraps to the smoothest; only while it is on.
+        model.keyframe_smoothing = {true, true, 1.0f};
+        activate(state, model, cb, "keyframe-smoothness", "");
+        check(capture.command == "keysmooth amount 0.75", "Keyframe smoothness steps from 100% to 75%");
+        model.keyframe_smoothing.amount = 0.1f;
+        activate(state, model, cb, "keyframe-smoothness", "");
+        check(capture.command == "keysmooth amount 1", "and from the lowest back to 100%");
+        capture.command.clear();
+        model.keyframe_smoothing = {true, false, 1.0f};
+        activate(state, model, cb, "keyframe-smoothness", "");
+        check(capture.command.empty(), "Keyframe smoothness waits until smoothing is on");
         model.multiplayer.local_name = "steam_name";
         model.player_card = {true, "Card Name", {}};
         const auto card_page = render(state, model, cb, player_section);

@@ -25,7 +25,6 @@ namespace dingosdk::replay_keyframes {
 namespace {
 namespace native = addr::replay_keyframes;
 using SegmentBuild = void* (*)(void* manager, void* segment, void* keys_end, void** key);
-using SegmentEval = bool (*)(void* camera, double time, const void* segment, void* out);
 using SlotBuild = void (*)(void* manager, const void* value, double time, int behaviour, int subject, void* slot);
 using SlotUnwrap = void (*)(void* adjust, const void* reference, int behaviour);
 using Rebuild = void (*)(void* manager, int session);
@@ -36,7 +35,7 @@ static_assert(native::slot_size % 16 == 0, "slots hold vec4s, one after another 
 
 std::atomic<bool> started{}, framing_hooked{};
 std::atomic<SegmentBuild> build_original{};
-std::atomic<SegmentEval> eval_original{};
+std::atomic<Rebuild> rebuild_original{};
 SlotBuild slot_build{};
 SlotUnwrap slot_unwrap{};
 Rebuild rebuild{};
@@ -56,10 +55,22 @@ std::size_t subject_index(int subject) noexcept {
     return subject >= 0 && subject < static_cast<int>(subjects) - 1 ? static_cast<std::size_t>(subject) : subjects - 1;
 }
 struct Counters {
-    std::array<std::atomic<std::uint64_t>, behaviours> played;
     std::array<std::array<std::atomic<std::uint64_t>, subjects>, behaviours> built;
     std::atomic<std::uint64_t> smoothed, stock, mismatch, filtered;
 } counters;
+
+// A rebuild builds one segment per key, and every segment needs every key of the session as a
+// slot: built once per rebuild (per Behaviour and Subject) and kept here for the rest of its
+// segments, instead of once per segment. Only inside a rebuild, on its own thread, while nothing
+// can change the keys; a segment built anywhere else builds its own.
+struct KeySlots {
+    std::uintptr_t keys_end{};
+    int behaviour{}, subject{};
+    std::vector<std::uintptr_t> nodes;
+    std::vector<float> slots;  // as slot_build made them, before unwrapping
+};
+thread_local int rebuilding{};
+thread_local std::vector<KeySlots> rebuild_slots;
 
 std::uintptr_t at(std::uintptr_t address) noexcept { return *reinterpret_cast<const std::uintptr_t*>(address); }
 // The next node of an EASTL map, as the game steps through one (0x2714d50): node [0] right, [1] left,
@@ -112,29 +123,45 @@ int segment_int(const void* segment, std::size_t offset) noexcept {
 SegmentResult smooth_framing(void* manager, unsigned char* segment, std::uintptr_t keys_end, std::uintptr_t key,
                              int behaviour, int subject, float amount) {
     thread_local std::vector<std::uintptr_t> nodes;
-    thread_local std::vector<float> slots;
+    thread_local std::vector<float> slots;  // this segment's: the session's keys, unwrapped from its own
     thread_local std::vector<double> times;
     thread_local Work work;
     const auto lanes = framing_lanes(behaviour);
     if (lanes.empty()) return SegmentResult::stock;
 
-    nodes.clear();
-    std::size_t from = most_keys;
-    for (auto node = at(keys_end + sizeof(std::uintptr_t)); node != keys_end; node = successor(node)) {
-        if (!node || nodes.size() == most_keys) return SegmentResult::stock;
-        if (node == key) from = nodes.size();
-        nodes.push_back(node);
-    }
-    if (from == most_keys) return SegmentResult::mismatch;
-    const auto n = nodes.size();
     // Every key as a slot, the way the game builds the segment's neighbours: under this segment's
-    // Behaviour and Subject, then each key's angles unwrapped against the key before it (going on from
-    // the segment's first key) or after it (going back).
-    slots.assign(n * native::slot_floats, 0.0f);
+    // Behaviour and Subject (once per rebuild, see KeySlots), then each key's angles unwrapped against
+    // the key before it (going on from the segment's first key) or after it (going back).
+    const KeySlots* built{};
+    if (rebuilding)
+        for (const auto& kept : rebuild_slots)
+            if (kept.keys_end == keys_end && kept.behaviour == behaviour && kept.subject == subject) built = &kept;
+    if (!built) {
+        nodes.clear();
+        for (auto node = at(keys_end + sizeof(std::uintptr_t)); node != keys_end; node = successor(node)) {
+            if (!node || nodes.size() == most_keys) return SegmentResult::stock;
+            nodes.push_back(node);
+        }
+        KeySlots made{keys_end, behaviour, subject, nodes, std::vector<float>(nodes.size() * native::slot_floats, 0.0f)};
+        for (std::size_t i = 0; i < nodes.size(); ++i)
+            slot_build(manager, reinterpret_cast<const void*>(nodes[i] + native::framing_key_value),
+                       *reinterpret_cast<const double*>(nodes[i] + native::framing_key_time), behaviour, subject,
+                       made.slots.data() + i * native::slot_floats);
+        if (rebuilding) {
+            rebuild_slots.push_back(std::move(made));
+            built = &rebuild_slots.back();
+        } else {
+            thread_local KeySlots alone;
+            alone = std::move(made);
+            built = &alone;
+        }
+    }
+    const auto found = std::find(built->nodes.begin(), built->nodes.end(), key);
+    if (found == built->nodes.end()) return SegmentResult::mismatch;
+    const auto from = static_cast<std::size_t>(found - built->nodes.begin());
+    const auto n = built->nodes.size();
+    slots = built->slots;
     const auto slot = [](std::size_t index) { return slots.data() + index * native::slot_floats; };
-    for (std::size_t i = 0; i < n; ++i)
-        slot_build(manager, reinterpret_cast<const void*>(nodes[i] + native::framing_key_value),
-                   *reinterpret_cast<const double*>(nodes[i] + native::framing_key_time), behaviour, subject, slot(i));
     for (std::size_t i = from + 1; i < n; ++i) slot_unwrap(slot(i), slot(i - 1), behaviour);
     for (std::size_t i = from; i-- > 0;) slot_unwrap(slot(i), slot(i + 1), behaviour);
     times.resize(n);
@@ -169,10 +196,14 @@ void* segment_build(void* manager, void* segment, void* keys_end, void** key) {
     counter.fetch_add(1, std::memory_order_relaxed);
     return result;
 }
-bool segment_eval(void* camera, double time, const void* segment, void* out) {
-    if (segment)
-        counters.played[behaviour_index(segment_int(segment, native::segment_behaviour))].fetch_add(1, std::memory_order_relaxed);
-    return eval_original.load(std::memory_order_relaxed)(camera, time, segment, out);
+// The game's rebuild of a session, which builds all of its segments: the key slots are kept for
+// the length of it (KeySlots).
+void session_rebuild(void* manager, int session) {
+    struct Rebuilding {
+        Rebuilding() { if (rebuilding++ == 0) rebuild_slots.clear(); }
+        ~Rebuilding() { if (--rebuilding == 0) rebuild_slots.clear(); }
+    } scope;
+    rebuild_original.load(std::memory_order_relaxed)(manager, session);
 }
 
 // Whether the manager still has the session (its map: anchor at manager_sessions, root two pointers
@@ -257,14 +288,16 @@ bool start(std::uintptr_t base) noexcept {
             matches(base, native::slot_unwrap) && matches(base, native::session_rebuild)) {
             slot_build = reinterpret_cast<SlotBuild>(base + native::slot_build.rva);
             slot_unwrap = reinterpret_cast<SlotUnwrap>(base + native::slot_unwrap.rva);
+            // (Called through its entry, so a setting's rebuild goes through the hook as the game's do.)
             rebuild = reinterpret_cast<Rebuild>(base + native::session_rebuild.rva);
+            // The rebuild first: without it each segment builds its own key slots, as before.
+            hook(base, native::session_rebuild, &session_rebuild, rebuild_original);
             framing_hooked = hook(base, native::segment_build, &segment_build, build_original);
         }
-        const bool counted = matches(base, native::segment_eval) &&
-                             hook(base, native::segment_eval, &segment_eval, eval_original);
-        logging::log(available() ? logging::Level::info : logging::Level::warning, logging::Channel::graphics,
-            "Replay keyframe smoothing: framing track {}, framing player count {}; smoothing {}.",
-            framing_hooked ? "hooked" : "not hooked (game code differs)", counted ? "on" : "off", on() ? "on" : "off");
+        logging::log(available() ? logging::Level::info : logging::Level::warning, logging::Channel::runtime,
+            "Replay keyframe smoothing: framing track {}, key slots {}; smoothing {}.",
+            framing_hooked ? "hooked" : "not hooked (game code differs)",
+            rebuild_original.load() ? "built once per rebuild" : "built per segment", on() ? "on" : "off");
         return available();
     } catch (...) {
         return false;
@@ -287,15 +320,12 @@ std::string set_smoothness(float value) {
 
 std::string status() {
     const auto take = [](std::atomic<std::uint64_t>& counter) { return counter.exchange(0, std::memory_order_relaxed); };
-    std::uint64_t played{}, built{};
-    std::string played_by, built_by;
+    std::uint64_t built{};
+    std::string built_by;
     const auto add = [](std::string& list, const std::string& name, std::uint64_t count) {
         if (count) list += std::format("{}{}: {}", list.empty() ? "" : ", ", name, count);
     };
     for (std::size_t b = 0; b < behaviours; ++b) {
-        const auto count = take(counters.played[b]);
-        played += count;
-        add(played_by, behaviour_name(b), count);
         for (std::size_t s = 0; s < subjects; ++s) {
             const auto built_here = take(counters.built[b][s]);
             built += built_here;
@@ -305,10 +335,10 @@ std::string status() {
     const auto seen = last_session.load(std::memory_order_relaxed);
     return std::format(
         "Keyframe smoothing {}: smoothness {}, free camera (Behaviour {}) only. Since the last status: framing "
-        "segments played {} times (by Behaviour: {}), built {} (by Behaviour/Subject: {}; smoothed {}, left as the "
-        "game built them {}, other Behaviour {}, not matching {}){}.",
+        "segments built {} (by Behaviour/Subject: {}; smoothed {}, left as the game built them {}, other Behaviour {}, "
+        "not matching {}){}.",
         on() ? "on" : "off", number(smoothness()), native::free_camera_behaviour,
-        played, played_by.empty() ? "none" : played_by, built, built_by.empty() ? "none" : built_by, take(counters.smoothed),
+        built, built_by.empty() ? "none" : built_by, take(counters.smoothed),
         take(counters.stock), take(counters.filtered), take(counters.mismatch),
         !framing_hooked.load() ? " (not hooked)"
         : seen ? std::format("; last built for session {}", static_cast<std::int32_t>(static_cast<std::uint32_t>(seen)))
