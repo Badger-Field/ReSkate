@@ -306,6 +306,8 @@ std::uint32_t size_kb(std::uint64_t memory) {
 // What the pool should be for the level loading or loaded now: 0 until a load asks (the game's
 // own value is left alone), then a custom map's size, the game's own for any other.
 std::uint32_t mesh_pool_wanted_kb = 0;
+// A custom map's load whose pool is measured again once the map it leaves has gone.
+bool mesh_pool_measure_again = false;
 const mesh_pool::Card& mesh_pool_card() {
     static const auto card = mesh_pool::largest_card();
     static bool reported = false;
@@ -337,7 +339,13 @@ void set_mesh_pool(std::uint32_t kb, bool now_or_never) {
 // Just before a level load is submitted (the pools are re-created at its start, from the setting):
 // for a custom map, half the video memory free now (or by the card's size when the driver reports
 // no budget); the game's own for any other. RESKATE_MESH_POOL_MB sets it for every load.
+// Measured here, the map being left still holds its textures and meshes: from one custom map to the
+// next the pool came out smaller each time (1846 MB down to 1253 MB over five maps on an 8 GB
+// RTX 5050), until The Mashup loaded to a black screen (2026-10-17). So a custom map's pool is
+// measured again at Starting level load (mesh_pool_after_leaving), which the pools' re-creation
+// comes after: it reads the new level's own data (FUN_14507a2d0).
 void mesh_pool_for_load(bool custom) {
+    mesh_pool_measure_again = false;
     const auto& card = mesh_pool_card();
     std::uint32_t kb = mesh_pool::override_kb();
     std::string how = "RESKATE_MESH_POOL_MB";
@@ -359,15 +367,38 @@ void mesh_pool_for_load(bool custom) {
         how = "not a custom map";
     }
     mesh_pool_wanted_kb = kb;
+    mesh_pool_measure_again = custom && how.ends_with("budget");
     dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::runtime,
         "Mesh streaming pool for this load: {} MB ({}).", kb / 1024, how);
     set_mesh_pool(kb, true);
 }
+// The custom map's pool again, now that the map it left has gone: only ever larger than the first.
+void mesh_pool_after_leaving() {
+    mesh_pool_measure_again = false;
+    const auto budget = mesh_pool::budget_of(mesh_pool_card());
+    if (!budget) return;
+    const auto kb = mesh_pool::free_kb(*budget, mesh_pool_wanted_kb);
+    const auto free_mb = (budget->budget - (std::min)(budget->budget, budget->usage)) >> 20;
+    if (kb <= mesh_pool_wanted_kb) {
+        dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::runtime,
+            "Mesh streaming pool stays {} MB after the last map left ({} MB free of a {} MB budget).",
+            mesh_pool_wanted_kb / 1024, free_mb, budget->budget >> 20);
+        return;
+    }
+    dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::runtime,
+        "Mesh streaming pool for this load: {} MB once the last map left ({} MB free of a {} MB budget).",
+        kb / 1024, free_mb, budget->budget >> 20);
+    mesh_pool_wanted_kb = kb;
+    set_mesh_pool(kb, true);
+}
 // Every tick: the graphics quality script sets the game's own value again whenever settings are
-// applied, so the wanted one is put back.
-void apply_mesh_streaming_pool() {
+// applied, so the wanted one is put back. `state` is the client state (client_state.h).
+void apply_mesh_streaming_pool(DWORD state) {
     (void)mesh_pool_card();
     if (!mesh_pool_wanted_kb) return;
+    if (mesh_pool_measure_again && state == 8) mesh_pool_after_leaving();   // Starting level load
+    // Past it without a tick there (the load is asked for while the old map is still active, 13).
+    else if (mesh_pool_measure_again && state >= 9 && state <= 12) mesh_pool_measure_again = false;
     static ULONGLONG next_check = 0;
     const auto now = GetTickCount64();
     if (now < next_check) return;
@@ -441,7 +472,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
     apply_performance_settings();
     apply_local_connection_timeouts();
     dingosdk::job_spin::apply_default();
-    apply_mesh_streaming_pool();
+    apply_mesh_streaming_pool(state);
     dingosdk::multiplayer::apply_throwdown_strings(r.base);
     const bool named_context_ready = (state == 13 || state == 21) && native_context_ready();
     {
