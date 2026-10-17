@@ -91,7 +91,7 @@ void Store::Update::encode(Json& patch) {
     for (const auto& [kind, keys] : inventory) {
         const auto& rows = kind == "cosmetic" ? value.customization.at("inventory") :
             value.extensions.at("object_dropper").at("inventory");
-        detail::require(rows.is_object() && rows.size() <= 8192, "Inventory exceeds limit");
+        detail::require(rows.is_object() && rows.size() <= saved_item_limit, "Inventory exceeds limit");
         for (const auto& key : keys) {
             detail::require(detail::valid_text(key) && rows.at(key).is_boolean(), "Invalid inventory item");
             add("inventory", Json::array({kind, key, rows.at(key).get<bool>() ? 1 : 0}), 2);

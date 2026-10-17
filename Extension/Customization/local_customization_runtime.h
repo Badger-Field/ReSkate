@@ -32,6 +32,8 @@ struct CosmeticRuntime {
     // installed); the published catalog is replaced when it falls behind.
     std::uint64_t items_generation{};
     std::uint64_t published_generation{};
+    // Items the last catalog built holds: `items` less any left out of it (make_cosmetic_catalog).
+    std::size_t catalog_items{};
     std::uintptr_t published_manager{};
     std::uintptr_t published_inventory{};
     std::uintptr_t inventory_data_model{};
