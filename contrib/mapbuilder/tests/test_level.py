@@ -75,15 +75,20 @@ TYPES = [
                       ("z", enc(T.float32, C.primitive), 0, 8)]),
     ("LinearTransform", 64, 16, [(n, enc(T.structure, C.structure), 9, o)
                                  for n, o in (("right", 0), ("up", 16), ("forward", 32), ("trans", 48))]),
-    # A world-partition tile and what it places (new-ground-level, FORMAT-NOTES 6.3).
-    ("SubWorldData", 32, 8, [("$", enc(T.inherited, C.none), 1, 0), ("Objects", enc(T.pointer, C.array), 0, 24)]),
-    ("LayerData", 24, 8, [("$", enc(T.inherited, C.none), 0, 0), ("Objects", enc(T.pointer, C.array), 0, 16)]),
+    # A world-partition tile, its layer and what it places (new-ground-level, FORMAT-NOTES 6.3).
+    ("QuadrantSubWorldData", 40, 8, [("$", enc(T.inherited, C.none), 1, 0), ("Objects", enc(T.pointer, C.array), 0, 24),
+                                     ("Descriptor", enc(T.pointer, C.pointer), 0, 32)]),
+    ("LayerData", 32, 8, [("$", enc(T.inherited, C.none), 1, 0), ("Objects", enc(T.pointer, C.array), 0, 24)]),
     ("ObjectReferenceObjectData", 96, 16, [("$", enc(T.inherited, C.none), 0, 0),
                                            ("BlueprintTransform", enc(T.structure, C.structure), 10, 16),
                                            ("Blueprint", enc(T.pointer, C.pointer), 0, 80)]),
+    ("LayerReferenceObjectData", 96, 16, [("$", enc(T.inherited, C.none), 0, 0),
+                                          ("BlueprintTransform", enc(T.structure, C.structure), 10, 16),
+                                          ("Blueprint", enc(T.pointer, C.pointer), 0, 80)]),
+    ("InterfaceDescriptorData", 16, 8, [("$", enc(T.inherited, C.none), 0, 0)]),
+    ("StaticModelGroupEntityData", 16, 8, [("$", enc(T.inherited, C.none), 0, 0)]),
     ("ObjectBlueprint", 32, 8, [("$", enc(T.inherited, C.none), 1, 0), ("Object", enc(T.pointer, C.pointer), 0, 24)]),
-    ("StaticModelEntityData", 32, 8, [("$", enc(T.inherited, C.none), 0, 0), ("Mesh", enc(T.pointer, C.pointer), 0, 16),
-                                      ("PhysicsResource", enc(T.resourceRef, C.primitive), 0, 24)]),
+    ("StaticModelEntityData", 24, 8, [("$", enc(T.inherited, C.none), 0, 0), ("Mesh", enc(T.pointer, C.pointer), 0, 16)]),
     ("RigidMeshAsset", 32, 8, [("$", enc(T.inherited, C.none), 1, 0),
                                ("MeshSetResource", enc(T.resourceRef, C.primitive), 0, 24)]),
 ]
@@ -167,58 +172,67 @@ def bam_root():
         imports=[(WPROOT_GUID, guid(61))])
 
 
-# The tile new-ground-level copies: a root, two layers, a decoy, a placement of a blueprint kept
-# elsewhere and a placement of a blueprint in the tile's bundle, which has a mesh, a texture and
-# a physics resource named after the blueprint.
-TILE = "levels/game/bam_levelroot/wproot/wp/s9600_x0z0/s200_x700z1100_sublevel"
-PROPS = "levels/game/bam_levelroot/props/"
-TILE_GUID, BP_GUID, MESH_GUID, TEXTURE_GUID = guid(62), guid(63), guid(64), guid(65)
+# The chain new-ground-level copies (FORMAT-NOTES 6.3): a tile whose LayerReferenceObjectData
+# imports a layer in the same bundle, whose ObjectReferenceObjectData places a blueprint kept
+# elsewhere; and util_groundplane in bam's root bundle with its mesh and <name>.physics.
+TILE = ("levels/game/bam_levelroot/wproot/wp/s9600_x0z0/s200_x500z900/s100_x450z850/s50_x425z825/"
+        "s50_x425z825_sublevel")
+TILE_LAYER = TILE[:-len("_sublevel")] + "_layer"
+CORE_LAYER = "levels/game/bam_levelroot/game_coremeshes"
+CORE_BUNDLE = "win32/levels/game/bam_levelroot/bam_coregameassets"
+GROUNDPLANE = "common/utilities/meshes/util_groundplane"
+TILE_GUID, LAYER_GUID, BP_GUID, MESH_GUID, CORE_GUID = guid(62), guid(63), guid(64), guid(65), guid(66)
+LAYER_ROOT_GUID, BP_ROOT_GUID = guid(81), guid(92)
+LAYER_REFERENCE_GUID = Guid.parse("00c4d5e6-0000-0000-0000-000000000003")
 PLACEMENT_GUID = Guid.parse("00a1b2c3-0000-0000-0000-000000000002")
-PHYSICS_ID, MESHSET_ID, TEXTURE_ID = 0x1111222233334444, 0x5555, 0x6666
-MESH_CHUNK, TEXTURE_CHUNK, OTHER_CHUNK = guid(70), guid(71), guid(72)
+PHYSICS_ID, MESHSET_ID = 0x1111222233334444, 0x5555
+MESH_CHUNK = guid(70)
 TEMPLATE_MATERIAL = 0x00012345
 
 
+def placed(d, kind, x, flags=0):
+    return obj(d, kind, Flags=flags, Blueprint=PointerReference(PointerKind.external, x),
+               BlueprintTransform=obj(d, "LinearTransform", trans=obj(d, "Vec3", x=5.0, y=6.0, z=7.0),
+                                      right=obj(d, "Vec3", x=0.0, z=1.0)))
+
+
 def tile():
-    def placement(d, x):
-        return obj(d, "ObjectReferenceObjectData", Flags=0xA1B2C3, Blueprint=PointerReference(PointerKind.external, x),
-                   BlueprintTransform=obj(d, "LinearTransform", trans=obj(d, "Vec3", x=5.0, y=6.0, z=7.0),
-                                          right=obj(d, "Vec3", x=0.0, z=1.0)))
     return document(TILE_GUID, [
-        (lambda d: obj(d, "SubWorldData", Name="Levels/Game/BAM_LevelRoot/wproot/wp/S9600_x0z0/S200_x700z1100_Sublevel",
-                       Objects=[ptr(1), ptr(2)]), guid(80)),
-        (lambda d: obj(d, "LayerData", Objects=[ptr(3), ptr(4), ptr(5)]), guid(81)),
-        (lambda d: obj(d, "LayerData", Objects=[ptr(3)]), guid(82)),
-        (lambda d: obj(d, "Asset", Name="staticmodelgroup"), guid(83)),
-        (lambda d: placement(d, 0), guid(84)),
-        (lambda d: placement(d, 1), PLACEMENT_GUID)],
-        imports=[(guid(90), guid(91)), (BP_GUID, guid(92))])
+        (lambda d: obj(d, "QuadrantSubWorldData", Name=TILE.replace("s50_x425z825_sublevel", "S50_x425z825_Sublevel"),
+                       Objects=[ptr(1), ptr(2), ptr(3)], Descriptor=ptr(4)), guid(80)),
+        (lambda d: placed(d, "LayerReferenceObjectData", 0, 0xC4D5E6), LAYER_REFERENCE_GUID),
+        (lambda d: obj(d, "StaticModelGroupEntityData"), guid(82)),
+        (lambda d: obj(d, "Asset", Name="audio tag"), guid(83)),
+        (lambda d: obj(d, "InterfaceDescriptorData"), guid(84))],
+        imports=[(LAYER_GUID, LAYER_ROOT_GUID), (guid(90), guid(91))])
 
 
-def floor_bp():
+def layer(file_guid=LAYER_GUID, name=TILE_LAYER):
+    return document(file_guid, [
+        (lambda d: obj(d, "LayerData", Name=name, Objects=[ptr(1), ptr(2)]), LAYER_ROOT_GUID),
+        (lambda d: placed(d, "ObjectReferenceObjectData", 0, 0xA1B2C3), PLACEMENT_GUID),
+        (lambda d: obj(d, "Asset", Name="decoy"), guid(85))],
+        imports=[(guid(93), guid(94))])
+
+
+def groundplane():
     return document(BP_GUID, [
-        (lambda d: obj(d, "ObjectBlueprint", Name=PROPS + "Floor_BP", Object=ptr(1)), guid(92)),
-        (lambda d: obj(d, "StaticModelEntityData", Mesh=PointerReference(PointerKind.external, 0),
-                       PhysicsResource=ResourceReference(PHYSICS_ID)), guid(93))],
-        imports=[(MESH_GUID, guid(94))])
+        (lambda d: obj(d, "ObjectBlueprint", Name="Common/Utilities/Meshes/Util_GroundPlane", Object=ptr(1)), BP_ROOT_GUID),
+        (lambda d: obj(d, "StaticModelEntityData", Mesh=PointerReference(PointerKind.external, 0)), guid(95))],
+        imports=[(MESH_GUID, guid(96))])
 
 
-def floor_mesh():
-    return document(MESH_GUID, [(lambda d: obj(d, "RigidMeshAsset", Name=PROPS + "Floor",
-                                               MeshSetResource=ResourceReference(MESHSET_ID)), guid(94))],
-                    imports=[(TEXTURE_GUID, guid(95))])
-
-
-def floor_texture():
-    return document(TEXTURE_GUID, [(lambda d: obj(d, "Asset", Name=PROPS + "Floor_D"), guid(95))])
+def groundplane_mesh():
+    return document(MESH_GUID, [(lambda d: obj(d, "RigidMeshAsset", Name=GROUNDPLANE + "_mesh",
+                                               MeshSetResource=ResourceReference(MESHSET_ID)), guid(96))])
 
 
 def meshset(chunk):
-    """A rigid MeshSet header with one LOD naming its chunk (FORMAT-NOTES 1)."""
+    """A rigid MeshSet header with one LOD naming its chunk: a flat 50 m plane (FORMAT-NOTES 1)."""
     data = bytearray(208 + 176)
     struct.pack_into("<III", data, 0, 192, 176, 384)
-    struct.pack_into("<3f", data, 0x10, -2.0, 0.0, -3.0)
-    struct.pack_into("<3f", data, 0x20, 2.0, 0.5, 3.0)
+    struct.pack_into("<3f", data, 0x10, -25.0, 0.0, -25.0)
+    struct.pack_into("<3f", data, 0x20, 25.0, 0.0, 25.0)
     struct.pack_into("<Q", data, 0x30, 208 - 16)
     struct.pack_into("<H", data, 180, 1)
     data[208 + 116:208 + 132] = chunk.bytes
@@ -227,7 +241,7 @@ def meshset(chunk):
 
 def template_physics():
     from reskate_mapbuilder.physics import Part, compute_edge_data, flat_grid, write_physics
-    shape = flat_grid(4.0, 2.0)
+    shape = flat_grid(50.0, 25.0)
     part = Part(0, material=TEMPLATE_MATERIAL)
     compute_edge_data([shape], [part])
     return write_physics([shape], [part], 2)
@@ -321,18 +335,19 @@ def fake_game(tmp_path):
         "globals": [bundle("win32/globals", {"some/other/asset": b"x" * 9}),
                     bundle("win32/globals_levels", {BAM + "/description": write_document(bam_description()),
                                                     ROOT + "/description": write_document(root_description())})],
-        BAM: [bundle("win32/" + BAM, {BAM: write_document(bam_root()), "levels/game/bam_levelroot/pool": b"pool"}),
+        BAM: [bundle("win32/" + BAM, {BAM: write_document(bam_root()), "levels/game/bam_levelroot/pool": b"pool",
+                                      GROUNDPLANE: write_document(groundplane()),
+                                      GROUNDPLANE + "_mesh": write_document(groundplane_mesh())},
+                     {GROUNDPLANE + ".physics": (0x41759364, PHYSICS_ID, template_physics()),
+                      GROUNDPLANE + "_mesh": (0x49B156D4, MESHSET_ID, meshset(MESH_CHUNK))},
+                     [(MESH_CHUNK, b"mesh data")]),
               bundle("win32/levels/game/bam_levelroot/tod_2_noon", {"levels/game/bam_levelroot/tod_2_noon": b"tod"}),
               bundle("win32/levels/game/bam_levelroot/startpoint_sublevels", {"sp": b"sp"}),
+              bundle(CORE_BUNDLE, {"levels/game/bam_levelroot/other": b"zz",
+                                   CORE_LAYER: write_document(layer(CORE_GUID, CORE_LAYER))}),
               bundle("win32/levels/game/bam_levelroot/wproot", {"levels/game/bam_levelroot/wproot": b"wproot"}),
-              bundle("win32/" + TILE,
-                     {TILE: write_document(tile()), PROPS + "not_an_ebx": b"zz", PROPS + "floor_bp": write_document(floor_bp()),
-                      PROPS + "floor": write_document(floor_mesh()), PROPS + "floor_d": write_document(floor_texture())},
-                     {TILE + "/staticmodelgroup.physics": (0x41759364, 0x77, template_physics()),
-                      PROPS + "floor_bp/physics": (0x41759364, PHYSICS_ID, template_physics()),
-                      PROPS + "floor": (0x49B156D4, MESHSET_ID, meshset(MESH_CHUNK)),
-                      PROPS + "floor_d": (0x6BDE20BA, TEXTURE_ID, b"texture" + TEXTURE_CHUNK.bytes)},
-                     [(OTHER_CHUNK, b"other"), (MESH_CHUNK, b"mesh data"), (TEXTURE_CHUNK, b"texels")])],
+              bundle("win32/" + TILE, {TILE: write_document(tile()), "not_an_ebx": b"zz", TILE_LAYER: write_document(layer())},
+                     {TILE[:-len("_sublevel")] + "/staticmodelgroup.physics": (0x41759364, 0x77, template_physics())})],
         ROOT: [bundle("win32/" + ROOT, {ROOT + "_dsublevelmanager_genprefab": write_document(genprefab())})],
     }
     chunks = {BAM: [TocChunk(guid(50), CasIdentifier(False, CHUNK, 2), 0, 4)]}
@@ -440,10 +455,10 @@ def test_new_level_writes_the_registration(tmp_path):
             assert b.region == base[b.name]
     assert [c.guid for c in toc.chunks] == [guid(50)]
     _, region, manifest = view.bundle(toc, "win32/" + NEW)
-    assert [a.name for a in manifest.ebx] == [BAM, "levels/game/bam_levelroot/pool", NEW]
-    assert [f.location.patch for f in region.files] == [True, False, False, True]
+    assert [a.name for a in manifest.ebx] == [BAM, "levels/game/bam_levelroot/pool", GROUNDPLANE, GROUNDPLANE + "_mesh", NEW]
+    assert [f.location.patch for f in region.files] == [True, False, False, False, False, True, False, False, False]
     raw = view.ebx(region, manifest, NEW)
-    assert manifest.ebx[2].sha1 == hashlib.sha1(raw).digest() and manifest.ebx[2].original_size == len(raw)
+    assert manifest.ebx[4].sha1 == hashlib.sha1(raw).digest() and manifest.ebx[4].original_size == len(raw)
     new_root = read_document(raw)
     o = new_root.instances[0].object
     assert new_root.file_guid != BAM_ROOT_GUID and new_root.instances[0].instance_guid != guid(2)
