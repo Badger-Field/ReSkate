@@ -615,14 +615,19 @@ or Travel, and voice, distances, placement and kicks from the Multiplayer menu.
                                 physics tuning), or all. Everyone else keeps what
                                 the server allows, and the player's role cannot
                                 give a locked tool back (movement). Takes effect
-                                at once; kept in memory until unlocked or the
-                                player leaves. Logged as "[lock] <name>
-                                (<SteamID64>): nobail, boosts locked by <who>".
+                                at once, and is kept for their SteamID until
+                                unlocked or the server restarts: leaving and
+                                joining again does not lift it. A player who is
+                                not here is locked by their SteamID64. Logged as
+                                "[lock] <name> (<SteamID64>): nobail, boosts
+                                locked by <who>".
   unlock <player|SteamID64> [<tool[,tool...]|all>]
-                                Give them back (all when none are named); also
-                                ends a throwdown's locks early. Logged as
-                                "[lock] ... unlocked by <who>".
-  locks                         The players with locked tools.
+                                Give them back (all when none are named), also
+                                to a player who left (by SteamID64 or the name
+                                they had); also ends a throwdown's locks early.
+                                Logged as "[lock] ... unlocked by <who>".
+  locks                         The players with locked tools, also those who
+                                left ("not here").
   throwdown-locks <tools>|off   What a throwdown locks for its players
                                 (players.throwdown_locks).
   tpall [player]                Everyone to you (admins in game) or to a player.

@@ -964,12 +964,18 @@ void Host::drop(std::uint64_t id, const std::string &reason, const std::string &
     const auto found = guests_.find(id);
     if (found == guests_.end()) return;
     const auto name = guest_name(*found->second);
-    // Locks end with the visit.
+    // A throwdown's locks end with the visit; an admin's are kept for when they join again.
     in_throwdown_.erase(id);
     if (const auto locks = locks_.find(id); locks != locks_.end()) {
-        if (locks->second.all())
-            log_("[lock] " + name + " (" + std::to_string(id) + "): " + lock_tools_text(locks->second.all()) + " unlocked (left the server)");
-        locks_.erase(locks);
+        const auto ended = static_cast<std::uint8_t>(locks->second.automatic & ~locks->second.manual);
+        locks->second.automatic = 0;
+        if (ended)
+            log_("[lock] " + name + " (" + std::to_string(id) + "): " + lock_tools_text(ended) + " unlocked (left the server)");
+        if (locks->second.manual)
+            log_("[lock] " + name + " (" + std::to_string(id) + "): " + lock_tools_text(locks->second.manual) +
+                 " stay locked if they join again");
+        else
+            locks_.erase(locks);
     }
     if (found->second->handshaken) {
         roster_dirty_ = true;
@@ -1248,6 +1254,11 @@ void Host::receive(std::uint64_t peer, std::span<const std::uint8_t> bytes, std:
             send_roster();
             meet_later(*link);
             if (!config_.welcome.empty()) send_chat(config_.welcome, link);
+            // Locks kept from an earlier visit (their roster and permissions already have them).
+            if (const auto locks = locks_of(peer)) {
+                send_chat("The server locked for you: " + lock_tools_text(locks) + ".", link);
+                log_("[lock] " + guest_name(*link) + " (" + std::to_string(peer) + "): " + lock_tools_text(locks) + " locked again (joined)");
+            }
             log_(guest_name(*link) + " joined (" + std::to_string(peer) + (role_of(peer) ? ", " + role_of(peer)->name : std::string{}) + "), " +
                  std::to_string(players()) + "/" + std::to_string(config_.max_players) + " players" +
                  (link->connected_at && now_ > link->connected_at

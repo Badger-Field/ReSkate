@@ -401,9 +401,11 @@ class Host {
     void send_permissions(Guest &);    // what their role lets them do
     // Tools taken from single players (lock_*, server_config.h): by an admin or the console
     // (`manual`), or for a throwdown they play in (`automatic`, config throwdown_locks). In
-    // memory only: they end when the player leaves. A locked player's roster says the tool is
-    // off for them, and while noclip, No Bail or the boosts are locked their permissions go
-    // without "movement", so their role cannot give the tool back.
+    // memory only. A throwdown's end when the player leaves; an admin's are kept for their
+    // SteamID until unlocked or the server restarts, so leaving and joining again does not lift
+    // them. A locked player's roster says the tool is off for them, and while noclip, No Bail or
+    // the boosts are locked their permissions go without "movement", so their role cannot give
+    // the tool back.
     struct Locks {
         std::uint8_t manual{}, automatic{};
         std::uint8_t all() const noexcept { return manual | automatic; }
@@ -414,9 +416,16 @@ class Host {
         const auto found = locks_.find(id);
         return found == locks_.end() ? 0 : found->second.all();
     }
-    // Locks (`lock`) or unlocks (otherwise) `tools` for a player, as `source` ("console", an
-    // admin's name, "throwdown"); `automatic`: the throwdown's own. Returns the tools that changed.
-    std::uint8_t change_locks(Guest &, std::uint8_t tools, bool lock, bool automatic, const std::string &source);
+    // Who changed a player's locks, which says what they are told: an admin (or the console), a
+    // throwdown starting or ending, or the throwdown-locks setting changing while theirs runs.
+    enum class LockBy { admin, throwdown, setting };
+    // Locks (`lock`) or unlocks (otherwise) `tools` for the player `id` (`guest`, or null when they
+    // are not connected), as `source` ("console", an admin's name, "throwdown"). A throwdown's,
+    // and the setting's, are the automatic ones; an admin's unlock takes back both. Returns the
+    // tools that changed.
+    std::uint8_t change_locks(std::uint64_t id, Guest *guest, std::uint8_t tools, bool lock, LockBy by, const std::string &source);
+    // A player's name for the lock lines: connected, last seen, or their SteamID.
+    std::string lock_name(std::uint64_t id, const Guest *guest) const;
     void update_throwdown_locks(); // after the throwdowns or the setting change
     void send_words(Guest &);          // the server's own filtered chat words (server_words.h)
     void send_next_maps(Guest &);      // the maps the vote for the next one will offer

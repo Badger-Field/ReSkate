@@ -333,15 +333,40 @@ int run() {
     check(free(d) && d.permissions && (*d.permissions & role_movement), "Dana did not get their roster and movement back");
     check(command("unlock Dana") == "Dana has none of noclip, nobail, boosts, tuning locked.", "unlock with nothing locked");
 
-    // ---- Locks end when the player leaves ------------------------------------------------------
+    // ---- An admin's locks stay with the player when they leave and join again -----------------
     c.leave();
     run_for(2000000);
-    check(logged("[lock] Casey (76561198000000003): noclip, tuning unlocked (left the server)"), "Leaving did not end the locks");
+    check(logged("[lock] Casey (76561198000000003): noclip, tuning stay locked if they join again"), "Leaving did not keep the admin's locks");
+    reply = command("locks");
+    check(reply.find("76561198000000003  Casey (not here): noclip, tuning") != std::string::npos, "locks does not list a player who left: " + reply);
+    games.erase(c_id);
+    {
+        auto &back = add_game(c_id, "Casey");
+        back.hello(now);
+        run_for(3000000);
+        check(back.joined && !back.noclip && back.enforce_tuning && back.no_bail && back.boosts, "Casey's locks did not come back when they joined again");
+        check(has(back.chat, "The server locked for you: noclip, tuning.") &&
+                  logged("[lock] Casey (76561198000000003): noclip, tuning locked again (joined)"),
+              "Casey was not told their locks are back");
+        back.leave();
+        run_for(2000000);
+    }
+    // Unlocked while away, by the name they had or their SteamID64: they come back free.
+    reply = command("unlock Casey tuning");
+    check(reply == "Unlocked for Casey: tuning.", "unlock of a player who left, by name: " + reply);
+    check(logged("[lock] Casey (76561198000000003): tuning unlocked by console (not here)"), "The unlock of a player who left was not logged");
+    reply = command("unlock 76561198000000003");
+    check(reply == "Unlocked for Casey: noclip.", "unlock of a player who left, by SteamID64: " + reply);
+    // A player who is not here is locked by their SteamID64.
+    reply = command("lock 76561198000000009 nobail");
+    check(reply == "Locked for 76561198000000009: nobail.", "lock of a player who is not here: " + reply);
+    check(command("lock Somebody nobail").find("their SteamID64") != std::string::npos, "lock of an unknown name did not say how");
+    check(command("unlock 76561198000000009") == "Unlocked for 76561198000000009: nobail.", "unlock of a player never seen");
     games.erase(c_id);
     auto &c2 = add_game(c_id, "Casey");
     c2.hello(now);
     run_for(3000000);
-    check(c2.joined && free(c2), "Locks came back when the player joined again");
+    check(c2.joined && free(c2), "Locks came back after they were unlocked");
     check(command("locks") == "0 players have locked tools", "Locks remain after everyone was unlocked");
 
     // ---- throwdown_locks: the players of a running throwdown --------------------------------------
@@ -379,6 +404,18 @@ int run() {
     check(free(a) && free(c2), "Players outside the throwdown were locked");
     reply = command("locks");
     check(reply.find("Bailey Two: (throwdown: nobail, tuning)") != std::string::npos, "locks does not show a throwdown's: " + reply);
+    // Changing the setting while it runs changes only what differs, and says so.
+    command("throwdown-locks nobail,boosts");
+    check(logged("[lock] Bailey Two (76561198000000002): tuning unlocked by throwdown-locks") &&
+              logged("[lock] Bailey Two (76561198000000002): boosts locked by throwdown-locks"),
+          "Changing throwdown-locks during a throwdown did not change just the difference");
+    check(!b.no_bail && !b.boosts && !b.enforce_tuning, "Bailey's roster does not have the new throwdown locks");
+    check(has(b.chat, "The server's throwdown locks changed, unlocked for you: tuning.") &&
+              has(b.chat, "The server's throwdown locks changed, locked for you while it runs: boosts.") &&
+              !has(b.chat, "Your throwdown is over"),
+          "Bailey was told their throwdown was over when only the setting changed");
+    command("throwdown-locks nobail,tuning");
+    check(!b.no_bail && b.boosts && b.enforce_tuning, "Bailey's roster did not go back with the setting");
     // An admin's lock outlasts the throwdown; quitting ends the throwdown's.
     command("lock Dana boosts");
     auto quit = join;
