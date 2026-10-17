@@ -20,8 +20,9 @@ Control does not block it) and is tested on Linux CI.
 | Visible meshes (rigid `MeshSet` and geometry chunks) | layout verified on a PC; writer next |
 | EBX document reader and writer | done, byte-identical to ReSkate's C++ (`tests/test_ebx_crosscheck.py`) |
 | Level registration (layout, level TOC, description, on-demand entry, detached sublevel) | written as a clone of bam, tested on a synthetic game; not yet run on the PC |
-| Own ground (tile -> layer -> placement of a copy of util_groundplane, its 50 m plane mesh reused, own flat collision found by name) | written as `new-ground-level`, tested on a synthetic game; not yet run in game |
-| World-partition tiles of our own, own MeshSet | not started (FORMAT-NOTES 6.3) |
+| Own ground (tile -> layer -> placement of a copy of util_groundplane, its 50 m plane mesh reused, own flat collision found by name) | `new-ground-level`: loads in game and the collision holds; the reused plane is not drawn (being diagnosed) |
+| Own MeshSet (`--mesh own`, a patched copy of the template's) | written, tested on a synthetic game; not yet run in game |
+| World-partition tiles of our own | not started (FORMAT-NOTES 6.3) |
 
 What has been verified in the game so far: a mod written this way that overrides one
 collision resource loads; ground raised by exactly the amount written; zeroed

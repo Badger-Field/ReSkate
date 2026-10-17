@@ -612,7 +612,19 @@ each source document's rewrite check, the GUIDs, hashes and bundle counts, and w
 `dump-ebx` prints a document and `ebx-roundtrip` diagnoses its rewrite; with `--mod <folder>` it reads a mod's TOCs and archives over the
 game's, which is how the 333 map's own registration can be compared with ours.
 
-### 6.3 A level with its own ground (written by `new-ground-level`; not yet run in game)
+### 6.3 A level with its own ground (written by `new-ground-level`; collision tested in game)
+
+**Tested in game** (b1bfca5, `--bam all`, defaults): the level registers and loads, the log says
+`Subworld loaded: levels/game/dingolevel_reskate_ground/ground_sublevel`, and our collision holds
+with the placement's transform applied: `trainer ground 0 0` and `20 -20` read 300.0 (the skater
+landed at 301), `40 0` (outside the 50 m square) reads 191 (sea). No crash. So a copied blueprint
+under a new name finds a new `<name>.physics` beside it, and the OROD's transform moves the
+collision (`PHYSICS_IN_OBJECT_SPACE` is right). **Nothing is drawn**: the skater stands in the air
+over the ocean; util_groundplane's plane does not show. `--bam no-world` and `333` refused: bam's
+root #0 holds direct pointer fields to some of the references they remove (`#0 still points at
+[6]`; with 333 `[1, 6, 17, 19, 23, 33, 65, 66]`). Since then such references are kept (reported as
+`KEPT …`) and only references held by nothing but pointer arrays are removed.
+
 
 **What the base game does (checked on files, the PC's read-only scans).**
 
@@ -676,20 +688,52 @@ Guesses, each a constant at the top of `ground.py` and reported by `--dry-run`:
 - `--at` (0, 300, 0) is above bam's ground (191 to 200 m) when bam's world stays.
 - Our three EBX first, then the collision, is an acceptable bundle order.
 
-**Next checks on the PC:** the three dry runs (`--bam all`, `no-world`, `333`), then in game,
-one level-adding mod at a time: `load levels/game/<new>/<new>`, `trainer ground 0 0` twice (300
-expected; 0 means the collision ignores the OROD's transform; bam's height or 191 means the
-sublevel did not load), `trainer ground 20 -20` (300), `trainer ground 40 0` (outside), and whether
-the plane is drawn at (0, 300, 0).
+**Finding why nothing is drawn** (options, all reported by the dry run):
 
-**Option (b), our own visible mesh.** Plan: copy `util_groundplane_mesh`'s MeshSet (1 LOD, 2
-sections) and patch only the known fields: header and section boxes, the LOD's index and vertex
-byte counts and chunk GUID, each section's triangle count, first index, vertex start and vertex
-count. The geometry chunk is written in the verified chunk format (1, "Geometry chunk") with the
-template sections' vertex declarations: positions ours, every other element the template's first
-vertex repeated. Then a copy of the RigidMeshAsset whose `MeshSetResource` names the new MeshSet,
-the blueprint pointing at it, and a new chunk row (`logicalOffset` 0, `logicalSize` = chunk size)
-in the ground bundle. `inspect-meshset` (read-only) prints the fields and bytes this needs.
+- The dry run prints, per instance of the blueprint, its bool fields and any field named like
+  visible, enable, render, debug, hidden, editor, draw, shadow, lod or cull.
+- `--visual template` keeps the layer's own placement (of its own blueprint, for the default layer
+  the worklight `cmn_lgt_worklight_01`) beside ours at `--at` + (10, 0, 10), rotation and scale as
+  they were: whether anything placed by our sublevel is drawn. (Its blueprint lives in another
+  bundle, which must be loaded for it to show; the report says so.)
+- `--blueprint-template` with `--blueprint-bundle` (and `--blueprint-superbundle`) takes any
+  blueprint with a `<name>.physics` beside it, e.g. a visible world object. When its bundle is not
+  bam's root bundle (which the level's root bundle copies and loads), what it imports from its
+  bundle is listed in the ground bundle as it is: EBX followed through imports, resources named
+  like them (MeshSet, textures), chunks whose GUID their bytes hold. A world-partition bundle is
+  listed in the level's TOC but loaded only when streamed, so it is copied in every `--bam` mode.
+
+**`--mesh own`: a MeshSet of our own** (written, untested in game; off by default). The template is
+the blueprint's mesh (the first import whose EBX has a MeshSet of the same name in the blueprint's
+bundle). `meshset.write_mesh`:
+
+- refuses unless the template is the rigid layout (192/176/384), mesh type 0, one LOD, 16-bit
+  indices, triangle lists, a position element of format 3 or 8, and its chunk rebuilds byte for
+  byte from the layout (each section's streams at its vertex start, the index buffer at the LOD's
+  vertex bytes, every gap zero);
+- writes our plane (the collision's grid, `--size`, 5 m cells) into every section: per section,
+  aligned to 16, each stream's vertices, each vertex a copy of the template section's first
+  vertex with the position replaced; then zero padding to 16 (the LOD's vertex bytes), the index
+  buffer (each section's indices relative to its first vertex, `first index` cumulative), and zero
+  padding of the chunk to 16. Triangles take the template's winding (seen from +y);
+- patches only: the header box, the LOD's index and vertex byte counts and chunk GUID, and each
+  section's triangle count, first index, vertex start and vertex count. Everything else (names,
+  declarations, material references, the undecoded per-section box, unknown words) and the size
+  stay the template's, so the template's resource meta is reused as is. The dry run says when our
+  box differs from the template's (each section's own box then still says the template's).
+
+With it come a copy of the RigidMeshAsset (`levels/game/<new>/ground_mesh`, `Name` renamed, any
+`ResourceReference` equal to the template MeshSet's id set to ours), the MeshSet resource of the
+same name (template meta), a new chunk row (`logicalOffset` 0, `logicalSize` its size, sha1 of
+it) and the blueprint's import of the template mesh moved to the copy. Guesses: the MeshSet's
+inner name strings need not change; the RigidMeshAsset names its MeshSet by id or else by name;
+normals and UVs of the template's first vertex suit a flat plane; a chunk in the bundle's
+manifest is found as the template's is.
+
+**Next checks on the PC:** `--bam no-world` and `--bam 333` (dry run, then in game); a run with
+`--visual template`; a run with a visible blueprint (`--blueprint-template … --blueprint-bundle
+…`); the `--mesh own` dry run. In game each time: `load levels/game/<new>/<new>`, `trainer
+ground 0 0` twice (300 expected), and what is drawn at (0, 300, 0) and (10, 300, 10).
 
 ## 7. Practical notes
 
