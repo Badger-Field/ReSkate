@@ -356,6 +356,16 @@ if(DINGOSDK_BUILD_BOARD_BREAK_TESTS)
     target_include_directories(dingosdk_board_break_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     add_test(NAME board_break COMMAND dingosdk_board_break_tests)
 endif()
+option(DINGOSDK_BUILD_REPLAY_KEYFRAMES_TESTS "Build replay keyframe smoothing regression tests" OFF)
+if(DINGOSDK_BUILD_REPLAY_KEYFRAMES_TESTS)
+    enable_testing()
+    # The smoother curve: stock at 0, every key met, C2 at 1, and a framing segment the game's spline plays as
+    # meant; the saved settings read back as written.
+    add_executable(dingosdk_replay_keyframes_tests Extension/ReplayKeyframes/Test/replay_keyframes_tests.cpp
+        Extension/ReplayKeyframes/replay_curve.cpp Extension/ReplayKeyframes/replay_settings.cpp)
+    target_include_directories(dingosdk_replay_keyframes_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    add_test(NAME replay_keyframes COMMAND dingosdk_replay_keyframes_tests)
+endif()
 option(DINGOSDK_BUILD_HALL_OF_MEAT_TESTS "Build Hall of Meat regression tests" OFF)
 if(DINGOSDK_BUILD_HALL_OF_MEAT_TESTS)
     enable_testing()

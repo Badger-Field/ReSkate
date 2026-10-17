@@ -19,6 +19,7 @@
 #include "Extension/RoadRash/road_rash.h"
 #include "Extension/BoardBreak/board_break.h"
 #include "Extension/BoardBreak/board_break_audio.h"
+#include "Extension/ReplayKeyframes/replay_keyframes.h"
 #include "Extension/Skater/grind_exit_control.h"
 #include "Extension/Skater/camera_observer.h"
 #include "Extension/UI/NativeMenu/native_menu.h"
@@ -1035,6 +1036,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
     model.grind_exit = {dingosdk::grind_exit_control::available(), dingosdk::grind_exit_control::enabled(),
                         dingosdk::grind_exit_control::toe_heel(), dingosdk::grind_exit_control::stance(),
                         dingosdk::grind_exit_control::strength()};
+    model.keyframe_smoothing = {dingosdk::replay_keyframes::available(), dingosdk::replay_keyframes::on()};
     model.bindings = dingosdk::local_profile_controller_bindings();
     model.parks = dingosdk::local_profile_parks();
     model.world = dingosdk::local_profile_world_layers();

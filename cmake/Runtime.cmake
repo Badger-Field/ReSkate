@@ -129,6 +129,10 @@ add_library(dingosdk_runtime SHARED
     Extension/World/spatial_cull_ids.cpp
     Extension/Rendering/display_startup.cpp
     Extension/Rendering/replay_export.cpp
+    Extension/ReplayKeyframes/replay_curve.cpp
+    Extension/ReplayKeyframes/replay_keyframes.cpp
+    Extension/ReplayKeyframes/replay_keyframes_commands.cpp
+    Extension/ReplayKeyframes/replay_settings.cpp
     Engine/Game/World/world_model.cpp
     Extension/World/level_loading.cpp
     Extension/World/loading_screen.cpp

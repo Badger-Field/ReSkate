@@ -251,6 +251,11 @@ struct GrindExitModel {
     int strength = 100; // pop-out strength, percent (10-100)
 };
 
+// Keyframe smoothing's switch (Extension/ReplayKeyframes/replay_keyframes.h): started, and switched on.
+struct KeyframeSmoothingModel {
+    bool available = false, enabled = false;
+};
+
 struct Model {
     std::string state = "Waiting for native state";
     std::string detail;
@@ -273,6 +278,7 @@ struct Model {
     RoadRashModel road_rash;
     BoardBreakModel board_break;
     GrindExitModel grind_exit;
+    KeyframeSmoothingModel keyframe_smoothing;
     ObjectPersistenceModel object_persistence;
     ParkEditorModel editor;
     float menu_scale = default_menu_scale;
