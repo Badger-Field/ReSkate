@@ -3,8 +3,11 @@
 #include <array>
 #include <string>
 
-namespace dingosdk::backtrace {
-inline constexpr DWORD protocol_version = 2;
+namespace dingosdk::crash_report {
+inline constexpr DWORD protocol_version = 4;
+// Who asked for the dump: ReSkate's last-chance filter, or the game's own fatal handler about to
+// write its dump (which it does without ever reaching that filter).
+enum class CaptureSource : DWORD { unhandled_exception, game_fatal_handler };
 inline constexpr DWORD capture_timeout_ms = 15000;
 struct SharedReport {
     DWORD version{protocol_version};
@@ -14,6 +17,13 @@ struct SharedReport {
     std::array<wchar_t, 32768> directory{};
     std::array<wchar_t, 260> application{};
     std::array<wchar_t, 32768> native_directory{};
+    // What the game was doing, for the report's tags: the level it loaded last, and the graphics
+    // card it renders on with its driver's version. Written by the game as they change, read by
+    // the helper after a crash (a torn read only spoils a tag).
+    std::array<wchar_t, 512> destination{};
+    std::array<wchar_t, 128> gpu_name{};
+    std::array<wchar_t, 32> gpu_driver{};
+    CaptureSource source{};
 };
 // Explicitly inherited unnamed handles; no token or paths on the command line.
 enum HandleIndex : std::size_t { mapping, requested, captured, stopping, ready, parent, handle_count };
@@ -30,5 +40,18 @@ inline std::wstring environment(const wchar_t* name) {
     std::array<wchar_t, 32768> buffer{};
     const auto size = GetEnvironmentVariableW(name, buffer.data(), static_cast<DWORD>(buffer.size()));
     return size && size < buffer.size() ? std::wstring(buffer.data(), size) : std::wstring{};
+}
+// RESKATE_NO_CRASH_UPLOAD set (to anything but "0"): nothing is sent, whatever the launcher's
+// settings or RESKATE_CRASH_REPORTING say, for test runs and unattended machines. Checked
+// before every upload (crash dumps and performance timings); dumps are still kept on disk.
+inline bool uploads_forbidden() {
+    const auto value = environment(L"RESKATE_NO_CRASH_UPLOAD");
+    return !value.empty() && value != L"0";
+}
+// Crash reports are opt-in: on only with RESKATE_CRASH_REPORTING=1, which the launcher sets when
+// "Send crash reports" is ticked (off by default). Unset, as when Skate.exe is started without
+// the launcher, they are off.
+inline bool reporting_enabled() {
+    return !uploads_forbidden() && environment(L"RESKATE_CRASH_REPORTING") == L"1";
 }
 }

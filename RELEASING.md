@@ -76,7 +76,7 @@ A release build sets these options:
 - `DINGOSDK_RELEASE_REPO` is **this** repository (`github.repository`). Our launchers update from our releases. Without it they would follow upstream (`Dingo-Shenanigans/ReSkate`) and lose this fork's features.
 - `DINGOSDK_LAUNCHER_AUTO_UPDATE=ON`. Only release builds replace themselves; local builds never do.
 - `DINGOSDK_VERSION` comes from the tag.
-- **Crash reports** go to the URL in the repository secret `RESKATE_BACKTRACE_URL` when it is set. That is a Backtrace *submission* URL, never an API token. With no secret they are **off**. Upstream's built-in Backtrace project is never used.
+- **Crash reports** go to the URL in the repository secret `RESKATE_CRASH_REPORT_URL` when it is set. That is a Sentry *minidump endpoint* URL (`https://<host>/api/<project>/minidump/?sentry_key=<public key>`), never an auth token. With no secret they are **off**: the build is configured with an empty `DINGOSDK_CRASH_REPORT_URL`, so upstream's built-in Sentry server is never used. Even with a URL, players must tick **Send crash reports** (off by default), and `RESKATE_NO_CRASH_UPLOAD=1` stops all uploads.
 
 ## Direct multiplayer's GameNetworkingSockets.dll
 

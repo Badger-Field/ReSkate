@@ -1,5 +1,4 @@
 #include "install_here.h"
-#include "steam_library.h"
 #include "text_encoding.h"
 #include "Engine/Core/Log/logging.h"
 
@@ -12,12 +11,12 @@
 #include <iterator>
 #include <stdexcept>
 #include <system_error>
+#include <vector>
 
 namespace fs = std::filesystem;
 
 namespace dingosdk::launcher_app {
 namespace {
-constexpr wchar_t skate_app[] = L"3354750";
 // What an install carries: the launcher and runtime always, the networking library for playing
 // without Steam when it came with them.
 constexpr std::array<const wchar_t *, 3> files{L"ReSkateLauncher.exe", L"ReSkate.dll", L"GameNetworkingSockets.dll"};
@@ -25,18 +24,6 @@ constexpr std::array<const wchar_t *, 3> files{L"ReSkateLauncher.exe", L"ReSkate
 std::string read_text(const fs::path &path) {
     std::ifstream in(path, std::ios::binary);
     return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-}
-std::optional<fs::path> steam_folder() {
-    std::array<wchar_t, MAX_PATH * 2> value{};
-    DWORD size = static_cast<DWORD>(value.size() * sizeof(wchar_t));
-    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath", RRF_RT_REG_SZ, nullptr, value.data(), &size) ==
-        ERROR_SUCCESS)
-        return fs::path(value.data());
-    size = static_cast<DWORD>(value.size() * sizeof(wchar_t));
-    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\WOW6432Node\\Valve\\Steam", L"InstallPath", RRF_RT_REG_SZ, nullptr,
-                     value.data(), &size) == ERROR_SUCCESS)
-        return fs::path(value.data());
-    return std::nullopt;
 }
 fs::path known_folder(REFKNOWNFOLDERID id) {
     PWSTR path{};
@@ -59,27 +46,23 @@ void shortcut(const fs::path &link, const fs::path &target) {
     }
     shell->Release();
 }
+void make_shortcuts(const fs::path &launcher) {
+    const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
+    for (const auto &folder : {known_folder(FOLDERID_Desktop), known_folder(FOLDERID_Programs)})
+        if (!folder.empty()) shortcut(folder / L"ReSkate.lnk", launcher);
+    if (com) CoUninitialize();
+}
 void set_value(HKEY key, const wchar_t *name, const std::wstring &value) {
     RegSetValueExW(key, name, 0, REG_SZ, reinterpret_cast<const BYTE *>(value.c_str()),
                    static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t)));
 }
 } // namespace
 
-std::optional<fs::path> find_steam_skate() {
-    const auto steam = steam_folder();
-    if (!steam) return std::nullopt;
-    std::vector<fs::path> libraries{*steam};
-    for (const auto &folder : steam_library::library_folders(read_text(*steam / L"steamapps" / L"libraryfolders.vdf")))
-        libraries.emplace_back(launcher_text::wide(folder));
-    std::error_code error;
-    for (const auto &library : libraries) {
-        const auto manifest = library / L"steamapps" / (std::wstring(L"appmanifest_") + skate_app + L".acf");
-        const auto folder = steam_library::manifest_value(read_text(manifest), "installdir");
-        if (!folder || !steam_library::plain_folder_name(*folder)) continue;
-        const auto game = library / L"steamapps" / L"common" / launcher_text::wide(*folder);
-        if (fs::is_regular_file(game / L"Skate.exe", error)) return game;
-    }
-    return std::nullopt;
+bool in_steam_library(const fs::path &folder) {
+    const auto same = [](const fs::path &part, const wchar_t *name) { return _wcsicmp(part.c_str(), name) == 0; };
+    for (auto at = folder; at.has_parent_path() && at != at.parent_path(); at = at.parent_path())
+        if (same(at.filename(), L"common") && same(at.parent_path().filename(), L"steamapps")) return true;
+    return false;
 }
 
 bool installed_copy_matches(const fs::path &game, const fs::path &from) {
@@ -100,6 +83,8 @@ bool installed_copy_matches(const fs::path &game, const fs::path &from) {
 fs::path install_into(const fs::path &game, const fs::path &from) {
     std::error_code error;
     if (!fs::is_regular_file(game / L"Skate.exe", error)) throw std::runtime_error("That folder has no Skate.exe.");
+    if (in_steam_library(game))
+        throw std::runtime_error("ReSkate is not installed into Steam's skate. folder: it has a folder of its own.");
     if (!fs::is_regular_file(from / L"ReSkate.dll", error))
         throw std::runtime_error("ReSkate.dll is not beside the launcher. Unzip the whole ReSkate download first.");
     if (fs::equivalent(game, from, error)) return game / L"ReSkateLauncher.exe";
@@ -146,10 +131,7 @@ fs::path install_into(const fs::path &game, const fs::path &from) {
     for (const auto &step : steps) fs::remove(step.kept, error);
     const auto launcher = game / L"ReSkateLauncher.exe";
     // Shortcuts: best effort, the install stands without them.
-    const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
-    for (const auto &folder : {known_folder(FOLDERID_Desktop), known_folder(FOLDERID_Programs)})
-        if (!folder.empty()) shortcut(folder / L"ReSkate.lnk", launcher);
-    if (com) CoUninitialize();
+    make_shortcuts(launcher);
     register_mod_install_verb(launcher);
     dingosdk::logging::write(dingosdk::logging::Level::info, dingosdk::logging::Channel::launcher,
                              L"Installed ReSkate into " + game.wstring());
@@ -176,11 +158,36 @@ fs::path shortcut_target(const fs::path &link) {
 constexpr wchar_t verb_key[] = L"Software\\Classes\\SystemFileAssociations\\.zip\\shell\\ReSkateInstallMod";
 } // namespace
 
+std::optional<fs::path> find_installed_reskate(const fs::path &self_folder) {
+    std::error_code error;
+    std::optional<fs::path> found;
+    const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
+    for (const auto &folder : {known_folder(FOLDERID_Desktop), known_folder(FOLDERID_Programs)}) {
+        if (folder.empty()) continue;
+        const auto target = shortcut_target(folder / L"ReSkate.lnk");
+        if (target.empty() || _wcsicmp(target.filename().c_str(), L"ReSkateLauncher.exe") != 0) continue;
+        const auto game = target.parent_path();
+        if (!fs::is_regular_file(target, error) || !fs::is_regular_file(game / L"Skate.exe", error)) continue;
+        if (fs::equivalent(game, self_folder, error) || in_steam_library(game)) continue;
+        found = game;
+        break;
+    }
+    if (com) CoUninitialize();
+    return found;
+}
+
+void make_shortcuts_once(const fs::path &launcher) {
+    std::error_code error;
+    for (const auto &folder : {known_folder(FOLDERID_Desktop), known_folder(FOLDERID_Programs)})
+        if (!folder.empty() && fs::exists(folder / L"ReSkate.lnk", error)) return;
+    make_shortcuts(launcher);
+}
+
 void uninstall_from(const fs::path &game) {
     std::error_code error;
     const auto launcher = game / L"ReSkateLauncher.exe";
-    if (!fs::is_regular_file(game / L"Skate.exe", error) || !fs::is_regular_file(launcher, error))
-        throw std::runtime_error("ReSkate is not installed in a skate. folder here.");
+    if (!fs::is_regular_file(launcher, error) || !fs::is_regular_file(game / L"ReSkate.dll", error))
+        throw std::runtime_error("ReSkate is not installed in this folder.");
     // Nothing is removed while skate. (or anything else) still has ReSkate's files open: each is
     // opened for exclusive access first, and only when all of them can be are they deleted.
     const std::array<fs::path, 2> runtime{game / L"ReSkate.dll", game / L"GameNetworkingSockets.dll"};

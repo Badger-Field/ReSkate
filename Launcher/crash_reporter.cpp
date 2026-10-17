@@ -6,7 +6,7 @@
 #include "Engine/Core/Debug/native_dump.h"
 #include "Engine/Core/Debug/multipart.h"
 #include "Engine/Game/Build/supported_build.h"
-#include "backtrace_config.h"
+#include "crash_report_config.h"
 #include <cstdlib>
 #include <fstream>
 #include <format>
@@ -14,7 +14,7 @@
 
 namespace {
 using namespace dingosdk;
-using namespace dingosdk::backtrace;
+using namespace dingosdk::crash_report;
 std::string utf8(const wchar_t* text) {
     const auto size = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
     if (size <= 1) return {};
@@ -22,6 +22,17 @@ std::string utf8(const wchar_t* text) {
     WideCharToMultiByte(CP_UTF8, 0, text, -1, result.data(), size, nullptr, nullptr);
     result.pop_back();
     return result;
+}
+template<std::size_t N> std::string field(const std::array<wchar_t, N>& value) {
+    return utf8(std::wstring(value.data(), wcsnlen(value.data(), N)).c_str());
+}
+// "Levels/Game/DingoLevel_Root/DingoLevel_Root + levels/game/x/x @ Start" -> "x": the sublevel when
+// there is one, else the level, by its last name.
+std::string map_name(std::string destination) {
+    if (const auto at = destination.find(" @ "); at != std::string::npos) destination.resize(at);
+    if (const auto plus = destination.find(" + "); plus != std::string::npos) destination.erase(0, plus + 3);
+    if (const auto slash = destination.find_last_of('/'); slash != std::string::npos) destination.erase(0, slash + 1);
+    return destination;
 }
 bool publish_dump(const std::filesystem::path& temporary, const SharedReport& report, const char* source) {
     auto dump = temporary; dump.replace_extension(L".dmp");
@@ -38,6 +49,13 @@ bool publish_dump(const std::filesystem::path& temporary, const SharedReport& re
     attributes["error.type"] = "crash";
     attributes["report.id"] = utf8(dump.stem().c_str());
     attributes["capture.source"] = source;
+    // (Tags for grouping crashes by the level and the graphics card; absent when unknown.)
+    if (const auto destination = field(report.destination); !destination.empty()) {
+        attributes["game.destination"] = destination;
+        attributes["game.map"] = map_name(destination);
+    }
+    if (const auto gpu = field(report.gpu_name); !gpu.empty()) attributes["gpu.name"] = gpu;
+    if (const auto driver = field(report.gpu_driver); !driver.empty()) attributes["gpu.driver"] = driver;
     const auto log = snapshot_log(std::filesystem::path(report.directory.data()).parent_path() / L"ReSkate.log", dump);
     attributes["attachment.log"] = log == LogSnapshot::complete ? "complete" : log == LogSnapshot::tail ? "tail" : "unavailable";
     std::ofstream metadata(dump.wstring() + L".json", std::ios::binary);
@@ -57,12 +75,16 @@ bool save_dump(HANDLE process, const SharedReport& report, const std::filesystem
     Handle file(CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
     if (file.value == INVALID_HANDLE_VALUE) return false;
     MINIDUMP_EXCEPTION_INFORMATION exception{report.thread_id, report.exception, TRUE};
-    constexpr auto flags = static_cast<MINIDUMP_TYPE>(MiniDumpNormal | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules);
+    // With the memory the stacks point at, so a crash on a freed or overwritten object shows that
+    // object and the list it was found in, not just the registers (a few MB more a dump).
+    constexpr auto flags = static_cast<MINIDUMP_TYPE>(MiniDumpNormal | MiniDumpWithThreadInfo |
+        MiniDumpWithUnloadedModules | MiniDumpWithIndirectlyReferencedMemory);
     const auto written = MiniDumpWriteDump(process, GetProcessId(process), file.value, flags, &exception, nullptr, nullptr);
     const auto durable = written && FlushFileBuffers(file.value);
     CloseHandle(file.release());
     if (!durable) { DeleteFileW(temporary.c_str()); return false; }
-    return publish_dump(temporary, report, "unhandled-exception");
+    return publish_dump(temporary, report,
+        report.source == CaptureSource::game_fatal_handler ? "game-fatal-handler" : "unhandled-exception");
 }
 bool collect_native_dump(HANDLE process, const SharedReport& report, const std::filesystem::path& directory) {
     const auto native = find_native_dump(report.native_directory.data(), GetProcessId(process), process_creation_seconds(process));
@@ -96,7 +118,9 @@ int run(int argc, wchar_t** argv) {
     const auto directory = queue_directory(shared->directory.data(), url);
     std::filesystem::create_directories(directory);
     // Uploading an old queue must never delay capturing a new crash.
-    std::jthread uploader([&] { upload_pending(url, directory); });
+    // RESKATE_NO_CRASH_UPLOAD: dumps are kept in the queue, nothing is sent.
+    const bool send = !uploads_forbidden();
+    std::jthread uploader([&] { if (send) upload_pending(url, directory); });
     SetEvent(handles[ready].value);
     const HANDLE wait_for[]{handles[requested].value, handles[stopping].value, handles[parent].value};
     const auto reason = WaitForMultipleObjects(3, wait_for, FALSE, INFINITE);
@@ -117,11 +141,11 @@ int run(int argc, wchar_t** argv) {
             saved ? "queued its native crash dump." : "no native dump matched this process and start time.");
     } else return 0;
     uploader.join();
-    if (saved) upload_pending(url, directory);
+    if (saved && send && !uploads_forbidden()) upload_pending(url, directory);
     return saved ? 0 : 4;
 }
 }
-int dingosdk::backtrace::run_reporter(int argc, wchar_t** argv) noexcept {
+int dingosdk::crash_report::run_reporter(int argc, wchar_t** argv) noexcept {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     try { return run(argc, argv); } catch (...) { return 1; }
 }

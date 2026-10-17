@@ -379,15 +379,16 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
         ImGui::BeginDisabled(busy);
         if (ImGui::Button("Verify game files")) { open = false; open_sign_in(launcher, ui, true); }
         ImGui::SameLine();
-        // Takes back what INSTALL added (install_here.h); skate., mods and the profile stay.
+        // Takes back ReSkate's files, shortcuts and right-click entry (install_here.h); the game
+        // copy, mods and the profile stay.
         if (ImGui::Button("Remove ReSkate") &&
             MessageBoxW(nullptr,
-                        L"Remove ReSkate from this skate. folder?\n\n"
+                        L"Remove ReSkate from this folder?\n\n"
                         L"Removed: ReSkate's files here, the ReSkate shortcuts and the \"Install as ReSkate mod\" "
-                        L"right-click entry.\nKept: skate. itself, your Mods folder, your ReSkate profile, and the config, "
-                        L"scripts and logs folders ReSkate made here (they can hold your own edits; delete them "
-                        L"yourself if you don't want them).\n\n"
-                        L"skate. keeps working from Steam as usual.",
+                        L"right-click entry.\nKept: the game files the launcher downloaded here, your Mods folder, "
+                        L"your ReSkate profile, and the config, scripts and logs folders (they can hold your own "
+                        L"edits). Delete the folder yourself to free the space.\n\n"
+                        L"skate. in Steam is not touched.",
                         L"Remove ReSkate", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND) == IDYES) {
             try {
                 launcher_app::uninstall_from(paths.directory);
@@ -459,6 +460,11 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
                       "Turn off to keep the ReSkate.dll and launcher you have, such as a test build someone gave you. "
                       "Skate's own Steam updates are not affected.",
                       settings.updates);
+        setting_check("Test pre-releases",
+                      "Update to the newest pre-release on GitHub when there is one, to try what is coming before it "
+                      "is released. Pre-releases are less tested. Turn off to go back to the latest release. "
+                      "The launcher checks again as soon as these settings are closed.",
+                      settings.prereleases);
         ImGui::Spacing();
         section_caption(fonts, "TROUBLESHOOTING");
         ImGui::AlignTextToFramePadding();
@@ -474,8 +480,15 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
                       settings.gpu_diagnostics);
         setting_check("Send crash reports",
                       "When the launcher or Skate crashes, upload a crash dump and that session's log so the ReSkate "
-                      "developers can fix it. The launcher picks a change up when it next starts.",
+                      "developers can fix it. Off unless you tick it. The launcher picks a change up when it next "
+                      "starts.",
                       settings.crash_reports);
+        setting_check("Send performance timings",
+                      "Send how long downloads, mod installs, the mod merge, level loads and joining a "
+                      "session took, and each level's average frame rate, so slow spots can be found and fixed. Nothing "
+                      "about your account is included. Needs crash reports on; the launcher picks a change up when it "
+                      "next starts.",
+                      settings.performance_timings);
         break;
     }
     ImGui::EndChild();
@@ -494,6 +507,7 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
     ImGui::End();
     if (!open) {
         launcher.save();
+        launcher.check_again_if_update_choices_changed();
         // Read again the next time: the game may have run in between.
         ui.game.loaded = false;
     }

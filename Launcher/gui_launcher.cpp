@@ -1,5 +1,6 @@
 #include "gui_internal.h"
 #include "install_here.h"
+#include "local_game.h"
 #include "text_encoding.h"
 
 #include "depot_output.h"
@@ -7,8 +8,12 @@
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Core/Platform/launcher_support.h"
+#include "Engine/Core/Debug/trace.h"
+#include "Engine/Game/Build/supported_build.h"
 #include "Engine/Vfs/mod_catalog.h"
 
+#include <algorithm>
+#include <deque>
 #include <shellapi.h>
 
 #include <format>
@@ -64,7 +69,9 @@ Settings load_settings(const fs::path& path) {
         // Keep the original settings key so existing launcher preferences survive.
         settings.keep_open_after_launch = !json.value("close_on_launch", !settings.keep_open_after_launch);
         settings.updates = json.value("updates", settings.updates);
-        settings.crash_reports = json.value("crash_reports", settings.crash_reports);
+        settings.crash_reports = json.value("send_crash_reports", settings.crash_reports);
+        settings.performance_timings = json.value("performance_timings", settings.performance_timings);
+        settings.prereleases = json.value("prereleases", settings.prereleases);
         settings.steam_username = json.value("steam_username", std::string());
         settings.steam_remember = json.value("steam_remember", settings.steam_remember);
         settings.steam_prefer_code = json.value("steam_prefer_code", settings.steam_prefer_code);
@@ -89,7 +96,9 @@ void save_settings(const fs::path& path, const Settings& settings) {
     json["arguments"] = settings.arguments;
     json["close_on_launch"] = !settings.keep_open_after_launch;
     json["updates"] = settings.updates;
-    json["crash_reports"] = settings.crash_reports;
+    json["send_crash_reports"] = settings.crash_reports;
+    json["performance_timings"] = settings.performance_timings;
+    json["prereleases"] = settings.prereleases;
     json["steam_username"] = settings.steam_username;
     json["steam_remember"] = settings.steam_remember;
     json["steam_prefer_code"] = settings.steam_prefer_code;
@@ -154,7 +163,21 @@ void Launcher::save() {
     save_settings(settings_path(session_), settings_);
     // The game inherits the launcher's environment, so this reaches the next launch; the
     // launcher's own crash reporting follows the setting from its next start.
-    SetEnvironmentVariableW(L"RESKATE_CRASH_REPORTING", settings_.crash_reports ? nullptr : L"0");
+    SetEnvironmentVariableW(L"RESKATE_CRASH_REPORTING", settings_.crash_reports ? L"1" : L"0");
+    SetEnvironmentVariableW(L"RESKATE_TRACING", settings_.performance_timings ? L"1" : L"0");
+}
+
+void Launcher::check_again_if_update_choices_changed() {
+    // "Install ReSkate updates" or "Test pre-releases" changed: the update check runs again now,
+    // so the release that applies (or keeping the files there are) is offered without a restart.
+    // Not while a download, an update or a launch is under way, the game runs, or a merge waits
+    // on an answer about mods: the next check or start picks it up then.
+    if (settings_.updates == checked_updates_.load() && settings_.prereleases == checked_prereleases_.load()) return;
+    if (busy_ || launched_) return;
+    const auto phase = snapshot().phase;
+    if (phase == Phase::ready || phase == Phase::update_available || phase == Phase::game_missing ||
+        phase == Phase::game_outdated || phase == Phase::failed)
+        check();
 }
 
 template<class Task> void Launcher::start(Task task) {
@@ -177,9 +200,9 @@ void Launcher::install_here() {
             std::lock_guard lock(mutex_);
             target = state_.install_target;
         }
-        set(Phase::checking, "Installing ReSkate", "Copying it into " + launcher_text::utf8(target.wstring()));
+        set(Phase::checking, "Updating ReSkate", "Copying it into " + launcher_text::utf8(target.wstring()));
         handoff_ = launcher_app::install_into(target, session_.self.parent_path()); // start() reports a failure
-        restart_ = true; // the launcher in the game folder takes over
+        restart_ = true; // the launcher in ReSkate's folder takes over
     });
 }
 void Launcher::apply_updates() { start([this] { run_updates(); }); }
@@ -191,8 +214,12 @@ void Launcher::download(bool validate, bool qr, std::string password) {
         password_ = std::move(password);
         qr_login_ = qr;
     }
-    start([this, validate] { run_download(validate); });
+    // Data of another build is put right by checking every file, not only fetching what is missing.
+    const bool verify = validate || launcher_app::game_data_mismatched(session_.paths);
+    start([this, verify] { run_download(verify); });
 }
+
+void Launcher::copy_game(fs::path source) { start([this, source] { run_copy(source); }); }
 
 void Launcher::play() { start([this] { run_play(); }); }
 
@@ -320,50 +347,43 @@ bool Launcher::runtime_outdated(const update::Config& config) const {
 }
 
 void Launcher::run_check() {
-    // Unzipped somewhere else: if Steam has skate., offer to install ReSkate into it rather than
-    // download the game a second time.
+    checked_updates_ = settings_.updates;
+    checked_prereleases_ = settings_.prereleases;
+    // ReSkate has a folder of its own, with its own copy of the game (main.cpp refuses Steam's
+    // skate. folder). Unzipped somewhere new while ReSkate is already installed in a folder of its
+    // own (its shortcut points there): open or update that copy rather than download the game a
+    // second time here.
     {
         std::error_code error;
         if (!fs::is_regular_file(session_.paths.game, error)) {
-            // Only a Steam copy that is the build ReSkate supports: otherwise the download below
-            // (a copy of its own, here) is the way, and Steam's install is left alone.
-            const auto found = launcher_app::find_steam_skate();
-            bool supported = false;
-            if (found) {
-                try {
-                    launcher::validate_game_file(*found / L"Skate.exe");
-                    supported = true;
-                } catch (...) {
-                }
-            }
-            if (supported) {
+            if (const auto installed = launcher_app::find_installed_reskate(session_.self.parent_path())) {
                 // This very build is already there (started again from the download, say): open
                 // the installed launcher instead of asking to install it once more.
-                if (launcher_app::installed_copy_matches(*found, session_.self.parent_path())) {
-                    set(Phase::checking, "Opening ReSkate", "ReSkate is already installed in your Steam copy of skate.");
-                    handoff_ = *found / L"ReSkateLauncher.exe";
+                if (launcher_app::installed_copy_matches(*installed, session_.self.parent_path())) {
+                    set(Phase::checking, "Opening ReSkate", "ReSkate is already installed in " + launcher_text::utf8(installed->wstring()));
+                    handoff_ = *installed / L"ReSkateLauncher.exe";
                     restart_ = true;
                     return;
                 }
                 {
                     std::lock_guard lock(mutex_);
-                    state_.install_target = *found;
+                    state_.install_target = *installed;
                 }
-                const bool update = fs::is_regular_file(*found / L"ReSkateLauncher.exe", error);
-                set(Phase::install_here, update ? "Update ReSkate" : "Install ReSkate",
-                    "Found skate. in your Steam library:\n" + launcher_text::utf8(found->wstring()) +
-                    (update ? "\nA different ReSkate build is installed there. This one replaces it; your mods and settings stay."
-                            : "\nReSkate copies itself there and adds Desktop and Start menu shortcuts."));
+                set(Phase::install_here, "Update ReSkate",
+                    "ReSkate is installed in:\n" + launcher_text::utf8(installed->wstring()) +
+                    "\nThis build replaces the one there; the game, your mods and settings stay.");
                 return;
             }
         } else {
-            // Beside Skate.exe: keep the right-click "Install as ReSkate mod" pointing here.
+            // In ReSkate's folder, beside its copy of the game: the shortcuts (once), and the
+            // right-click "Install as ReSkate mod" pointing here.
+            launcher_app::make_shortcuts_once(session_.self);
             launcher_app::register_mod_install_verb(session_.self);
         }
     }
     set(Phase::checking, "Checking for updates");
     update::remove_previous_launcher(session_.self);
-    auto config = update::fetch_config();
+    auto config = update::fetch_config(settings_.prereleases);
     {
         std::lock_guard lock(mutex_);
         state_.config = config;
@@ -371,7 +391,7 @@ void Launcher::run_check() {
     const bool newer = config && (launcher_outdated(*config) || runtime_outdated(*config));
     if (newer && update::binary_updates_enabled() && binaries_ && settings_.updates) {
         set(Phase::update_available, "A ReSkate update is ready",
-            std::format("Version {} will be downloaded and installed.",
+            std::format("{} {} will be downloaded and installed.", config->prerelease ? "Pre-release" : "Version",
                 config->runtime.version.empty() ? config->launcher.version : config->runtime.version));
         return;
     }
@@ -379,6 +399,26 @@ void Launcher::run_check() {
     if (!launcher_app::game_files_supported(session_.paths)) {
         std::error_code error;
         const bool installed = fs::is_regular_file(session_.paths.game, error);
+        // skate. already installed on this PC, as the supported build, is copied from there
+        // (GET THE GAME): no Steam account, no download, no update server needed.
+        auto local = launcher_app::find_local_games(session_.paths.directory);
+        const bool copyable = !local.empty() && local.front().supported;
+        const auto where = local.empty() ? std::string() : launcher_text::utf8(local.front().folder.wstring());
+        for (const auto& game : local)
+            logging::log(logging::Level::info, logging::Channel::launcher, "Found skate. at {} ({}).",
+                         launcher_text::utf8(game.folder.wstring()), game.supported ? "the supported build" : "another build");
+        if (local.empty())
+            logging::log(logging::Level::info, logging::Channel::launcher, "No skate. install found on this PC.");
+        {
+            std::lock_guard lock(mutex_);
+            state_.local_games = std::move(local);
+        }
+        if (copyable) {
+            set(installed ? Phase::game_outdated : Phase::game_missing, "skate. is on this PC",
+                "Press INSTALL to copy it from\n" + where + "\ninto ReSkate's folder. Nothing is downloaded, Steam is "
+                "not opened, and the game there is left as it is.");
+            return;
+        }
         if (!config) {
             fail(installed ? "This Skate version is not supported, and the update server could not be reached."
                            : "Skate is not installed here, and the update server could not be reached.");
@@ -388,10 +428,20 @@ void Launcher::run_check() {
             fail("This launcher is out of date. Download the latest ReSkate release.");
             return;
         }
-        if (installed) set(Phase::game_outdated, "Steam updated Skate",
+        // (Data of another build under a Skate.exe that may itself be right: every file is
+        // checked, which download() sees to.)
+        if (installed && launcher_app::game_data_mismatched(session_.paths))
+            set(Phase::game_outdated, "Game files need verifying",
+                "Some of the game's files are from another version of skate. (Steam updated it, or a download did not finish). "
+                "Press DOWNLOAD: every file is checked and only the wrong ones are downloaded.");
+        else if (installed) set(Phase::game_outdated, "Steam updated Skate",
             "ReSkate needs the build below. Only the files that differ are downloaded.");
         else set(Phase::game_missing, "Skate is not installed here",
             "Download the build below from Steam, about 14 GB, with an account that owns skate.");
+        if (!where.empty()) {
+            std::lock_guard lock(mutex_);
+            state_.detail += "\nThe skate. in " + where + " is another build than ReSkate supports, so it cannot be copied.";
+        }
         return;
     }
     std::error_code error;
@@ -422,11 +472,17 @@ void Launcher::run_updates() {
 void Launcher::run_download(bool validate) {
     const auto config = this->config();
     if (!config) return run_check();
+    trace::Scope timing("launcher.game_download", "task");
+    timing.tag("mode", validate ? "verify" : "download");
     set(Phase::downloading, "Preparing Steam download", {}, 0);
     const auto depot_downloader = update::ensure_depot_downloader(config->depot_downloader,
         progress_for("DepotDownloader"));
     set(Phase::downloading, "Connecting to Steam");
     DepotOutput output;
+    // DepotDownloader's last lines, for the log when the download fails: they say why (the
+    // account does not own the game, Steam refused the sign-in, the disk is full), and are
+    // otherwise only written at the debug level.
+    std::deque<std::string> last_lines;
     update::SteamLogin login;
     login.username = settings_.steam_username;
     login.remember = settings_.steam_remember;
@@ -445,6 +501,11 @@ void Launcher::run_download(bool validate) {
                 for (auto at = logged.find(login.username); at != std::string::npos; at = logged.find(login.username, at + 8))
                     logged.replace(at, login.username.size(), "<hidden>");
             logging::write(logging::Level::debug, logging::Channel::launcher, logged);
+            // (Not the rows of a QR code, nor each step of the progress.)
+            if (!logged.empty() && logged.find('%') == std::string::npos && std::ranges::none_of(logged, [](unsigned char c) { return c >= 0x80; })) {
+                if (last_lines.size() >= 40) last_lines.pop_front();
+                last_lines.push_back(logged.substr(0, 300));
+            }
             output.feed(line);
             std::lock_guard lock(mutex_);
             if (line.find("Use the Steam Mobile App to confirm") != std::string_view::npos) {
@@ -471,6 +532,7 @@ void Launcher::run_download(bool validate) {
         wipe(password_);
     }
     if (cancel_) {
+        timing.tag("cancelled", "true");
         run_check();
         std::lock_guard lock(mutex_);
         state_.detail = "Download cancelled. It will resume where it stopped.";
@@ -480,7 +542,67 @@ void Launcher::run_download(bool validate) {
         set(Phase::ready, "Ready to skate", "Skate build installed.");
         return;
     }
+    timing.fail();
+    logging::log(logging::Level::warning, logging::Channel::launcher, "The Steam download did not finish (exit code {}). DepotDownloader's last lines:", code);
+    for (const auto& line : last_lines) logging::write(logging::Level::warning, logging::Channel::launcher, "  " + line);
     fail(std::format("The Steam download did not finish (exit code {}). {}", code, output.message));
+}
+
+void Launcher::run_copy(const fs::path& source) {
+    trace::Scope timing("launcher.game_copy", "task");
+    const auto where = launcher_text::utf8(source.wstring());
+    const auto& target = session_.paths.directory;
+    set(Phase::copying, "Checking the game on this PC", where);
+    if (!launcher_app::local_game::looks_like_game(source))
+        return fail("The folder " + where + " is not a skate. folder: it has no Skate.exe and Data\\layout.toc.");
+    if (launcher_app::local_game::overlapping(source, target))
+        return fail("Choose the skate. folder Steam installed, not ReSkate's own folder or one that holds it.");
+    if (!launcher_app::game_folder_supported(source)) {
+        launcher::SiblingPaths paths;
+        paths.directory = source;
+        const auto build = launcher_app::game_data_build(paths);
+        return fail(std::format("The skate. in {} is not supported by this ReSkate: it is not Steam build {}{}. "
+            "Download the supported build with a Steam account instead.", where, supported_build::steam_build_id,
+            build.empty() ? std::string() : std::format(" (its data is build {}, ReSkate needs {})", build,
+                supported_build::game_data_changelist)));
+    }
+    const auto plan = launcher_app::local_game::plan_copy(source, target);
+    std::error_code error;
+    const auto space = fs::space(target, error);
+    if (!error && space.available < plan.bytes + (256ull << 20))
+        return fail(std::format("Not enough free space to copy skate.: it needs {} and the drive has {} free.",
+            format_bytes(plan.bytes), format_bytes(space.available)));
+    logging::log(logging::Level::info, logging::Channel::launcher, "Copying skate. from {}: {} files ({}), {} already in place.",
+        where, plan.files.size(), format_bytes(plan.bytes), plan.in_place);
+    set(Phase::copying, "Copying skate. from this PC", where, 0);
+    std::uint64_t done = 0;
+    for (const auto& file : plan.files) {
+        const auto name = launcher_app::local_game::text(file);
+        if (!launcher_app::local_game::copy_one(source / file, target / file, [&](std::uintmax_t bytes) {
+                done += bytes;
+                set_progress(std::format("{}  {} of {}", name, format_bytes(done), format_bytes(plan.bytes)),
+                    plan.bytes ? static_cast<float>(static_cast<double>(done) / static_cast<double>(plan.bytes)) : -1.0f);
+            }, cancel_))
+            break;
+    }
+    if (cancel_) {
+        timing.tag("cancelled", "true");
+        logging::log(logging::Level::info, logging::Channel::launcher, "Copy cancelled after {}; what was copied is kept.",
+                     format_bytes(done));
+        set(fs::is_regular_file(session_.paths.game, error) ? Phase::game_outdated : Phase::game_missing, "Copy cancelled",
+            "What was copied is kept; press INSTALL to carry on from there.");
+        return;
+    }
+    // The same check a finished download gets: Skate.exe, steam_api64.dll and the data's build.
+    if (launcher_app::game_files_supported(session_.paths)) {
+        logging::log(logging::Level::info, logging::Channel::launcher, "Copy finished: {} copied; the game files are the supported build.",
+                     format_bytes(done));
+        set(Phase::ready, "Ready to skate", "skate. copied from this PC.");
+        return;
+    }
+    timing.fail();
+    logging::log(logging::Level::warning, logging::Channel::launcher, "Copy finished, but the copied files are not the supported build.");
+    fail("The copied game is not supported: its files do not match the supported build. Download it with a Steam account instead.");
 }
 
 // The merge the game does behind its splash, done here instead, so a mod that
@@ -491,10 +613,14 @@ bool Launcher::run_mod_merge() {
     std::error_code error;
     if (!fs::is_directory(root / mods::mods_folder, error)) return true;
     set(Phase::merging, "Preparing mods", "Merging what is installed", 0);
+    trace::Scope timing("launcher.mod_merge", "task");
     auto catalog = mods::load_catalog(root, [this](const mods::MergeProgress& progress) {
         set_progress(progress.step, progress.total
             ? static_cast<float>(progress.done) / static_cast<float>(progress.total) : -1.0f);
     });
+    timing.tag("mods", std::to_string(catalog.mods.size()));
+    timing.tag("mods.excluded", std::to_string(catalog.excluded.size()));
+    if (!catalog.issue.empty()) timing.fail();
     for (const auto& note : catalog.notes)
         logging::write(logging::Level::info, logging::Channel::launcher, note);
     for (const auto& warning : catalog.warnings)
@@ -555,6 +681,9 @@ namespace dingosdk::launcher_gui {
 bool updates_enabled(const launcher_app::Session& session) {
     return detail::load_settings(detail::settings_path(session)).updates;
 }
+bool prereleases_enabled(const launcher_app::Session& session) {
+    return detail::load_settings(detail::settings_path(session)).prereleases;
+}
 launcher::LaunchOptions saved_launch_options(const launcher_app::Session& session) {
     return detail::launch_options(detail::load_settings(detail::settings_path(session)));
 }
@@ -564,8 +693,12 @@ void apply_crash_report_setting() noexcept {
         const auto length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
         if (!length || length >= path.size()) return;
         path.resize(length);
-        if (!detail::load_settings(std::filesystem::path(path).parent_path() / L"ReSkateLauncher.settings.json").crash_reports)
-            SetEnvironmentVariableW(L"RESKATE_CRASH_REPORTING", L"0");
+        const auto settings = detail::load_settings(std::filesystem::path(path).parent_path() / L"ReSkateLauncher.settings.json");
+        // Opt-in: on only when ticked (RESKATE_NO_CRASH_UPLOAD still stops every upload).
+        SetEnvironmentVariableW(L"RESKATE_CRASH_REPORTING", settings.crash_reports ? L"1" : L"0");
+        // A RESKATE_TRACING already set (to test with, or to refuse) is left alone.
+        if (settings.performance_timings && !GetEnvironmentVariableW(L"RESKATE_TRACING", nullptr, 0))
+            SetEnvironmentVariableW(L"RESKATE_TRACING", L"1");
     } catch (...) {}
 }
 } // namespace dingosdk::launcher_gui
