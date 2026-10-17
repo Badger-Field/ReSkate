@@ -161,10 +161,8 @@ CosmeticShared make_cosmetic_catalog(const profile::Snapshot& snapshot) {
     // EASTL's iteration scans past empty buckets until this non-null sentinel.
     owner->buckets.back() = &owner->sentinel;
     owner->map = {owner->buckets.data(), bucket_count, static_cast<std::uint32_t>(items.size())};
-    const auto inventory = snapshot.customization.value("inventory", dingosdk::Json::object());
     const auto catalog = snapshot.customization.value("catalog", dingosdk::Json::object());
     const auto object_dropper = snapshot.extensions.value("object_dropper", dingosdk::Json::object());
-    const auto object_inventory = object_dropper.value("inventory", dingosdk::Json::object());
     const auto object_catalog = object_dropper.value("catalog", dingosdk::Json::object());
     const auto groups = objects::object_groups(content_cache::catalogs());
     std::set<std::uint32_t> hashes;
@@ -184,10 +182,8 @@ CosmeticShared make_cosmetic_catalog(const profile::Snapshot& snapshot) {
         }
         auto& node = owner->nodes[index];
         node.hash = info.hash;
-        const auto& item_inventory = info.build_kit ? object_inventory : inventory;
         const auto& item_catalog = info.build_kit ? object_catalog : catalog;
-        const auto saved = item_inventory.find(key);
-        const bool owned = !cosmetic_runtime().ownership_unavailable && saved != item_inventory.end() && saved->get<bool>();
+        const bool owned = installed_item_owned(snapshot, key, info.hash, info.build_kit);
         auto metadata = profile::item_display_metadata(key, item_catalog.value(key, dingosdk::Json::object()));
         if (info.build_kit) {
             // The same tile and category the browser layout gives this object.
@@ -267,16 +263,8 @@ void publish_cosmetic_catalog() {
 
 std::vector<std::uint32_t> cosmetic_owned_ids(const profile::Snapshot& snapshot) {
     std::vector<std::uint32_t> ids;
-    if (cosmetic_runtime().ownership_unavailable) return ids;
-    const auto inventory = snapshot.customization.value("inventory", dingosdk::Json::object());
-    const auto object_dropper = snapshot.extensions.value("object_dropper", dingosdk::Json::object());
-    const auto object_inventory = object_dropper.value("inventory", dingosdk::Json::object());
-    for (const auto& [key, info] : cosmetic_runtime().items) {
-        const auto& item_inventory = info.build_kit ? object_inventory : inventory;
-        const auto saved = item_inventory.find(key);
-        if (saved != item_inventory.end() && saved->is_boolean() && saved->get<bool>())
-            ids.push_back(info.hash);
-    }
+    for (const auto& [key, info] : cosmetic_runtime().items)
+        if (installed_item_owned(snapshot, key, info.hash, info.build_kit)) ids.push_back(info.hash);
     return ids;
 }
 
