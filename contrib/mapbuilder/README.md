@@ -20,7 +20,8 @@ Control does not block it) and is tested on Linux CI.
 | Visible meshes (rigid `MeshSet` and geometry chunks) | layout verified on a PC; writer next |
 | EBX document reader and writer | done, byte-identical to ReSkate's C++ (`tests/test_ebx_crosscheck.py`) |
 | Level registration (layout, level TOC, description, on-demand entry, detached sublevel) | written as a clone of bam, tested on a synthetic game; not yet run on the PC |
-| World-partition tiles, own ground | not started |
+| Own ground (a sublevel with a copied blueprint, reused mesh, own flat collision) | written as `new-ground-level`, tested on a synthetic game; not yet run on the PC |
+| World-partition tiles of our own, own MeshSet | not started (FORMAT-NOTES 6.3) |
 
 What has been verified in the game so far: a mod written this way that overrides one
 collision resource loads; ground raised by exactly the amount written; zeroed
@@ -38,6 +39,10 @@ can be stood on.
         --level dingolevel_reskate_test --dry-run
     python -m reskate_mapbuilder new-level --game "<Skate>" --mods "<Skate>\Mods" --name zz-new-level \
         --level dingolevel_reskate_test --display-name "ReSkate test level"
+    python -m reskate_mapbuilder new-ground-level --game "<Skate>" --name zz-ground-level \
+        --level dingolevel_reskate_ground --bam all --dry-run
+    python -m reskate_mapbuilder list-assets --game "<Skate>" --superbundle <path> [--bundle B] [--contains TEXT]
+    python -m reskate_mapbuilder inspect-meshset --game "<Skate>" --superbundle S --bundle B --resource R
     python -m reskate_mapbuilder ebx-roundtrip --game "<Skate>" --superbundle globals \
         --ebx levels/game/dingolevel_root/dingolevel_root/description
     python -m reskate_mapbuilder ebx-arrayhash --game "<Skate>" --superbundle ... --ebx ...
@@ -46,7 +51,8 @@ can be stood on.
 
 `raise-ground` repeats the collision test already proven in game with the C++ tools, written
 entirely by this package. `new-level` adds a level that is, for now, a clone of the base
-map (FORMAT-NOTES 6.2); `--dry-run` reads and reports only. `dump-ebx` prints an EBX document; `ebx-roundtrip` says where and why rewriting one unchanged
+map (FORMAT-NOTES 6.2); `--dry-run` reads and reports only. `new-ground-level` adds a level
+with its own flat ground (FORMAT-NOTES 6.3). `dump-ebx` prints an EBX document; `ebx-roundtrip` says where and why rewriting one unchanged
 changes its bytes.
 
 The format reference is `contrib/mapbuilder/FORMAT-NOTES.md`.
