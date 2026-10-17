@@ -407,3 +407,27 @@ def refresh_flags(source: Document, clone: Document) -> int:
             new.object.set("Flags", guid_flags(new.instance_guid, flags))
             changed += 1
     return changed
+
+
+def field_referrers(doc: Document, index: int) -> list[str]:
+    """Paths of the pointers to instance `index` that are not elements of a pointer array (a
+    field, or a pointer inside a struct); remove_instances refuses those."""
+    out: list[str] = []
+
+    def walk(value: Any, path: str, in_array: bool) -> None:
+        if isinstance(value, PointerReference):
+            if value.kind == PointerKind.internal and value.index == index and not in_array:
+                out.append(path)
+        elif isinstance(value, Object):
+            for f in value.fields:
+                walk(f.value, f"{path}.{f.name}", False)
+        elif isinstance(value, list):
+            for i, v in enumerate(value):
+                walk(v, f"{path}[{i}]", True)
+
+    for i, instance in enumerate(doc.instances):
+        if instance.object is not None:
+            walk(instance.object, f"#{i}", False)
+    if index in boxed_reach(doc):
+        out.append("a boxed value")
+    return out

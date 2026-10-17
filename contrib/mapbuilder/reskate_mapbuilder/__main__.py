@@ -10,7 +10,8 @@
   python -m reskate_mapbuilder new-level --game <dir> --mods <dir> --name zz-... --level <name> [--dry-run]
   python -m reskate_mapbuilder new-ground-level --game <dir> --mods <dir> --name zz-... --level <name> \\
         [--size 50] [--tiles N] [--at X Y Z] [--bam all|no-world|333] [--tile-template EBX] \\
-        [--layer-template EBX [--layer-bundle B]] [--blueprint-template EBX [--blueprint-bundle B]] [--dry-run]
+        [--layer-template EBX [--layer-bundle B]] [--blueprint-template EBX [--blueprint-bundle B]] \\
+        [--blueprint-superbundle S] [--visual none|template] [--mesh template|own] [--dry-run]
   python -m reskate_mapbuilder inspect-meshset --game <dir> [--mod <mod dir>] --superbundle S --bundle B --resource R
   python -m reskate_mapbuilder list-assets --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] [--contains TEXT]
   python -m reskate_mapbuilder ebx-roundtrip --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME [--detail [N]]
@@ -30,8 +31,8 @@ from .ebx import read_document
 from .ebxcheck import array_hash_report, roundtrip
 from .ebxedit import describe
 from .game import Game
-from .ground import BAM_MODES, BLUEPRINT_BUNDLE, BLUEPRINT_TEMPLATE, DEFAULT_AT, DEFAULT_SIZE, TILE_TEMPLATE, new_ground_level
-from .level import new_level
+from .ground import BAM_MODES, MESH_MODES, VISUAL_MODES, BLUEPRINT_BUNDLE, BLUEPRINT_TEMPLATE, DEFAULT_AT, DEFAULT_SIZE, TILE_TEMPLATE, new_ground_level
+from .level import BASE_SUPERBUNDLE, new_level
 from .meshset import describe_meshset
 from .mod import ModBuilder
 from .physics import (KIND_TRIANGLE_MESH, Shape, compute_edge_data, physics_tail, read_physics, replace_shape,
@@ -136,7 +137,7 @@ def new_ground_level_command(args):
     try:
         new_ground_level(game, mod, args.level, args.display_name, args.size, tuple(args.at), args.bam,
                          args.tile_template, args.layer_template, args.layer_bundle, args.blueprint_template,
-                         args.blueprint_bundle, args.tiles, log)
+                         args.blueprint_bundle, args.tiles, log, args.blueprint_superbundle, args.visual, args.mesh)
     finally:
         for line in log:
             print(line)
@@ -262,6 +263,11 @@ def main(argv=None):
     p.add_argument("--layer-bundle", help="its bundle (default: the tile's, or found by search)")
     p.add_argument("--blueprint-template", default=BLUEPRINT_TEMPLATE, help="the ObjectBlueprint copied")
     p.add_argument("--blueprint-bundle", default=BLUEPRINT_BUNDLE, help="its bundle, which holds <blueprint>.physics")
+    p.add_argument("--blueprint-superbundle", default=BASE_SUPERBUNDLE, help="the superbundle holding that bundle")
+    p.add_argument("--visual", choices=VISUAL_MODES, default="none",
+                   help="template: also keep the layer's own placement of its own blueprint, beside ours")
+    p.add_argument("--mesh", choices=MESH_MODES, default="template",
+                   help="own: draw a MeshSet of our own (a copy of the template's with our plane); untested")
     p.add_argument("--dry-run", action="store_true", help="read and report only")
     p = sub.add_parser("inspect-meshset", help="print a MeshSet resource's header, LODs and sections (read-only)")
     p.add_argument("--game", required=True)

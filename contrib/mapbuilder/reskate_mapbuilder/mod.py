@@ -40,6 +40,7 @@ class _Bundle:
     manifest: object                                # None: a copy whose region is written as is
     replaced: dict = field(default_factory=dict)    # resource name -> decoded bytes
     ebx: dict = field(default_factory=dict)         # EBX name (lower case) -> decoded bytes, changed or added
+    chunks: dict = field(default_factory=dict)      # chunk GUID -> decoded bytes, added
 
 
 class ModBuilder:
@@ -149,6 +150,18 @@ class ModBuilder:
                                                 resource_meta=bytes(resource_meta)))
         b.replaced[name] = decoded
 
+    def add_chunk(self, superbundle: str, bundle_name: str, guid, decoded: bytes):
+        """A new chunk in a bundle the mod rewrites: logicalOffset 0, logicalSize its size, its
+        payload in the mod's archive of the manifest's install chunk."""
+        b = self.edit_bundle(superbundle, bundle_name)
+        if any(c.guid == guid for c in b.manifest.chunks):
+            raise ValueError(f"chunk {guid.string()} is already in {bundle_name}")
+        if b.region.inline_manifest:
+            raise NotImplementedError("bundles with an inline manifest are not written yet")
+        b.region.files.append(BundleFileInfo(b.region.files[0].location, 0, 0))
+        b.manifest.chunks.append(BundleAsset(CHUNK, guid=guid, logical_offset=0, logical_size=len(decoded)))
+        b.chunks[guid] = decoded
+
     def add_copied(self, superbundle: str, bundle_name: str, asset: BundleAsset, location: BundleFileInfo):
         """An entry of another bundle listed in this one as it is: its manifest record copied and
         its region file kept pointing where it was (a base archive), as the 333 map's copies do."""
@@ -212,6 +225,12 @@ class ModBuilder:
                 asset = b.manifest.resources[index - 1 - len(b.manifest.ebx)]
                 asset.original_size = len(decoded)
                 asset.sha1 = hashlib.sha1(decoded).digest()
+            for guid, decoded in b.chunks.items():
+                index = 1 + len(b.manifest.ebx) + len(b.manifest.resources) + next(
+                    i for i, c in enumerate(b.manifest.chunks) if c.guid == guid)
+                files[index] = store(files[index].location.install_chunk, encode_raw(decoded))
+                b.manifest.chunks[index - 1 - len(b.manifest.ebx) - len(b.manifest.resources)].sha1 = \
+                    hashlib.sha1(decoded).digest()
             # Manifests are stored without a block header.
             files[0] = store(files[0].location.install_chunk, write_binary_bundle(b.manifest))
             region = write_bundle_region(files)

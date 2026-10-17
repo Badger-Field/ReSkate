@@ -36,11 +36,13 @@ from collections import Counter
 
 from . import nativedb
 from .bundle import CHUNK, EBX, Guid
+from .cas import decode_cas
 from .ebx import Document, Object, PointerKind, PointerReference, ResourceReference, read_document, read_file_guid, write_document
 from .ebxcheck import semantically_equal
 from .ebxedit import (add_import, after_last_of_type, clone_document, clone_instance, derived_guid, find_objects, guid_flags,
-                      path_to, pointer_arrays, prune_imports, prune_unreachable, refresh_flags, remove_instances,
+                      field_referrers, path_to, pointer_arrays, prune_imports, prune_unreachable, refresh_flags, remove_instances,
                       set_fields, type_name, used_imports)
+from .meshset import describe_meshset, read_layout as read_mesh_layout, write_mesh
 from .level import (BASE_ROOT_BUNDLE, BASE_SUPERBUNDLE, LEVEL_NAME, SUBWORLD_REFERENCE_TYPE, _clone_found, _identity, _read,
                     new_level)
 from .physics import KIND_TRIANGLE_MESH, RESOURCE_TYPE as PHYSICS_TYPE, Part, compute_edge_data, flat_grid, read_physics, write_physics
@@ -49,6 +51,13 @@ from .physics import KIND_TRIANGLE_MESH, RESOURCE_TYPE as PHYSICS_TYPE, Part, co
 GROUND_SUBLEVEL = "levels/game/{level}/ground_sublevel"
 GROUND_LAYER = "levels/game/{level}/ground_layer"
 GROUND_BLUEPRINT = "levels/game/{level}/ground_bp"
+GROUND_MESH = "levels/game/{level}/ground_mesh"     # with --mesh own: the RigidMeshAsset and its MeshSet
+# --visual template: the layer's own placement (of its own blueprint) is kept beside ours, moved
+# by this much from --at, to tell whether anything our sublevel places is drawn.
+VISUAL_MODES = ("none", "template")
+VISUAL_OFFSET = (10.0, 0.0, 10.0)
+# --mesh own: the blueprint's mesh is replaced by a MeshSet of our own (meshset.write_mesh).
+MESH_MODES = ("template", "own")
 # Templates, all in bam's superbundle (found by the PC's scan of the base game, FORMAT-NOTES 6.3).
 TILE_TEMPLATE = ("levels/game/bam_levelroot/wproot/wp/s9600_x0z0/s200_x500z900/s100_x450z850/s50_x425z825/"
                  "s50_x425z825_sublevel")
@@ -142,15 +151,86 @@ class _Source:
         return self._guids
 
 
-def _source(game, bundle: str | None, ebx: str) -> _Source:
-    """The bundle of bam's superbundle holding `ebx`: the one given, the one named like it, or a search."""
-    toc = game.superbundle(BASE_SUPERBUNDLE)
+def _source(game, bundle: str | None, ebx: str, superbundle: str = BASE_SUPERBUNDLE) -> _Source:
+    """The bundle of a superbundle (bam's by default) holding `ebx`: the one given, the one named
+    like it, or a search."""
+    toc = game.superbundle(superbundle)
     names = {b.name.lower() for b in toc.bundles}
     if bundle is None:
-        bundle = "win32/" + ebx.lower() if "win32/" + ebx.lower() in names else game.find_ebx(BASE_SUPERBUNDLE, ebx)
+        bundle = "win32/" + ebx.lower() if "win32/" + ebx.lower() in names else game.find_ebx(superbundle, ebx)
         if bundle is None:
-            raise KeyError(f"{ebx} is in no bundle of {BASE_SUPERBUNDLE}")
-    return _Source(game, BASE_SUPERBUNDLE, bundle)
+            raise KeyError(f"{ebx} is in no bundle of {superbundle}")
+    return _Source(game, superbundle, bundle)
+
+
+# Field names worth printing on the blueprint's instances when looking for why it is not drawn.
+FLAG_WORDS = ("visible", "enable", "render", "debug", "hidden", "editor", "draw", "shadow", "lod", "cull")
+
+
+def _flag_fields(doc: Document) -> list[str]:
+    """Per instance: its bool fields, and any field whose name suggests visibility or debugging."""
+    out = []
+
+    def walk(value, path, found):
+        if isinstance(value, Object):
+            for f in value.fields:
+                if isinstance(f.value, bool) or (any(w in f.name.lower() for w in FLAG_WORDS)
+                                                 and not isinstance(f.value, (Object, list))):
+                    found.append(f"{path}{f.name}={f.value!r}")
+                if isinstance(f.value, (Object, list)):
+                    walk(f.value, f"{path}{f.name}.", found)
+        elif isinstance(value, list):
+            for i, v in enumerate(value[:8]):
+                walk(v, f"{path[:-1]}[{i}].", found)
+
+    for i, instance in enumerate(doc.instances):
+        found: list[str] = []
+        walk(instance.object, "", found)
+        out.append(f"#{i} {type_name(doc, instance.object)}: " + (", ".join(found) if found else "no such fields"))
+    return out
+
+
+def _closure(source: _Source, roots: list[Guid], skip: set[str], log: list[str]) -> dict[str, list[int]]:
+    """What `roots` import from `source`'s bundle, followed through imports: the EBX, the resources
+    named like them, and the chunks whose GUID appears in those resources' bytes."""
+    guids = source.guids()
+    names, outside, wanted = [], set(), list(roots)
+    while wanted:
+        g = wanted.pop()
+        name = guids.get(g)
+        if name is None:
+            outside.add(g)
+            continue
+        if name in names or name.lower() in skip:
+            continue
+        names.append(name)
+        try:
+            wanted += [imp.file_guid for imp in read_document(source.ebx(name)).imports]
+        except ValueError as e:
+            log.append(f"  {name} does not read ({e}); its own imports are not followed")
+    lower = {n.lower() for n in names}
+    copied = {EBX: [i for i, a in enumerate(source.manifest.ebx) if a.name.lower() in lower]}
+    copied["res"] = [i for i, r in enumerate(source.manifest.resources) if r.name.lower() in lower]
+    payloads = [source.payload("res", i) for i in copied["res"]]
+    copied[CHUNK] = [i for i, c in enumerate(source.manifest.chunks) if any(c.guid.bytes in p for p in payloads)]
+    log.append(f"  listed from {source.name} in the ground bundle: {len(copied[EBX])} EBX {sorted(names)}, "
+               f"{len(copied['res'])} res, {len(copied[CHUNK])} chunks; {len(outside)} imported files are not in that "
+               f"bundle and must come from another bundle the level loads")
+    return copied
+
+
+def _chunk_payload(game, source: _Source, guid: Guid) -> bytes:
+    """A chunk's decoded bytes: from the bundle's manifest, or from its superbundle's TOC chunks."""
+    for i, c in enumerate(source.manifest.chunks):
+        if c.guid == guid:
+            if c.logical_offset:
+                raise ValueError(f"chunk {guid.string()} has logicalOffset {c.logical_offset}; not handled")
+            data = source.payload(CHUNK, i)
+            return data[:c.logical_size] if c.logical_size else data
+    for c in game.superbundle(source.superbundle).chunks:
+        if c.guid == guid:
+            return decode_cas(game.read(c.location, c.offset, c.size), game.root)
+    raise KeyError(f"chunk {guid.string()} is neither in {source.name} nor in {source.superbundle}'s TOC chunks")
 
 
 def _meshset_summary(data: bytes) -> str:
@@ -226,7 +306,8 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                      at: tuple[float, float, float] = DEFAULT_AT, bam: str = "all", tile_template: str = TILE_TEMPLATE,
                      layer_template: str | None = LAYER_TEMPLATE, layer_bundle: str | None = None,
                      blueprint_template: str = BLUEPRINT_TEMPLATE, blueprint_bundle: str | None = BLUEPRINT_BUNDLE,
-                     tiles: int = 1, log: list[str] | None = None) -> list[str]:
+                     tiles: int = 1, log: list[str] | None = None, blueprint_superbundle: str = BASE_SUPERBUNDLE,
+                     visual: str = "none", mesh: str = "template") -> list[str]:
     """Adds a level whose content is our own ground to `mod` (see the module's text). Appends a
     report to `log` (also when it refuses) and returns it."""
     log = [] if log is None else log
@@ -238,11 +319,14 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         raise ValueError("--size is between 0 and 1024 metres")
     if not 1 <= tiles <= MAX_TILES:
         raise ValueError(f"--tiles is between 1 and {MAX_TILES}")
+    if visual not in VISUAL_MODES or mesh not in MESH_MODES:
+        raise ValueError(f"--visual is one of {VISUAL_MODES}, --mesh one of {MESH_MODES}")
     path = f"levels/game/{level}/{level}"
     sublevel_name = GROUND_SUBLEVEL.format(level=level)
     layer_name = GROUND_LAYER.format(level=level)
     bp_name = GROUND_BLUEPRINT.format(level=level)
     physics_name = bp_name + PHYSICS_SUFFIX
+    mesh_name = GROUND_MESH.format(level=level)
     ground_bundle = "win32/" + sublevel_name
     log.append(f"Ground for {path}: {tiles} x {tiles} placements of {size} m at {list(at)}, bam bundles: {bam}")
 
@@ -282,27 +366,29 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         log.append(f"  {PLACEMENT_TYPE} #{f.instance} places {what}")
     placement_index = placements[0].instance
 
-    # 2. The blueprint: a copy under our name; the mesh it imports is kept.
-    bp_source = _source(game, blueprint_bundle, blueprint_template)
-    log.append(f"Blueprint {blueprint_template} in {bp_source.name}")
+    # 2. The blueprint: a copy under our name; the mesh it imports is kept (or replaced, --mesh own).
+    bp_source = _source(game, blueprint_bundle, blueprint_template, blueprint_superbundle)
+    log.append(f"Blueprint {blueprint_template} in {blueprint_superbundle} / {bp_source.name}")
     bp_old = _read(bp_source.ebx(blueprint_template), blueprint_template, log)
     if bp_old.root_type != BLUEPRINT_TYPE:
         raise ValueError(f"{blueprint_template} is a {bp_old.root_type}, not an {BLUEPRINT_TYPE}")
     log.append(f"  instance types: {dict(Counter(type_name(bp_old, i.object) for i in bp_old.instances if i.object))}")
+    log.extend("  flags " + line for line in _flag_fields(bp_old))
     found = bp_source.resource(blueprint_template + PHYSICS_SUFFIX, PHYSICS_TYPE)
     if found is None:
         raise KeyError(f"{bp_source.name} has no physics resource {blueprint_template + PHYSICS_SUFFIX}")
     physics_index, physics_asset = found
     log.append(f"  collision {physics_asset.name}: id {physics_asset.resource_id:#x}, meta {physics_asset.resource_meta.hex()}")
     guids = bp_source.guids()
+    template_mesh = None      # (EBX name, import, MeshSet (index, asset))
     for imp in used_imports(bp_old):
         name = guids.get(imp.file_guid)
-        mesh = bp_source.resource(name, MESHSET_TYPE) if name else None
+        found_ms = bp_source.resource(name, MESHSET_TYPE) if name else None
         log.append(f"  imports {name or imp.file_guid.string() + ' (another bundle)'}"
-                   + (f": MeshSet {_meshset_summary(bp_source.payload('res', mesh[0]))}" if mesh else ""))
-    if bp_source.name.lower() != BASE_ROOT_BUNDLE:
-        log.append(f"  WARNING: {bp_source.name} is not bam's root bundle, so what the blueprint imports is loaded "
-                   f"only if the level lists that bundle (nothing is copied)")
+                   + (f": MeshSet {_meshset_summary(bp_source.payload('res', found_ms[0]))}, meta "
+                      f"{found_ms[1].resource_meta.hex()}" if found_ms else ""))
+        if found_ms and template_mesh is None:
+            template_mesh = (name, imp, found_ms)
     bp = clone_document(bp_old, derived_guid(level, "ground_bp", bp_old.file_guid.string()), level + ":ground_bp")
     flags = refresh_flags(bp_old, bp)
     if isinstance(bp.instances[0].object.get("Name"), str):
@@ -316,6 +402,48 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
             moved += 1
     log.append(f"  new {bp_name}: file guid {bp.file_guid.string()}, {flags} Flags renewed; collision {physics_name} "
                f"(id {physics_id:#x}, matched by name); {len(refs)} resource references, {moved} named the template's id")
+
+    # 2b. With --mesh own: a MeshSet of our own geometry (the collision's grid), patched into a
+    # copy of the template's, a copy of its RigidMeshAsset naming it, and its geometry chunk.
+    own = None
+    if mesh == "own":
+        if template_mesh is None:
+            raise KeyError(f"{blueprint_template} imports no mesh whose MeshSet is in {bp_source.name}")
+        template_mesh_name, template_import, (ms_index, ms_asset) = template_mesh
+        mesh_old = _read(bp_source.ebx(template_mesh_name), template_mesh_name, log)
+        ms_data = bp_source.payload("res", ms_index)
+        layout = read_mesh_layout(ms_data)
+        chunk_data = _chunk_payload(game, bp_source, layout[0].chunk)
+        grid_mesh = flat_grid(size, GRID_CELL)
+        chunk_guid = derived_guid(level, "ground_mesh_chunk")
+        new_ms, new_chunk, lines = write_mesh(ms_data, chunk_data, grid_mesh.vertices, grid_mesh.triangles, chunk_guid)
+        mesh_new = clone_document(mesh_old, derived_guid(level, "ground_mesh", mesh_old.file_guid.string()),
+                                  level + ":ground_mesh")
+        refresh_flags(mesh_old, mesh_new)
+        if isinstance(mesh_new.instances[0].object.get("Name"), str):
+            mesh_new.instances[0].object.set("Name", mesh_name)
+        meshset_id = resource_id(mesh_name)
+        named = 0
+        for holder, field_name, ref in _resource_refs([i.object for i in mesh_new.instances if i.object is not None]):
+            if ref.id == ms_asset.resource_id:
+                holder.set(field_name, ResourceReference(meshset_id))
+                named += 1
+        new_class, _ = _new_guid_of(mesh_old, mesh_new, template_import.class_guid)
+        retargeted = 0
+        for imp in bp.imports:
+            if imp.file_guid == template_import.file_guid:
+                imp.file_guid, imp.class_guid = mesh_new.file_guid, new_class
+                retargeted += 1
+        log.append(f"  --mesh own: template {template_mesh_name} (MeshSet id {ms_asset.resource_id:#x}, chunk "
+                   f"{layout[0].chunk.string()}, {len(chunk_data)} bytes)")
+        log.extend("    " + line for line in lines)
+        log.append(f"    new {mesh_name}: file guid {mesh_new.file_guid.string()}, MeshSet {mesh_name} id {meshset_id:#x} "
+                   f"({named} resource references named the template's id"
+                   + ("" if named else "; GUESS: then it is found by name") + f"), chunk {chunk_guid.string()}; "
+                   f"{retargeted} blueprint imports moved to it")
+        for line in describe_meshset(new_ms)[:2]:
+            log.append("    " + line)
+        own = (mesh_new, new_ms, new_chunk, chunk_guid, ms_asset)
 
     # 3. Our collision, with the template part's material and words.
     shapes, parts, version = read_physics(bp_source.payload("res", physics_index))
@@ -349,10 +477,27 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
     # GUESS: an import of a blueprint names its root instance (the template placement imports
     # another blueprint, so its own instance GUID says nothing about ours).
     instance_guid = bp.instances[0].instance_guid
+    holders = pointer_arrays(layer, placed)
+    if visual == "template":
+        # The layer's own placement, of its own blueprint, kept beside ours (rotation and scale as
+        # they were, moved next to --at).
+        source = layer.instances[placed]
+        index = clone_instance(layer, placed, derived_guid(level, "visual_placement") if source.exported else None,
+                               after_last_of_type(layer, placed))
+        for _, array in holders:
+            array.append(PointerReference(PointerKind.internal, index))
+        kept = layer.instances[index].object
+        if source.exported and isinstance(kept.get("Flags"), int):
+            kept.set("Flags", guid_flags(layer.instances[index].instance_guid, kept.get("Flags")))
+        where = [a + d for a, d in zip(at, VISUAL_OFFSET)]
+        for axis, value in zip("xyz", where):
+            kept.get(PLACEMENT_TRANSFORM).get("trans").set(axis, float(value))
+        imp = layer.imports[kept.get(PLACEMENT_BLUEPRINT).index]
+        log.append(f"  --visual template: the layer's own placement kept as #{index} at {where}, placing "
+                   f"{layer_source.guids().get(imp.file_guid) or imp.file_guid.string() + ' (not in the layer bundle)'}")
     target.set(PLACEMENT_BLUEPRINT, add_import(layer, bp.file_guid, instance_guid))
     offsets = [((i - (tiles - 1) / 2) * size, (j - (tiles - 1) / 2) * size) for j in range(tiles) for i in range(tiles)]
     _place(target, (at[0] + offsets[0][0], at[1], at[2] + offsets[0][1]))
-    holders = pointer_arrays(layer, placed)
     for n, (dx, dz) in enumerate(offsets[1:], 1):
         source = layer.instances[placed]
         index = clone_instance(layer, placed, derived_guid(level, "ground_placement", str(n)) if source.exported else None,
@@ -393,6 +538,18 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         if imp.file_guid != layer.file_guid:
             log.append(f"    still imports {tile_source.guids().get(imp.file_guid) or imp.file_guid.string()}")
 
+    # 5b. What the blueprint (and our mesh) need from the blueprint's bundle, unless that is bam's
+    # root bundle, which the level's root bundle copies (and which is loaded with the level).
+    copied = {EBX: [], "res": [], CHUNK: []}
+    if bp_source.name.lower() == BASE_ROOT_BUNDLE:
+        log.append("  the blueprint's imports are in bam's root bundle, which the level's root bundle copies: nothing listed")
+    else:
+        docs = [bp] + ([own[0]] if own else [])
+        new_files = {d.file_guid for d in docs}
+        roots = [imp.file_guid for d in docs for imp in d.imports if imp.file_guid not in new_files]
+        skip = {blueprint_template.lower()} | ({template_mesh[0].lower()} if own else set())
+        copied = _closure(bp_source, roots, skip, log)
+
     # 6. The level, registered as new-level does, its root loading the ground.
     def edit_root(root: Document, listed: set[str], lines: list[str]) -> None:
         listed = listed | {ground_bundle}
@@ -406,12 +563,24 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
             if not ok:
                 unresolved.append(f)
         if unresolved and bam != "all":
+            # Only references nothing but pointer arrays point at are removed; the others are kept
+            # (a field pointing at them would be left dangling) and reported.
+            removable, kept, structs = set(), [], 0
             for f in unresolved:
                 if f.instance < 0:
                     f.array[:] = [v for v in f.array if v is not f.object]
-            taken = remove_instances(root, {f.instance for f in unresolved if f.instance >= 0})
-            lines.append(f"  removed {len(unresolved)} references to bundles the TOC does not list"
+                    structs += 1
+                    continue
+                held = field_referrers(root, f.instance)
+                if held:
+                    kept.append(f"#{f.instance} {f.object.get('BundleName')!r} (held by {', '.join(held)})")
+                else:
+                    removable.add(f.instance)
+            taken = remove_instances(root, removable)
+            lines.append(f"  removed {len(removable) + structs} references to bundles the TOC does not list"
                          + (f" (and {len(taken)} pointers to them: {taken})" if taken else ""))
+            for text in kept:
+                lines.append(f"  KEPT a reference to a bundle the TOC does not list, as a field points at it: {text}")
         references = find_objects(root, SUBWORLD_REFERENCE_TYPE)
         if not references:
             raise KeyError(f"the root has no {SUBWORLD_REFERENCE_TYPE} to copy for the ground")
@@ -447,5 +616,19 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
     mod.add_ebx(path, ground_bundle, bp_name, _checked_bytes(bp, bp_name))
     mod.add_resource(path, ground_bundle, physics_name, physics_asset.resource_type, physics, physics_id,
                      copy.copy(physics_asset.resource_meta))
-    log.append(f"{ground_bundle}: 3 new EBX and 1 new res, payloads in install chunk {chunk:#x}")
+    new_counts = [3, 1, 0]
+    if own is not None:
+        mesh_new, new_ms, new_chunk, chunk_guid, ms_asset = own
+        mod.add_ebx(path, ground_bundle, mesh_name, _checked_bytes(mesh_new, mesh_name))
+        mod.add_resource(path, ground_bundle, mesh_name, ms_asset.resource_type, new_ms, resource_id(mesh_name),
+                         copy.copy(ms_asset.resource_meta))
+        mod.add_chunk(path, ground_bundle, chunk_guid, new_chunk)
+        new_counts = [4, 2, 1]
+    for kind, assets in ((EBX, bp_source.manifest.ebx), ("res", bp_source.manifest.resources),
+                         (CHUNK, bp_source.manifest.chunks)):
+        for i in copied[kind]:
+            mod.add_copied(path, ground_bundle, assets[i], bp_source.region.files[bp_source.file_index(kind, i)])
+    log.append(f"{ground_bundle}: {new_counts[0]} new EBX, {new_counts[1]} new res, {new_counts[2]} new chunks, "
+               f"{sum(len(v) for v in copied.values())} entries listed from {bp_source.name}; new payloads in install "
+               f"chunk {chunk:#x}")
     return log

@@ -5,6 +5,7 @@ Pointers are u64 counted from byte 16 of the resource.
 from __future__ import annotations
 
 import struct
+from dataclasses import dataclass
 
 from .bundle import Guid
 
@@ -62,3 +63,179 @@ def describe_meshset(data: bytes) -> list[str]:
             out.append(f"    elements (usage, format, offset, stream) {layout}; streams (stride, class) {strides}")
             out.append(f"    section bytes: {data[at:at + SECTION_SIZE].hex()}")
     return out
+
+
+# ---- Writing a MeshSet of our own geometry by patching a copy of a template ---------------------
+#
+# Only the fields FORMAT-NOTES 1 has verified are changed; every other byte (names, vertex
+# declarations, material references, the per-section box, unknown words) is the template's, and
+# the resource keeps the template's size, so the template's resource meta stays valid.
+
+POSITION_USAGE = 1
+INDEX_FORMAT_U16 = 33
+TRIANGLE_LIST = 3
+
+
+@dataclass
+class Section:
+    at: int                 # offset of the section struct in the MeshSet
+    vertex_start: int       # byte offset into the chunk
+    vertex_count: int
+    triangle_count: int
+    first_index: int
+    elements: list          # (usage, format, offset, stream)
+    strides: list           # per stream
+
+
+@dataclass
+class Lod:
+    at: int
+    index_bytes: int
+    vertex_bytes: int
+    chunk: Guid
+    sections: list
+
+
+def read_layout(data: bytes) -> list[Lod]:
+    """The LODs and sections of a rigid MeshSet; ValueError when it is not one this writer handles."""
+    header, lod_size, section_size = struct.unpack_from("<III", data, 0)
+    if (header, lod_size, section_size) != (HEADER_SIZE, LOD_SIZE, SECTION_SIZE):
+        raise ValueError("not the rigid MeshSet layout (192/176/384)")
+    if data[124] != 0:
+        raise ValueError(f"mesh type {data[124]}; only type 0 is handled")
+    (lod_count,) = struct.unpack_from("<H", data, 180)
+    lods = []
+    for k in range(lod_count):
+        lod = struct.unpack_from("<Q", data, 0x30 + 8 * k)[0] + 16
+        count = struct.unpack_from("<I", data, lod + 8)[0]
+        table = struct.unpack_from("<Q", data, lod + 12)[0] + 16
+        _, index_format, index_bytes, vertex_bytes = struct.unpack_from("<4I", data, lod + 80)
+        if index_format != INDEX_FORMAT_U16:
+            raise ValueError(f"LOD {k}: index format {index_format}; only 16-bit indices are handled")
+        sections = []
+        for s in range(count):
+            at = table + s * SECTION_SIZE
+            if data[at + 31] != TRIANGLE_LIST:
+                raise ValueError(f"LOD {k} section {s}: primitive type {data[at + 31]}, not a triangle list")
+            triangles, first_index, vertex_start, vertices = struct.unpack_from("<4I", data, at + 32)
+            decl = at + 112
+            elements = [tuple(data[decl + 4 * e:decl + 4 * e + 4]) for e in range(data[decl + 96])]
+            strides = [data[decl + 64 + 2 * e] for e in range(data[decl + 97])]
+            sections.append(Section(at, vertex_start, vertices, triangles, first_index, elements, strides))
+        lods.append(Lod(lod, index_bytes, vertex_bytes, Guid(data[lod + 116:lod + 132]), sections))
+    return lods
+
+
+def _stream_base(section: Section, stream: int) -> int:
+    return section.vertex_start + sum(stride * section.vertex_count for stride in section.strides[:stream])
+
+
+def _vertex_end(section: Section) -> int:
+    return section.vertex_start + sum(section.strides) * section.vertex_count
+
+
+def rebuild_chunk(lod: Lod, chunk: bytes) -> bytes:
+    """The chunk rebuilt from what the layout says it holds (each section's streams, the index
+    buffer at `vertex_bytes`), gaps zero: equal to the original when the layout is understood."""
+    out = bytearray(len(chunk))
+    for s in lod.sections:
+        out[s.vertex_start:_vertex_end(s)] = chunk[s.vertex_start:_vertex_end(s)]
+        start = lod.vertex_bytes + 2 * s.first_index
+        out[start:start + 6 * s.triangle_count] = chunk[start:start + 6 * s.triangle_count]
+    return bytes(out)
+
+
+def _position(section: Section) -> tuple[int, int, int]:
+    found = [e for e in section.elements if e[0] == POSITION_USAGE]
+    if len(found) != 1 or found[0][1] not in (3, 8):
+        raise ValueError(f"section at {section.at}: position element {found}; only formats 3 and 8 are handled")
+    _, fmt, offset, stream = found[0]
+    return fmt, offset, stream
+
+
+def section_positions(section: Section, chunk: bytes) -> list[tuple[float, float, float]]:
+    fmt, offset, stream = _position(section)
+    base, stride = _stream_base(section, stream), section.strides[stream]
+    code = "<3f" if fmt == 3 else "<3e"
+    return [struct.unpack_from(code, chunk, base + i * stride + offset) for i in range(section.vertex_count)]
+
+
+def section_triangles(lod: Lod, section: Section, chunk: bytes) -> list[tuple[int, int, int]]:
+    start = lod.vertex_bytes + 2 * section.first_index
+    flat = struct.unpack_from(f"<{3 * section.triangle_count}H", chunk, start)
+    return [tuple(flat[i:i + 3]) for i in range(0, len(flat), 3)]
+
+
+def _align(value: int, to: int) -> int:
+    return (value + to - 1) // to * to
+
+
+def write_mesh(template: bytes, template_chunk: bytes, vertices, triangles, chunk_guid: Guid) -> tuple[bytes, bytes, list[str]]:
+    """A MeshSet and its geometry chunk holding `vertices` and `triangles` in every section of a
+    one-LOD template; every vertex's other elements are the template section's first vertex's.
+    Triangles take the template's winding (seen from +y). Returns (meshset, chunk, report)."""
+    lods = read_layout(template)
+    if len(lods) != 1:
+        raise ValueError(f"the template has {len(lods)} LODs; only one is handled")
+    lod = lods[0]
+    if rebuild_chunk(lod, template_chunk) != template_chunk:
+        raise ValueError("the template's chunk does not rebuild from its layout; not written")
+    if len(vertices) > 0xFFFF:
+        raise ValueError("at most 65535 vertices")
+    report = []
+    flip = False
+    first = lod.sections[0]
+    points, tris = section_positions(first, template_chunk), section_triangles(lod, first, template_chunk)
+    ups = [((b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]))
+           for a, b, c in ((points[i], points[j], points[k]) for i, j, k in tris)]
+    ours = [((vertices[b][2] - vertices[a][2]) * (vertices[c][0] - vertices[a][0])
+             - (vertices[b][0] - vertices[a][0]) * (vertices[c][2] - vertices[a][2])) for a, b, c in triangles[:1]]
+    if ups and ours and (sum(ups) > 0) != (ours[0] > 0):
+        flip = True
+    if flip:
+        triangles = [(a, c, b) for a, b, c in triangles]
+    report.append(f"template: {len(lod.sections)} sections, {[s.vertex_count for s in lod.sections]} vertices, "
+                  f"{[s.triangle_count for s in lod.sections]} triangles; chunk {len(template_chunk)} bytes rebuilds "
+                  f"identically; winding {'flipped to match' if flip else 'as the template'}")
+
+    meshset = bytearray(template)
+    vertex_data = bytearray()
+    first_index = 0
+    for s in lod.sections:
+        fmt, offset, stream = _position(s)
+        start = _align(len(vertex_data), 16)
+        vertex_data += bytes(start - len(vertex_data))
+        for t, stride in enumerate(s.strides):
+            model = template_chunk[_stream_base(s, t):_stream_base(s, t) + stride]
+            for x, y, z in vertices:
+                vertex = bytearray(model)
+                if t == stream:
+                    struct.pack_into("<3f" if fmt == 3 else "<3e", vertex, offset, x, y, z)
+                vertex_data += vertex
+        struct.pack_into("<4I", meshset, s.at + 32, len(triangles), first_index, start, len(vertices))
+        first_index += 3 * len(triangles)
+    vertex_bytes = _align(len(vertex_data), 16)
+    indices = struct.pack(f"<{3 * len(triangles)}H", *(i for t in triangles for i in t)) * len(lod.sections)
+    chunk = bytes(vertex_data) + bytes(vertex_bytes - len(vertex_data)) + indices
+    chunk += bytes(-len(chunk) % 16)
+    struct.pack_into("<II", meshset, lod.at + 88, len(indices), vertex_bytes)
+    meshset[lod.at + 116:lod.at + 132] = chunk_guid.bytes
+    lo = [min(v[i] for v in vertices) for i in range(3)]
+    hi = [max(v[i] for v in vertices) for i in range(3)]
+    struct.pack_into("<3f", meshset, 0x10, *lo)
+    struct.pack_into("<3f", meshset, 0x20, *hi)
+    old_lo, old_hi = struct.unpack_from("<3f", template, 0x10), struct.unpack_from("<3f", template, 0x20)
+    report.append(f"ours: {len(vertices)} vertices, {len(triangles)} triangles per section, chunk {len(chunk)} bytes; "
+                  f"box {[round(v, 2) for v in lo]}..{[round(v, 2) for v in hi]}"
+                  + ("" if all(abs(a - b) < 1e-3 for a, b in zip(lo + hi, old_lo + old_hi)) else
+                     " (differs from the template's; each section's own box, not decoded, still says the template's)"))
+    back = read_layout(bytes(meshset))[0]
+    if rebuild_chunk(back, chunk) != chunk:
+        raise ValueError("the written chunk does not rebuild from the written layout")
+    for s in back.sections:
+        tolerance = 1e-4 if _position(s)[0] == 3 else 0.05
+        read = section_positions(s, chunk)
+        if section_triangles(back, s, chunk) != list(triangles) or any(
+                abs(a - b) > tolerance * max(1.0, abs(b)) for p, v in zip(read, vertices) for a, b in zip(p, v)):
+            raise ValueError("the written mesh does not read back")
+    return bytes(meshset), chunk, report
