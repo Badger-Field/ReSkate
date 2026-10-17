@@ -62,6 +62,16 @@ void camera_controls(SkateMenu& menu, const Model& model, const CallbacksV3& cal
     if (debug.free_camera) note("Close the menu to fly. WASD / Q E move; hold the right mouse button to look.");
     if (!debug.camera_available) warn(debug.camera_unavailable.c_str());
     end_card();
+
+    // Keyframe smoothing (Extension/ReplayKeyframes/replay_keyframes.h).
+    begin_card(menu, "replay-editor", "REPLAY EDITOR");
+    bool keysmooth = model.keyframe_smoothing.enabled;
+    if (toggle_row(menu, "Keyframe smoothing",
+            "The free camera glides through its keys instead of changing speed at each one. Every key is still met, at its time.",
+            keysmooth, model.keyframe_smoothing.available && callbacks.queue_console_command))
+        send_console(menu, callbacks, keysmooth ? "keysmooth on" : "keysmooth off");
+    note("How smooth: keysmooth amount 0..1 in the console (1, the smoothest, by default).");
+    end_card();
 }
 
 void first_person_controls(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) {
