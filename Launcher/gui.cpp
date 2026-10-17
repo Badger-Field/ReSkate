@@ -15,6 +15,7 @@
 #include <backends/imgui_impl_dx12.h>
 #include <backends/imgui_impl_win32.h>
 
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -185,6 +186,19 @@ void open_url(std::string_view url) {
 
 namespace {
 
+// The window resizes from its edges, no smaller than it opens. While an edge is dragged Windows
+// runs its own message loop, so the launcher draws from WM_SIZE through g_paint; g_painting keeps
+// that from starting a frame inside one.
+std::function<void()> g_paint;
+bool g_painting{};
+POINT g_min_size{};
+
+// How far a maximised borderless window reaches past the screen on each side.
+int frame_overhang(HWND window) {
+    const auto dpi = GetDpiForWindow(window);
+    return GetSystemMetricsForDpi(SM_CXFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+}
+
 LRESULT CALLBACK window_procedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     if (g_capturing_key && (message == WM_KEYDOWN || message == WM_SYSKEYDOWN)) {
         // Tell left and right modifiers apart so they can be refused by name.
@@ -201,14 +215,51 @@ LRESULT CALLBACK window_procedure(HWND window, UINT message, WPARAM wparam, LPAR
         g_pad_feed->mouse_moved(ImVec2(static_cast<float>(GET_X_LPARAM(lparam)), static_cast<float>(GET_Y_LPARAM(lparam))));
     if (ImGui_ImplWin32_WndProcHandler(window, message, wparam, lparam)) return 1;
     switch (message) {
+    case WM_NCCALCSIZE:
+        // No frame: the client is the whole window (the frame style is only there for resizing,
+        // snapping and the shadow). Maximised, Windows puts the frame past the screen's edge.
+        if (wparam) {
+            if (IsZoomed(window)) {
+                auto& rect = reinterpret_cast<NCCALCSIZE_PARAMS*>(lparam)->rgrc[0];
+                const int overhang = frame_overhang(window);
+                rect.left += overhang;
+                rect.top += overhang;
+                rect.right -= overhang;
+                rect.bottom -= overhang;
+            }
+            return 0;
+        }
+        break;
     case WM_NCHITTEST: {
-        // The top strip drags the borderless window, except over its buttons.
-        POINT point{static_cast<short>(LOWORD(lparam)), static_cast<short>(HIWORD(lparam))};
+        POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
         ScreenToClient(window, &point);
+        RECT client{};
+        GetClientRect(window, &client);
+        // The edges and corners resize it.
+        if (!IsZoomed(window)) {
+            const int edge = static_cast<int>(S(6));
+            const bool left = point.x < edge, right = point.x >= client.right - edge;
+            const bool top = point.y < edge, bottom = point.y >= client.bottom - edge;
+            if (top && left) return HTTOPLEFT;
+            if (top && right) return HTTOPRIGHT;
+            if (bottom && left) return HTBOTTOMLEFT;
+            if (bottom && right) return HTBOTTOMRIGHT;
+            if (left) return HTLEFT;
+            if (right) return HTRIGHT;
+            if (top) return HTTOP;
+            if (bottom) return HTBOTTOM;
+        }
+        // The top strip drags the borderless window, except over its buttons.
         if (g_drag_allowed && point.y >= 0 && static_cast<float>(point.y) < S(44) &&
-            static_cast<float>(point.x) < S(design_width - 100)) return HTCAPTION;
+            static_cast<float>(point.x) < static_cast<float>(client.right) - S(100)) return HTCAPTION;
         return HTCLIENT;
     }
+    case WM_GETMINMAXINFO:
+        if (g_min_size.x) reinterpret_cast<MINMAXINFO*>(lparam)->ptMinTrackSize = g_min_size;
+        return 0;
+    case WM_SIZE:
+        if (wparam != SIZE_MINIMIZED && g_paint && !g_painting) g_paint();
+        return 0;
     case WM_SYSCOMMAND:
         if ((wparam & 0xfff0) == SC_KEYMENU) return 0;
         break;
@@ -351,9 +402,10 @@ int run(const launcher_app::Session& session, const std::vector<std::wstring>& a
     RECT work{};
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
     g_scale = std::max(1.0f, static_cast<float>(GetDpiForSystem()) / 96.0f);
-    // The window cannot be resized, so the design size has to fit the screen:
-    // scale down for a small laptop, or a high DPI that would push the window
-    // past the taskbar. Fonts and the style are built from the final scale.
+    // The window opens at the design size, which is also the smallest it can be
+    // made, so that has to fit the screen: scale down for a small laptop, or a
+    // high DPI that would push the window past the taskbar. Fonts and the style
+    // are built from the final scale.
     const auto work_width = static_cast<float>(work.right - work.left);
     const auto work_height = static_cast<float>(work.bottom - work.top);
     if (work_width > 0 && work_height > 0)
@@ -378,9 +430,12 @@ int run(const launcher_app::Session& session, const std::vector<std::wstring>& a
         "Launcher window: {}x{} at scale {:.2f} (system DPI {}), work area {}x{}.", width, height, g_scale,
         GetDpiForSystem(), work.right - work.left, work.bottom - work.top);
     const HWND window = CreateWindowExW(WS_EX_APPWINDOW, window_class.lpszClassName, L"ReSkate",
-        WS_POPUP | WS_MINIMIZEBOX | WS_SYSMENU, work.left + (work.right - work.left - width) / 2,
+        WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU, work.left + (work.right - work.left - width) / 2,
         work.top + (work.bottom - work.top - height) / 2, width, height, nullptr, nullptr, instance, nullptr);
     if (!window) throw std::runtime_error("Cannot create the launcher window");
+    g_min_size = {width, height};
+    // The frame style changed what the client is: have Windows ask again (WM_NCCALCSIZE).
+    SetWindowPos(window, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     const DWORD corners = 2; // DWMWCP_ROUND
     DwmSetWindowAttribute(window, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */, &corners, sizeof(corners));
     const BOOL dark = TRUE;
@@ -450,6 +505,41 @@ int run(const launcher_app::Session& session, const std::vector<std::wstring>& a
         DWORD game_id{};
         bool hidden{};
         bool drew{};
+        UINT drawn_width = static_cast<UINT>(width), drawn_height = static_cast<UINT>(height);
+        const auto paint = [&] {
+            RECT client{};
+            GetClientRect(window, &client);
+            const auto client_width = static_cast<UINT>(client.right - client.left);
+            const auto client_height = static_cast<UINT>(client.bottom - client.top);
+            if (!client_width || !client_height) return;
+            if (client_width != drawn_width || client_height != drawn_height) {
+                renderer.resize(client_width, client_height);
+                drawn_width = client_width;
+                drawn_height = client_height;
+            }
+            g_painting = true;
+            ImGui_ImplDX12_NewFrame();
+            ImGui_ImplWin32_NewFrame();
+            // A pad pressed while another window has the focus is not meant for us;
+            // it reads as let go, so nothing stays held while we are in the background.
+            const bool foreground = GetForegroundWindow() == window;
+            pad_feed.update(ImGui::GetIO(), foreground ? read_pad() : PadState{}, g_scale);
+            ImGui::NewFrame();
+            pad_feed.after_new_frame();
+            frame(launcher, fonts, window, ui, mods_panel);
+            // While the pad moves the focus, the mouse cursor (the Deck's trackpad in its
+            // desktop layout) hides; the next mouse move hides the focus and brings it back.
+            if (GImGui->NavCursorVisible && GImGui->NavHighlightItemUnderNav && !pad_feed.pointing())
+                ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+            ImGui::Render();
+            renderer.render();
+            g_painting = false;
+            if (!drew) {
+                drew = true;
+                logging::write(logging::Level::info, logging::Channel::launcher, "Launcher drew its first frame.");
+            }
+        };
+        g_paint = paint;
         while (running) {
             MSG message;
             while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
@@ -491,26 +581,9 @@ int run(const launcher_app::Session& session, const std::vector<std::wstring>& a
                 }
             }
             if (hidden || IsIconic(window)) { Sleep(hidden ? 100 : 50); continue; }
-            ImGui_ImplDX12_NewFrame();
-            ImGui_ImplWin32_NewFrame();
-            // A pad pressed while another window has the focus is not meant for us;
-            // it reads as let go, so nothing stays held while we are in the background.
-            const bool foreground = GetForegroundWindow() == window;
-            pad_feed.update(ImGui::GetIO(), foreground ? read_pad() : PadState{}, g_scale);
-            ImGui::NewFrame();
-            pad_feed.after_new_frame();
-            frame(launcher, fonts, window, ui, mods_panel);
-            // While the pad moves the focus, the mouse cursor (the Deck's trackpad in its
-            // desktop layout) hides; the next mouse move hides the focus and brings it back.
-            if (GImGui->NavCursorVisible && GImGui->NavHighlightItemUnderNav && !pad_feed.pointing())
-                ImGui::SetMouseCursor(ImGuiMouseCursor_None);
-            ImGui::Render();
-            renderer.render();
-            if (!drew) {
-                drew = true;
-                logging::write(logging::Level::info, logging::Channel::launcher, "Launcher drew its first frame.");
-            }
+            paint();
         }
+        g_paint = nullptr;
         g_pad_feed = nullptr;
         ShowWindow(window, SW_HIDE);
         if (game) CloseHandle(game);
