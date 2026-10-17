@@ -1,6 +1,7 @@
 #include "mod_item_sources.h"
 
 #include "Engine/Core/Json/json.h"
+#include "Engine/Core/Platform/path_text.h"
 
 #include <algorithm>
 #include <fstream>
@@ -20,7 +21,8 @@ std::vector<ItemSource> read_item_sources(const fs::path& file) noexcept {
         const auto& mods = root.at("mods");
         for (std::size_t i = 0; i < mods.size(); ++i) {
             const auto& entry = mods.at(i);
-            ItemSource source{entry.at("mod").string(), entry.value("title", std::string()), entry.value("author", std::string()), {}};
+            ItemSource source{entry.at("mod").string(), entry.value("title", std::string()), entry.value("author", std::string()),
+                              entry.value("version", std::string()), entry.value("folder", std::string()), {}};
             const auto& keys = entry.at("items");
             for (std::size_t k = 0; k < keys.size(); ++k) source.keys.push_back(keys.at(k).string());
             sources.push_back(std::move(source));
@@ -38,6 +40,8 @@ void write_item_sources(const fs::path& file, const std::vector<ItemSource>& sou
         entry["mod"] = source.mod;
         entry["title"] = source.title;
         entry["author"] = source.author;
+        entry["version"] = source.version;
+        entry["folder"] = source.folder;
         entry["items"] = Json(source.keys);
         mods.push_back(std::move(entry));
     }
@@ -51,13 +55,13 @@ void write_item_sources(const fs::path& file, const std::vector<ItemSource>& sou
     {
         std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
         output.write(text.data(), static_cast<std::streamsize>(text.size()));
-        if (!output.flush()) throw std::runtime_error("Cannot write " + temporary.string());
+        if (!output.flush()) throw std::runtime_error("Cannot write " + path_utf8(temporary));
     }
     std::error_code error;
     fs::rename(temporary, file, error);
     if (error) {
         fs::remove(temporary, error);
-        throw std::runtime_error("Cannot write " + file.string());
+        throw std::runtime_error("Cannot write " + path_utf8(file));
     }
 }
 

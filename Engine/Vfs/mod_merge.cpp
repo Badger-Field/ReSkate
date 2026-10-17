@@ -6,6 +6,7 @@
 #include "mod_merge_internal.h"
 #include "mod_store_copies.h"
 #include "native_db.h"
+#include "Engine/Core/Platform/path_text.h"
 
 #include <Windows.h>
 
@@ -128,7 +129,10 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
             const auto before = options.live ? read_item_sources(output / item_sources_file) : std::vector<ItemSource>{};
             itemSources.emplace();
             for (const auto* mod : mods) {
-                ItemSource source{mod->name, mod->title, mod->author, {}};
+                std::error_code outside;
+                const auto folder = fs::relative(mod->directory, catalog.root, outside);
+                ItemSource source{mod->name, mod->title, mod->author, mod->version,
+                                  outside ? std::string() : path_utf8(folder.generic_wstring()), {}};
                 const auto read = std::ranges::find(*itemsRead, mod->name, &StoreCopies::Added::mod);
                 const auto earlier = std::ranges::find(before, mod->name, &ItemSource::mod);
                 if (read != itemsRead->end()) source.keys = std::move(read->keys);

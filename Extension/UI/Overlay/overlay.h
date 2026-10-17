@@ -467,6 +467,11 @@ struct ItemBrowserView {
     std::string search, filter; // the search text and the filter's name
     unsigned shown{}, total{};  // tiles in the grid that has the focus
     bool focused_favorite{};    // the highlighted item is a favorite
+    // The mod the highlighted item is from (empty title: the game's own), for its card: its icon
+    // file (UTF-8), how many items it has, and whether it only changes one of the game's.
+    std::string mod_title, mod_author, mod_version, mod_icon;
+    unsigned mod_items{};
+    bool mod_changed{};
 };
 struct ItemBrowserHost {
     ItemBrowserView (*view)(){};

@@ -871,6 +871,11 @@ void update_model(std::uintptr_t client, TickState& frame) {
         dingosdk::tick_network_objects();
     }
     if (r.observer_failed) return; // Keep the bounded restore/telemetry path available after catalog failure.
+    {
+        // Every tick, not at the 500 ms customization pace: the item grids follow the highlight.
+        DINGO_PROFILE_ZONE("tick/item browser");
+        dingosdk::update_local_item_browser();
+    }
     dingosdk::hall_of_meat::on_client_tick();
     dingosdk::road_rash::on_client_tick(client);
     dingosdk::drone::outfit::on_client_tick();

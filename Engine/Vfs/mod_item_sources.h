@@ -12,9 +12,10 @@ namespace dingosdk::mods {
 inline constexpr char item_sources_file[] = "reskate-items.json";
 
 struct ItemSource {
-    std::string mod;            // its folder name under Mods/
-    std::string title, author;  // as its manifest gives them
-    std::vector<std::string> keys;  // the items it adds or changes, lower case
+    std::string mod;                     // its folder name
+    std::string title, author, version;  // as its manifest gives them
+    std::string folder;                  // where it is, from Mods/ ("x" or ".reskate-official/x"), with its icon.png
+    std::vector<std::string> keys;       // the items it adds or changes, lower case
 };
 
 // Highest priority first, as the merge orders the mods: where two list one item, the game uses
