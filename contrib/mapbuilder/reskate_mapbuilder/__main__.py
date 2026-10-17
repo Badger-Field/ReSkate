@@ -9,7 +9,8 @@
 
   python -m reskate_mapbuilder new-level --game <dir> --mods <dir> --name zz-... --level <name> [--dry-run]
   python -m reskate_mapbuilder new-ground-level --game <dir> --mods <dir> --name zz-... --level <name> \\
-        [--size 64] [--at X Y Z] [--bam all|no-world|333] [--tile-template EBX] [--placement N] [--dry-run]
+        [--size 50] [--tiles N] [--at X Y Z] [--bam all|no-world|333] [--tile-template EBX] \\
+        [--layer-template EBX [--layer-bundle B]] [--blueprint-template EBX [--blueprint-bundle B]] [--dry-run]
   python -m reskate_mapbuilder inspect-meshset --game <dir> [--mod <mod dir>] --superbundle S --bundle B --resource R
   python -m reskate_mapbuilder list-assets --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] [--contains TEXT]
   python -m reskate_mapbuilder ebx-roundtrip --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME [--detail [N]]
@@ -29,7 +30,7 @@ from .ebx import read_document
 from .ebxcheck import array_hash_report, roundtrip
 from .ebxedit import describe
 from .game import Game
-from .ground import BAM_MODES, DEFAULT_AT, DEFAULT_SIZE, TILE_TEMPLATE, new_ground_level
+from .ground import BAM_MODES, BLUEPRINT_BUNDLE, BLUEPRINT_TEMPLATE, DEFAULT_AT, DEFAULT_SIZE, TILE_TEMPLATE, new_ground_level
 from .level import new_level
 from .meshset import describe_meshset
 from .mod import ModBuilder
@@ -134,7 +135,8 @@ def new_ground_level_command(args):
     log: list[str] = []
     try:
         new_ground_level(game, mod, args.level, args.display_name, args.size, tuple(args.at), args.bam,
-                         args.tile_template, args.placement, log)
+                         args.tile_template, args.layer_template, args.layer_bundle, args.blueprint_template,
+                         args.blueprint_bundle, args.tiles, log)
     finally:
         for line in log:
             print(line)
@@ -247,14 +249,19 @@ def main(argv=None):
     p.add_argument("--name", required=True, help="the mod's folder name, e.g. zz-ground-level")
     p.add_argument("--level", required=True, help="the level's name, e.g. dingolevel_reskate_ground")
     p.add_argument("--display-name")
-    p.add_argument("--size", type=float, default=DEFAULT_SIZE, help="side of the square ground, metres")
+    p.add_argument("--size", type=float, default=DEFAULT_SIZE,
+                   help="side of each placement's square collision, and their spacing, metres")
+    p.add_argument("--tiles", type=int, default=1, help="N: an N x N grid of placements")
     p.add_argument("--at", type=float, nargs=3, default=list(DEFAULT_AT), metavar=("X", "Y", "Z"),
                    help="where the ground's centre is placed")
     p.add_argument("--bam", choices=sorted(BAM_MODES), default="all",
                    help="which of bam's bundles the level lists: all (as new-level), no-world (without bam's "
                         "world-partition tiles), 333 (the 42 the 333 map carries)")
-    p.add_argument("--tile-template", default=TILE_TEMPLATE, help="the bam tile whose placement is copied")
-    p.add_argument("--placement", type=int, help="instance index of the ObjectReferenceObjectData to copy")
+    p.add_argument("--tile-template", default=TILE_TEMPLATE, help="the bam tile copied for the sublevel")
+    p.add_argument("--layer-template", help="the LayerData copied (default: the one the tile references)")
+    p.add_argument("--layer-bundle", help="its bundle (default: the tile's, or found by search)")
+    p.add_argument("--blueprint-template", default=BLUEPRINT_TEMPLATE, help="the ObjectBlueprint copied")
+    p.add_argument("--blueprint-bundle", default=BLUEPRINT_BUNDLE, help="its bundle, which holds <blueprint>.physics")
     p.add_argument("--dry-run", action="store_true", help="read and report only")
     p = sub.add_parser("inspect-meshset", help="print a MeshSet resource's header, LODs and sections (read-only)")
     p.add_argument("--game", required=True)
