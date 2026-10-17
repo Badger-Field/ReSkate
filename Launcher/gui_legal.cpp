@@ -161,12 +161,15 @@ void legal_agreement_window(Launcher& launcher, const Fonts& fonts, ImVec2 size,
     }
     ImGui::Dummy(ImVec2(0, S(8)));
     ImGui::TextDisabled("In short:");
+    // (BulletText does not wrap: a bullet, then wrapped text beside it.)
     for (const char* line : {"Play fair online and respect other players.",
-                             "Don't unlock or copy cosmetics skate. sells.",
+                             "Don't unlock or copy cosmetics that skate sells.",
                              "Crash reports go to the ReSkate team unless you turn them off in Settings. Nothing in them is "
                              "meant to identify you.",
-                             "ReSkate is a free fan project, not made by EA, and comes with no warranty."})
-        ImGui::BulletText("%s", line);
+                             "ReSkate is a free fan project, not made by EA, and comes with no warranty."}) {
+        ImGui::Bullet();
+        ImGui::TextWrapped("%s", line);
+    }
     ImGui::PopTextWrapPos();
     ImGui::Dummy(ImVec2(0, S(10)));
     if (ImGui::Button("Read the Terms of Service", ImVec2(S(260), 0))) legal.open = Legal::terms;
