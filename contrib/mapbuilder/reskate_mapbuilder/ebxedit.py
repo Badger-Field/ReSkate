@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from typing import Any, Iterator
 
 from .bundle import Guid
-from .ebx import BoxedReference, Document, InstanceRecord, Object, PointerKind, PointerReference
+from .ebx import (BoxedReference, Document, ImportReference, InstanceRecord, Object, PointerKind, PointerReference,
+                  array_element, pointer_target)
 
 
 def derived_guid(*parts: str) -> Guid:
@@ -108,6 +109,9 @@ def clone_instance(doc: Document, index: int, guid: Guid | None = None, at: int 
         raise ValueError("an exported instance needs a new GUID")
     record = copy.deepcopy(source)
     record.instance_guid = guid if source.exported else source.instance_guid
+    # The writer finds what a boxed value's pointers reach by the read offsets of the instances;
+    # a copy sharing its source's offset would take those pointers over.
+    record.data_offset = -1
     return insert_instance(doc, record, at)
 
 
@@ -210,3 +214,196 @@ def describe(doc: Document, limit: int = 20) -> Iterator[str]:
         guid = f" guid {instance.instance_guid.string()}" if instance.exported else ""
         if instance.object is not None:
             yield from walk(instance.object, f"#{index}{guid}", 0)
+
+
+# ---- Removing instances and imports (a pruned copy of a document, FORMAT-NOTES 6.3) -------------
+
+def boxed_reach(doc: Document) -> set[int]:
+    """Instances a boxed value's bytes point at, directly or through the arrays they reach (the
+    writer carries those bytes as they are, so such an instance must stay)."""
+    if not doc.payload or not doc.boxed_values:
+        return set()
+    arrays = {record.offset: record for record in doc.arrays}
+    instances = {instance.data_offset: index for index, instance in enumerate(doc.instances)}
+    slots = sorted(set(doc.pointer_offsets))
+    ranges = [(b.offset, len(b.raw_bytes)) for b in doc.boxed_values]
+    seen_arrays: set[int] = set()
+    out: set[int] = set()
+    while ranges:
+        start, length = ranges.pop()
+        for slot in (s for s in slots if start <= s < start + length):
+            kind, key = pointer_target(doc, slot, arrays, instances)
+            if kind == "instance":
+                out.add(key)
+            elif kind == "array" and key not in seen_arrays:
+                seen_arrays.add(key)
+                stride, _ = array_element(doc, arrays[key])
+                ranges.append((key, stride * arrays[key].count))
+    return out
+
+
+def _internal(value: Any) -> Iterator[int]:
+    if isinstance(value, PointerReference) and value.kind == PointerKind.internal:
+        yield value.index
+    elif isinstance(value, Object):
+        for f in value.fields:
+            yield from _internal(f.value)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _internal(v)
+
+
+def reachable(doc: Document) -> set[int]:
+    """Instances reached from the root (instance 0) by internal pointers, plus what boxed values reach."""
+    seen = set(boxed_reach(doc)) | ({0} if doc.instances else set())
+    queue = list(seen)
+    while queue:
+        instance = doc.instances[queue.pop()]
+        for target in _internal(instance.object):
+            if target not in seen:
+                seen.add(target)
+                queue.append(target)
+    return seen
+
+
+def remove_instances(doc: Document, removed: set[int]) -> list[str]:
+    """Removes instances and every pointer to them that is an element of a pointer array; any
+    other pointer to them (a field, a pointer inside a struct, a boxed value) is refused. The rest
+    are renumbered. Returns the paths of the array elements taken out."""
+    if not removed:
+        return []
+    if 0 in removed:
+        raise ValueError("the root instance cannot be removed")
+    blocked = boxed_reach(doc) & removed
+    if blocked:
+        raise ValueError(f"instances {sorted(blocked)} are reached from boxed values; not removed")
+    taken: list[str] = []
+
+    def strip(value: Any, path: str) -> None:
+        if isinstance(value, Object):
+            for f in value.fields:
+                strip(f.value, f"{path}.{f.name}")
+        elif isinstance(value, list):
+            kept = []
+            for i, v in enumerate(value):
+                if isinstance(v, PointerReference) and v.kind == PointerKind.internal and v.index in removed:
+                    taken.append(f"{path}[{i}] -> #{v.index}")
+                else:
+                    kept.append(v)
+                    strip(v, f"{path}[{i}]")
+            value[:] = kept
+
+    kept = [i for i in range(len(doc.instances)) if i not in removed]
+    for i in kept:
+        if doc.instances[i].object is not None:
+            strip(doc.instances[i].object, f"#{i}")
+    for i in kept:
+        left = sorted(set(_internal(doc.instances[i].object)) & removed)
+        if left:
+            raise ValueError(f"#{i} still points at {left} outside a pointer array; not removed")
+    new_index = {old: new for new, old in enumerate(kept)}
+    for i in kept:
+        if doc.instances[i].object is not None:
+            _remap(doc.instances[i].object, lambda index: new_index[index])
+    doc.instances[:] = [doc.instances[i] for i in kept]
+    return taken
+
+
+def prune_unreachable(doc: Document) -> list[int]:
+    """Removes every instance the root does not reach; returns their (old) indices."""
+    gone = sorted(set(range(len(doc.instances))) - reachable(doc))
+    remove_instances(doc, set(gone))
+    return gone
+
+
+def _externals(value: Any) -> Iterator[PointerReference]:
+    if isinstance(value, PointerReference) and value.kind == PointerKind.external:
+        yield value
+    elif isinstance(value, Object):
+        for f in value.fields:
+            yield from _externals(f.value)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _externals(v)
+
+
+def used_imports(doc: Document) -> list[ImportReference]:
+    """The imports some field points at, in import order."""
+    used = {p.index for i in doc.instances if i.object is not None for p in _externals(i.object)}
+    return [imp for index, imp in enumerate(doc.imports) if index in used]
+
+
+def prune_imports(doc: Document) -> int | None:
+    """Drops imports no field points at and renumbers the rest. Returns how many were dropped,
+    or None when the document has boxed values (whose bytes may hold import indices; left as is)."""
+    if doc.boxed_values:
+        return None
+    pointers = [p for i in doc.instances if i.object is not None for p in _externals(i.object)]
+    used = sorted({p.index for p in pointers})
+    new_index = {old: new for new, old in enumerate(used)}
+    for p in pointers:
+        p.index = new_index[p.index]
+    dropped = len(doc.imports) - len(used)
+    doc.imports[:] = [doc.imports[i] for i in used]
+    return dropped
+
+
+def add_import(doc: Document, file_guid: Guid, instance_guid: Guid) -> PointerReference:
+    """An external pointer to (file, instance), reusing an equal import."""
+    for index, imp in enumerate(doc.imports):
+        if imp.file_guid == file_guid and imp.class_guid == instance_guid:
+            return PointerReference(PointerKind.external, index)
+    doc.imports.append(ImportReference(file_guid, instance_guid))
+    return PointerReference(PointerKind.external, len(doc.imports) - 1)
+
+
+def path_to(doc: Document, target: int) -> list[tuple[int, list | None, int]] | None:
+    """The chain of internal pointers from the root to instance `target`: per step (holder
+    instance, the pointer array holding the step or None for a field, the element's index)."""
+    parents: dict[int, tuple[int, list | None, int]] = {}
+    seen, queue = {0}, [0]
+
+    def steps(value: Any, array: list | None) -> Iterator[tuple[int, list | None, int]]:
+        if isinstance(value, PointerReference) and value.kind == PointerKind.internal:
+            yield value.index, None, -1
+        elif isinstance(value, Object):
+            for f in value.fields:
+                yield from steps(f.value, None)
+        elif isinstance(value, list):
+            for i, v in enumerate(value):
+                if isinstance(v, PointerReference) and v.kind == PointerKind.internal:
+                    yield v.index, value, i
+                else:
+                    yield from steps(v, None)
+
+    while queue:
+        at = queue.pop(0)
+        if at == target:
+            chain = []
+            while at != 0:
+                holder, array, i = parents[at]
+                chain.append((holder, array, i))
+                at = holder
+            return chain[::-1]
+        if doc.instances[at].object is None:
+            continue
+        for nxt, array, i in steps(doc.instances[at].object, None):
+            if nxt not in seen:
+                seen.add(nxt)
+                parents[nxt] = (at, array, i)
+                queue.append(nxt)
+    return None
+
+
+def refresh_flags(source: Document, clone: Document) -> int:
+    """Gives each exported instance of a clone the Flags its new GUID makes, where the source
+    instance's Flags follow the GUID rule (guid_flags). Returns how many were changed."""
+    changed = 0
+    for old, new in zip(source.instances, clone.instances):
+        flags = new.object.get("Flags") if new.object is not None else None
+        if not (old.exported and isinstance(flags, int)) or guid_flags(old.instance_guid, flags) != flags:
+            continue
+        if new.instance_guid != old.instance_guid:
+            new.object.set("Flags", guid_flags(new.instance_guid, flags))
+            changed += 1
+    return changed

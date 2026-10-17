@@ -138,6 +138,22 @@ def compute_edge_data(shapes: list[Shape], parts: list[Part]) -> None:
         shape.edge_value, shape.edge_fold, shape.edge_flat = values, folds, flats
 
 
+def flat_grid(size: float, cell: float, y: float = 0.0) -> Shape:
+    """A square of `size` metres centred on the origin at height y, split into cells of about
+    `cell` metres, two triangles each, counter-clockwise seen from above (normals point up, as
+    in the game's ground)."""
+    n = max(1, round(size / cell))
+    step, half = size / n, size / 2
+    verts = [(i * step - half, y, j * step - half) for j in range(n + 1) for i in range(n + 1)]
+    tris = []
+    for j in range(n):
+        for i in range(n):
+            a = j * (n + 1) + i
+            b, c, d = a + 1, a + n + 1, a + n + 2
+            tris += [(a, c, b), (b, c, d)]
+    return Shape(verts, tris)
+
+
 def _bits(flags: list[bool]) -> bytes:
     out = bytearray(((len(flags) + 31) // 32) * 4)
     for i, on in enumerate(flags):

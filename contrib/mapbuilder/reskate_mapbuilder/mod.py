@@ -15,6 +15,7 @@ archive 1}.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -22,8 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import nativedb
-from .bundle import (EBX, BinaryBundle, BundleAsset, BundleFileInfo, BundleRegion, CasIdentifier, write_binary_bundle,
-                     write_bundle_region)
+from .bundle import (CHUNK, EBX, RESOURCE, BinaryBundle, BundleAsset, BundleFileInfo, BundleRegion, CasIdentifier,
+                     write_binary_bundle, write_bundle_region)
 from .cas import encode_raw
 from .toc import TocBundle, TocChunk, read_toc, verify_toc, write_patch_toc
 
@@ -132,6 +133,39 @@ class ModBuilder:
         b.region.files.insert(index, BundleFileInfo(b.region.files[0].location, 0, 0))
         b.manifest.ebx.append(BundleAsset(EBX, ebx_name))
         b.ebx[ebx_name.lower()] = decoded
+
+    def add_resource(self, superbundle: str, bundle_name: str, name: str, resource_type: int, decoded: bytes,
+                     resource_id: int, resource_meta: bytes = b"\0" * 16):
+        """A new resource in a bundle the mod rewrites, listed after the bundle's other resources;
+        its payload goes to the mod's archive of the manifest's install chunk."""
+        b = self.edit_bundle(superbundle, bundle_name)
+        if any(a.name.lower() == name.lower() for a in b.manifest.resources):
+            raise ValueError(f"resource {name} is already in {bundle_name}")
+        if b.region.inline_manifest:
+            raise NotImplementedError("bundles with an inline manifest are not written yet")
+        index = 1 + len(b.manifest.ebx) + len(b.manifest.resources)
+        b.region.files.insert(index, BundleFileInfo(b.region.files[0].location, 0, 0))
+        b.manifest.resources.append(BundleAsset(RESOURCE, name, resource_id=resource_id, resource_type=resource_type,
+                                                resource_meta=bytes(resource_meta)))
+        b.replaced[name] = decoded
+
+    def add_copied(self, superbundle: str, bundle_name: str, asset: BundleAsset, location: BundleFileInfo):
+        """An entry of another bundle listed in this one as it is: its manifest record copied and
+        its region file kept pointing where it was (a base archive), as the 333 map's copies do."""
+        b = self.edit_bundle(superbundle, bundle_name)
+        if b.region.inline_manifest:
+            raise NotImplementedError("bundles with an inline manifest are not written yet")
+        lists = {EBX: b.manifest.ebx, RESOURCE: b.manifest.resources, CHUNK: b.manifest.chunks}
+        same = (lambda a: a.guid == asset.guid) if asset.kind == CHUNK else (lambda a: a.name.lower() == asset.name.lower())
+        if any(same(a) for a in lists[asset.kind]):
+            raise ValueError(f"{asset.kind} {asset.name or asset.guid.string()} is already in {bundle_name}")
+        index = 1 + len(b.manifest.ebx)
+        if asset.kind != EBX:
+            index += len(b.manifest.resources)
+        if asset.kind == CHUNK:
+            index += len(b.manifest.chunks)
+        b.region.files.insert(index, BundleFileInfo(location.location, location.offset, location.size))
+        lists[asset.kind].append(copy.deepcopy(asset))
 
     @staticmethod
     def _ebx_index(b: _Bundle, ebx_name: str) -> int:

@@ -137,8 +137,16 @@ def _identity(transform: Object) -> bool:
     return True
 
 
-def new_level(game, mod, level: str, display_name: str | None = None) -> list[str]:
-    """Adds everything for a new level to `mod` and returns a report of what it found and changed."""
+def new_level(game, mod, level: str, display_name: str | None = None, keep_bundle=None, edit_root=None) -> list[str]:
+    """Adds everything for a new level to `mod` and returns a report of what it found and changed.
+
+    `keep_bundle(name)` (lower-case bundle name) chooses which of bam's bundles the level's TOC
+    lists (default: COPY_BASE_BUNDLES). `edit_root(new_root, listed, log)` may change the new root
+    document before it is written; `listed` is the set of lower-case bundle names the level's TOC
+    holds (new-ground-level, FORMAT-NOTES 6.3)."""
+    if keep_bundle is None:
+        def keep_bundle(name):
+            return COPY_BASE_BUNDLES is None or name.startswith(COPY_BASE_BUNDLES)
     if not LEVEL_NAME.fullmatch(level) or level == BASE_LEVEL:
         raise ValueError("level names use lower-case letters, digits and _, starting with a letter")
     path = f"levels/game/{level}/{level}"          # superbundle (under Win32), root bundle and root EBX
@@ -155,11 +163,13 @@ def new_level(game, mod, level: str, display_name: str | None = None) -> list[st
                f"{nativedb.DEFAULT_INSTALL_CHUNK} ({len(game.layout_bytes)} -> {len(mod.layout_bytes)} bytes)")
     chunks = Counter()
     copied = 0
+    listed = {root_bundle}
     for b in base_toc.bundles:
         name = b.name.lower()
-        if name == BASE_ROOT_BUNDLE or (COPY_BASE_BUNDLES is not None and not name.startswith(COPY_BASE_BUNDLES)):
+        if name == BASE_ROOT_BUNDLE or not keep_bundle(name):
             continue
         mod.copy_bundle(path, b)
+        listed.add(name)
         copied += 1
         for f in read_bundle_region(b.region).files:
             chunks[f.location.install_chunk] += 1
@@ -185,6 +195,8 @@ def new_level(game, mod, level: str, display_name: str | None = None) -> list[st
     log.append(f"  new root {path}: file guid {new_root.file_guid.string()}, instance guid "
                f"{new_root.instances[0].instance_guid.string()}, set {sorted(set(changes) - set(missing))}"
                + (f", MISSING fields {missing}" if missing else ""))
+    if edit_root is not None:
+        edit_root(new_root, listed, log)
     mod.add_ebx(path, root_bundle, path, write_document(new_root, refuse_new_array_hashes=True))
 
     # 3. The level description, next to bam's.

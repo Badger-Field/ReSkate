@@ -8,6 +8,10 @@
         --superbundle S --bundle B --resource R [--by 1.0]
 
   python -m reskate_mapbuilder new-level --game <dir> --mods <dir> --name zz-... --level <name> [--dry-run]
+  python -m reskate_mapbuilder new-ground-level --game <dir> --mods <dir> --name zz-... --level <name> \\
+        [--size 64] [--at X Y Z] [--bam all|no-world|333] [--tile-template EBX] [--placement N] [--dry-run]
+  python -m reskate_mapbuilder inspect-meshset --game <dir> [--mod <mod dir>] --superbundle S --bundle B --resource R
+  python -m reskate_mapbuilder list-assets --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] [--contains TEXT]
   python -m reskate_mapbuilder ebx-roundtrip --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME [--detail [N]]
   python -m reskate_mapbuilder ebx-arrayhash --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME
   python -m reskate_mapbuilder dump-ebx --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME
@@ -25,7 +29,9 @@ from .ebx import read_document
 from .ebxcheck import array_hash_report, roundtrip
 from .ebxedit import describe
 from .game import Game
+from .ground import BAM_MODES, DEFAULT_AT, DEFAULT_SIZE, TILE_TEMPLATE, new_ground_level
 from .level import new_level
+from .meshset import describe_meshset
 from .mod import ModBuilder
 from .physics import (KIND_TRIANGLE_MESH, Shape, compute_edge_data, physics_tail, read_physics, replace_shape,
                       write_physics)
@@ -120,6 +126,70 @@ def new_level_command(args):
     print(f"wrote {mod.write(args.mods)}")
 
 
+def new_ground_level_command(args):
+    """Builds the own-ground level mod (FORMAT-NOTES 6.3). --dry-run writes nothing. The report is
+    printed also when the build refuses, so a dry run on the PC says what was found."""
+    game = Game(args.game)
+    mod = ModBuilder(game, args.name, description=f"New level {args.level} with its own ground")
+    log: list[str] = []
+    try:
+        new_ground_level(game, mod, args.level, args.display_name, args.size, tuple(args.at), args.bam,
+                         args.tile_template, args.placement, log)
+    finally:
+        for line in log:
+            print(line)
+    files = mod.build()
+    print("Mod files:")
+    for relative, data in sorted(files.items()):
+        print(f"  {relative}: {len(data)} bytes")
+    if args.dry_run:
+        print("dry run: nothing written")
+        return
+    if not args.mods:
+        sys.exit("--mods is required unless --dry-run")
+    print(f"wrote {mod.write(args.mods)}")
+
+
+def list_assets(args):
+    """Lists a superbundle's (or one bundle's) EBX, resources and chunks, filtered by name; read-only."""
+    game = Game(args.game, args.mod)
+    toc = game.superbundle(args.superbundle)
+    needle = (args.contains or "").lower()
+    shown = 0
+    for b in toc.bundles:
+        if args.bundle and b.name.lower() != args.bundle.lower():
+            continue
+        if args.bundle_contains and args.bundle_contains.lower() not in b.name.lower():
+            continue
+        _, region, manifest = game.bundle(toc, b.name)
+        for kind, assets in (("ebx", manifest.ebx), ("res", manifest.resources), ("chunk", manifest.chunks)):
+            for a in assets:
+                label = a.name if kind != "chunk" else a.guid.string()
+                if needle and needle not in label.lower():
+                    continue
+                extra = (f" type {a.resource_type:#010x} id {a.resource_id:#018x} meta {a.resource_meta.hex()}"
+                         if kind == "res" else f" logical {a.logical_offset}+{a.logical_size}" if kind == "chunk" else "")
+                print(f"{b.name}\t{kind}\t{label}\t{a.original_size or a.logical_size} bytes{extra}")
+                shown += 1
+                if shown >= args.limit:
+                    print(f"... stopped at --limit {args.limit}")
+                    return
+
+
+def inspect_meshset(args):
+    """Prints a MeshSet resource's header, LOD and section fields (read-only)."""
+    game = Game(args.game, args.mod)
+    _, region, manifest = game.bundle(game.superbundle(args.superbundle), args.bundle)
+    for i, asset in enumerate(manifest.resources):
+        if asset.name.lower() == args.resource.lower():
+            index = (0 if region.inline_manifest else 1) + len(manifest.ebx) + i
+            print(f"{asset.name}: type {asset.resource_type:#010x}, id {asset.resource_id:#018x}, meta {asset.resource_meta.hex()}")
+            for line in describe_meshset(game.payload(region, index)):
+                print(line)
+            return
+    sys.exit(f"resource {args.resource} not in {args.bundle}")
+
+
 def _read_ebx(args) -> bytes:
     game = Game(args.game, args.mod)
     bundle = args.bundle or game.find_ebx(args.superbundle, args.ebx)
@@ -171,6 +241,35 @@ def main(argv=None):
     p.add_argument("--level", required=True, help="the level's name, e.g. dingolevel_reskate_test")
     p.add_argument("--display-name")
     p.add_argument("--dry-run", action="store_true", help="read and report only")
+    p = sub.add_parser("new-ground-level", help="a mod adding a level whose content is our own ground")
+    p.add_argument("--game", required=True, help="the game folder (holding Data/)")
+    p.add_argument("--mods", help="output folder; the mod is written inside it")
+    p.add_argument("--name", required=True, help="the mod's folder name, e.g. zz-ground-level")
+    p.add_argument("--level", required=True, help="the level's name, e.g. dingolevel_reskate_ground")
+    p.add_argument("--display-name")
+    p.add_argument("--size", type=float, default=DEFAULT_SIZE, help="side of the square ground, metres")
+    p.add_argument("--at", type=float, nargs=3, default=list(DEFAULT_AT), metavar=("X", "Y", "Z"),
+                   help="where the ground's centre is placed")
+    p.add_argument("--bam", choices=sorted(BAM_MODES), default="all",
+                   help="which of bam's bundles the level lists: all (as new-level), no-world (without bam's "
+                        "world-partition tiles), 333 (the 42 the 333 map carries)")
+    p.add_argument("--tile-template", default=TILE_TEMPLATE, help="the bam tile whose placement is copied")
+    p.add_argument("--placement", type=int, help="instance index of the ObjectReferenceObjectData to copy")
+    p.add_argument("--dry-run", action="store_true", help="read and report only")
+    p = sub.add_parser("inspect-meshset", help="print a MeshSet resource's header, LODs and sections (read-only)")
+    p.add_argument("--game", required=True)
+    p.add_argument("--mod", help="a mod folder laid over the game, to read its TOCs and archives")
+    p.add_argument("--superbundle", required=True, help="path under Data/Win32 without .toc")
+    p.add_argument("--bundle", required=True)
+    p.add_argument("--resource", required=True)
+    p = sub.add_parser("list-assets", help="list a superbundle's EBX, res and chunks by name (read-only)")
+    p.add_argument("--game", required=True)
+    p.add_argument("--mod", help="a mod folder laid over the game, to read its TOCs and archives")
+    p.add_argument("--superbundle", required=True, help="path under Data/Win32 without .toc")
+    p.add_argument("--bundle", help="only this bundle")
+    p.add_argument("--bundle-contains", help="only bundles whose name holds this text")
+    p.add_argument("--contains", help="only entries whose name (or chunk GUID) holds this text")
+    p.add_argument("--limit", type=int, default=2000)
     for name, text in (("dump-ebx", "print an EBX document (read-only)"),
                        ("ebx-roundtrip", "rewrite an EBX document in memory and compare (read-only)"),
                        ("ebx-arrayhash", "score rules for the array records' hashes (read-only)")):
@@ -189,6 +288,7 @@ def main(argv=None):
                            help="also say where differing arrays (the first N, default 20) and strings are reached from")
     args = ap.parse_args(argv)
     {"inspect": inspect, "raise-ground": raise_ground, "rebuild": rebuild, "new-level": new_level_command,
+     "new-ground-level": new_ground_level_command, "list-assets": list_assets, "inspect-meshset": inspect_meshset,
      "dump-ebx": dump_ebx, "ebx-roundtrip": ebx_roundtrip, "ebx-arrayhash": ebx_arrayhash}[args.command](args)
 
 
