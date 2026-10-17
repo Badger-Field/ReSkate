@@ -6,6 +6,8 @@
 #include "Engine/Game/Build/addresses.h"
 #include "Engine/Game/Build/20260929/engine.h"
 #include "Engine/Game/Build/20260929/local_cosmetic_catalog.h"
+#include "Engine/Vfs/mod_catalog.h"
+#include "Engine/Vfs/mod_item_sources.h"
 
 namespace dingosdk::profile_runtime {
 // Retail OwnableData catalog bridge; included after the installed-item reader.
@@ -165,6 +167,18 @@ CosmeticShared make_cosmetic_catalog(const profile::Snapshot& snapshot) {
     const auto object_dropper = snapshot.extensions.value("object_dropper", dingosdk::Json::object());
     const auto object_catalog = object_dropper.value("catalog", dingosdk::Json::object());
     const auto groups = objects::object_groups(content_cache::catalogs());
+    // Which mod each item is from, as the last merge found (mod_item_sources.h): the first
+    // listed, highest priority, is the one whose item the game has.
+    const auto lower_key = [](std::string text) {
+        for (auto& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return text;
+    };
+    std::map<std::string, std::string, std::less<>> sources;
+    for (const auto& source : dingosdk::mods::read_item_sources(
+             dingosdk::mods::catalog().root / dingosdk::mods::generated_folder / dingosdk::mods::item_sources_file)) {
+        const auto name = dingosdk::mods::item_source_name(source);
+        for (const auto& item : source.keys) sources.emplace(item, name);
+    }
     std::set<std::uint32_t> hashes;
     std::size_t index{}, left_out{};
     // One item the catalog cannot hold (two mods' items with one identity, a record the game will not
@@ -191,6 +205,14 @@ CosmeticShared make_cosmetic_catalog(const profile::Snapshot& snapshot) {
             metadata["group"] = placement.group ? placement.group->id : key;
             metadata["browser_category"] = placement.category ? placement.category->id : info.category;
         }
+        // A mod's item says which mod under its name, where the game shows a description; one of
+        // the game's own that a mod changes says that (unless it has a description of its own).
+        if (!info.build_kit && !metadata.contains("description"))
+            if (const auto from = sources.find(lower_key(key)); from != sources.end()) {
+                const auto& game = content_cache::catalogs();
+                const bool own = game.available && game.items.contains(from->first);
+                metadata["description"] = (own ? "Changed by " : "From: ") + from->second;
+            }
         try {
             node.item = make_cosmetic_message(cosmetic_ownable_message(key, info, owned, metadata));
         } catch (const std::exception& failure) {
