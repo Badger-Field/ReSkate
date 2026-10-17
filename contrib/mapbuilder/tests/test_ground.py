@@ -8,12 +8,15 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from test_level import (ISLAND_BUNDLE, LIGHTHOUSE, LIGHTHOUSE_CHUNK, LIGHTHOUSE_MESH_GUID,  # noqa: E402
+                        LIGHTHOUSE_TEXTURE_CHUNK, meshset)
 from test_level import (BAM, BP_GUID, BP_ROOT_GUID, CHUNK, CORE_BUNDLE, CORE_LAYER, GROUNDPLANE, LAYER_GUID,  # noqa: E402
                         LAYER_REFERENCE_GUID, LEVEL, MESH_CHUNK, MESH_GUID, NEW, PLACEMENT_GUID, TEMPLATE_MATERIAL, TILE,
                         TILE_GUID, fake_game, genprefab, guid, ptr)
 from reskate_mapbuilder.__main__ import main  # noqa: E402
 from reskate_mapbuilder.ebx import PointerKind, PointerReference, read_document, write_document  # noqa: E402
-from reskate_mapbuilder.ebxedit import (add_import, clone_instance, derived_guid, guid_flags, path_to,  # noqa: E402
+from reskate_mapbuilder.meshset import read_layout, rebuild_chunk, section_positions, section_triangles, write_mesh  # noqa: E402
+from reskate_mapbuilder.ebxedit import (add_import, clone_instance, derived_guid, field_referrers, guid_flags, path_to,  # noqa: E402
                                         prune_imports, prune_unreachable, remove_instances)
 from reskate_mapbuilder.game import Game  # noqa: E402
 from reskate_mapbuilder.ground import new_ground_level, resource_id  # noqa: E402
@@ -244,4 +247,103 @@ def test_inspect_meshset_prints_the_known_fields(tmp_path, capsys):
           "--resource", GROUNDPLANE + "_mesh"])
     out = capsys.readouterr().out
     assert "type 0x49b156d4" in out and "1 LODs" in out and MESH_CHUNK.string() in out
-    assert "header 192, LOD struct 176, section struct 384" in out and "0 sections @" in out
+    assert "header 192, LOD struct 176, section struct 384" in out and "2 sections @" in out
+    assert "(usage, format, offset, stream) [(1, 3, 0, 0), (33, 6, 0, 1), (51, 12, 4, 1)]" in out
+
+
+def test_no_world_and_333_keep_references_a_field_holds(tmp_path):
+    for bam in ("no-world", "333"):
+        _, _, report, _, view = build(tmp_path / bam, bam=bam)
+        text = "\n".join(report)
+        assert "KEPT a reference to a bundle the TOC does not list" in text and "wproot/wp/held" in text
+        assert "held by #3.Object" in text
+        doc, refs = references(view)
+        assert [r.object.get("BundleName") for r in refs] == ["Levels/Game/BAM_LevelRoot/TOD_2_Noon", SUBLEVEL]
+        holder = next(i for i in doc.instances if i.object.get("Name") == "holder")
+        assert doc.instances[holder.object.get("Object").index].object.get("BundleName").endswith("/held")
+
+
+def test_field_referrers():
+    doc = genprefab()
+    assert field_referrers(doc, 4) == ["#2.Blueprint"] and field_referrers(doc, 2) == []
+
+
+def test_visual_template_keeps_the_layers_own_placement(tmp_path):
+    _, _, report, _, view = build(tmp_path, visual="template", at=(0.0, 300.0, 0.0))
+    assert any("--visual template: the layer's own placement kept" in line for line in report)
+    _, _, _, (_, layer, bp) = ground(view)
+    placements = [layer.instances[p.index] for p in layer.instances[0].object.get("Objects")]
+    assert len(placements) == 2
+    ours, theirs = placements
+    assert layer.imports[ours.object.get("Blueprint").index].file_guid == bp.file_guid
+    assert layer.imports[theirs.object.get("Blueprint").index].file_guid == guid(93)     # the worklight, unchanged
+    t = transform(theirs.object)
+    assert t[3] == [10, 300, 10] and t[0] == [0, 0, 1]          # moved next to ours, rotation kept
+    assert transform(ours.object)[3] == [0, 300, 0]
+    assert theirs.instance_guid != ours.instance_guid
+
+
+def test_blueprint_from_another_bundle_lists_what_it_needs(tmp_path):
+    _, _, report, _, view = build(tmp_path, blueprint_template=LIGHTHOUSE, blueprint_bundle=ISLAND_BUNDLE)
+    text = "\n".join(report)
+    assert f"listed from {ISLAND_BUNDLE} in the ground bundle: 2 EBX" in text
+    assert "flags #1 StaticModelEntityData" in text
+    _, region, manifest, (_, _, bp) = ground(view)
+    assert [a.name for a in manifest.ebx] == [SUBLEVEL, LAYER, BLUEPRINT, LIGHTHOUSE + "_mesh", LIGHTHOUSE + "_d"]
+    assert [a.name for a in manifest.resources] == [PHYSICS, LIGHTHOUSE + "_mesh", LIGHTHOUSE + "_d"]
+    assert [c.guid for c in manifest.chunks] == [LIGHTHOUSE_CHUNK, LIGHTHOUSE_TEXTURE_CHUNK]
+    assert [f.location.patch for f in region.files] == [True] * 4 + [False] * 2 + [True] + [False] * 4
+    assert bp.imports[0].file_guid == LIGHTHOUSE_MESH_GUID
+    assert read_document(view.ebx(region, manifest, LIGHTHOUSE + "_mesh")).file_guid == LIGHTHOUSE_MESH_GUID
+
+
+def test_mesh_own_writes_a_meshset_rigidmesh_and_chunk(tmp_path):
+    _, _, report, _, view = build(tmp_path, mesh="own", size=20.0)
+    text = "\n".join(report)
+    assert "chunk 144 bytes rebuilds identically" in text and "winding flipped to match" in text
+    assert "1 resource references named the template's id" in text and "1 blueprint imports moved to it" in text
+    _, region, manifest, (_, _, bp) = ground(view)
+    mesh_name = f"levels/game/{LEVEL}/ground_mesh"
+    assert [a.name for a in manifest.ebx] == [SUBLEVEL, LAYER, BLUEPRINT, mesh_name]
+    assert [a.name for a in manifest.resources] == [PHYSICS, mesh_name]
+    assert manifest.resources[1].resource_type == 0x49B156D4 and manifest.resources[1].resource_id == resource_id(mesh_name)
+    mesh = read_document(view.ebx(region, manifest, mesh_name))
+    assert mesh.instances[0].object.get("Name") == mesh_name
+    assert mesh.instances[0].object.get("MeshSetResource").id == resource_id(mesh_name)
+    assert (bp.imports[0].file_guid, bp.imports[0].class_guid) == (mesh.file_guid, mesh.instances[0].instance_guid)
+    ms = view.payload(region, 1 + 4 + 1)
+    chunk_asset = manifest.chunks[0]
+    chunk = view.payload(region, 1 + 4 + 2)
+    assert len(ms) == 1376 and chunk_asset.logical_size == len(chunk) and chunk_asset.logical_offset == 0
+    lod = read_layout(ms)[0]
+    assert lod.chunk == chunk_asset.guid and rebuild_chunk(lod, chunk) == chunk
+    for s in lod.sections:
+        points = section_positions(s, chunk)
+        assert len(points) == 25 and min(p[0] for p in points) == -10 and max(p[2] for p in points) == 10
+        tris = section_triangles(lod, s, chunk)
+        a, b, c = (points[i] for i in tris[0])
+        assert (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]) < 0     # the template's winding
+    # The other elements are the template's first vertex's.
+    first = lod.sections[0]
+    assert chunk[first.vertex_start + 25 * 12:first.vertex_start + 25 * 12 + 8] == bytes([0x7F, 0xFF, 0x80, 0]) + \
+        __import__("struct").pack("<2e", 0.5, 0.25)
+
+
+def test_write_mesh_refuses_a_chunk_it_does_not_understand():
+    ms, chunk = meshset(guid(1))
+    broken = bytearray(chunk)
+    broken[112 - 1] = 0 if broken[111] else 1        # inside section 1's positions: still rebuilds
+    write_mesh(ms, bytes(broken), [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)], [(0, 2, 1)], guid(2))
+    broken = chunk[:-1] + b"\1"                        # a non-zero byte in the end padding
+    with pytest.raises(ValueError, match="does not rebuild"):
+        write_mesh(ms, broken, [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)], [(0, 2, 1)], guid(2))
+
+
+def test_mesh_own_on_a_blueprint_from_another_bundle_keeps_its_texture(tmp_path):
+    _, _, _, _, view = build(tmp_path, mesh="own", blueprint_template=LIGHTHOUSE, blueprint_bundle=ISLAND_BUNDLE)
+    _, _, manifest, _ = ground(view)
+    mesh_name = f"levels/game/{LEVEL}/ground_mesh"
+    assert [a.name for a in manifest.ebx] == [SUBLEVEL, LAYER, BLUEPRINT, mesh_name, LIGHTHOUSE + "_d"]
+    assert [a.name for a in manifest.resources] == [PHYSICS, mesh_name, LIGHTHOUSE + "_d"]
+    assert [c.guid for c in manifest.chunks][1:] == [LIGHTHOUSE_TEXTURE_CHUNK] and LIGHTHOUSE_CHUNK not in [
+        c.guid for c in manifest.chunks]

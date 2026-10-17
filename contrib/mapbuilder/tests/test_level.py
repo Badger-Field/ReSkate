@@ -168,7 +168,11 @@ def bam_root():
         (lambda d: obj(d, "SubWorldReferenceObjectData", BundleName="Levels/Game/BAM_LevelRoot/TOD_2_Noon",
                        StreamRealm=1), None),
         (lambda d: obj(d, "SubWorldReferenceObjectData", BundleName="Levels/Game/BAM_LevelRoot/wproot", AutoLoad=True,
-                       StreamRealm=1, Blueprint=PointerReference(PointerKind.external, 0)), None)],
+                       StreamRealm=1, Blueprint=PointerReference(PointerKind.external, 0)), None),
+        # A reference held by a field (as bam's root #0 holds some), not by an array.
+        (lambda d: obj(d, "ObjectBlueprint", Name="holder", Object=ptr(4)), None),
+        (lambda d: obj(d, "SubWorldReferenceObjectData", BundleName="Levels/Game/BAM_LevelRoot/wproot/wp/held",
+                       StreamRealm=1), None)],
         imports=[(WPROOT_GUID, guid(61))])
 
 
@@ -227,16 +231,76 @@ def groundplane_mesh():
                                                MeshSetResource=ResourceReference(MESHSET_ID)), guid(96))])
 
 
-def meshset(chunk):
-    """A rigid MeshSet header with one LOD naming its chunk: a flat 50 m plane (FORMAT-NOTES 1)."""
-    data = bytearray(208 + 176)
+def meshset(chunk_guid, name=GROUNDPLANE + "_mesh"):
+    """(MeshSet, chunk): a rigid MeshSet with one LOD of two sections, a 50 m quad each, laid out
+    as FORMAT-NOTES 1 says: section 0 with float positions in stream 0 and a normal and UV in
+    stream 1, section 1 (a shadow) with half-float positions only."""
+    quad = [(-25.0, 0.0, -25.0), (25.0, 0.0, -25.0), (-25.0, 0.0, 25.0), (25.0, 0.0, 25.0)]
+    tris = [(0, 1, 2), (1, 3, 2)]      # clockwise seen from above
+    chunk = bytearray()
+    for p in quad:
+        chunk += struct.pack("<3f", *p)
+    for _ in quad:
+        chunk += bytes([0x7F, 0xFF, 0x80, 0x00]) + struct.pack("<2e", 0.5, 0.25)
+    for p in quad:
+        chunk += struct.pack("<4e", *p, 1.0)
+    vertex_bytes = len(chunk)                       # 112
+    for _ in range(2):
+        chunk += struct.pack("<6H", *(i for t in tris for i in t))
+    chunk += bytes(-len(chunk) % 16)
+    data = bytearray(1376)
     struct.pack_into("<III", data, 0, 192, 176, 384)
-    struct.pack_into("<3f", data, 0x10, -25.0, 0.0, -25.0)
-    struct.pack_into("<3f", data, 0x20, 25.0, 0.0, 25.0)
+    struct.pack_into("<4f", data, 0x10, -25.0, 0.0, -25.0, 0.0)
+    struct.pack_into("<4f", data, 0x20, 25.0, 0.0, 25.0, 0.0)
     struct.pack_into("<Q", data, 0x30, 208 - 16)
-    struct.pack_into("<H", data, 180, 1)
-    data[208 + 116:208 + 132] = chunk.bytes
-    return bytes(data)
+    struct.pack_into("<HH", data, 180, 1, 2)
+    names = 1152
+    data[names:names + len(name) + 1] = name.encode() + b"\0"
+    struct.pack_into("<Q", data, 0x68, names - 16)
+    lod = 208
+    struct.pack_into("<I", data, lod + 8, 2)
+    struct.pack_into("<Q", data, lod + 12, 384 - 16)
+    struct.pack_into("<4I", data, lod + 80, 0x40, 33, 24, vertex_bytes)
+    data[lod + 116:lod + 132] = chunk_guid.bytes
+    for s, (per_vertex, start, first, elements, strides) in enumerate((
+            (20, 0, 0, [(1, 3, 0, 0), (33, 6, 0, 1), (51, 12, 4, 1)], [12, 8]),
+            (8, 80, 6, [(1, 8, 0, 0)], [8]))):
+        at = 384 + 384 * s
+        struct.pack_into("<Q", data, at + 8, names - 16)
+        data[at + 30], data[at + 31] = per_vertex, 3
+        struct.pack_into("<4I", data, at + 32, 2, first, start, 4)
+        for e, element in enumerate(elements):
+            data[at + 112 + 4 * e:at + 116 + 4 * e] = bytes(element)
+        for e, stride in enumerate(strides):
+            data[at + 112 + 64 + 2 * e] = stride
+        data[at + 112 + 96], data[at + 112 + 97] = len(elements), len(strides)
+    return bytes(data), bytes(chunk)
+
+
+# An ordinary visible world object in its own world-partition bundle (like the lighthouse the PC
+# found): blueprint, mesh, texture, their resources and chunks, and <blueprint>.physics.
+ISLAND_BUNDLE = "win32/levels/game/bam_levelroot/wp_dst_ftue_island"
+LIGHTHOUSE = "world/plots/iog_island/iog_lighthouse_island_02"
+LIGHTHOUSE_GUID, LIGHTHOUSE_MESH_GUID, LIGHTHOUSE_TEXTURE_GUID = guid(100), guid(101), guid(102)
+LIGHTHOUSE_CHUNK, LIGHTHOUSE_TEXTURE_CHUNK = guid(103), guid(104)
+
+
+def lighthouse_bundle(bundle):
+    bp = document(LIGHTHOUSE_GUID, [
+        (lambda d: obj(d, "ObjectBlueprint", Name=LIGHTHOUSE, Object=ptr(1)), guid(105)),
+        (lambda d: obj(d, "StaticModelEntityData", Mesh=PointerReference(PointerKind.external, 0)), guid(106))],
+        imports=[(LIGHTHOUSE_MESH_GUID, guid(107))])
+    mesh = document(LIGHTHOUSE_MESH_GUID, [(lambda d: obj(d, "RigidMeshAsset", Name=LIGHTHOUSE + "_mesh",
+                                                          MeshSetResource=ResourceReference(0x7777)), guid(107))],
+                    imports=[(LIGHTHOUSE_TEXTURE_GUID, guid(108))])
+    texture = document(LIGHTHOUSE_TEXTURE_GUID, [(lambda d: obj(d, "Asset", Name=LIGHTHOUSE + "_d"), guid(108))])
+    ms, chunk = meshset(LIGHTHOUSE_CHUNK, LIGHTHOUSE + "_mesh")
+    return bundle(ISLAND_BUNDLE, {"world/plots/iog_island/other": b"zz", LIGHTHOUSE: write_document(bp),
+                                  LIGHTHOUSE + "_mesh": write_document(mesh), LIGHTHOUSE + "_d": write_document(texture)},
+                  {LIGHTHOUSE + ".physics": (0x41759364, 0x8888, template_physics()),
+                   LIGHTHOUSE + "_mesh": (0x49B156D4, 0x7777, ms),
+                   LIGHTHOUSE + "_d": (0x6BDE20BA, 0x9999, b"texture" + LIGHTHOUSE_TEXTURE_CHUNK.bytes)},
+                  [(guid(109), b"unrelated"), (LIGHTHOUSE_CHUNK, chunk), (LIGHTHOUSE_TEXTURE_CHUNK, b"texels")])
 
 
 def template_physics():
@@ -339,8 +403,9 @@ def fake_game(tmp_path):
                                       GROUNDPLANE: write_document(groundplane()),
                                       GROUNDPLANE + "_mesh": write_document(groundplane_mesh())},
                      {GROUNDPLANE + ".physics": (0x41759364, PHYSICS_ID, template_physics()),
-                      GROUNDPLANE + "_mesh": (0x49B156D4, MESHSET_ID, meshset(MESH_CHUNK))},
-                     [(MESH_CHUNK, b"mesh data")]),
+                      GROUNDPLANE + "_mesh": (0x49B156D4, MESHSET_ID, meshset(MESH_CHUNK)[0])},
+                     [(MESH_CHUNK, meshset(MESH_CHUNK)[1])]),
+              lighthouse_bundle(bundle),
               bundle("win32/levels/game/bam_levelroot/tod_2_noon", {"levels/game/bam_levelroot/tod_2_noon": b"tod"}),
               bundle("win32/levels/game/bam_levelroot/startpoint_sublevels", {"sp": b"sp"}),
               bundle(CORE_BUNDLE, {"levels/game/bam_levelroot/other": b"zz",
