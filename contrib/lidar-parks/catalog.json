@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "comment": "Build Kit objects the converter may place. Item ids are from skate.'s content cache for build 25414733. Sizes are in metres: 'along' is the object's long axis (rails, ledges, pads) or its uphill direction (kickers, banks, quarters, stairs); 'across' is the other way. Every size marked estimated has not been measured in game yet: run 'calibrate', check each object against the measuring stick, and correct the numbers here. yaw_offset_degrees turns an object whose model points another way; origin is where the object's own origin sits relative to the centre of its base, in object-local metres (x along, y up, z across).",
+  "items": [
+    {"item": "own_bkrails_generic_flatrailround_00001",          "kinds": ["rail"], "along": 3.0, "across": 0.1, "height": 0.35, "estimated": true},
+    {"item": "own_bkrails_generic_flatrailroundlong_00001",      "kinds": ["rail"], "along": 6.0, "across": 0.1, "height": 0.35, "estimated": true},
+    {"item": "own_bkrails_generic_flatrailroundtall_00001",      "kinds": ["rail"], "along": 3.0, "across": 0.1, "height": 0.65, "estimated": true},
+    {"item": "own_bkrails_generic_flatrailroundtalllong_00001",  "kinds": ["rail"], "along": 6.0, "across": 0.1, "height": 0.65, "estimated": true},
+    {"item": "own_bkrails_generic_flatrailsquare_00001",         "kinds": ["rail"], "along": 3.0, "across": 0.1, "height": 0.35, "estimated": true},
+    {"item": "own_bkrails_generic_urbanslappycurb_00001",        "kinds": ["ledge"], "along": 3.0, "across": 0.4, "height": 0.15, "estimated": true},
+
+    {"item": "own_bkpads_generic_grindboxshort_00001",           "kinds": ["ledge"], "along": 1.5, "across": 0.5, "height": 0.4, "estimated": true},
+    {"item": "own_bkpads_generic_grindboxmedium_00001",          "kinds": ["ledge"], "along": 3.0, "across": 0.5, "height": 0.4, "estimated": true},
+    {"item": "own_bkpads_generic_grindboxlarge_00001",           "kinds": ["ledge"], "along": 4.5, "across": 0.5, "height": 0.4, "estimated": true},
+    {"item": "own_bkpads_generic_grindpadlong_90001",            "kinds": ["ledge", "manual_pad"], "along": 6.0, "across": 0.6, "height": 0.3, "estimated": true},
+
+    {"item": "own_bkpads_generic_manualpadsmall_00001",          "kinds": ["manual_pad", "box"], "along": 2.0, "across": 1.2, "height": 0.25, "estimated": true},
+    {"item": "own_bkpads_generic_manualpadmedium_00001",         "kinds": ["manual_pad", "box"], "along": 3.0, "across": 1.5, "height": 0.3, "estimated": true},
+    {"item": "own_bkpads_generic_manualpadlarge_00001",          "kinds": ["manual_pad", "box"], "along": 4.0, "across": 2.0, "height": 0.35, "estimated": true},
+
+    {"item": "own_bkramps_generic_kickerflatsmall_00001",        "kinds": ["kicker", "bank"], "along": 1.2, "across": 1.2, "height": 0.4, "estimated": true},
+    {"item": "own_bkramps_generic_kickerflatmedium_00001",       "kinds": ["kicker", "bank"], "along": 1.8, "across": 1.5, "height": 0.6, "estimated": true},
+    {"item": "own_bkramps_generic_kickerflatlarge_00001",        "kinds": ["kicker", "bank"], "along": 2.4, "across": 2.0, "height": 0.9, "estimated": true},
+    {"item": "own_bkramps_generic_wallramp_00001",               "kinds": ["bank"], "along": 2.5, "across": 3.0, "height": 1.8, "estimated": true},
+
+    {"item": "own_bkvert_generic_quarterpipesmall_00001",        "kinds": ["quarter"], "along": 1.5, "across": 3.0, "height": 1.0, "estimated": true},
+    {"item": "own_bkvert_generic_quarterpipemedium_00001",       "kinds": ["quarter"], "along": 2.2, "across": 4.0, "height": 1.6, "estimated": true},
+    {"item": "own_bkvert_generic_quarterpipelarge_00001",        "kinds": ["quarter"], "along": 3.0, "across": 5.0, "height": 2.4, "estimated": true},
+
+    {"item": "own_bkramps_generic_stairslarge_00001",            "kinds": ["stairs"], "along": 3.0, "across": 3.0, "height": 1.2, "estimated": true},
+    {"item": "own_bkramps_generic_stairslargerail_00001",        "kinds": ["stairs"], "along": 3.0, "across": 3.0, "height": 1.2, "estimated": true, "has_rail": true}
+  ],
+  "marker": "own_bkprops_generic_measuringstick_00001"
+}
