@@ -147,7 +147,7 @@ void set_activity(ModsPanel& panel, std::string text) {
 }
 
 // Downloads one package into Mods/.reskate-download, then installs it over any
-// installed copy (which goes to the Recycle Bin, keeping its place in mods.json).
+// installed copy (which is deleted, its place in mods.json kept).
 std::string install_package(ModsPanel& panel, const fs::path& root, const ts::Package& package) {
     const auto& version = package.latest();
     const auto folder = root / L".reskate-download";

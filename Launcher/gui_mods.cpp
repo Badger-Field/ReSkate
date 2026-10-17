@@ -1219,7 +1219,7 @@ void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, Mo
     ImGui::SetNextWindowSize(ImVec2(S(440), 0));
     if (ImGui::BeginPopupModal("Replace mod", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
         ImGui::PushTextWrapPos(0);
-        ImGui::Text("\"%s\" is already installed. Replace it? The installed copy goes to the Recycle Bin.",
+        ImGui::Text("\"%s\" is already installed. Replace it? The installed copy is deleted.",
             panel.conflict_name.c_str());
         ImGui::PopTextWrapPos();
         ImGui::Spacing();
