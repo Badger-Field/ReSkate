@@ -13,11 +13,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from reskate_mapbuilder import nativedb  # noqa: E402
 from reskate_mapbuilder.__main__ import main  # noqa: E402
 from reskate_mapbuilder.bundle import (BinaryBundle, BundleAsset, BundleFileInfo, CasIdentifier, EBX, Guid,  # noqa: E402
-                                       read_bundle_region, write_binary_bundle, write_bundle_region)
+                                       RESOURCE, read_bundle_region, write_binary_bundle, write_bundle_region)
+from reskate_mapbuilder.bundle import CHUNK as CHUNK_KIND  # noqa: E402
 from reskate_mapbuilder.cas import decode_raw, encode_raw  # noqa: E402
-from reskate_mapbuilder.ebx import (Document, FieldCategory as C, FieldType as T, FieldValue, InstanceRecord,  # noqa: E402
-                                    Object, PointerKind, PointerReference, ensure_fixup_type, read_document,
-                                    write_document)
+from reskate_mapbuilder.ebx import (Document, FieldCategory as C, FieldType as T, FieldValue, ImportReference,  # noqa: E402
+                                    InstanceRecord, Object, PointerKind, PointerReference, ResourceReference,
+                                    ensure_fixup_type, read_document, write_document)
 from reskate_mapbuilder.ebxcheck import roundtrip  # noqa: E402
 from reskate_mapbuilder.ebxedit import (after_last_of_type, clone_document, clone_instance, derived_guid,  # noqa: E402
                                         describe, find_objects, guid_flags, pointer_arrays)
@@ -74,6 +75,17 @@ TYPES = [
                       ("z", enc(T.float32, C.primitive), 0, 8)]),
     ("LinearTransform", 64, 16, [(n, enc(T.structure, C.structure), 9, o)
                                  for n, o in (("right", 0), ("up", 16), ("forward", 32), ("trans", 48))]),
+    # A world-partition tile and what it places (new-ground-level, FORMAT-NOTES 6.3).
+    ("SubWorldData", 32, 8, [("$", enc(T.inherited, C.none), 1, 0), ("Objects", enc(T.pointer, C.array), 0, 24)]),
+    ("LayerData", 24, 8, [("$", enc(T.inherited, C.none), 0, 0), ("Objects", enc(T.pointer, C.array), 0, 16)]),
+    ("ObjectReferenceObjectData", 96, 16, [("$", enc(T.inherited, C.none), 0, 0),
+                                           ("BlueprintTransform", enc(T.structure, C.structure), 10, 16),
+                                           ("Blueprint", enc(T.pointer, C.pointer), 0, 80)]),
+    ("ObjectBlueprint", 32, 8, [("$", enc(T.inherited, C.none), 1, 0), ("Object", enc(T.pointer, C.pointer), 0, 24)]),
+    ("StaticModelEntityData", 32, 8, [("$", enc(T.inherited, C.none), 0, 0), ("Mesh", enc(T.pointer, C.pointer), 0, 16),
+                                      ("PhysicsResource", enc(T.resourceRef, C.primitive), 0, 24)]),
+    ("RigidMeshAsset", 32, 8, [("$", enc(T.inherited, C.none), 1, 0),
+                               ("MeshSetResource", enc(T.resourceRef, C.primitive), 0, 24)]),
 ]
 INDEX = {t[0]: i for i, t in enumerate(TYPES)}
 
@@ -122,9 +134,11 @@ def obj(doc, type_name, **values):
     return out
 
 
-def document(file_guid, instances):
-    """instances: (object builder, exported guid or None); the builders get the empty document."""
+def document(file_guid, instances, imports=()):
+    """instances: (object builder, exported guid or None); the builders get the empty document.
+    imports: (file guid, instance guid) pairs, for PointerReference(PointerKind.external, i)."""
     doc = read_document(write_document(Document(file_guid=file_guid, reflection_data=reflection())))
+    doc.imports = [ImportReference(f, c) for f, c in imports]
     for build, exported in instances:
         o = build(doc)
         doc.instances.append(InstanceRecord(ensure_fixup_type(doc, o.descriptor), o.descriptor,
@@ -139,12 +153,84 @@ def ptr(index):
 BAM_ROOT_GUID = guid(1)
 
 
+WPROOT_GUID = guid(60)
+
+
 def bam_root():
     return document(BAM_ROOT_GUID, [
         (lambda d: obj(d, "DetachedSubWorldData", Name="Levels/Game/BAM_LevelRoot/BAM_LevelRoot", WorldSizeXZ=2048.0,
-                       WorldSizeY=512.0, Objects=[ptr(1)]), guid(2)),
+                       WorldSizeY=512.0, Objects=[ptr(1), ptr(2)]), guid(2)),
         (lambda d: obj(d, "SubWorldReferenceObjectData", BundleName="Levels/Game/BAM_LevelRoot/TOD_2_Noon",
-                       StreamRealm=1), None)])
+                       StreamRealm=1), None),
+        (lambda d: obj(d, "SubWorldReferenceObjectData", BundleName="Levels/Game/BAM_LevelRoot/wproot", AutoLoad=True,
+                       StreamRealm=1, Blueprint=PointerReference(PointerKind.external, 0)), None)],
+        imports=[(WPROOT_GUID, guid(61))])
+
+
+# The tile new-ground-level copies: a root, two layers, a decoy, a placement of a blueprint kept
+# elsewhere and a placement of a blueprint in the tile's bundle, which has a mesh, a texture and
+# a physics resource named after the blueprint.
+TILE = "levels/game/bam_levelroot/wproot/wp/s9600_x0z0/s200_x700z1100_sublevel"
+PROPS = "levels/game/bam_levelroot/props/"
+TILE_GUID, BP_GUID, MESH_GUID, TEXTURE_GUID = guid(62), guid(63), guid(64), guid(65)
+PLACEMENT_GUID = Guid.parse("00a1b2c3-0000-0000-0000-000000000002")
+PHYSICS_ID, MESHSET_ID, TEXTURE_ID = 0x1111222233334444, 0x5555, 0x6666
+MESH_CHUNK, TEXTURE_CHUNK, OTHER_CHUNK = guid(70), guid(71), guid(72)
+TEMPLATE_MATERIAL = 0x00012345
+
+
+def tile():
+    def placement(d, x):
+        return obj(d, "ObjectReferenceObjectData", Flags=0xA1B2C3, Blueprint=PointerReference(PointerKind.external, x),
+                   BlueprintTransform=obj(d, "LinearTransform", trans=obj(d, "Vec3", x=5.0, y=6.0, z=7.0),
+                                          right=obj(d, "Vec3", x=0.0, z=1.0)))
+    return document(TILE_GUID, [
+        (lambda d: obj(d, "SubWorldData", Name="Levels/Game/BAM_LevelRoot/wproot/wp/S9600_x0z0/S200_x700z1100_Sublevel",
+                       Objects=[ptr(1), ptr(2)]), guid(80)),
+        (lambda d: obj(d, "LayerData", Objects=[ptr(3), ptr(4), ptr(5)]), guid(81)),
+        (lambda d: obj(d, "LayerData", Objects=[ptr(3)]), guid(82)),
+        (lambda d: obj(d, "Asset", Name="staticmodelgroup"), guid(83)),
+        (lambda d: placement(d, 0), guid(84)),
+        (lambda d: placement(d, 1), PLACEMENT_GUID)],
+        imports=[(guid(90), guid(91)), (BP_GUID, guid(92))])
+
+
+def floor_bp():
+    return document(BP_GUID, [
+        (lambda d: obj(d, "ObjectBlueprint", Name=PROPS + "Floor_BP", Object=ptr(1)), guid(92)),
+        (lambda d: obj(d, "StaticModelEntityData", Mesh=PointerReference(PointerKind.external, 0),
+                       PhysicsResource=ResourceReference(PHYSICS_ID)), guid(93))],
+        imports=[(MESH_GUID, guid(94))])
+
+
+def floor_mesh():
+    return document(MESH_GUID, [(lambda d: obj(d, "RigidMeshAsset", Name=PROPS + "Floor",
+                                               MeshSetResource=ResourceReference(MESHSET_ID)), guid(94))],
+                    imports=[(TEXTURE_GUID, guid(95))])
+
+
+def floor_texture():
+    return document(TEXTURE_GUID, [(lambda d: obj(d, "Asset", Name=PROPS + "Floor_D"), guid(95))])
+
+
+def meshset(chunk):
+    """A rigid MeshSet header with one LOD naming its chunk (FORMAT-NOTES 1)."""
+    data = bytearray(208 + 176)
+    struct.pack_into("<III", data, 0, 192, 176, 384)
+    struct.pack_into("<3f", data, 0x10, -2.0, 0.0, -3.0)
+    struct.pack_into("<3f", data, 0x20, 2.0, 0.5, 3.0)
+    struct.pack_into("<Q", data, 0x30, 208 - 16)
+    struct.pack_into("<H", data, 180, 1)
+    data[208 + 116:208 + 132] = chunk.bytes
+    return bytes(data)
+
+
+def template_physics():
+    from reskate_mapbuilder.physics import Part, compute_edge_data, flat_grid, write_physics
+    shape = flat_grid(4.0, 2.0)
+    part = Part(0, material=TEMPLATE_MATERIAL)
+    compute_edge_data([shape], [part])
+    return write_physics([shape], [part], 2)
 
 
 def bam_description():
@@ -214,14 +300,19 @@ def fake_game(tmp_path):
     (data / "layout.toc").write_bytes(layout_bytes())
     cas = bytearray()
 
-    def bundle(name, ebx):
+    def bundle(name, ebx, res=None, chunks=None):
+        """res: name -> (type, id, payload); chunks: (guid, payload) pairs."""
+        res, chunks = res or {}, chunks or []
         files = []
-        for payload in ebx.values():
+        for payload in list(ebx.values()) + [r[2] for r in res.values()] + [c[1] for c in chunks]:
             stored = encode_raw(payload)
             files.append(BundleFileInfo(CasIdentifier(False, CHUNK, 2), len(cas), len(stored)))
             cas.extend(stored)
-        manifest = write_binary_bundle(BinaryBundle(ebx=[
-            BundleAsset(EBX, n, hashlib.sha1(p).digest(), original_size=len(p)) for n, p in ebx.items()]))
+        manifest = write_binary_bundle(BinaryBundle(
+            ebx=[BundleAsset(EBX, n, hashlib.sha1(p).digest(), original_size=len(p)) for n, p in ebx.items()],
+            resources=[BundleAsset(RESOURCE, n, hashlib.sha1(p).digest(), resource_id=i, resource_type=t, original_size=len(p))
+                       for n, (t, i, p) in res.items()],
+            chunks=[BundleAsset(CHUNK_KIND, guid=g, sha1=hashlib.sha1(p).digest(), logical_size=len(p)) for g, p in chunks]))
         files.insert(0, BundleFileInfo(CasIdentifier(False, CHUNK, 2), len(cas), len(manifest)))
         cas.extend(manifest)
         return TocBundle(name, write_bundle_region(files), 1)
@@ -232,7 +323,16 @@ def fake_game(tmp_path):
                                                     ROOT + "/description": write_document(root_description())})],
         BAM: [bundle("win32/" + BAM, {BAM: write_document(bam_root()), "levels/game/bam_levelroot/pool": b"pool"}),
               bundle("win32/levels/game/bam_levelroot/tod_2_noon", {"levels/game/bam_levelroot/tod_2_noon": b"tod"}),
-              bundle("win32/levels/game/bam_levelroot/startpoint_sublevels", {"sp": b"sp"})],
+              bundle("win32/levels/game/bam_levelroot/startpoint_sublevels", {"sp": b"sp"}),
+              bundle("win32/levels/game/bam_levelroot/wproot", {"levels/game/bam_levelroot/wproot": b"wproot"}),
+              bundle("win32/" + TILE,
+                     {TILE: write_document(tile()), PROPS + "not_an_ebx": b"zz", PROPS + "floor_bp": write_document(floor_bp()),
+                      PROPS + "floor": write_document(floor_mesh()), PROPS + "floor_d": write_document(floor_texture())},
+                     {TILE + "/staticmodelgroup.physics": (0x41759364, 0x77, template_physics()),
+                      PROPS + "floor_bp/physics": (0x41759364, PHYSICS_ID, template_physics()),
+                      PROPS + "floor": (0x49B156D4, MESHSET_ID, meshset(MESH_CHUNK)),
+                      PROPS + "floor_d": (0x6BDE20BA, TEXTURE_ID, b"texture" + TEXTURE_CHUNK.bytes)},
+                     [(OTHER_CHUNK, b"other"), (MESH_CHUNK, b"mesh data"), (TEXTURE_CHUNK, b"texels")])],
         ROOT: [bundle("win32/" + ROOT, {ROOT + "_dsublevelmanager_genprefab": write_document(genprefab())})],
     }
     chunks = {BAM: [TocChunk(guid(50), CasIdentifier(False, CHUNK, 2), 0, 4)]}
