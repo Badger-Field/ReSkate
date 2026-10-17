@@ -438,7 +438,9 @@ def run_city(args) -> int:
             lat, lon = bbox.centre
             print(f"  as its own area: --centre {lat + offset / 111_320:.6f},{lon:.6f} --size "
                   f"{args.size[0]:g}x{args.size[1]:g}")
-        model.spots = [s for s in model.spots if city_module.in_slice(s, *args.size, offset)]
+        # Everything written from here is the slice: the spots, and the ground and buildings under them.
+        width, height = args.size
+        model = city_module.crop(model, (-width / 2, offset - height / 2, width / 2, offset + height / 2))
     attribution = attribution_lines(model.sources, survey, usgs=args.lidar == "auto", credit=args.lidar_credit)
 
     print(f"\n{len(model.spots)} skate spots:")

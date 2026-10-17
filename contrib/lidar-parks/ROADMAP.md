@@ -137,6 +137,7 @@ These apply to every phase:
 ## Next
 
 Done since the last list:
+- **Level tiles of just the slice.** With `--best-slice`, the ground, buildings and grinds are cropped to the chosen slice too. Before, only the spots were. Buildings are clipped at its edge, and spots whose middle is inside stay whole. The frame doesn't move. Embarcadero 130 x 20: 4 tiles, 20,920 visual and 5,320 collision triangles, against 16 tiles for the whole search range before.
 - **Level tiles for the map builder** (`city --level`): 50 m tiles of triangle lists with materials, visual and collision, in the park frame.
   - Collision is split into chunks of at most 256 triangles, with bit-identical shared vertices.
   - Collision parts are welded, and degenerate and repeated triangles dropped.

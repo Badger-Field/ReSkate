@@ -525,6 +525,37 @@ def test_best_slice_finds_the_busy_strip():
     assert [s.what for s in model.spots if city.in_slice(s, 130, 20, offset)] == ["bench"] * 3
 
 
+def test_crop_to_a_slice(model, tmp_path):
+    from reskate_lidar import levelexport
+    rect = (-35.0, -15.0, 40.0, 0.0)                              # through the west building (x -38..-32)
+    cut = city.crop(model, rect)
+    assert cut is not model and len(cut.buildings) == 1 and model.buildings[0].footprint.area == pytest.approx(90)
+    assert all(rect[0] <= s.feature.centre[0] <= rect[2] and rect[1] <= s.feature.centre[1] <= rect[3]
+               for s in cut.spots)
+    assert len(cut.spots) < len(model.spots)
+    west = [b for b in cut.buildings if b.footprint.bounds[0] < -30]
+    assert west and west[0].footprint.bounds == pytest.approx((-35, -15, -32, -5), abs=0.6)
+    x, y = cut.ground.centres()
+    assert x.min() <= rect[0] < x.min() + cut.ground.cell and x.max() - cut.ground.cell < rect[2] <= x.max()
+    assert y.min() <= rect[1] and rect[3] <= y.max()
+    assert np.array_equal(cut.ground.sample([(10.0, -7.0)]), model.ground.sample([(10.0, -7.0)]))
+    manifest = levelexport.export(cut, tmp_path / "level", 50.0)
+    assert not any(manifest["collision_checks"][k] for k in ("edges_same_direction_twice", "edges_shared_by_3_or_more"))
+    edge = cut.ground.cell + 0.01                                  # the ground reaches the grid point past each side
+    parts = set()
+    for listed in manifest["tiles"]:
+        tile = json.loads((tmp_path / "level" / listed["json"]).read_text())
+        for obj in tile["objects"]:
+            parts.add(obj["part"])
+            if obj["part"] in ("ground", "buildings"):           # spots stay whole, if their middle is in
+                v, _ = levelexport.read_object(tmp_path / "level", tile, obj)
+                assert v[:, 0].min() >= rect[0] - edge and v[:, 0].max() <= rect[2] + edge   # x east
+                assert v[:, 2].min() >= rect[1] - edge and v[:, 2].max() <= rect[3] + edge   # z north
+    assert {"ground", "buildings"} <= parts
+    spawn = manifest["spawn"]
+    assert rect[0] <= spawn[0] <= rect[2] and rect[1] <= spawn[2] <= rect[3]
+
+
 def test_level_tiles_for_the_map_builder(model, tmp_path):
     from reskate_lidar import levelexport
     manifest = levelexport.export(model, tmp_path / "level", 50.0, ["credit"], {"lat": FRAME.lat, "lon": FRAME.lon})

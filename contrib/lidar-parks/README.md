@@ -272,7 +272,7 @@ python studio_prep.py venice.glb venice.blend      # optional, for ReSkate Studi
 | `--size 130x30` | a rectangle, east-west x north-south, instead of a square |
 | `--turn 30` | turn the whole place before placing it, counter-clockwise from above (east towards north) |
 | `--centre-park` | move the objects so the middle of their footprint is on the anchor |
-| `--best-slice 60` | slide the `--size` area up to 60 m north and south, and keep the slice with the most skate spots |
+| `--best-slice 60` | slide the `--size` area up to 60 m north and south, and keep the slice with the most skate spots. `--level`, `--mesh` and `--preview` then cover just that slice (in the same frame, origin at the search centre) |
 | `--no-scales` | every object at scale 1, the nearest Build Kit size, with no `object_scales` in the park. With `--skatepark` it reports each bowl's depth error. |
 
 ## Street-level imagery (`imagery`)

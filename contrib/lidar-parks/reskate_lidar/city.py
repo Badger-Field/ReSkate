@@ -916,6 +916,45 @@ def in_slice(spot: Spot, width: float, height: float, offset: float) -> bool:
     return abs(x) <= width / 2 and abs(y - offset) <= height / 2
 
 
+def crop(model: CityModel, rect: tuple[float, float, float, float]) -> CityModel:
+    """The model inside `rect` (xmin, ymin, xmax, ymax), in the same frame: the ground grid cut to
+    the points covering it, buildings and areas clipped to it, spots and grinds whose middle is in
+    it. The spawn moves to the rectangle's middle if it was outside."""
+    import dataclasses
+    import shapely
+    x0, y0, x1, y1 = rect
+    window = shapely.box(x0, y0, x1, y1)
+    grid = model.ground
+    rows, cols = grid.shape
+    c0 = max(0, int(math.floor((x0 - grid.origin[0]) / grid.cell + 1e-9)))
+    c1 = min(cols - 1, int(math.ceil((x1 - grid.origin[0]) / grid.cell - 1e-9)))
+    r0 = max(0, int(math.floor((y0 - grid.origin[1]) / grid.cell + 1e-9)))
+    r1 = min(rows - 1, int(math.ceil((y1 - grid.origin[1]) / grid.cell - 1e-9)))
+    if c1 <= c0 or r1 <= r0:
+        raise ValueError("the crop misses the model's ground")
+    ground = Grid(grid.heights[r0:r1 + 1, c0:c1 + 1].copy(), grid.origin + np.array([c0, r0]) * grid.cell, grid.cell)
+    keep = None if model.ground_keep is None else model.ground_keep[r0:r1 + 1, c0:c1 + 1].copy()
+
+    def inside(xy) -> bool:
+        return x0 <= xy[0] <= x1 and y0 <= xy[1] <= y1
+
+    buildings = []
+    for b in model.buildings:
+        clipped = b.footprint.intersection(window)
+        if clipped.area > 0.5:
+            parts = [g for g in getattr(clipped, "geoms", [clipped]) if g.geom_type == "Polygon" and g.area > 0.5]
+            if parts:
+                footprint = parts[0] if len(parts) == 1 else shapely.MultiPolygon(parts)
+                buildings.append(dataclasses.replace(b, footprint=footprint))
+    spawn = model.spawn if model.spawn is not None and inside(model.spawn) else ((x0 + x1) / 2, (y0 + y1) / 2)
+    return dataclasses.replace(
+        model, bounds=(x0, y0, x1, y1), ground=ground, buildings=buildings,
+        spots=[s for s in model.spots if inside(s.feature.centre)],
+        public=model.public.intersection(window), car_free=model.car_free.intersection(window),
+        grinds=[g for g in model.grinds if inside(np.asarray(g.points)[:, :2].mean(axis=0))],
+        spawn=spawn, ground_keep=keep)
+
+
 def best_slice(model: CityModel, width: float, height: float, reach: float,
                step: float = 5.0) -> tuple[float, dict[float, int]]:
     """The north-south offset (within `reach` of the centre) of the `width` x `height` slice
