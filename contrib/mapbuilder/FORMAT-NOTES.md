@@ -612,86 +612,84 @@ each source document's rewrite check, the GUIDs, hashes and bundle counts, and w
 `dump-ebx` prints a document and `ebx-roundtrip` diagnoses its rewrite; with `--mod <folder>` it reads a mod's TOCs and archives over the
 game's, which is how the 333 map's own registration can be compared with ours.
 
-### 6.3 A level with its own ground (written by `new-ground-level`; not yet run on the PC)
+### 6.3 A level with its own ground (written by `new-ground-level`; not yet run in game)
 
-`python -m reskate_mapbuilder new-ground-level` (`ground.py`) builds on 6.2: the level is
-registered exactly as `new-level` registers it, and gets one more bundle holding our own ground.
-Tested only on the synthetic game in `tests/test_ground.py`.
+**What the base game does (checked on files, the PC's read-only scans).**
 
-**Why this shape.** Everything new is a copy of a base-game document with edits, because an EBX
-document carries its own reflection table and the builder cannot make one for a type it has not
-read. The ground is a plain sublevel loaded by a sub-world reference in the level's root, not a
-world-partition tile under our own `wproot`: the `QuadrantDefinitionAsset` (which tiles exist and
-how they are named) has not been dumped, while sub-world references are already read and written
-(6.2). The visible mesh is reused, option (a): the copied blueprint keeps its base-game
-RigidMeshAsset, whose MeshSet and chunks stay in the base archives. The collision is ours.
+- bam's world-partition tiles place their geometry through merged `StaticModelGroup`s. The first
+  template tried (the tile of 2.5) has no `ObjectReferenceObjectData` (OROD) at all, so the first
+  version of this command refused on every dry run.
+- A scan of all 23 base superbundles (185,301 EBX, no read errors) found the 333 map's kind of
+  placement in the base game too, one document further down: 127 of bam's tiles are
+  `QuadrantSubWorldData` -> `LayerReferenceObjectData` -> `LayerData` (a separate EBX in the
+  tile's bundle) -> OROD -> `ObjectBlueprint`. 1,519 of 1,523 `QuadrantSubWorldData` have exactly
+  one `LayerReferenceObjectData`.
+- Example, the default template here (all in `levels/game/bam_levelroot/bam_levelroot`): the tile
+  `…/wproot/wp/s9600_x0z0/s200_x500z900/s100_x450z850/s50_x425z825/s50_x425z825_sublevel` (own
+  bundle, 18,636 bytes: `QuadrantSubWorldData`, one `LayerReferenceObjectData`, a StaticModelGroup
+  with its components, audio tags, `InterfaceDescriptorData`; rewrite semantically equal, array
+  hashes all in the group table). Its `LayerReferenceObjectData.Blueprint` imports
+  `…/s50_x425z825_layer` in the same bundle (7,338 bytes: `LayerData` and one OROD placing
+  `world/lighting/common/construction/cmn_lgt_worklight_01/cmn_lgt_worklight_01`; rewrites
+  identically).
+- Another layer: `levels/game/bam_levelroot/game_coremeshes` in `bam_coregameassets` (7,256 bytes,
+  one OROD placing `common/utilities/meshes/util_groundplane`, scale 0.05 with a rotation, at
+  355.60, 209.13, 1469.20; rewrites identically).
+- `common/utilities/meshes/util_groundplane`, in bam's root bundle (9,690 bytes, 10 instances:
+  `ObjectBlueprint`, `PartData`, `StaticModelHealthComponentData`, `FBPhysicsComponentData`,
+  `StaticModelEntityData`, `SourcePartMappingComponentData`, `ConsoleCommandTriggerEntityData`,
+  `PartState`, `InterfaceDescriptorData`, `BoolEntityData`; rewrite semantically equal, 9,690 to
+  9,658 bytes). Its mesh `common/utilities/meshes/util_groundplane_mesh` is a 1,376-byte MeshSet,
+  1 LOD, 2 sections, mesh type 0, meta `20050000380000000000000000000000`, box
+  [-25, 0, -25]..[25, 0, 25]: a flat 50 x 50 m plane. `PhysicsPartInfos` has one entry.
+- **Collision is found by name.** No `ResourceReference` in the blueprint names its physics; the
+  resource is `<blueprint name>.physics` in the blueprint's bundle
+  (`common/utilities/meshes/util_groundplane.physics`); 9,661 of 10,883 base blueprints have one.
 
-| Piece | What is written |
+**What is written.** The level is registered as in 6.2, plus one bundle
+`win32/levels/game/<new>/ground_sublevel` (load flag 1) holding, in this order:
+
+| Entry | Content |
 |---|---|
-| `win32/levels/game/<new>/ground_sublevel` | a new bundle in the level's TOC (load flag 1), listing the four rows below, our three first |
-| `levels/game/<new>/ground_sublevel` | a copy of bam's tile `TILE_TEMPLATE` (new file GUID, new exported instance GUIDs, `Flags` renewed where they followed the GUID rule): every pointer array on the chain from its root to one `ObjectReferenceObjectData` cut to that one element, everything the root no longer reaches removed (instances reached from boxed values are kept), unused imports dropped (kept when the document has boxed values); the placement's `BlueprintTransform` set to identity with `trans` = `--at`, its `Blueprint` an import of our blueprint; root `Name` = the EBX name |
-| `levels/game/<new>/ground_bp` | a copy of the ObjectBlueprint that placement used, `Name` renamed; every `ResourceReference` equal to the template's physics resource id set to ours |
-| physics resource `levels/game/<new>/ground_bp<suffix>` | type 0x41759364, version 2 (section 2), one shape, one kind-5 part: a flat square of `--size` metres (default 64) centred on the origin at local height 0, cells of `GRID_CELL` (4 m), normals up, edge data by 2.3, zeroed tree; part material, hashes and the +0x30, +0x3C, +0x44 words from the template's first kind-5 part, +0x34 = 0; the resource's meta copied from the template's; id = first 8 bytes of MD5 of its name |
-| copied entries | what the blueprint and the sublevel import from the tile's bundle, followed through imports (mesh, textures, ...), the resources named like those EBX (MeshSet, textures), and the chunks whose GUID appears in those resources' bytes; manifest rows copied, region files left pointing at the base archives |
-| level root | per `SubWorldReferenceObjectData`: its `BundleName` and whether the level's TOC lists it. One is copied (preferring a non-detached one with `AutoLoad`) after the last of its kind and appended to the arrays holding it: `BundleName` = our sublevel, `AutoLoad` true, `IsDetachedSubLevel` false, identity transform, `Blueprint` an import of our sublevel's root when the copied one's was an import, `Template` null, `Flags` by the GUID rule |
-| `--bam` | `all` (default): every bam bundle, as 6.2, so only things are added; `no-world`: bam's `wproot` and `wpvista` bundles (all world-partition tiles) left out; `333`: only `bam_coregameassets`, `startpoint_sublevels`, `vfx_global`, `vfx_season_04`, `lighting_*`, `tod_*`. Except with `all`, root references to bundles the TOC does not list are removed (refused if anything but a pointer array points at them) |
+| `levels/game/<new>/ground_sublevel` | the tile copied (new file GUID, new exported instance GUIDs, `Flags` renewed where they followed the GUID rule), every pointer array on the chain from its root to its `LayerReferenceObjectData` cut to that element, everything the root no longer reaches removed (what boxed values reach is kept), unused imports dropped (kept when boxed values exist); the reference's `Blueprint` imports our layer (the instance the template's import named, mapped to the copy); root `Name` = the EBX name |
+| `levels/game/<new>/ground_layer` | the tile's layer (or `--layer-template`) copied the same way and cut to its first OROD, which gets `BlueprintTransform` identity rotation and scale 1 at `--at`, and imports our blueprint's root instance. `--tiles N` makes N x N copies of the OROD `--size` metres apart around `--at` (new GUIDs and Flags), appended to the arrays holding it |
+| `levels/game/<new>/ground_bp` | `util_groundplane` copied, `Name` renamed; its mesh import kept, so the base plane is drawn (it lives in bam's root bundle, which the level's root bundle copies in every `--bam` mode) |
+| res `levels/game/<new>/ground_bp.physics` | type 0x41759364, meta copied from the template's, id = first 8 bytes of MD5 of the name; version 2, one shape, one kind-5 part: a flat `--size` square (default 50, as the mesh) centred on the origin at local height 0, 5 m cells, normals up, edge data by 2.3, zeroed tree; material, hashes and words +0x30, +0x3C, +0x44 from the template's first kind-5 part, +0x34 = 0 |
+| level root | as before: per `SubWorldReferenceObjectData`, its `BundleName` and whether the TOC lists it; one is copied (preferring non-detached with `AutoLoad`), `BundleName` = our sublevel, `AutoLoad` true, `IsDetachedSubLevel` false, identity transform, `Blueprint` an import of our tile's root when the copied one's was an import, `Template` null, `Flags` by the GUID rule |
+| `--bam` | `all` (default; only additions to 6.2), `no-world` (bam's `wproot`/`wpvista` bundles left out), `333` (`bam_coregameassets`, `startpoint_sublevels`, `vfx_global`, `vfx_season_04`, `lighting_*`, `tod_*`). Except with `all`, root references to bundles the TOC does not list are removed (refused if anything but a pointer array points at them) |
 
-The placement used is the first one of the tile whose blueprint is an `ObjectBlueprint` in the
-tile's own bundle with a physics resource named after it; `--placement N` picks another. The dry
-run lists every placement with its blueprint, physics resources and each mesh's box from its
-MeshSet header, so a ground-like one can be chosen. New documents must read back to themselves and
-rewrite identically, or nothing is written.
+New documents must read back to themselves and rewrite identically, or nothing is written. The
+dry run prints the chain it found (tile, its layer reference and layer, each OROD and what it
+places, the blueprint's instances, imports and the MeshSet box, the template collision) and each
+source's rewrite check.
 
-Guesses, each a constant at the top of `ground.py` and each reported by `--dry-run`:
+Guesses, each a constant at the top of `ground.py` and reported by `--dry-run`:
 
-- `TILE_TEMPLATE` is `levels/game/bam_levelroot/wproot/wp/s9600_x0z0/s200_x700z1100_sublevel` (the
-  tile of 2.5), its EBX named like its bundle, and it holds `ObjectReferenceObjectData` placements
-  of blueprints kept in its own bundle. If not, `--tile-template` takes another EBX.
-- A blueprint's collision is a physics resource in its bundle whose name starts with the
-  blueprint's name, and the blueprint names it by resource id (a `ResourceReference`) or by name;
-  the report says whether any reference held the id.
+- **The ground is loaded as a plain sub-world** by the root's new reference, though bam's tiles
+  are loaded by the world partition under `wproot`. A `wproot` of our own
+  (`QuadrantSubWorldData` + `QuadrantDefinitionAsset`) is not written.
+- An import of a blueprint names the blueprint's root instance.
 - A new resource id may be any unused 64-bit value.
-- `PHYSICS_IN_OBJECT_SPACE`: the placement's transform moves the collision as it moves the mesh.
-  The 333 map bakes both in world space under identity placements, so if this is wrong the
-  collision is at height 0 below `--at`'s x, z.
-- `--at` defaults to (0, 300, 0): above bam's ground (191 to 200 m) when bam's world stays.
-- The ground's sub-world reference loads it (`AutoLoad` true) without a start point naming it.
-- Sublevel first, blueprint second, then the collision, then copied entries is an acceptable
-  bundle order; the source manifest's `chunkMetadata` (opaque) is not carried.
-- Duplicates of base assets in a second loaded bundle are harmless (the 333 map's root bundle
-  duplicates about 41,800 base EBX).
+- `PHYSICS_IN_OBJECT_SPACE`: the OROD's transform moves the collision as it moves the mesh. If
+  not, the collision is at height 0 below `--at`'s x, z. (Scaling an OROD to stretch the plane
+  is not offered for the same reason.)
+- `--at` (0, 300, 0) is above bam's ground (191 to 200 m) when bam's world stays.
+- Our three EBX first, then the collision, is an acceptable bundle order.
 
-Not done: a `wproot` of our own (`QuadrantSubWorldData` and `QuadrantDefinitionAsset`) with tiles
-named `wproot/wp/dN_xXXX_zZZZ_sublevel` as the 333 map has, and a MeshSet of our own (option b,
-below). `inspect-meshset` prints a MeshSet's header, LOD and section fields and bytes, read-only,
-for that writer.
+**Next checks on the PC:** the three dry runs (`--bam all`, `no-world`, `333`), then in game,
+one level-adding mod at a time: `load levels/game/<new>/<new>`, `trainer ground 0 0` twice (300
+expected; 0 means the collision ignores the OROD's transform; bam's height or 191 means the
+sublevel did not load), `trainer ground 20 -20` (300), `trainer ground 40 0` (outside), and whether
+the plane is drawn at (0, 300, 0).
 
-**Next checks on the PC** (all read-only but the last step; `<map>` is the 333 map's level name
-from its `reskate-levels.json`, `<333>` its mod folder):
-
-- the 333 map: `list-assets --mod <333> --superbundle levels/game/<map>/<map>` on the bundle
-  `win32/levels/game/<map>/wproot`, on `--bundle-contains /wproot/wp/d1_`, and on the root bundle
-  with `--contains world/custom/ --limit 60`; `dump-ebx` of its root, `wproot`,
-  `wproot/quadrantdefinition`, the d1 tile, one `..._col_N_0_bp` and its `..._col_N_0`;
-  `inspect-meshset` of that `..._col_N_0`;
-- bam: `list-assets` of `win32/levels/game/bam_levelroot/wproot` and of `TILE_TEMPLATE`'s bundle;
-  `dump-ebx` of bam's `wproot`, its quadrant definition and `TILE_TEMPLATE`;
-- `new-ground-level --dry-run` with `--bam all`, `no-world` and `333`, then `inspect-meshset` of
-  the mesh the chosen placement shows;
-- in game, one mod at a time: `load levels/game/<new>/<new>`, then `trainer ground 0 0` twice (300
-  expected; 0 means the collision ignores the placement's transform; bam's height or 191 means the
-  sublevel did not load), `trainer ground 20 -20` (300) and `trainer ground 40 0` (outside), and
-  whether the template mesh is drawn at (0, 300, 0).
-
-**Option (b), our own visible mesh.** Plan: copy the reused mesh's MeshSet (one LOD, one section
-when possible) and patch only the known fields: the header and section boxes, the LOD's index and
-vertex byte counts and chunk GUID, the section's triangle count, first index, vertex start and
-vertex count. The geometry chunk is written in the verified chunk format (1, "Geometry chunk")
-with the template section's vertex declaration: positions ours, every other element (normal frame,
-UVs, colour) the template's first vertex repeated, as nothing else is decoded. Then a copy of the
-RigidMeshAsset whose `ResourceReference` names the new MeshSet's id, the blueprint copy pointing
-at it, and a new chunk row (`logicalOffset` 0, `logicalSize` = chunk size) in the ground bundle.
-It needs `inspect-meshset` on a one-LOD base mesh and on one of the 333 map's `..._col_N_0` meshes.
+**Option (b), our own visible mesh.** Plan: copy `util_groundplane_mesh`'s MeshSet (1 LOD, 2
+sections) and patch only the known fields: header and section boxes, the LOD's index and vertex
+byte counts and chunk GUID, each section's triangle count, first index, vertex start and vertex
+count. The geometry chunk is written in the verified chunk format (1, "Geometry chunk") with the
+template sections' vertex declarations: positions ours, every other element the template's first
+vertex repeated. Then a copy of the RigidMeshAsset whose `MeshSetResource` names the new MeshSet,
+the blueprint pointing at it, and a new chunk row (`logicalOffset` 0, `logicalSize` = chunk size)
+in the ground bundle. `inspect-meshset` (read-only) prints the fields and bytes this needs.
 
 ## 7. Practical notes
 
