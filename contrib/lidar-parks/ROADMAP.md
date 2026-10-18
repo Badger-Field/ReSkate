@@ -153,7 +153,7 @@ Done since the last list:
 
 1. **Whatever the map builder needs next.**
    - **Possible additions:** level of detail for visual tiles, grass split out of the ground, and texture coordinates.
-   - **Waiting on the builder's first in-game level**, built from these tiles.
+   - **Waiting on the builder's first in-game level**, built from these tiles. The first export is delivered: Embarcadero Plaza 130 x 20 (`--best-slice 60`, 4 tiles), a zip on the `level-exports` branch. That branch shares no history with the code branches and is never merged. The builder keeps the search centre as the origin and places the spawn itself.
 2. **Downloading national LiDAR.** Reading it works (above). Next is finding and fetching the tiles over an area:
    - AHN's tile index on PDOK;
    - the UK Environment Agency's survey catalogue;
