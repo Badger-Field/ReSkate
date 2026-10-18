@@ -71,6 +71,8 @@ Settings load_settings(const fs::path& path) {
         settings.steam_username = json.value("steam_username", std::string());
         settings.steam_remember = json.value("steam_remember", settings.steam_remember);
         settings.steam_prefer_code = json.value("steam_prefer_code", settings.steam_prefer_code);
+        settings.accepted_privacy = json.value("accepted_privacy_version", settings.accepted_privacy);
+        settings.accepted_terms = json.value("accepted_terms_version", settings.accepted_terms);
     } catch (const std::exception& exception) {
         logging::log(logging::Level::warning, logging::Channel::launcher, "Ignoring launcher settings: {}", exception.what());
     }
@@ -98,6 +100,8 @@ void save_settings(const fs::path& path, const Settings& settings) {
     json["steam_username"] = settings.steam_username;
     json["steam_remember"] = settings.steam_remember;
     json["steam_prefer_code"] = settings.steam_prefer_code;
+    json["accepted_privacy_version"] = settings.accepted_privacy;
+    json["accepted_terms_version"] = settings.accepted_terms;
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     output << json.dump(2) << '\n';
 }
@@ -516,9 +520,9 @@ bool Launcher::run_mod_merge() {
 void Launcher::run_play() {
     // The official mods first (official_mods.h): the merge takes them in.
     if (!official_mods::wait(std::chrono::milliseconds(0))) {
-        set(Phase::merging, "Getting official mods", "Downloading the mods every player has", -1.0f);
+        set(Phase::merging, "Official mods", "Finishing the official mods being installed", -1.0f);
         if (!official_mods::wait(std::chrono::minutes(3)))
-            logging::write(logging::Level::warning, logging::Channel::launcher, "Official mods were still downloading; Skate starts without them");
+            logging::write(logging::Level::warning, logging::Channel::launcher, "Official mods were still being installed; Skate starts without them");
     }
     if (!ignore_mod_problems_ && !run_mod_merge()) return;
     ignore_mod_problems_ = false;
