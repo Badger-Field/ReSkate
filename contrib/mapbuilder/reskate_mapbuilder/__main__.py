@@ -18,6 +18,7 @@
   python -m reskate_mapbuilder new-place-level --game <dir> --mods <dir> --name zz-... --level <name> --tiles <DIR> \\
         [--at X Y Z] [--mirror] [--bam 333|no-world|all] [--asset-bundle ...] [--dry-run]
   python -m reskate_mapbuilder place-info --tiles <DIR> [--at X Y Z] [--max-height M] [--skip-part P]
+  python -m reskate_mapbuilder scan-materials --game <dir> [--superbundle S ...] [--bundle-contains TEXT]
   python -m reskate_mapbuilder material-donors --game <dir> [--contains TEXT]
   python -m reskate_mapbuilder mesh-refs --game <dir> [--mod <mod dir>] --superbundle S --bundle B --mesh EBX \\
         [--scan SUPERBUNDLE:BUNDLE ...] [--level <name>]
@@ -44,6 +45,7 @@ from .game import Game
 from .ground import material_donors
 from .ground import ASSET_BUNDLES, BAM_MODES, COLLISION_MODES, MESH_MODES, MESH_SHAPES, VISUAL_MODES, BLUEPRINT_BUNDLE, BLUEPRINT_TEMPLATE, DEFAULT_AT, DEFAULT_SIZE, TILE_TEMPLATE, new_ground_level
 from .level import BASE_SUPERBUNDLE, new_level
+from .materials import report as materials_report, scan as scan_materials
 from .meshrefs import mesh_refs
 from .place import (PlaceError, check_spots, view_spots, collision as place_collision, filter_collision, read_place, spawn_at,
                     summary as place_summary)
@@ -168,7 +170,7 @@ def new_ground_level_command(args, place=None):
                          else getattr(args, "geometry_section", 0), getattr(args, "uv_per_metre", None),
                          getattr(args, "parts", "merge") == "grow", _visuals(args, place),
                          getattr(args, "visual_template", None), _donors(args),
-                         not getattr(args, "no_auto_materials", False))
+                         not getattr(args, "no_auto_materials", False), _material_bundle(args))
     finally:
         for line in log:
             print(line)
@@ -246,6 +248,16 @@ def _visuals(args, place) -> list:
     return out
 
 
+def _material_bundle(args):
+    spec = getattr(args, "material_bundle", None)
+    if not spec:
+        return None
+    superbundle, _, bundle = spec.partition(":")
+    if not bundle:
+        sys.exit(f"--material-bundle {spec!r}: give SUPERBUNDLE:BUNDLE")
+    return superbundle, bundle
+
+
 def _donors(args) -> dict:
     out = {}
     for spec in getattr(args, "material_donor", None) or []:
@@ -277,6 +289,16 @@ def new_place_level_command(args):
     place = _read_place_args(args, "new-place-level")
     args.size, args.mesh = DEFAULT_SIZE, "template"
     new_ground_level_command(args, place)
+
+
+def scan_materials_command(args):
+    """Bundles of the whole game (or chosen superbundles) holding usable concrete, stone, wood or
+    metal materials, ranked per MB (read-only)."""
+    game = Game(args.game)
+    rows = scan_materials(game, args.superbundle or None, args.bundle_contains or "", args.limit,
+                          log=lambda line: print(line, flush=True))
+    for line in materials_report(rows, args.top):
+        print(line)
 
 
 def material_donors_command(args):
@@ -420,6 +442,9 @@ def _place_options(p):
     p.add_argument("--material-donor", action="append", metavar="MATERIAL=MESH[:SECTION]",
                    help="the mesh section whose material draws objects of MATERIAL (default the template's section 0)")
     p.add_argument("--uv-per-metre", type=float, metavar="U", help="visual objects' texture repeats per metre (default 1)")
+    p.add_argument("--material-bundle", metavar="SUPERBUNDLE:BUNDLE",
+                   help="another level's bundle (scan-materials finds them), copied under its own name: it becomes our "
+                        "sublevel, and objects whose --material-donor is one of its meshes go into it")
     p.add_argument("--no-auto-materials", action="store_true",
                    help="without --material-donor, keep the template's section 0 for every material instead of the "
                         "auto picks (ramp wedge surface for ground, a rail for metal, a concrete section)")
@@ -521,6 +546,12 @@ def main(argv=None):
                    help="where the blueprint and collision go: the ground bundle, the level's copy of "
                         "bam_coregameassets, or the level's root bundle")
     p.add_argument("--dry-run", action="store_true", help="read and report only")
+    p = sub.add_parser("scan-materials", help="bundles holding usable concrete, stone, wood, metal (read-only)")
+    p.add_argument("--game", required=True)
+    p.add_argument("--superbundle", action="append", help="only these superbundles (repeatable; default: all)")
+    p.add_argument("--bundle-contains", help="only bundles whose names hold this text")
+    p.add_argument("--limit", type=int, help="read at most this many bundles with meshes")
+    p.add_argument("--top", type=int, default=30, help="bundles listed")
     p = sub.add_parser("material-donors", help="stock mesh sections that could lend a material (read-only)")
     p.add_argument("--game", required=True)
     p.add_argument("--contains", default="", help="only MeshSets whose names hold this text (default: all)")
@@ -583,7 +614,7 @@ def main(argv=None):
         args.size = _size(args.size)
     {"inspect": inspect, "raise-ground": raise_ground, "rebuild": rebuild, "new-level": new_level_command,
      "new-ground-level": new_ground_level_command, "new-place-level": new_place_level_command,
-     "place-info": place_info, "material-donors": material_donors_command,
+     "place-info": place_info, "material-donors": material_donors_command, "scan-materials": scan_materials_command,
      "list-assets": list_assets, "inspect-meshset": inspect_meshset,
      "mesh-refs": mesh_refs_command, "meshset-diff": meshset_diff,
      "dump-ebx": dump_ebx, "ebx-roundtrip": ebx_roundtrip, "ebx-arrayhash": ebx_arrayhash}[args.command](args)

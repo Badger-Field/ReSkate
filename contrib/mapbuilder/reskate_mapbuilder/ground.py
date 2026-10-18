@@ -542,7 +542,8 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                      mesh_shape: str = "slab", collision_mode: str = "own",
                      geometry_section: int | None = 0, uv_per_metre: float | None = None,
                      grow_parts: bool = False, visuals=(), visual_template: str = None,
-                     material_donors: dict | None = None, auto_material: bool = False) -> list[str]:
+                     material_donors: dict | None = None, auto_material: bool = False,
+                     material_bundle: tuple[str, str] | None = None) -> list[str]:
     """Adds a level whose content is our own ground to `mod` (see the module's text). Appends a
     report to `log` (also when it refuses) and returns it.
 
@@ -582,6 +583,19 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
     physics_name = bp_name + PHYSICS_SUFFIX
     mesh_name = GROUND_MESH.format(level=level)
     ground_bundle = "win32/" + sublevel_name
+    host = None
+    if material_bundle is not None:
+        # --material-bundle: another level's bundle, copied under its own name into our TOC, holds
+        # our tile, layer and the visual objects drawn with its materials (keys resolve only in
+        # the depot of the bundle holding the MeshSet); the root's sub-world reference loads it.
+        host = _Source(game, material_bundle[0], material_bundle[1])
+        ground_bundle = host.name.lower()
+        sublevel_name = ground_bundle[len("win32/"):]
+        log.append(f"--material-bundle {material_bundle[0]}:{host.name}: {sum(f.size for f in host.region.files) / 2 ** 20:.1f} MB "
+                   f"stored, {len(host.manifest.ebx)} EBX, {len(host.manifest.resources)} res, "
+                   f"{len(host.manifest.chunks)} chunks, {len(_source_depot_keys(host))} depot keys; it becomes our "
+                   f"sublevel {sublevel_name}" + (" (its own sublevel EBX replaced by our tile)" if host.has_ebx(sublevel_name)
+                                                   else ""))
     log.append(f"Ground for {path}: {tiles} x {tiles} placements of {size} m"
                + ("" if depth == width else f" x {depth} m") + f" at {list(at)}, bam bundles: {bam}")
 
@@ -898,7 +912,7 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         wanted = dict(material_donors or {})
         if not wanted and auto_material:
             wanted = auto_donors(prepared, log)
-        donors = _visual_donors(game, prepared, wanted, log)
+        donors = _visual_donors(game, prepared, wanted, log, host)
         for name, vertices, triangles, material in visuals:
             asset = _visual_asset(game, level, name, vertices, triangles, prepared, donors.get(material, donors[None]),
                                   uv_per_metre, log)
@@ -1068,8 +1082,26 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
 
     # 7. The ground bundle (GUESS: tile, layer, blueprint, then the collision beside the blueprint).
     chunk = game.chunk_index(nativedb.DEFAULT_INSTALL_CHUNK)
-    mod.new_bundle(path, ground_bundle, chunk)
-    mod.add_ebx(path, ground_bundle, sublevel_name, _checked_bytes(sub, sublevel_name))
+    if host is None:
+        mod.new_bundle(path, ground_bundle, chunk)
+        mod.add_ebx(path, ground_bundle, sublevel_name, _checked_bytes(sub, sublevel_name))
+    else:
+        mod.edit_bundle(path, host.name, source=(host.superbundle, host.name))
+        if host.has_ebx(sublevel_name):
+            mod.replace_ebx(path, host.name, sublevel_name, _checked_bytes(sub, sublevel_name))
+        else:
+            mod.add_ebx(path, host.name, sublevel_name, _checked_bytes(sub, sublevel_name))
+        # Chunks of the material bundle's superbundle TOC that its small resources name (texture
+        # and mesh headers) are listed in our TOC: the other superbundle's TOC is not read.
+        toc_chunks = host.toc_chunks()
+        wanted = {g.bytes for g in toc_chunks}
+        found: set[bytes] = set()
+        for i, r in enumerate(host.manifest.resources):
+            if r.original_size and r.original_size <= 0x10000:
+                found |= _guids_in(host.payload("res", i), wanted)
+        added = sum(mod.add_toc_chunk(path, c) for g, c in toc_chunks.items() if g.bytes in found)
+        log.append(f"{host.name}: copied into the level's TOC under its own name; our tile replaces/joins its "
+                   f"sublevel EBX; {added} chunks of {host.superbundle}'s TOC added to ours")
     mod.add_ebx(path, ground_bundle, layer_name, _checked_bytes(layer, layer_name))
     assets_bundle = ground_bundle
     if asset_bundle == "root":
@@ -1115,7 +1147,16 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                f"(the others it already lists); new payloads in install chunk {chunk:#x}")
     log.extend(_mesh_chunk_report(mod, path, assets_bundle, bp_source, template_mesh, own))
     root_bundle = "win32/" + path
+    root_keys = _bundle_depot_keys(game, BASE_SUPERBUNDLE, BASE_ROOT_BUNDLE) if visual_assets else set()
+    host_keys = _source_depot_keys(host) if host is not None and visual_assets else set()
     for asset in visual_assets:
+        target = ground_bundle if asset["target"] == "host" else root_bundle
+        missing = [k for k in asset["keys"] if k not in (host_keys if asset["target"] == "host" else root_keys)]
+        if missing:
+            raise ValueError(f"{asset['mesh_name']}: shader-block keys {[f'{k:#018x}' for k in missing]} are not in the "
+                             f"depot of {target}, where it would go")
+    for asset in visual_assets:
+        root_bundle = ground_bundle if asset["target"] == "host" else "win32/" + path
         mod.add_ebx(path, root_bundle, asset["bp_name"], _checked_bytes(asset["bp"], asset["bp_name"]))
         if asset["physics_doc"] is not None:
             mod.add_ebx(path, root_bundle, asset["physics_name"], _checked_bytes(asset["physics_doc"], asset["physics_name"]))
@@ -1128,7 +1169,11 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
             mod.add_chunk(path, root_bundle, guid, data)
             mod.add_toc_chunk_payload(path, guid, data, chunk)
     if visual_assets:
-        log.append(f"{root_bundle}: {len(visual_assets)} visual objects added (blueprint, collision EBX and resource, "
+        root_bundle = "win32/" + path
+        hosted = sum(a["target"] == "host" for a in visual_assets)
+        if hosted:
+            log.append(f"{ground_bundle}: {hosted} visual objects drawn with its materials, their keys in its depot")
+        log.append(f"{root_bundle}: {len(visual_assets) - hosted} visual objects added (blueprint, collision EBX and resource, "
                    f"mesh, MeshSet and chunks each)")
     return log
 
@@ -1185,19 +1230,22 @@ def _prepare_visual_template(game, template: str, log: list[str]) -> dict:
             "physics_asset": physics[1], "parts": shaped, "physics_doc": physics_doc, "template": template}
 
 
-def _visual_donors(game, prepared: dict, wanted: dict, log: list[str]) -> dict:
-    """material (None: the default) -> (geometry section of the template, donor section or None).
-    The default and any donor naming the template's own mesh use that section of the clone; a
-    donor of another mesh (in bam's root bundle) lends its section's layout, key and vertex."""
-    out = {None: (0, None, None, f"{prepared['mesh_name']}:0")}
+def _visual_donors(game, prepared: dict, wanted: dict, log: list[str], host: _Source | None = None) -> dict:
+    """material (None: the default) -> (geometry section of the template, donor section or None,
+    donor measures, label, where the object goes: "root" or "host"). The default and any donor
+    naming the template's own mesh use that section of the clone; a donor of another mesh (in the
+    --material-bundle `host`, else in bam's root bundle) lends its section's layout, key and vertex,
+    and an object drawn with a host donor goes into the host bundle, whose depot holds the key."""
+    out = {None: (0, None, None, f"{prepared['mesh_name']}:0", "root")}
     log.append(f"  material donors: default {prepared['mesh_name']}:0")
     for material, spec in wanted.items():
         mesh_name, _, section = spec.partition(":")
         index = int(section or 0)
         if mesh_name.lower() == prepared["mesh_name"].lower():
-            out[material] = (index, None, None, f"{mesh_name}:{index}")
+            out[material] = (index, None, None, f"{mesh_name}:{index}", "root")
         else:
-            source = _source(game, BASE_ROOT_BUNDLE, mesh_name)
+            in_host = host is not None and host.resource(mesh_name, MESHSET_TYPE) is not None
+            source = host if in_host else _source(game, BASE_ROOT_BUNDLE, mesh_name)
             found = source.resource(mesh_name, MESHSET_TYPE)
             if found is None:
                 raise KeyError(f"--material-donor {material}: no MeshSet {mesh_name} in {source.name}")
@@ -1209,9 +1257,15 @@ def _visual_donors(game, prepared: dict, wanted: dict, log: list[str]) -> dict:
             chunk_data = _chunk_payload(game, source, lod.chunk)
             measures = (uv_measure(lod, sec, chunk_data, UV0_USAGE), uv_measure(lod, sec, chunk_data, UV1_USAGE),
                         common_value(sec, chunk_data, COLOUR_USAGE))
+            key = section_key(data, sec)
+            if key not in _source_depot_keys(source):
+                raise ValueError(f"--material-donor {material}: {mesh_name}:{index}'s key {key:#018x} is not in "
+                                 f"{source.name}'s depot")
             out[material] = (0, (data[sec.at:sec.at + 384], model_vertex(lod, sec, chunk_data)[0]), measures,
-                             f"{mesh_name}:{index}")
-        log.append(f"  material donors: {material} = {mesh_name}:{index}")
+                             f"{mesh_name}:{index}", "host" if in_host else "root")
+        log.append(f"  material donors: {material} = {mesh_name}:{index}"
+                   + (" (in the material bundle: objects of this material go there)" if out[material][4] == "host"
+                      else ""))
     return out
 
 
@@ -1263,7 +1317,7 @@ def _visual_asset(game, level: str, name: str, vertices, triangles, prepared: di
         raise ValueError(f"visual {name}: its blueprint still imports the template's mesh or collision")
     lines = _check_part_tables(bp, shapes, parts, "own", False, len(prepared["parts"]))
 
-    geometry_section, donor_section, measures, donor_label = donor
+    geometry_section, donor_section, measures, donor_label, target = donor
     chunk_guids = [derived_guid(level, name, "chunk", str(k)) for k in range(len(prepared["chunks"]))]
     meshset, chunks, report = write_mesh(
         prepared["ms_data"], prepared["chunks"], vertices, triangles, chunk_guids, donor_section, None, False,
@@ -1276,7 +1330,8 @@ def _visual_asset(game, level: str, name: str, vertices, triangles, prepared: di
                f"indices), box {[round(v, 2) for v in lo]}..{[round(v, 2) for v in hi]}, material {donor_label}"
                + f" -> {bp_name}; "
                + "; ".join(line.strip() for line in lines if "physics parts:" in line))
-    return {"bp_name": bp_name, "bp": bp, "mesh_name": mesh_name, "mesh": mesh, "physics_name": physics_name,
+    return {"target": target, "keys": _meshset_keys(meshset),
+            "bp_name": bp_name, "bp": bp, "mesh_name": mesh_name, "mesh": mesh, "physics_name": physics_name,
             "physics": physics, "physics_doc": physics_doc, "physics_type": prepared["physics_asset"].resource_type,
             "physics_meta": copy.copy(prepared["physics_asset"].resource_meta), "meshset": meshset,
             "meshset_meta": copy.copy(prepared["ms_asset"].resource_meta), "chunks": chunks, "chunk_guids": chunk_guids}
