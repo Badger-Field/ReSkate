@@ -207,6 +207,44 @@ else()
 endif()
 configure_file(cmake/templates/launcher_update_config.h.in generated/launcher_update_config.h @ONLY)
 
+# The terms of use and privacy policy (legal/*.md), built into the launcher as it shows them
+# and asks players to agree to them. Each starts "# Title", then "Version N, YYYY-MM-DD".
+set(legal_header "// Generated from legal/*.md by cmake/Apps.cmake.\n#pragma once\n")
+foreach(legal_kind IN ITEMS terms privacy)
+    string(TOUPPER "${legal_kind}" legal_file)
+    set(legal_path "${PROJECT_SOURCE_DIR}/legal/${legal_file}.md")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${legal_path}")
+    file(READ "${legal_path}" legal_text)
+    if(NOT legal_text MATCHES "^# ([^\n]+)\n+Version ([0-9]+), ([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])\n")
+        message(FATAL_ERROR "${legal_path} must start with \"# Title\" and \"Version N, YYYY-MM-DD\"")
+    endif()
+    set(legal_title "${CMAKE_MATCH_1}")
+    set(legal_version "${CMAKE_MATCH_2}")
+    set(legal_date "${CMAKE_MATCH_3}")
+    # ASCII only: the launcher is compiled without /utf-8.
+    string(REGEX MATCH "[^\t\n\r -~]" legal_odd "${legal_text}")
+    if(legal_odd)
+        message(FATAL_ERROR "${legal_path} must be plain ASCII")
+    endif()
+    if(legal_text MATCHES "\\)LEGAL\"")
+        message(FATAL_ERROR "${legal_path} must not contain )LEGAL\"")
+    endif()
+    # MSVC takes at most 16380 bytes in one string literal: adjacent pieces of 8000.
+    set(legal_pieces "")
+    string(LENGTH "${legal_text}" legal_length)
+    set(legal_at 0)
+    while(legal_at LESS legal_length)
+        string(SUBSTRING "${legal_text}" ${legal_at} 8000 legal_piece)
+        string(APPEND legal_pieces "    R\"LEGAL(${legal_piece})LEGAL\"\n")
+        math(EXPR legal_at "${legal_at} + 8000")
+    endwhile()
+    string(APPEND legal_header "inline constexpr char legal_${legal_kind}_title[] = R\"LEGAL(${legal_title})LEGAL\";\n"
+        "inline constexpr unsigned legal_${legal_kind}_version = ${legal_version};\n"
+        "inline constexpr char legal_${legal_kind}_date[] = \"${legal_date}\";\n"
+        "inline constexpr char legal_${legal_kind}_markdown[] =\n${legal_pieces};\n")
+endforeach()
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/legal_documents.h" CONTENT "${legal_header}" @ONLY)
+
 if(WIN32)
     # ReSkateEmotePacker: a folder of pictures and GIFs -> the chat emote pack (emotes.json +
     # emotes.png) that ReSkate.dll bakes in from assets/emotes.

@@ -70,14 +70,16 @@ Settings load_settings(const fs::path& path) {
         // Keep the original settings key so existing launcher preferences survive.
         settings.keep_open_after_launch = !json.value("close_on_launch", !settings.keep_open_after_launch);
         settings.updates = json.value("updates", settings.updates);
-        settings.crash_reports = json.value("send_crash_reports", settings.crash_reports);
-        settings.performance_timings = json.value("performance_timings", settings.performance_timings);
+        // Never read back: this edition sends no crash reports or timings (legal/PRIVACY.md).
+        settings.crash_reports = false;
+        settings.performance_timings = false;
         settings.prereleases = json.value("prereleases", settings.prereleases);
         settings.steam_username = json.value("steam_username", std::string());
         settings.steam_remember = json.value("steam_remember", settings.steam_remember);
         settings.steam_prefer_code = json.value("steam_prefer_code", settings.steam_prefer_code);
-        settings.accepted_privacy = json.value("accepted_privacy_version", settings.accepted_privacy);
-        settings.accepted_terms = json.value("accepted_terms_version", settings.accepted_terms);
+        // This edition's own documents: an agreement to upstream's (accepted_*_version) does not count.
+        settings.accepted_privacy = json.value("accepted_badger_privacy_version", settings.accepted_privacy);
+        settings.accepted_terms = json.value("accepted_badger_terms_version", settings.accepted_terms);
     } catch (const std::exception& exception) {
         logging::log(logging::Level::warning, logging::Channel::launcher, "Ignoring launcher settings: {}", exception.what());
     }
@@ -105,8 +107,8 @@ void save_settings(const fs::path& path, const Settings& settings) {
     json["steam_username"] = settings.steam_username;
     json["steam_remember"] = settings.steam_remember;
     json["steam_prefer_code"] = settings.steam_prefer_code;
-    json["accepted_privacy_version"] = settings.accepted_privacy;
-    json["accepted_terms_version"] = settings.accepted_terms;
+    json["accepted_badger_privacy_version"] = settings.accepted_privacy;
+    json["accepted_badger_terms_version"] = settings.accepted_terms;
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     output << json.dump(2) << '\n';
 }
