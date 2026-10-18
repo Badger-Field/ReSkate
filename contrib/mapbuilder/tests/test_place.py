@@ -237,3 +237,45 @@ def test_place_info_needs_no_game_and_puts_the_spawn_at_the_origin(tmp_path, cap
     assert "trainer ground 0.0 0.0    -> 300.0    (spawn)" in out and "4 collision chunks" in out
     with pytest.raises(SystemExit, match="place-info: .*not found"):
         main(["place-info", "--tiles", str(tmp_path / "nothing")])
+
+
+def test_visuals_get_a_blueprint_mesh_and_harmless_collision_each(tmp_path, capsys):
+    from reskate_mapbuilder.ebx import read_document
+    from reskate_mapbuilder.meshset import read_layout
+    from test_level import BOX, GROUNDPLANE
+    game_dir = fake_game(tmp_path / "game")
+    tiles = write_tiles(tmp_path / "tiles")
+    main(["new-place-level", "--game", str(game_dir), "--mods", str(tmp_path / "Mods"), "--name", "zz-place",
+          "--level", LEVEL, "--tiles", str(tiles), "--at", "0", "300", "0", "--skip-part", "buildings", "--visuals",
+          "--visual-template", BOX])
+    out = capsys.readouterr().out
+    assert "visual objects: 1 of 1: ground_t0_0 (ground, 9 vertices, 8 triangles)" in out
+    assert f"Visual template {BOX}" in out and "3 collision parts" in out
+    assert "visual ground_t0_0: 9 vertices, 8 triangles" in out and "PhysicsPartInfos: 3, our physics parts: 3" in out
+    root = tmp_path / "Mods" / "zz-place"
+    view = Game(game_dir, mod=root)
+    toc = read_toc((root / "Win32" / (NEW + ".toc")).read_bytes())
+    _, region, manifest = view.bundle(toc, "win32/" + NEW)
+    base = f"levels/game/{LEVEL}/visual_ground_t0_0"
+    names = [a.name for a in manifest.ebx]
+    assert {base + "_bp", base + "_mesh", base + "_bp.physics"} <= set(names)
+    resources = {a.name: 1 + len(manifest.ebx) + i for i, a in enumerate(manifest.resources)}
+    shapes, parts, _ = read_physics(view.payload(region, resources[base + "_bp.physics"]))
+    assert len(parts) == 3 and all(v[1] == -500.0 for s in shapes for v in s.vertices)      # not standable
+    layout = read_layout(view.payload(region, resources[base + "_mesh"]))
+    assert layout[0].sections[0].vertex_count == 9 and layout[0].sections[1].vertex_count == 1
+    bp = read_document(view.ebx(region, manifest, base + "_bp"))
+    # The layer places our collision blueprint and the visual one, both at --at.
+    _, region, manifest = view.bundle(toc, "win32/" + SUBLEVEL)
+    layer = read_document(view.ebx(region, manifest, f"levels/game/{LEVEL}/ground_layer"))
+    placed = [layer.instances[p.index].object for p in layer.instances[0].object.get("Objects")]
+    assert len(placed) == 2 and layer.imports[placed[1].get("Blueprint").index].file_guid == bp.file_guid
+    assert [placed[1].get("BlueprintTransform").get("trans").get(a) for a in "xyz"] == [0, 300, 0]
+    # A donor of another mesh, and a filter matching nothing.
+    main(["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles", str(tiles),
+          "--visuals", "--visual-template", BOX, "--material-donor", f"ground={GROUNDPLANE}_mesh:1", "--dry-run"])
+    out = capsys.readouterr().out
+    assert f"material donors: ground = {GROUNDPLANE}_mesh:1" in out and "with a donor section" in out
+    with pytest.raises(SystemExit, match="no visual object matches"):
+        main(["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles", str(tiles),
+              "--visuals", "--visuals-only", "nothing", "--dry-run"])
