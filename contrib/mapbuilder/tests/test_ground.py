@@ -300,7 +300,7 @@ def test_blueprint_from_another_bundle_is_refused_for_its_shader_blocks(tmp_path
 
 
 def test_mesh_own_writes_a_meshset_rigidmesh_and_chunk(tmp_path):
-    _, _, report, _, view = build(tmp_path, mesh="own", size=20.0)
+    _, _, report, _, view = build(tmp_path, mesh="own", size=20.0, mesh_shape="plane")
     text = "\n".join(report)
     assert "chunk 144 bytes rebuilds identically" in text and "winding flipped to match" in text
     assert f"mesh {GROUNDPLANE}_mesh (replaced by ours) LOD 0 chunk {MESH_CHUNK.string()}: in win32/{BAM}'s chunk " \
@@ -355,8 +355,8 @@ def test_write_mesh_refuses_a_chunk_it_does_not_understand():
 
 
 def test_mesh_own_on_a_blueprint_from_another_bundle_keeps_its_texture(tmp_path):
-    _, _, _, _, view = build(tmp_path, mesh="own", blueprint_template=LIGHTHOUSE, blueprint_bundle=ISLAND_BUNDLE,
-                                     blueprint_superbundle=FTUE)
+    _, _, _, _, view = build(tmp_path, mesh="own", mesh_shape="plane", blueprint_template=LIGHTHOUSE,
+                             blueprint_bundle=ISLAND_BUNDLE, blueprint_superbundle=FTUE)
     _, _, manifest, _ = ground(view)
     mesh_name = f"levels/game/{LEVEL}/ground_mesh"
     assert [a.name for a in manifest.ebx] == [SUBLEVEL, LAYER, BLUEPRINT, mesh_name, LIGHTHOUSE + "_d"]
@@ -487,7 +487,7 @@ def test_coordinates_take_any_separator(tmp_path, capsys):
 
 def test_own_mesh_on_a_stock_blueprint_clone(tmp_path):
     _, _, report, root, view = build(tmp_path, bam="333", mesh="own", blueprint_template=BOX, asset_bundle="root",
-                                     collision_mode="template", size=20.0)
+                                     collision_mode="template", size=20.0, mesh_shape="plane")
     text = "\n".join(report)
     assert "boxes found in the structs: section +336" in text and "is each template section's surface area" in text
     assert "    section 1: 1 triangles, 1 vertices, material" in text and "    section 0: 200 triangles" not in text
@@ -505,9 +505,8 @@ def test_own_mesh_on_a_stock_blueprint_clone(tmp_path):
     section = lod.sections[0]
     assert int.from_bytes(ms[section.at + 0x138:section.at + 0x140], "little") == section_keys(BOX + "_mesh")[0]
     unpack = __import__("struct").unpack_from
-    assert unpack("<3f", ms, section.at + 336) == (-10.0, 0.0, -10.0)       # the section's box, ours now
-    assert unpack("<3f", ms, section.at + 352) == (10.0, 0.0, 10.0) and unpack("<f", ms, section.at + 332)[0] == 400.0
-    assert unpack("<3f", ms, 0x10) == (-10.0, 0.0, -10.0)
+    lo, hi = unpack("<3f", ms, section.at + 336), unpack("<3f", ms, section.at + 352)   # the section's box, ours now
+    assert (lo[0], lo[2], hi[0], hi[2]) == (-10.0, -10.0, 10.0, 10.0) and hi[1] - lo[1] > 0.05     # never flat
     box_physics = Game(view.root).bundle(Game(view.root).superbundle(BAM), "win32/" + BAM)
     physics = view.payload(region, resources[PHYSICS])
     _, base_region, base_manifest = box_physics
@@ -557,14 +556,42 @@ def test_meshset_diff_prints_the_fields_that_differ(tmp_path, capsys):
     assert "LOD 0: sections 2 vs 2" in out and "LOD 0 section 0 +32 triangle count" in out
 
 
-def test_write_mesh_warns_on_the_dont_draw_flag_and_can_fill_every_section():
+def test_write_mesh_can_fill_every_section():
     ms, chunk = meshset(guid(1))
-    flagged = bytearray(ms)
-    flagged[208 + 80] |= 1
     verts = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)]
-    _, _, report = write_mesh(bytes(flagged), [chunk], verts, [(0, 2, 1)], [guid(2)])
-    assert any(line.startswith("WARNING: LOD 0 flags 0x41 have bit 0 set") for line in report)
     out, chunks, report = write_mesh(ms, [chunk], verts, [(0, 2, 1)], [guid(2)], geometry_section=None)
     lod = read_layout(out)[0]
     assert [s.triangle_count for s in lod.sections] == [1, 1] and [s.vertex_count for s in lod.sections] == [3, 3]
     assert not any("WARNING" in line for line in report)
+
+
+def test_default_slab_with_padded_bounds_part_boxes_and_bounds_fields(tmp_path, capsys):
+    game_dir = fake_game(tmp_path / "game")
+    main(["new-ground-level", "--game", str(game_dir), "--name", "zz-g", "--level", LEVEL, "--bam", "333", "--mesh", "own",
+          "--blueprint-template", BOX, "--asset-bundle", "root", "--size", "12,0.2,8", "--dry-run"])
+    out = capsys.readouterr().out
+    assert "--mesh-shape slab: 12.0 x 0.2 x 8.0 m, its top at the ground's height" in out
+    assert "ours: 24 vertices, 12 triangles per section" in out and "box [-6.0, -0.2, -4.0]..[6.0, 0.0, 4.0]" in out
+    assert "collision part 0: material 0x10e0, box [-6.0, 0.0, -4.0]..[6.0, 0.0, " in out
+    assert "collision part 2: material 0x10e0, box [-6.0, 0.0, " in out and ", 0.0, 4.0]" in out
+    assert "UVs: planar per face" in out
+    for size in ("12", "12 0.2 12", "12;0.2;12"):
+        main(["new-ground-level", "--game", str(game_dir), "--name", "zz-g", "--level", LEVEL, "--dry-run",
+              "--size", *size.split(" ")])
+        assert "placements of 12.0 m" in capsys.readouterr().out
+
+
+def test_vertex_helpers():
+    from reskate_mapbuilder.meshset import _closest, padded_bounds, planar_uv, vertex_normals
+    lo, hi = padded_bounds([(0.0, 1.0, 0.0), (2.0, 1.0, 3.0)])
+    assert lo == [0.0, 0.95, 0.0] and hi == [2.0, 1.05, 3.0]
+    assert planar_uv((2.0, 1.0, 3.0), (0.0, 1.0, 0.0), 0.5) == (1.0, 1.5)
+    assert planar_uv((2.0, 1.0, 3.0), (1.0, 0.0, 0.0), 1.0) == (3.0, 1.0)
+    assert planar_uv((2.0, 1.0, 3.0), (0.0, 0.0, -1.0), 1.0) == (2.0, 1.0)
+    pool = [((0.0, 1.0, 0.0), [b"up"]), ((1.0, 0.0, 0.0), [b"east"]), ((0.0, -1.0, 0.0), [b"down"])]
+    assert _closest(pool, (0.9, 0.1, 0.0), [b"x"]) == [b"east"] and _closest([], (0, 1, 0), [b"x"]) == [b"x"]
+    from reskate_mapbuilder.meshset import box_geometry
+    vertices, triangles = box_geometry((0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
+    normals = vertex_normals(vertices, triangles)
+    assert sorted(set(normals)) == sorted({(0.0, 1.0, 0.0), (0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0),
+                                          (0.0, 0.0, 1.0), (0.0, 0.0, -1.0)})
