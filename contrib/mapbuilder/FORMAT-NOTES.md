@@ -1056,8 +1056,11 @@ the dry run says so (it printed "given" before).
 **Looking at objects.** The trainer's `tp x y z` and `ground x z` take no heading, and the camera
 after a teleport faces wherever it did; `trainer where` prints the heading (0 = +z, north; 90 =
 +x, east: `atan2(forward.x, forward.z)` in `Extension/Trainer/trainer.cpp`). `place-info --views`
-prints, per visual object, a `trainer ground` spot outside it on the side with ground and the
-heading to face. Proposal (not in this branch): an optional heading argument, `trainer ground <x>
+prints, per visual object, a `trainer ground` spot outside it on the side with ground (its west
+side first: after a teleport the camera seemed to face +x on the PC, observed once, not confirmed)
+and the heading to face. A V2 run teleported 3 to 4 m west of the spot_2 bench showed the textured
+plaza with raised textured objects (a long ledge or step edge, a raised slab): the non-ground
+visuals draw. Proposal (not in this branch): an optional heading argument, `trainer ground <x>
 <z> [heading]` and `tp <x> <y> <z> [heading]`, setting the skater's yaw (forward = (sin h, 0,
 cos h)) after the teleport, so a test can face an object without turning by hand.
 

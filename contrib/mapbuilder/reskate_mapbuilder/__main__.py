@@ -291,8 +291,9 @@ def place_info(args):
     for label, x, z, y in check_spots(place, tuple(args.at)):
         print(f"  trainer ground {x} {z}    -> {'-' if y is None else y}    ({label})")
     if args.views:
-        print("Where to look at each visual object from (the trainer cannot set the heading: turn until "
-              "`trainer where` shows it; 0 = north, +z; 90 = east, +x):")
+        print("Where to look at each visual object from (the trainer cannot set the heading; after a teleport the "
+              "camera seems to face +x, heading 90, observed not confirmed; else turn until `trainer where` shows "
+              "the heading; 0 = north, +z; 90 = east, +x):")
         for label, x, z, y, heading, note in view_spots(place, tuple(args.at)):
             print(f"  {label}: trainer ground {x} {z}    -> {'-' if y is None else y}, face heading {heading:g}  ({note})")
 
