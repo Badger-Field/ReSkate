@@ -115,7 +115,9 @@ Any role with at least one command can also use help and roles (the list).
 
 Players
   players              Connected players and their SteamID64s.
-  kick                 kick <player>: off the server until it restarts.
+  kick                 kick <player> [minutes|restart]: off the server for
+                       that long, or for as long as kick-time says.
+  kick-time            kick-time <minutes>|restart: how long a kick lasts.
   ban                  ban <player or SteamID64> [name]: for good.
   unban                unban <SteamID64>.
   bans                 The ban list. (A role with ban, unban or bans also sees
@@ -182,6 +184,7 @@ What players may do
   object-scaling       object-scaling on|off: whether players may resize objects.
   clear-objects        Delete every placed object.
   effects              effects on|off: whether players see each other's effects.
+  drones               drones on|off: whether players see each other's FPV drones.
   noclip               noclip on|off. (The menu calls it noclip-allow.)
   nobail               nobail on|off. (The menu calls it nobail-allow.)
   boosts               boosts on|off. (The menu calls it boosts-allow.)

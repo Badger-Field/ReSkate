@@ -46,6 +46,7 @@ struct InputCaptureHooks {
     std::map<HANDLE, PlayStationPad> hid_devices;
     std::map<OVERLAPPED*, HidRead> hid_reads;
     Hook register_raw;
+    Hook foreground, active, focus;
     Hook async_key, key, keyboard, raw_data, raw_buffer, capture, release_capture, cursor, show_cursor, physical_cursor, cursor_position;
     std::array<Hook, 5> xinput_state, xinput_extended, xinput_keystroke;
     // Hooks other programs put in front of those, hooked in turn (keep_xinput_capture_first).
@@ -77,6 +78,24 @@ BOOLEAN __stdcall captured_hid_attributes(HANDLE file, PHIDD_ATTRIBUTES attribut
     SetLastError(error);
     return result;
 }
+std::atomic<dingosdk::overlay::GamepadFilter>& gamepad_filter() {
+    static std::atomic<dingosdk::overlay::GamepadFilter> value{};
+    return value;
+}
+// Full Bluetooth reports have a CRC over the 0xA1 input prefix and payload.
+// A stale checksum makes the native reader discard a changed report.
+void refresh_bluetooth_crc(std::uint8_t* bytes, DWORD size) noexcept {
+    if (size != 78 || (bytes[0] != 0x31 && bytes[0] != 0x11)) return;
+    std::uint32_t crc = 0xffffffffu;
+    const auto feed = [&](std::uint8_t byte) {
+        crc ^= byte;
+        for (unsigned bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    };
+    feed(0xa1);
+    for (DWORD i = 0; i < size - 4; ++i) feed(bytes[i]);
+    crc = ~crc;
+    std::memcpy(bytes + size - 4, &crc, sizeof(crc));
+}
 void neutral_hid(const InputCaptureHooks::HidRead& read, DWORD size) {
     if (!block_polled_input() || !read.buffer || size > read.capacity) return;
     auto* bytes = static_cast<std::uint8_t*>(read.buffer);
@@ -100,24 +119,61 @@ void neutral_hid(const InputCaptureHooks::HidRead& read, DWORD size) {
         data[4] = 8; data[5] = 0; data[6] &= 0xfc; // retain DS4 sequence bits
         data[7] = data[8] = 0;
     }
-    // Full Bluetooth reports have a CRC over the 0xA1 input prefix and payload.
-    // A stale checksum makes the native reader discard the neutral report.
-    if (size == 78 && (bytes[0] == 0x31 || bytes[0] == 0x11)) {
-        std::uint32_t crc = 0xffffffffu;
-        const auto feed = [&](std::uint8_t byte) {
-            crc ^= byte;
-            for (unsigned bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
-        };
-        feed(0xa1);
-        for (DWORD i = 0; i < size - 4; ++i) feed(bytes[i]);
-        crc = ~crc;
-        std::memcpy(bytes + size - 4, &crc, sizeof(crc));
-    }
+    refresh_bluetooth_crc(bytes, size);
     static std::atomic<bool> reported{};
     if (!reported.exchange(true)) logging::printf(logging::Level::info, logging::Channel::input,
         "Native PlayStation HID report neutralized; overlay retains its independent input stream. (%s over %s, report 0x%02x of %lu bytes, "
         "the game's buffer %lu.)", read.kind == PlayStationPad::dualsense ? "DualSense" : "DualShock 4",
         bluetooth ? "Bluetooth" : "USB", bytes[0], size, read.capacity);
+}
+// The gamepad filter (DingoSDKOverlaySetGamepadFilter) on the game's own native PlayStation
+// reads, as filter_pad applies it to XInput: a DualShock 4 or DualSense read without Steam Input
+// never goes through XInput. The report is parsed into XInput's layout, filtered, and what the
+// filter changed (triggers, left stick X) is written back in the report's own layout.
+inline constexpr unsigned hid_filter_slot = 3; // the filter's pad slot for native PlayStation pads
+void filter_hid(const InputCaptureHooks::HidRead& read, DWORD size) noexcept {
+    const auto filter = gamepad_filter().load(std::memory_order_acquire);
+    if (!filter || !read.buffer || !size || size > read.capacity) return;
+    auto* bytes = static_cast<std::uint8_t*>(read.buffer);
+    const bool bluetooth = playstation_bluetooth(size);
+    const auto parsed = parse_playstation_report(read.kind, bluetooth, bytes, size);
+    if (!parsed) return;
+    const dingosdk::overlay::GamepadValues before{parsed->buttons, parsed->left_trigger, parsed->right_trigger,
+        parsed->left_x, parsed->left_y, parsed->right_x, parsed->right_y};
+    auto pad = before;
+    filter(hid_filter_slot, pad);
+    if (pad.left_trigger == before.left_trigger && pad.right_trigger == before.right_trigger && pad.left_x == before.left_x) return;
+    // Where parse_playstation_report found them: sticks (left X first), the shoulder byte (L2 0x04,
+    // R2 0x08 digital bits) and the two analog triggers.
+    std::uint8_t *sticks{}, *shoulder{}, *left{}, *right{};
+    const auto id = bytes[0];
+    if (read.kind == PlayStationPad::dualsense && ((id == 0x01 && !bluetooth) || id == 0x31)) {
+        auto* data = bytes + (id == 0x31 ? 2 : 1);
+        sticks = data; left = data + 4; right = data + 5; shoulder = data + 8;
+    } else if (id == 0x01) {
+        sticks = bytes + 1; shoulder = bytes + 6; left = bytes + 8; right = bytes + 9;
+    } else if (read.kind == PlayStationPad::dualshock4 && id == 0x11) {
+        sticks = bytes + 3; shoulder = bytes + 8; left = bytes + 10; right = bytes + 11;
+    } else {
+        return;
+    }
+    if (pad.left_trigger != before.left_trigger) {
+        *left = pad.left_trigger;
+        if (!pad.left_trigger) *shoulder = static_cast<std::uint8_t>(*shoulder & ~0x04u);
+    }
+    if (pad.right_trigger != before.right_trigger) {
+        *right = pad.right_trigger;
+        if (!pad.right_trigger) *shoulder = static_cast<std::uint8_t>(*shoulder & ~0x08u);
+    }
+    if (pad.left_x != before.left_x)
+        sticks[0] = static_cast<std::uint8_t>(std::clamp(static_cast<int>(pad.left_x) / 258 + 128, 0, 255));
+    refresh_bluetooth_crc(bytes, size);
+}
+// A finished native PlayStation read of the game's: neutral while a menu holds the input, else
+// through the gamepad filter.
+void handle_hid(const InputCaptureHooks::HidRead& read, DWORD size) noexcept {
+    if (block_polled_input()) neutral_hid(read, size);
+    else filter_hid(read, size);
 }
 void complete_hid(OVERLAPPED* request, DWORD bytes, bool success, bool finished) {
     auto& h = input_hooks();
@@ -129,7 +185,7 @@ void complete_hid(OVERLAPPED* request, DWORD bytes, bool success, bool finished)
         read = found->second;
         if (finished) h.hid_reads.erase(found);
     }
-    if (success) neutral_hid(read, bytes);
+    if (success) handle_hid(read, bytes);
 }
 BOOL WINAPI captured_read_file(HANDLE file, LPVOID buffer, DWORD size, LPDWORD bytes, LPOVERLAPPED request) {
     auto& h = input_hooks();
@@ -163,7 +219,7 @@ BOOL WINAPI captured_read_file(HANDLE file, LPVOID buffer, DWORD size, LPDWORD b
     const auto result = original<decltype(&ReadFile)>(h.read_file)(file, buffer, size, bytes, request);
     const auto error = GetLastError();
     if (read.kind != PlayStationPad::none) {
-        if (result) neutral_hid(read, bytes ? *bytes : request ? static_cast<DWORD>(request->InternalHigh) : 0);
+        if (result) handle_hid(read, bytes ? *bytes : request ? static_cast<DWORD>(request->InternalHigh) : 0);
         if (!result && error != ERROR_IO_PENDING && request) complete_hid(request, 0, false, true);
     }
     SetLastError(error);
@@ -266,10 +322,6 @@ std::string xinput_entry_owners() {
     return text.empty() ? "none" : text;
 }
 
-std::atomic<dingosdk::overlay::GamepadFilter>& gamepad_filter() {
-    static std::atomic<dingosdk::overlay::GamepadFilter> value{};
-    return value;
-}
 // The game's own read only: not ReSkate's (overlay_input_access) and not an inner layer of a
 // read already being answered (Steam's hook going on to XInput runs inside OverlayInputAccess).
 void filter_pad(bool outer, DWORD user, XINPUT_STATE* output) noexcept {
@@ -286,6 +338,32 @@ void filter_pad(bool outer, DWORD user, XINPUT_STATE* output) noexcept {
     g.sThumbLY = pad.left_y;
     g.sThumbRX = pad.right_x;
     g.sThumbRY = pad.right_y;
+}
+// `press` (console): a short press of controller buttons on the first pad, so a script can get
+// past a game menu without a person and without SendInput, which types into whatever has focus.
+// With no pad connected, the first pad reads as a connected, idle one while the press lasts and
+// for a second after it, so the game also sees the buttons come up again.
+struct VirtualPress {
+    std::atomic<unsigned> buttons{}; // XInput button bits; 0x10000 and 0x20000 are the triggers
+    std::atomic<std::uint64_t> down_until{}, up_until{};
+};
+VirtualPress& virtual_press() { static auto* value = new VirtualPress; return *value; }
+void apply_virtual_press(bool outer, DWORD user, DWORD& result, XINPUT_STATE* output) noexcept {
+    if (!outer || user != 0 || !output) return;
+    auto& press = virtual_press();
+    const auto now = GetTickCount64();
+    if (now >= press.up_until.load(std::memory_order_acquire)) return;
+    if (result != ERROR_SUCCESS) {
+        *output = {};
+        result = ERROR_SUCCESS;
+    }
+    if (now < press.down_until.load(std::memory_order_acquire)) {
+        const auto buttons = press.buttons.load(std::memory_order_relaxed);
+        output->Gamepad.wButtons |= static_cast<WORD>(buttons);
+        if (buttons & 0x10000) output->Gamepad.bLeftTrigger = 255;
+        if (buttons & 0x20000) output->Gamepad.bRightTrigger = 255;
+        output->dwPacketNumber ^= 0x40000000u;
+    }
 }
 // Another program's hook on XInput that was put in front of the capture's own after it was
 // installed (Steam's overlay does, for Steam Input, and answers the game with its own pad
@@ -308,6 +386,7 @@ DWORD WINAPI captured_front(DWORD user, XINPUT_STATE* output) {
     } else if (result == ERROR_SUCCESS) {
         filter_pad(outer, user, output);
     }
+    if (!capture) apply_virtual_press(outer, user, result, output);
     return result;
 }
 void keep_xinput_capture_first() {
@@ -342,6 +421,21 @@ SHORT WINAPI captured_async_key(int key) {
 SHORT WINAPI captured_key(int key) {
     const auto value = original<SHORT(WINAPI*)(int)>(input_hooks().key)(key);
     return block_polled_input() ? 0 : value;
+}
+HWND assumed_window() {
+    return assume_focus() ? state().window.load() : nullptr;
+}
+HWND WINAPI captured_foreground() {
+    if (const auto window = assumed_window()) return window;
+    return original<HWND(WINAPI*)()>(input_hooks().foreground)();
+}
+HWND WINAPI captured_active() {
+    if (const auto window = assumed_window()) return window;
+    return original<HWND(WINAPI*)()>(input_hooks().active)();
+}
+HWND WINAPI captured_focus() {
+    if (const auto window = assumed_window()) return window;
+    return original<HWND(WINAPI*)()>(input_hooks().focus)();
 }
 BOOL WINAPI captured_keyboard(PBYTE keys) {
     const auto result = original<BOOL(WINAPI*)(PBYTE)>(input_hooks().keyboard)(keys);
@@ -612,6 +706,7 @@ DWORD WINAPI captured_xinput(DWORD user, XINPUT_STATE* output) {
     } else if (result == ERROR_SUCCESS) {
         filter_pad(outer, user, output);
     }
+    if (!capture) apply_virtual_press(outer, user, result, output);
     return result;
 }
 template<std::size_t I>
@@ -853,6 +948,13 @@ bool install_input_capture() {
         return okay;
     };
     add(h.register_raw, "RegisterRawInputDevices", reinterpret_cast<void*>(captured_register_raw));
+    if (assume_focus()) {
+        add(h.foreground, "GetForegroundWindow", reinterpret_cast<void*>(captured_foreground));
+        add(h.active, "GetActiveWindow", reinterpret_cast<void*>(captured_active));
+        add(h.focus, "GetFocus", reinterpret_cast<void*>(captured_focus));
+        dingosdk::logging::write(dingosdk::logging::Level::info, dingosdk::logging::Channel::input,
+            "RESKATE_ASSUME_FOCUS: the game is told its window is in front and active.");
+    }
     if (!add(h.async_key, "GetAsyncKeyState", reinterpret_cast<void*>(captured_async_key)) ||
         !add(h.key, "GetKeyState", reinterpret_cast<void*>(captured_key)) ||
         !add(h.keyboard, "GetKeyboardState", reinterpret_cast<void*>(captured_keyboard)) ||
@@ -906,4 +1008,21 @@ bool install_input_capture() {
 
 extern "C" void DingoSDKOverlaySetGamepadFilter(dingosdk::overlay::GamepadFilter filter) {
     dingosdk::overlay::detail::gamepad_filter().store(filter, std::memory_order_release);
+}
+namespace dingosdk::overlay::detail {
+bool assume_focus() {
+    static const bool value = [] {
+        wchar_t text[8]{};
+        const auto length = GetEnvironmentVariableW(L"RESKATE_ASSUME_FOCUS", text, 8);
+        return length == 1 && text[0] == L'1';
+    }();
+    return value;
+}
+}
+extern "C" void DingoSDKOverlayPressGamepad(unsigned buttons, unsigned milliseconds) {
+    auto& press = dingosdk::overlay::detail::virtual_press();
+    const auto now = GetTickCount64();
+    press.buttons.store(buttons, std::memory_order_relaxed);
+    press.down_until.store(now + milliseconds, std::memory_order_release);
+    press.up_until.store(now + milliseconds + 1000, std::memory_order_release);
 }

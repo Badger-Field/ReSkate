@@ -46,6 +46,9 @@ struct SkateMenu {
     std::array<char,96> multiplayer_join_code{};
     std::array<char,128> multiplayer_lobby_search{};
     std::array<char,129> multiplayer_lobby_name{};
+    // Playing without Steam: the name other players see, as typed (seeded from the model once).
+    std::array<char,33> multiplayer_direct_name{};
+    bool multiplayer_direct_name_seeded{};
     MultiplayerDistances multiplayer_distance_draft, multiplayer_distance_applied;
     bool multiplayer_distance_initialized{}, multiplayer_distance_hosting{};
     int voice_bind_capture{};
@@ -83,6 +86,7 @@ struct SkateMenu {
     int world_layer_category = 0;
     std::array<char, 128> world_layer_search{};
     int progression_tab = 0;
+    int drone_tab = 0; // the DRONE page (drone_page.cpp)
     int bus_stop_map = 0;
     int challenge_type = 0;
     std::array<char, 128> challenge_search{};

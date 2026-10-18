@@ -4,6 +4,7 @@
 #include "game_settings.h"
 #include "launch.h"
 #include "text_encoding.h"
+#include "mod_profiles.h"
 #include "thunderstore.h"
 
 #include "Engine/Vfs/mod_list.h"
@@ -189,8 +190,16 @@ struct Settings {
     bool keep_open_after_launch{};
     // Off: never replace ReSkate.dll or the launcher (keeps a test build someone handed out).
     bool updates{true};
-    // Off: a crash uploads nothing (RESKATE_CRASH_REPORTING=0 for the launcher and the game).
-    bool crash_reports{true};
+    // On: a crash uploads its dump and log (RESKATE_CRASH_REPORTING=1 for the launcher and the
+    // game). Off by default: crash reports are opt-in, and RESKATE_NO_CRASH_UPLOAD=1 stops them
+    // whatever this says. Saved as "send_crash_reports"; the old "crash_reports" key (on by
+    // default upstream) is not read, so no one is opted in without ticking it.
+    bool crash_reports{};
+    // On: launches send how long their steps took (RESKATE_TRACING=1 for the launcher and the game).
+    bool performance_timings{};
+    // On: update to the newest pre-release on GitHub when there is one newer than the latest
+    // release. Turned off, the next check goes back to the latest release.
+    bool prereleases{};
     std::string steam_username;   // never the password
     bool steam_remember{true};
     bool steam_prefer_code{};
@@ -200,7 +209,7 @@ inline constexpr std::array<const char*, 7> log_levels{"trace", "debug", "info",
 
 // ---------------------------------------------------------------- state
 
-enum class Phase { checking, update_available, updating, game_missing, game_outdated, downloading,
+enum class Phase { checking, install_here, update_available, updating, game_missing, game_outdated, downloading, copying,
                    merging, mods_broken, ready, launching, failed };
 
 // A mod the pre-launch merge could not use, named so nobody has to guess which
@@ -221,6 +230,10 @@ struct State {
     std::optional<update::Config> config;
     // Set when a merge before launch left mods out; PLAY waits on an answer.
     std::vector<ModProblem> mod_problems;
+    // install_here: the folder of a ReSkate already installed (install_here.h), to update.
+    std::filesystem::path install_target;
+    // game_missing / game_outdated: skate. installed on this PC (Steam's library), supported build first.
+    std::vector<launcher_app::LocalGame> local_games;
 };
 
 // Update checks, the Steam download and the game launch, one at a time on a worker thread.
@@ -241,6 +254,8 @@ public:
     Settings& settings() { return settings_; }
     const launcher_app::Session& session() const { return session_; }
     void save();
+    // After settings are closed: the update check again, when an update choice changed.
+    void check_again_if_update_choices_changed();
 
     void check();
     // The merge the game would do at startup, run here so its failures can be
@@ -255,18 +270,28 @@ public:
     // The password only lives in memory until DepotDownloader asks for it; it
     // may be empty when DepotDownloader remembers the login.
     void download(bool validate, bool qr, std::string password);
+    // "Use the game on this PC": copies the skate. in `source` into ReSkate's folder, when it is the
+    // supported build. `source` is only read. No network, no Steam.
+    void copy_game(fs::path source);
     void play();
     void cancel();
     // Answers the pending Steam prompt; nothing cancels the download.
     void answer(std::optional<std::string> value);
 
     void restart();
+    // install_here: copy this ReSkate into the installed one's folder, then hand over to it.
+    void install_here();
+    // After Remove ReSkate: the settings file is gone and stays gone (save() does nothing).
+    void forget_settings() { settings_forgotten_ = true; }
 
 private:
     launcher_app::Session session_;
     std::vector<std::wstring> arguments_;
     Settings settings_;
     bool relaunched_{};
+    // The update choices the last check was made with: one changed in settings is checked
+    // again straight away (save()).
+    std::atomic<bool> checked_updates_{true}, checked_prereleases_{};
     bool binaries_{true};
     std::mutex mutex_;
     std::condition_variable answered_;
@@ -279,6 +304,8 @@ private:
     std::atomic<bool> busy_{};
     std::atomic<bool> cancel_{};
     std::atomic<bool> restart_{};
+    std::filesystem::path handoff_; // a launcher to start in this one's place (install_here)
+    bool settings_forgotten_{};
     std::atomic<bool> ignore_mod_problems_{};
     std::atomic<DWORD> game_{};
     std::atomic<bool> launched_{};
@@ -296,6 +323,7 @@ private:
     void run_check();
     void run_updates();
     void run_download(bool validate);
+    void run_copy(const fs::path& source);
     // False when mods were left out and the launch should wait for an answer.
     bool run_mod_merge();
     void run_play();
@@ -315,6 +343,8 @@ struct Changelog {
     std::string error;                               // why the last fetch failed
     update::ReleaseNote note;
     thunderstore::Readme text;
+    // Whether pre-releases are wanted (the setting), and whether `note` was fetched with them.
+    bool prereleases{}, fetched_prereleases{};
 
     ~Changelog() {
         if (worker.joinable()) worker.join();
@@ -342,6 +372,7 @@ struct Ui {
     std::string key_error;
     bool mods{};
     bool sign_in{};
+    bool get_game{};            // the GET THE GAME panel: copy from this PC, choose a folder, or Steam
     bool sign_in_validate{};
     bool focus{};
     std::array<char, 65> username{};
@@ -361,13 +392,10 @@ struct Ui {
     // Cleared by leaving the page or by an install that failed.
     bool play_after_install{};
     double mods_checked{-100};
-    // Steam display name for the name plate, re-read every few seconds.
+    // Steam display name for the name plate, re-read every few seconds. Empty
+    // without Steam, which is fine: ReSkate does not need it.
     std::string steam_name;
     double steam_checked{-100};
-    // One-time notice that Skate will start offline because Steam is not
-    // running or not signed in. Decided on the first Steam check.
-    bool steam_offline{};
-    bool steam_offline_seen{};
 };
 
 // The Thunderstore listing, fetched in the background when the launcher
@@ -486,9 +514,30 @@ struct ModsPanel {
     Icons icons;
     Readmes readmes;
 
+    // PROFILES (gui_mods_profiles.cpp).
+    launcher_profiles::Profiles profiles;
+    bool profiles_loaded{};
+    std::array<char, 64> profile_name{};    // typed for a new profile
+    std::array<char, 96> profile_code{};    // typed to import
+    std::array<char, 64> profile_renamed{}; // typed in the rename popup
+    std::string profile_rename;             // the profile being renamed
+    std::string profile_delete;             // the profile awaiting "Delete" confirmation
+    // Loaded while its missing mods download: put in its order again once they are in.
+    std::string profile_settle;
+    // Talking to Thunderstore's profile service, off the UI thread.
+    struct ProfileResult {
+        bool ready{}, error{};
+        std::string message, clipboard;
+        std::optional<launcher_profiles::Profile> imported;
+    };
+    std::thread profile_worker;
+    std::atomic<bool> profile_busy{};
+    ProfileResult profile_result;           // worker -> UI, under mutex
+
     ~ModsPanel() {
         cancel = true;
         if (worker.joinable()) worker.join();
+        if (profile_worker.joinable()) profile_worker.join();
     }
 };
 
@@ -496,6 +545,19 @@ void scan(ModsPanel& panel, const launcher_app::Session& session);
 // Re-reads the Mods folder and the Thunderstore listing.
 void refresh_mods(Launcher& launcher, ModsPanel& panel);
 void start_install(ModsPanel& panel, const fs::path& source, bool replace);
+// The Windows file (or folder) picker; empty when cancelled. A file picker shows
+// `filter_pattern` ("*.zip") under `filter_name`.
+fs::path pick_path(HWND owner, bool folder, const wchar_t* title, const wchar_t* filter_name, const wchar_t* filter_pattern);
+
+// ---------------------------------------------------------------- Profiles (gui_mods_profiles.cpp)
+
+// The PROFILES page body, under the page header.
+void profiles_page(const Fonts& fonts, ModsPanel& panel, HWND window, float height, bool installing);
+// The rename and delete confirmations; call once a frame with the page's other popups.
+void profile_popups(ModsPanel& panel);
+// A profile loaded while its mods downloaded is put in order once they are in; call once
+// a frame, after collect_install.
+void settle_profile(ModsPanel& panel);
 
 // ---------------------------------------------------------------- Thunderstore (gui_mods_browse.cpp)
 
@@ -541,9 +603,9 @@ void pick(Store& store, const std::string& full_name, bool on);
 
 void open_sign_in(Launcher& launcher, Ui& ui, bool validate);
 void sign_in_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui);
+void get_game_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, const State& state, HWND window);
 void prompt_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, const update::Prompt& prompt, Ui& ui);
 void qr_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, const std::vector<std::string>& rows);
-void steam_offline_window(const Fonts& fonts, ImVec2 size, Ui& ui);
 // What the newest release changed: its notes on GitHub.
 void changelog_window(const Fonts& fonts, ImVec2 size, Ui& ui);
 void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, HWND window);

@@ -1,0 +1,17 @@
+{
+  // ReSkate lobby service. Deploy: npx wrangler login, then npx wrangler deploy.
+  "name": "reskate-lobby",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  // Address: workers.dev for now (reskate-lobby.reskate-lobby-service.workers.dev). Once the
+  // custom domain skate.ops.rodeo answers and has its firewall rules (README.md), set this to
+  // false: workers.dev skips the zone's firewall. No per-version preview URLs.
+  "workers_dev": true,
+  "preview_urls": false,
+  "durable_objects": {
+    "bindings": [{ "name": "HUB", "class_name": "Hub" }]
+  },
+  // SQLite-backed Durable Objects are on Cloudflare's free plan.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }]
+  // Production also needs a secret for join challenges: npx wrangler secret put CHALLENGE_SECRET
+}

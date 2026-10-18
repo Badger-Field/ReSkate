@@ -1,0 +1,116 @@
+# Builds a release from a version tag (v2.1.0) or by hand (Actions > Release > Run workflow), and
+# leaves it as a DRAFT: nothing reaches players until someone reads it and presses Publish.
+# The launcher updates from this repository's latest published release (DINGOSDK_RELEASE_REPO),
+# not upstream's. See RELEASING.md.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, X.Y.Z (the tag vX.Y.Z is made on the chosen branch)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Version
+        shell: bash
+        run: |
+          version="${{ inputs.version || github.ref_name }}"
+          version="${version#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The version must look like 2.1.0, not '$version'"; exit 1
+          fi
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "::error::Release v$version already exists"; exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Configure
+        shell: bash
+        env:
+          # Crash reports go to this project's own Sentry minidump endpoint if the secret is set;
+          # with no secret they are off (never upstream's server). Players opt in either way.
+          CRASH_REPORT_URL: ${{ secrets.RESKATE_CRASH_REPORT_URL }}
+        run: >
+          cmake --preset vs2022-x64
+          -DDINGOSDK_VERSION="$VERSION"
+          -DDINGOSDK_RELEASE_REPO="${{ github.repository }}"
+          -DDINGOSDK_LAUNCHER_AUTO_UPDATE=ON
+          -DDINGOSDK_CRASH_REPORT_URL="$CRASH_REPORT_URL"
+      - name: The Spotify device from earlier runs (cargo)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            SpotifyHelper/target
+          key: cargo-windows-${{ hashFiles('SpotifyHelper/Cargo.lock', 'SpotifyHelper/Cargo.toml', 'SpotifyHelper/src/**') }}
+          restore-keys: cargo-windows-
+      - name: Build
+        # Only what ships: the launcher and ReSkate.dll. The tests ran in the Build workflow on
+        # this commit (release from main once its checks are green).
+        run: cmake --build --preset release --parallel --target dingosdk_launcher dingosdk_runtime
+      - name: Package
+        shell: bash
+        run: |
+          out=release && mkdir -p "$out/ReSkate-$VERSION"
+          bin=build/vs2022-x64/Release
+          cp "$bin/ReSkateLauncher.exe" "$bin/ReSkate.dll" "$out/"
+          cp "$bin/ReSkateLauncher.exe" "$bin/ReSkate.dll" "$out/ReSkate-$VERSION/"
+          # Direct multiplayer's GameNetworkingSockets.dll: the exact build ReSkate pins
+          # (direct_play.cpp), kept as an asset of the release tagged gns-<commit>.
+          pin_file=Extension/Multiplayer/Direct/direct_play.cpp
+          if [ -f "$pin_file" ]; then
+            pin=$(grep -oE 'library_sha256 = "[0-9a-f]{64}"' "$pin_file" | grep -oE '[0-9a-f]{64}')
+            tag=$(gh release list --limit 100 --json tagName --jq '.[].tagName | select(startswith("gns-"))' | head -1)
+            if [ -z "$tag" ]; then
+              echo "::error::No gns-<commit> release holds GameNetworkingSockets.dll (see RELEASING.md)"; exit 1
+            fi
+            gh release download "$tag" --pattern GameNetworkingSockets.dll --dir gns
+            got=$(sha256sum gns/GameNetworkingSockets.dll | cut -d' ' -f1)
+            if [ "$got" != "$pin" ]; then
+              echo "::error::GameNetworkingSockets.dll from $tag is $got; direct_play.cpp pins $pin"; exit 1
+            fi
+            cp gns/GameNetworkingSockets.dll "$out/" && cp gns/GameNetworkingSockets.dll "$out/ReSkate-$VERSION/"
+            # Its licences (OpenSSL, Abseil, protobuf, WebRTC and GameNetworkingSockets itself) go with it.
+            notices=contrib/direct-multiplayer/GameNetworkingSockets-NOTICES.txt
+            cp "$notices" "$out/ReSkate-$VERSION/THIRD-PARTY-NOTICES.txt" && cp "$notices" "$out/THIRD-PARTY-NOTICES.txt"
+          fi
+          cp LICENSE "$out/ReSkate-$VERSION/"
+          (cd "$out" && 7z a -tzip "ReSkate-$VERSION.zip" "ReSkate-$VERSION" > /dev/null)
+          7z a -tzip "$out/ReSkate-$VERSION-symbols.zip" "$bin/ReSkateLauncher.pdb" "$bin/ReSkate.pdb" > /dev/null || true
+          python .github/scripts/launcher_json.py --version "$VERSION" \
+            --launcher "$out/ReSkateLauncher.exe" --runtime "$out/ReSkate.dll" --out "$out/launcher.json"
+          (cd "$out" && sha256sum ReSkateLauncher.exe ReSkate.dll ReSkate-$VERSION.zip launcher.json \
+            $( [ -f GameNetworkingSockets.dll ] && echo GameNetworkingSockets.dll ) > SHA256SUMS.txt)
+          cat "$out/SHA256SUMS.txt"
+      - name: Draft the release
+        shell: bash
+        run: |
+          cat > notes.md <<NOTES
+          **Install:** unzip \`ReSkate-$VERSION.zip\` into the skate. folder (beside \`Skate.exe\`) and run \`ReSkateLauncher.exe\`. Steam is optional: with it closed, ReSkate starts without it.
+
+          **Update:** the launcher updates itself and \`ReSkate.dll\` from this repository's latest release.
+          NOTES
+          files=(release/ReSkate-$VERSION.zip release/ReSkateLauncher.exe release/ReSkate.dll release/launcher.json release/SHA256SUMS.txt)
+          [ -f release/GameNetworkingSockets.dll ] && files+=(release/GameNetworkingSockets.dll release/THIRD-PARTY-NOTICES.txt)
+          [ -f release/ReSkate-$VERSION-symbols.zip ] && files+=(release/ReSkate-$VERSION-symbols.zip)
+          gh release create "v$VERSION" "${files[@]}" --draft --target "$GITHUB_SHA" \
+            --title "ReSkate $VERSION" --notes-file notes.md --generate-notes

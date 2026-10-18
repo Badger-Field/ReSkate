@@ -12,6 +12,8 @@ bool send_private(SkateMenu &menu, const char *action, const std::string &argume
 std::string map_label(const Model &model, std::string_view path);
 // Draw text within a column, preserving UTF-8 when adding an ellipsis.
 void cell_text(const std::string &text);
+// Without Steam: the name other players see, and a Save button (multiplayer_menu.cpp).
+void direct_name_card(SkateMenu &menu, const MultiplayerModel &mp);
 // LOBBIES tab and its password prompt (multiplayer_lobbies.cpp).
 void join_page(SkateMenu &menu, const Model &model, const CallbacksV3 &callbacks);
 void password_popup(SkateMenu &menu, const Model &model);

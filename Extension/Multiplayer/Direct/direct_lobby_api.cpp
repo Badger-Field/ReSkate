@@ -1,0 +1,174 @@
+#include "direct_lobby_api.h"
+#include "Engine/Core/Json/json.h"
+
+#include <charconv>
+#include <map>
+#include <optional>
+#include <stdexcept>
+
+namespace dingosdk::multiplayer {
+namespace {
+constexpr std::uint64_t republish_ms = 60'000;
+
+class DirectLobbyApi final : public LobbyApi {
+  public:
+    explicit DirectLobbyApi(LobbyChannel channel) : ch_(std::move(channel)) {}
+
+    // The connection to the service may still be opening: requests wait for it (poll, owner).
+    void open() override {}
+    std::uint64_t create(unsigned) override {
+        own_ = ch_.local_id();
+        own_data_.clear();
+        hosted_ = false;
+        return finished(LobbyCall::create, {true, own_, 0, 1});
+    }
+    std::uint64_t search() override {
+        if (list_call_) return 0;
+        list_call_ = next_++;
+        list_sent_ = ch_.request(R"({"op":"list"})");
+        return *list_call_;
+    }
+    std::uint64_t join(std::uint64_t lobby) override {
+        // Joining is connecting to the host; the listing only has to still be there.
+        return finished(LobbyCall::join, {find(lobby) != nullptr, lobby, 0, 1});
+    }
+    std::optional<LobbyResult> poll(std::uint64_t call, LobbyCall kind) override {
+        if (list_call_ && !list_sent_) list_sent_ = ch_.request(R"({"op":"list"})");
+        take_replies();
+        const auto done = done_.find(call);
+        if (done == done_.end() || done->second.first != kind) return std::nullopt;
+        const auto result = done->second.second;
+        done_.erase(done);
+        return result;
+    }
+    void leave(std::uint64_t lobby) override {
+        if (!lobby || lobby != own_) return;
+        if (hosted_) ch_.request(R"({"op":"unhost"})");
+        hosted_ = listed_ = false;
+        own_ = 0;
+        own_data_.clear();
+    }
+    std::uint64_t at(int index) override {
+        return index >= 0 && static_cast<std::size_t>(index) < rows_.size() ? rows_[static_cast<std::size_t>(index)].host : 0;
+    }
+    std::uint64_t owner(std::uint64_t lobby) override {
+        // Asked about once a second while hosting: the listing is kept fresh from here.
+        if (lobby && lobby == own_) {
+            if (listed_ && (!hosted_ || ch_.now_ms() - published_ >= republish_ms)) publish();
+            return own_;
+        }
+        return find(lobby) ? lobby : 0;
+    }
+    std::string data(std::uint64_t lobby, const char *key) override {
+        const auto &values = lobby && lobby == own_ ? own_data_ : [&]() -> const std::map<std::string, std::string> & {
+            static const std::map<std::string, std::string> none;
+            const auto *row = find(lobby);
+            return row ? row->data : none;
+        }();
+        const auto found = values.find(key);
+        return found == values.end() ? std::string{} : found->second;
+    }
+    bool data(std::uint64_t lobby, const char *key, const std::string &value) override {
+        if (!lobby || lobby != own_) return false;
+        own_data_[key] = value;
+        return true;
+    }
+    // Listed or not. A listing that could not be sent yet (the connection still opening, or
+    // reopening) goes out from owner(), which the host asks every second.
+    bool joinable(std::uint64_t lobby, bool open) override {
+        if (!lobby || lobby != own_) return false;
+        listed_ = open;
+        if (open) {
+            publish();
+            return true;
+        }
+        if (hosted_) ch_.request(R"({"op":"unhost"})");
+        hosted_ = false;
+        return true;
+    }
+    bool visibility(std::uint64_t lobby, bool everyone) override {
+        if (!lobby || lobby != own_) return false;
+        everyone_ = everyone;
+        return true;
+    }
+    std::string name() override { return ch_.name ? ch_.name() : std::string{}; }
+    std::string service() override { return "the lobby service"; }
+
+  private:
+    struct Row {
+        std::uint64_t host{};
+        std::map<std::string, std::string> data;
+    };
+    LobbyChannel ch_;
+    std::uint64_t next_ = 1;
+    std::map<std::uint64_t, std::pair<LobbyCall, LobbyResult>> done_;
+    std::optional<std::uint64_t> list_call_;
+    bool list_sent_{};
+    std::vector<Row> rows_;
+    std::uint64_t own_{}, published_{};
+    std::map<std::string, std::string> own_data_;
+    bool everyone_ = true, listed_{}, hosted_{}; // listed_: wanted; hosted_: sent
+
+    std::uint64_t finished(LobbyCall kind, LobbyResult result) {
+        const auto call = next_++;
+        if (done_.size() >= 64) done_.erase(done_.begin());
+        done_[call] = {kind, result};
+        return call;
+    }
+    const Row *find(std::uint64_t lobby) const {
+        for (const auto &row : rows_)
+            if (row.host == lobby) return &row;
+        return nullptr;
+    }
+    bool publish() {
+        // The service lists public games only; a game that is not public is never sent.
+        if (!everyone_) return false;
+        auto lobby = Json::object();
+        for (const auto &[key, value] : own_data_) lobby[key] = value;
+        auto message = Json::object();
+        message["op"] = "host";
+        message["public"] = true;
+        message["lobby"] = std::move(lobby);
+        if (!ch_.request(message.dump())) {
+            hosted_ = false;
+            return false;
+        }
+        hosted_ = true;
+        published_ = ch_.now_ms();
+        return true;
+    }
+    void take_replies() {
+        for (const auto &text : ch_.replies()) {
+            try {
+                const auto reply = Json::parse(text);
+                const auto op = reply.contains("op") && reply.at("op").is_string() ? reply.at("op").string() : std::string{};
+                if (op == "lobbies" && list_call_) {
+                    rows_.clear();
+                    if (reply.contains("rows") && reply.at("rows").is_array())
+                        for (const auto &item : reply.at("rows")) read_row(item);
+                    done_[*std::exchange(list_call_, std::nullopt)] = {
+                        LobbyCall::list, {true, 0, static_cast<std::uint32_t>(rows_.size()), 1}};
+                } else if (op == "error" && list_call_) {
+                    done_[*std::exchange(list_call_, std::nullopt)] = {LobbyCall::list, {false, 0, 0, 2}};
+                }
+            } catch (...) {
+            }
+        }
+    }
+    void read_row(const Json &item) {
+        if (!item.is_object() || !item.contains("host") || !item.at("host").is_string() || rows_.size() >= 200) return;
+        Row row;
+        const auto &host = item.at("host").string();
+        const auto parsed = std::from_chars(host.data(), host.data() + host.size(), row.host);
+        if (parsed.ec != std::errc{} || parsed.ptr != host.data() + host.size() || !row.host) return;
+        for (const auto &[key, value] : item.items())
+            if (key != "host" && value.is_string()) row.data[key] = value.string();
+        rows_.push_back(std::move(row));
+    }
+};
+} // namespace
+
+std::unique_ptr<LobbyApi> make_direct_lobby_api(LobbyChannel channel) {
+    return std::make_unique<DirectLobbyApi>(std::move(channel));
+}
+} // namespace dingosdk::multiplayer

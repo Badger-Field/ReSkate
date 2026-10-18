@@ -67,6 +67,30 @@ void cell_text(const std::string &text) {
     if (clipped && ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", text.c_str());
 }
+void direct_name_card(SkateMenu &menu, const MultiplayerModel &mp) {
+    if (!menu.multiplayer_direct_name_seeded && !mp.local_name.empty()) {
+        menu.multiplayer_direct_name.fill(0);
+        std::copy_n(mp.local_name.begin(), std::min(mp.local_name.size(), menu.multiplayer_direct_name.size() - 1),
+                    menu.multiplayer_direct_name.begin());
+        menu.multiplayer_direct_name_seeded = true;
+    }
+    begin_card(menu, "direct-name", "YOUR NAME");
+    const std::string typed = menu.multiplayer_direct_name.data();
+    const float save_width = ImGui::CalcTextSize("SAVE").x + ImGui::GetStyle().FramePadding.x * 4;
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - save_width - ImGui::GetStyle().ItemSpacing.x);
+    const bool entered = ImGui::InputTextWithHint("##direct-name", "The name other skaters see", menu.multiplayer_direct_name.data(),
+                                                  menu.multiplayer_direct_name.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    const bool changed = !typed.empty() && typed != mp.local_name;
+    ImGui::BeginDisabled(!changed);
+    std::array<char, 65> unused{};
+    if ((ImGui::Button("SAVE", ImVec2(save_width, 0)) || (entered && changed)))
+        send_private(menu, "name", typed, unused, false);
+    ImGui::EndDisabled();
+    note(mp.active ? "Players who join from now on see the new name."
+                   : "Other skaters see this over your head and in chat.");
+    end_card();
+}
 } // namespace dingosdk::overlay::menu::multiplayer_detail
 
 namespace dingosdk::overlay::menu {
@@ -92,18 +116,28 @@ void host_page(SkateMenu &menu, const Model &model, const CallbacksV3 &) {
     unsigned tps = mp.hosting ? mp.tps : menu.multiplayer_tps;
     bool locked = mp.hosting ? mp.password_required : menu.multiplayer_password_enabled;
 
+    if (mp.direct) direct_name_card(menu, mp);
     begin_card(menu, "host-access", "WHO CAN JOIN");
-    choice(menu, "visibility", visibility, {"Join code only", "Public lobby"}, editable);
+    choice(menu, "visibility", visibility, {"Join code only", mp.direct ? "Home network" : "Public lobby"}, editable);
     menu.multiplayer_visibility = visibility;
-    note(visibility == 0 ? "Unlisted. Friends join with the code you share from Session."
-                         : "Listed in the Servers browser. Anyone on a compatible build can join.");
+    // Without Steam players connect straight to each other: whoever joins can see your IP
+    // address, so there are no public games, and the notes say who can get in.
+    if (mp.direct)
+        note(visibility == 0 ? "Only players you give the code from Session can join. They connect straight to you, "
+                               "so they can see your IP address: share it with people you know."
+                             : "Anyone on the same network sees it in Servers and can join, and the code works too. "
+                               "Use it at home, not on school or public Wi-Fi.");
+    else
+        note(visibility == 0 ? "Unlisted. Friends join with the code you share from Session."
+                             : "Listed in the Servers browser. Anyone on a compatible build can join.");
     end_card();
 
     begin_card(menu, "host-settings", "LOBBY SETTINGS");
     info(menu, "Map", map_label(model, mp.map));
     ImGui::BeginDisabled(!editable);
     field(menu, "Lobby name");
-    const auto name_hint = mp.local_name.empty() ? std::string("Your Steam name") : mp.local_name + " (your Steam name)";
+    const char *whose = mp.direct ? " (your name)" : " (your Steam name)";
+    const auto name_hint = mp.local_name.empty() ? std::string(mp.direct ? "Your name" : "Your Steam name") : mp.local_name + whose;
     ImGui::InputTextWithHint("##lobby-name", name_hint.c_str(), menu.multiplayer_lobby_name.data(),
                              menu.multiplayer_lobby_name.size());
     field(menu, "Player limit", "Includes you.");
@@ -133,13 +167,13 @@ void host_page(SkateMenu &menu, const Model &model, const CallbacksV3 &) {
     end_card();
 
     if (!mp.hosting) {
-        if (primary_button(menu, visibility ? "HOST PUBLIC LOBBY" : "HOST WITH JOIN CODE",
+        if (primary_button(menu, visibility ? (mp.direct ? "HOST ON HOME NETWORK" : "HOST PUBLIC LOBBY") : "HOST WITH JOIN CODE",
                            editable && mp.local_ready)) {
             if (locked && !menu.multiplayer_host_password[0])
                 feedback(menu, "Enter a password or turn off Require password.");
             else
                 send_private(menu, "host-config",
-                             std::string(visibility ? "public " : "code ") + std::to_string(capacity) + " " +
+                             std::string(visibility ? (mp.direct ? "home " : "public ") : "code ") + std::to_string(capacity) + " " +
                                  std::to_string(tps) + " " + menu.multiplayer_lobby_name.data(),
                              menu.multiplayer_host_password, locked);
         }

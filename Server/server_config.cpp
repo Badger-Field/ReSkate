@@ -121,6 +121,7 @@ Layout layout(const ServerConfig &c) {
     players.set("allow_parties", c.parties);
     players.set("party_size", c.party_size);
     players.set("afk_kick_minutes", c.afk_kick);
+    players.set("kick_minutes", c.kick_minutes);
     players.set("word_warnings", c.word_warnings);
     players.set("use_global_word_filter", c.global_words);
     players.set("allow_voice_chat", c.voice_chat);
@@ -129,6 +130,7 @@ Layout layout(const ServerConfig &c) {
     players.set("object_limit", c.object_limit);
     players.set("allow_object_scaling", c.object_scaling);
     players.set("sync_effects", c.sync_effects);
+    players.set("sync_drones", c.sync_drones);
     players.set("announce_throwdowns", c.announce_throwdowns);
 
     auto &anti_cheat = root.section("anti_cheat");
@@ -171,6 +173,7 @@ Layout layout(const ServerConfig &c) {
     vote("extend_map", c.votes.extend);
     votes.set("seconds", c.votes.seconds);
     votes.set("cooldown_seconds", c.votes.cooldown);
+    votes.set("kick_minutes", c.votes.kick_minutes);
     votes.set("starter_votes_yes", c.votes.starter_votes_yes);
     votes.set("polls", c.votes.polls);
     votes.set("poll_seconds", c.votes.poll_seconds);
@@ -365,6 +368,7 @@ ServerConfig load_config(const std::filesystem::path &file, std::vector<std::str
     c.parties = get("players", "allow_parties", c.parties, {"parties"});
     c.party_size = std::clamp(get("players", "party_size", c.party_size), 2U, 8U);
     c.afk_kick = get("players", "afk_kick_minutes", c.afk_kick);
+    c.kick_minutes = get("players", "kick_minutes", c.kick_minutes);
     c.word_warnings = get("players", "word_warnings", c.word_warnings);
     c.global_words = get("players", "use_global_word_filter", c.global_words);
     c.voice_chat = get("players", "allow_voice_chat", c.voice_chat, {"voice_chat"});
@@ -376,6 +380,7 @@ ServerConfig load_config(const std::filesystem::path &file, std::vector<std::str
     c.object_limit = get("players", "object_limit", c.object_limit);
     c.object_scaling = get("players", "allow_object_scaling", c.object_scaling);
     c.sync_effects = get("players", "sync_effects", c.sync_effects);
+    c.sync_drones = get("players", "sync_drones", c.sync_drones);
     c.announce_throwdowns = get("players", "announce_throwdowns", c.announce_throwdowns);
 
     c.speed_check = get("anti_cheat", "speed_hack", c.speed_check, {"speed_check"});
@@ -429,10 +434,11 @@ ServerConfig load_config(const std::filesystem::path &file, std::vector<std::str
     read_vote("kick", c.votes.kick);
     read_vote("time_of_day", c.votes.time);
     read_vote("extend_map", c.votes.extend);
-    for (const char *key : {"seconds", "cooldown_seconds", "starter_votes_yes", "polls", "poll_seconds", "custom"})
+    for (const char *key : {"seconds", "cooldown_seconds", "kick_minutes", "starter_votes_yes", "polls", "poll_seconds", "custom"})
         if (!votes.contains(key)) missing.push_back(std::string("votes.") + key);
     c.votes.seconds = std::clamp(votes.value("seconds", c.votes.seconds), 10U, 300U);
     c.votes.cooldown = std::clamp(votes.value("cooldown_seconds", c.votes.cooldown), 0U, 3600U);
+    c.votes.kick_minutes = votes.value("kick_minutes", c.votes.kick_minutes);
     c.votes.starter_votes_yes = votes.value("starter_votes_yes", c.votes.starter_votes_yes);
     c.votes.polls = votes.value("polls", c.votes.polls);
     if (c.votes.polls != "off" && c.votes.polls != "admins" && c.votes.polls != "everyone") c.votes.polls = "admins";
@@ -756,9 +762,9 @@ bool custom_command_name_free(std::string_view name) noexcept {
     // The chat's own commands, then the server commands admins type as /<command>.
     for (const std::string_view taken :
          {"help", "party", "p", "w", "whisper", "tell", "poll", "vote", "yes", "y", "no", "n", "tp",
-          "activity-log", "admin", "admins", "afk-kick", "role", "roles", "announce", "announce-throwdowns", "announce-to", "announcements",
+          "activity-log", "admin", "admins", "afk-kick", "kick-time", "role", "roles", "announce", "announce-throwdowns", "announce-to", "announcements",
           "ban", "bans", "board-check", "bone-scale", "boosts", "boosts-allow", "chat-color", "chat-colour", "clear-objects", "crowd",
-          "distances", "effects", "kick", "layer", "layer-sync", "layers", "listed", "map", "map-pool", "maps", "msg",
+          "distances", "drones", "effects", "kick", "layer", "layer-sync", "layers", "listed", "map", "map-pool", "maps", "msg",
           "msg-admins", "msg-party", "name", "net", "nobail", "nobail-allow", "noclip", "noclip-allow", "object-limit",
           "object-placement", "object-scaling", "objects", "park", "park-mod", "parties", "party-size", "password", "placement",
           "players", "rate", "reserved", "rotation", "say", "score-allow", "score-check", "speed-check", "status", "teleport",
@@ -826,6 +832,8 @@ std::string config_error(const ServerConfig &c) {
     using namespace multiplayer;
     if (!parse_colour(c.chat_color)) return "chat_color must be a colour like #8E5CFF.";
     if (c.afk_kick > 1440) return "afk_kick_minutes must be 0 (never) to 1440.";
+    if (c.kick_minutes > 1440) return "kick_minutes must be 0 (until the server restarts) to 1440.";
+    if (c.votes.kick_minutes > 1440) return "votes.kick_minutes must be 0 (until the server restarts) to 1440.";
     if (c.word_warnings > 10) return "word_warnings must be 0 (words are not checked) to 10.";
     if (!parse_colour(c.chat_text_color)) return "chat_text_color must be a colour like #D9C8FF.";
     if (!valid_server_name(c.name)) return std::string("name must be ") + server_name_rule + ".";

@@ -255,6 +255,7 @@ void status_tile(const Fonts& fonts, const State& state, ImVec2 position, float 
     switch (state.phase) {
     case Phase::ready: icon = Icon::check; accent = color::good; pill = "READY"; break;
     case Phase::failed: icon = Icon::fail; accent = color::danger; pill = "PROBLEM"; break;
+    case Phase::install_here: icon = Icon::check; accent = color::good; pill = "ONE STEP"; break;
     case Phase::update_available:
     case Phase::game_missing:
     case Phase::game_outdated:
@@ -269,7 +270,7 @@ void status_tile(const Fonts& fonts, const State& state, ImVec2 position, float 
         const auto build = state.config->game.build_id.empty() ? state.config->game.manifest_id
                                                                : state.config->game.build_id;
         const bool game_ok = state.phase != Phase::game_missing && state.phase != Phase::game_outdated &&
-                             state.phase != Phase::downloading;
+                             state.phase != Phase::downloading && state.phase != Phase::copying;
         facts.push_back({game_ok ? Icon::check : Icon::warning, "skate. build " + build});
         if (update::binary_updates_enabled())
             facts.push_back({state.phase == Phase::update_available ? Icon::warning : Icon::check,
@@ -389,18 +390,13 @@ void frame(Launcher& launcher, const Fonts& fonts, HWND window, Ui& ui, ModsPane
         }
         g_dropped.clear();
     }
-    // The Steam name for the plate, and the one-time offline notice, both come
-    // from the first Steam check; steam_offline_seen keeps it to one decision.
+    // The Steam name for the plate, when Steam happens to be running.
     if (time - ui.steam_checked > 5) {
         ui.steam_name = launcher_app::steam_persona_name();
         ui.steam_checked = time;
-        if (!ui.steam_offline_seen) {
-            ui.steam_offline_seen = true;
-            ui.steam_offline = !launcher.settings().offline && !launcher_app::steam_signed_in();
-        }
     }
-    const bool modal = ui.settings || ui.changelog || ui.mods || ui.sign_in || qr_open || state.prompt.has_value() ||
-        ui.steam_offline || state.phase == Phase::mods_broken || ui.mods_update_prompt;
+    const bool modal = ui.settings || ui.changelog || ui.mods || ui.sign_in || ui.get_game || qr_open || state.prompt.has_value() ||
+        state.phase == Phase::mods_broken || ui.mods_update_prompt;
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(size);
@@ -437,10 +433,15 @@ void frame(Launcher& launcher, const Fonts& fonts, HWND window, Ui& ui, ModsPane
     bool secondary = false;
     switch (state.phase) {
     case Phase::checking: label = "CHECKING"; enabled = false; break;
+    case Phase::install_here: label = "UPDATE"; detail = "The ReSkate you installed"; break;
     case Phase::update_available: label = "UPDATE"; detail = "New ReSkate files are ready"; break;
     case Phase::updating: label = "UPDATING"; enabled = false; break;
     case Phase::game_missing: label = "INSTALL"; detail = "Download skate. from Steam"; break;
     case Phase::game_outdated: label = "DOWNLOAD"; detail = "Get the supported build from Steam"; break;
+    case Phase::copying:
+        label = "CANCEL"; enabled = true; secondary = true;
+        detail = state.progress >= 0 ? std::format("Copying  {:.0f}%", state.progress * 100) : "Copying";
+        break;
     case Phase::downloading:
         label = "CANCEL"; enabled = true; secondary = true;
         detail = state.progress >= 0 ? std::format("Downloading  {:.0f}%", state.progress * 100) : "Downloading";
@@ -458,12 +459,20 @@ void frame(Launcher& launcher, const Fonts& fonts, HWND window, Ui& ui, ModsPane
     case Phase::launching: label = "LAUNCHING"; enabled = false; break;
     case Phase::failed: label = "RETRY"; break;
     }
+    // skate. on this PC, as the supported build: copying it is the way in (GET THE GAME panel).
+    const bool local_copy = !state.local_games.empty() && state.local_games.front().supported;
+    if ((state.phase == Phase::game_missing || state.phase == Phase::game_outdated) && local_copy) {
+        label = "INSTALL";
+        detail = "Copy skate. from this PC";
+    }
     const auto act = [&] {
         switch (state.phase) {
+        case Phase::install_here: launcher.install_here(); break;
         case Phase::update_available: launcher.apply_updates(); break;
         case Phase::game_missing:
-        case Phase::game_outdated: open_sign_in(launcher, ui, false); break;
-        case Phase::downloading: launcher.cancel(); break;
+        case Phase::game_outdated: ui.get_game = true; break;
+        case Phase::downloading:
+        case Phase::copying: launcher.cancel(); break;
         case Phase::ready:
             // Mods with updates waiting: ask first, once a session. Playing on
             // the old version is a choice, not a mistake, so it stays offered.
@@ -530,13 +539,16 @@ void frame(Launcher& launcher, const Fonts& fonts, HWND window, Ui& ui, ModsPane
     if (state.prompt) prompt_window(launcher, fonts, size, *state.prompt, ui);
     else if (qr_open) qr_window(launcher, fonts, size, state.qr);
     else if (ui.sign_in) sign_in_window(launcher, fonts, size, ui);
+    else if (ui.get_game) get_game_window(launcher, fonts, size, ui, state, window);
     else if (ui.settings) settings_window(launcher, fonts, size, ui, window);
-    else if (ui.changelog) changelog_window(fonts, size, ui);
+    else if (ui.changelog) {
+        ui.notes.prereleases = launcher.settings().prereleases;
+        changelog_window(fonts, size, ui);
+    }
     else if (ui.mods) mods_window(launcher, fonts, size, ui, mods_panel, window);
     else if (state.phase == Phase::mods_broken)
         mods_broken_window(launcher, fonts, size, ui, mods_panel, state.mod_problems);
     else if (ui.mods_update_prompt) mods_outdated_window(launcher, fonts, size, ui, mods_panel);
-    else if (ui.steam_offline) steam_offline_window(fonts, size, ui);
 }
 
 } // namespace dingosdk::launcher_gui::detail

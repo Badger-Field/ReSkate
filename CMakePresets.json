@@ -13,6 +13,18 @@
       "toolset": "v143"
     },
     {
+      "name": "ninja-x64",
+      "displayName": "Ninja x64 (Release; CI, from a Developer PowerShell)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ninja-x64",
+      "environment": {
+        "VCLibPackagePath": "${sourceDir}/build/no-vcpkg/vcpkg.user"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
       "name": "linux-x64",
       "displayName": "Linux x64 (dedicated server only)",
       "generator": "Unix Makefiles",

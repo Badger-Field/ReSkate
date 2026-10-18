@@ -7,6 +7,7 @@
 #include "Extension/Objects/network_object_runtime.h"
 #include "Extension/Objects/ParkEditor/park_editor_runtime.h"
 #include "Engine/Core/Platform/launcher_support.h"
+#include "Extension/Multiplayer/Direct/direct_play.h"
 #include "Engine/Core/Text/word_filter.h"
 #include "Engine/Game/Multiplayer/session_tools.h"
 #include <algorithm>
@@ -54,6 +55,12 @@ void apply_guest_tools(Session &s, bool noclip, bool no_bail, bool boosts) {
 }
 } // namespace session_detail
 namespace {
+// Whether the lists may be searched now; saying yes starts the wait for the next search.
+bool take_browse(Session &s, std::uint64_t now) {
+    if (s.browsed && now - s.browsed < multiplayer_browse_interval_us) return false;
+    s.browsed = now;
+    return true;
+}
 std::string edit_distances(Session &s, std::string_view argument) {
     if (s.mode != Mode::host) return "Only the lobby host can change TPS distances.";
     MultiplayerDistances value;
@@ -613,22 +620,28 @@ std::string send_admin(Session &s, std::string text) {
 bool own_mark_command(std::string_view action) {
     return action == "mark-tag" || action == "mark-items" || action == "mark-style";
 }
+// Offline, players connect straight to each other (direct_play.h), and lobbies are listed by the
+// lobby service (direct_lobby_api.h). Friends' lobbies are Steam's.
+bool steam_only_command(std::string_view action) { return action == "join-friend-lobby"; }
+bool offline_command(std::string_view action) {
+    return own_mark_command(action) || (direct_play_installed() && !steam_only_command(action));
+}
 } // namespace
 bool queue_command(std::string_view action, std::string_view argument, std::string_view password) {
-    if (launcher::offline_mode() && !own_mark_command(action)) return false;
-    if ((action != "host" && action != "host-config" && action != "join" && action != "rejoin" && action != "join-lobby" && action != "join-friend-lobby" && action != "stop" &&
+    if (launcher::offline_mode() && !offline_command(action)) return false;
+    if ((action != "host" && action != "host-config" && action != "join" && action != "rejoin" && action != "join-lobby" && action != "join-friend-lobby" && action != "stop" && action != "stop-map-fetch" &&
          action != "distances" && action != "object-placement" && action != "object-limit" && action != "kick" && action != "clear-objects" &&
          action != "nametags" && action != "chat-visible" && action != "chat-filter" &&
          action != "nametag-distance" && action != "nametag-dots" && action != "nametags-friends" && action != "player-distance" && action != "direct-connections" && action != "pose-dump" && action != "vote" && action != "voice-chat" &&
          action != "chat-bubbles" && action != "chat-bubbles-own" && action != "chat-bubbles-distance" &&
          action != "chat-bubbles-duration" && action != "chat-bubbles-history" &&
          !own_mark_command(action) &&
-         action != "voice" && action != "voice-mute" &&
-         action != "voice-volume" && action != "voice-allow" && action != "voice-range" && action != "chat" && action != "ban" && action != "unban" &&
+         action != "voice" && action != "voice-mute" && action != "objects-solid" &&
+         action != "voice-volume" && action != "voice-allow" && action != "voice-range" && action != "chat" && action != "typing" && action != "ban" && action != "unban" &&
          action != "world-layer-sync" && action != "noclip-allow" && action != "nobail-allow" && action != "boosts-allow" &&
          action != "tuning-enforce" && action != "tp" &&
          action != "tpall" && action != "tphere" && action != "browse" &&
-         action != "server" && action != "party") ||
+         action != "server" && action != "party" && action != "name") ||
         argument.size() > (action == "host" || action == "host-config" ? 160U : action == "chat" ? 4 * multiplayer_chat_max_bytes
                            : action == "server" ? max_admin_text : 128U) ||
         password.size() > 64)
@@ -653,8 +666,20 @@ std::vector<NextMapWanted> next_maps() {
 }
 unsigned next_maps_serial() noexcept { return session_detail::next_maps_serial_value.load(std::memory_order_relaxed); }
 std::string command(std::string_view action, std::string_view argument, std::string_view password) {
-    if (launcher::offline_mode() && !own_mark_command(action))
-        return "Multiplayer is unavailable in offline mode. Start Steam and relaunch ReSkate.";
+    if (launcher::offline_mode() && !offline_command(action))
+        return !direct_play_installed()
+            ? "Multiplayer without Steam needs GameNetworkingSockets.dll beside ReSkate.dll."
+            : "Joining a friend's lobby needs Steam. Without Steam, join from Servers or with a code.";
+    // The name other players see without Steam (with Steam, it is the Steam name).
+    if (action == "name") {
+        if (!launcher::offline_mode()) return "With Steam, other players see your Steam name.";
+        if (argument.empty()) return "Your name is " + direct_player_name() + ". Change it with: mp name <name>";
+        if (auto problem = set_direct_player_name(argument); !problem.empty()) return problem;
+        auto &named = session();
+        if (named.transport.direct())
+            named.transport.remember_name(named.transport.status().local_id, direct_player_name());
+        return "Other players now see you as " + direct_player_name() + ".";
+    }
     const bool configured_host = action == "host-config";
     if (configured_host) action = "host";
     PrivateRequest input;
@@ -710,6 +735,11 @@ std::string command(std::string_view action, std::string_view argument, std::str
             }
             if (!result.empty() && (s.mode == Mode::host || s.mode == Mode::join)) add_chat(s, 0, "ReSkate", result);
             return result.empty() ? "Command sent." : result;
+        }
+        if (action == "typing") {
+            if (argument != "0" && argument != "1") return "Invalid typing notice.";
+            send_typing(s, argument == "1");
+            return {};
         }
         if (action == "chat") {
             // The overlay queues chat and never sees this result, so a refusal
@@ -818,6 +848,24 @@ std::string command(std::string_view action, std::string_view argument, std::str
             publish(s);
             return enabled == "on" ? "Player voice muted." : "Player voice unmuted.";
         }
+        if (action == "objects-solid") {
+            const auto split = argument.find(' ');
+            if (split == std::string_view::npos) return "Choose a player whose objects to make solid.";
+            std::uint64_t id{};
+            const auto result = std::from_chars(argument.data(), argument.data() + split, id);
+            const auto enabled = argument.substr(split + 1);
+            // "server": the dedicated server's own objects (its parks), which no player row stands for.
+            if (argument.substr(0, split) == "server" && dedicated_host(s)) id = s.host_id;
+            else if (result.ec != std::errc{} || result.ptr != argument.data() + split) id = 0;
+            if (!id || !find_peer(s, id) || (enabled != "on" && enabled != "off"))
+                return "objects-solid <SteamID64 of a connected player, or server> on|off";
+            const bool solid = enabled == "on";
+            s.objects_solid[id] = solid;
+            set_network_object_owner_solid(id, solid);
+            profile_runtime::set_local_preference("SolidObjects." + std::to_string(id), solid);
+            publish(s);
+            return solid ? "That player's objects are solid for you." : "That player's objects are ghosts for you.";
+        }
         // Host-only settings check the mode themselves; guests get a refusal.
         using Setting = std::string (*)(Session &, std::string_view);
         static constexpr std::pair<std::string_view, Setting> settings[] = {
@@ -846,7 +894,15 @@ std::string command(std::string_view action, std::string_view argument, std::str
         if (action == "status")
             return s.status + " | Players " + std::to_string(player_count(s)) + "/" +
                    std::to_string(s.capacity);
-        if (action == "stop") {
+        if (action == "stop-map-fetch") {
+            std::uint64_t expected{};
+            const auto parsed = std::from_chars(argument.data(), argument.data() + argument.size(), expected);
+            // A worker's queued cancellation may execute after a fresh join command.
+            if (parsed.ec != std::errc{} || parsed.ptr != argument.data() + argument.size() ||
+                !expected || expected != s.map_fetch_deadline)
+                return s.status;
+        }
+        if (action == "stop" || action == "stop-map-fetch") {
             stop(s, "Multiplayer stopped.");
             publish(s);
             return s.status;
@@ -865,11 +921,20 @@ std::string command(std::string_view action, std::string_view argument, std::str
             return s.status;
         }
         if (action == "browse") {
-            if (!s.transport.open())
+            // Without Steam: the lobby service's list; dedicated servers are Steam's.
+            if (launcher::offline_mode() ? !open_direct_play(s.transport) : !s.transport.open())
                 s.status = s.transport.status().detail;
-            else {
-                s.lobbies.refresh(now_us());
-                s.servers.refresh(now_us());
+            else if (const auto now = now_us(); take_browse(s, now)) {
+                s.lobbies.refresh(now);
+                if (!s.transport.direct()) s.servers.refresh(now);
+                // And games on this player's own network.
+                if (s.transport.direct()) {
+                    s.lan.search();
+                    s.lan_searched = now;
+                }
+            } else {
+                const auto left = multiplayer_browse_interval_us - (now - s.browsed);
+                return "The server list can be refreshed again in " + std::to_string((left + 999999) / 1000000) + " s.";
             }
             publish(s);
             return s.lobbies.status().browser;
@@ -905,14 +970,19 @@ std::string command(std::string_view action, std::string_view argument, std::str
                 }
                 return reply;
             }
+            // A game found on this player's own network: its listing carries its code.
+            if (const auto found = lan_lobby(s, id)) {
+                if (found->password_required && input.password.empty()) return "This game needs a password.";
+                return command("join", found->code, input.password);
+            }
             // A friend on a server this game has not listed yet: only the list has its code.
             if (game_server_steam_id(id)) {
-                s.servers.refresh(now_us());
+                if (const auto now = now_us(); take_browse(s, now)) s.servers.refresh(now);
                 s.status = "That server is not in your server list yet. Open the server browser and join it there.";
                 publish(s);
                 return s.status;
             }
-            if (!s.transport.open())
+            if (launcher::offline_mode() ? !open_direct_play(s.transport) : !s.transport.open())
                 return s.transport.status().detail;
             if (action == "join-friend-lobby")
                 s.lobbies.join_friend(id, s.transport.status().local_id, now_us());
@@ -936,6 +1006,8 @@ std::string command(std::string_view action, std::string_view argument, std::str
         if (action == "rejoin") {
             rejoin = std::exchange(s.rejoin, std::nullopt);
             if (!rejoin) return "There is no session to go back to.";
+            if (map_fetch_policy::expired(rejoin->deadline_us, now_us()))
+                return "Map download timed out. Please try joining the server again.";
         }
         if (action != "host" && action != "join" && action != "echo" && !rejoin)
             return "Unknown multiplayer action.";
@@ -967,8 +1039,16 @@ std::string command(std::string_view action, std::string_view argument, std::str
                     capacity > multiplayer_lobby_player_limit)
                     return refuse("Choose a player limit from 2 to " + std::to_string(multiplayer_lobby_player_limit) + ".");
             }
-            if (!visibility.empty() && visibility != "code" && visibility != "public")
-                return refuse("Use mp host code <limit> [lobby name] or mp host public <limit> [lobby name].");
+            if (!visibility.empty() && visibility != "code" && visibility != "public" && visibility != "home")
+                return refuse("Use mp host code|home|public <limit> [lobby name].");
+            // Without Steam's relays, a public game would show the host's address to anyone who
+            // joins it: off until there is a relay that hides it. A game on the home network is
+            // found on that network only (lan_discovery.h).
+            if (launcher::offline_mode() && visibility == "public")
+                return refuse("Public games are off without Steam: anyone who joined would see your IP address. "
+                              "Host on your home network, or with a join code you share.");
+            if (!launcher::offline_mode() && visibility == "home")
+                return refuse("Home network games are for playing without Steam. With Steam, host with a code or publicly.");
             if (configured_host) {
                 const auto split = lobby_name.find(' ');
                 const auto rate = lobby_name.substr(0, split);
@@ -996,6 +1076,9 @@ std::string command(std::string_view action, std::string_view argument, std::str
             if (blocked_server(invitation->steam_id)) return refuse(std::string(blocked_server_notice));
             if (banned_host(invitation->steam_id)) return refuse(std::string(banned_host_lobby_notice));
         }
+        // Without Steam, the transport runs on the networking library and the lobby service.
+        if (launcher::offline_mode() && action != "echo" && !open_direct_play(s.transport))
+            return refuse(s.transport.status().detail);
         stop(s, "Starting multiplayer...");
         s.chat.clear(); // A new session starts with an empty chat.
         s.tps = tps;
@@ -1017,6 +1100,18 @@ std::string command(std::string_view action, std::string_view argument, std::str
                 return s.status;
             }
             s.mode = Mode::host;
+            // Without Steam only signals carrying this session's token reach the networking
+            // library (steam_transport.h): holders of its join code and, if it has one, its
+            // password. Kicked and banned players are refused before any address is exchanged.
+            if (s.transport.direct()) {
+                s.transport.set_admission_token(
+                    s.password ? direct_join_token(s.secret, *s.password) : direct_join_token(s.secret));
+                s.transport.set_admission_filter([&s](std::uint64_t id) {
+                    return !s.banned.contains(id) && !is_banned(s, id) && !reskate_banned(id) &&
+                           !s.join_backoff.waiting(id, now_us());
+                });
+                s.lan_host = visibility == "home";
+            }
             s.host_id = s.transport.status().local_id;
             load_host_preferences(s);
             auto &remembered = s.host_preferences;
@@ -1031,7 +1126,8 @@ std::string command(std::string_view action, std::string_view argument, std::str
             if (s.lobby_name.empty()) s.lobby_name = "ReSkate session";
             s.invite = format_invite({s.host_id, s.secret});
             s.public_host = visibility == "public";
-            if (s.public_host)
+            s.listed_host = s.public_host;
+            if (s.listed_host)
                 s.lobbies.host(s.invite, capacity, s.password.has_value(), s.lobby_name);
             // Remember this setup, and bring back the host options chosen last time.
             remembered.public_lobby = s.public_host;
@@ -1053,6 +1149,11 @@ std::string command(std::string_view action, std::string_view argument, std::str
             s.roster_dirty = true;
             save_host_preferences(s);
             s.status = "Hosting for up to " + std::to_string(capacity) + " players at " + std::to_string(s.tps) + " TPS.";
+            // Without Steam there is no friends list or lobby browser: the code is how others join.
+            if (s.transport.direct()) {
+                s.status += " Join code: " + s.invite;
+                add_chat(s, 0, "ReSkate", "Share this join code: " + s.invite);
+            }
         } else {
             // A server that listens on its own address is connected to directly, with Steam's
             // relays as the fallback (steam_transport.h). The server sees the address of a
@@ -1075,12 +1176,17 @@ std::string command(std::string_view action, std::string_view argument, std::str
                 return s.status;
             }
             s.mode = Mode::join;
+            if (s.transport.direct())
+                s.transport.set_admission_token(
+                    s.password ? direct_join_token(s.secret, *s.password) : direct_join_token(s.secret));
             // Wait for the authenticated host's initial policy.
             apply_object_placement(s, ObjectPlacement::nobody);
             s.world = 0;
             s.host_id = invitation->steam_id;
             s.awaiting_map = true;
             s.join_started = now_us();
+            s.map_fetch_deadline = rejoin ? rejoin->deadline_us : 0;
+            map_fetch_deadline_flag.store(s.map_fetch_deadline);
             s.status = "Connecting and checking the host's map...";
         }
         set_lobby_park_mode(s.mode == Mode::host || s.mode == Mode::join, s.mode == Mode::join);

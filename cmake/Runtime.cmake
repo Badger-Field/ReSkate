@@ -11,7 +11,9 @@ add_library(dingosdk_runtime SHARED
     Engine/Game/Abi/native_data.cpp
     Extension/Console/commands.cpp
     Extension/Console/perf_commands.cpp
+    Extension/Console/memory_ledger.cpp
     Extension/Skater/console_commands.cpp
+    Extension/Skater/drone_outfit.cpp
     Extension/Multiplayer/console_commands.cpp
     Extension/Customization/console_commands.cpp
     Extension/Multiplayer/Session/session.cpp
@@ -53,6 +55,12 @@ add_library(dingosdk_runtime SHARED
     Extension/Throwdowns/throwdown_wire.cpp
     Extension/Multiplayer/Hud/native_indicators.cpp
     Extension/Multiplayer/Steam/steam_transport.cpp
+    Extension/Multiplayer/Direct/direct_signaling.cpp
+    Extension/Multiplayer/Direct/direct_identity.cpp
+    Extension/Multiplayer/Direct/direct_lobby.cpp
+    Extension/Multiplayer/Direct/direct_play.cpp
+    Extension/Multiplayer/Direct/direct_lobby_api.cpp
+    Extension/Multiplayer/Direct/lan_discovery.cpp
     Extension/Multiplayer/Steam/steam_social.cpp
     Extension/Multiplayer/Steam/steam_friend_join.cpp
     Extension/Multiplayer/Steam/steam_lobbies.cpp
@@ -84,6 +92,8 @@ add_library(dingosdk_runtime SHARED
     Extension/Music/app_audio_capture.cpp
     Extension/Music/music_inject.cpp
     Extension/World/mesh_unload_guard.cpp
+    Extension/World/shader_permutation_guard.cpp
+    Extension/World/light_table_guard.cpp
     Extension/World/stack_check_report.cpp
     Extension/World/texture_handle_limit.cpp
     Extension/Settings/replay_drafts.cpp
@@ -116,7 +126,9 @@ add_library(dingosdk_runtime SHARED
     Extension/Assets/morph_memory_pool.cpp
     Extension/Assets/native_render_resource_pool.cpp
     Extension/World/native_entity_pages.cpp
+    Extension/World/world_pool_usage.cpp
     Extension/World/physics_world_size.cpp
+    Extension/World/spatial_cull_ids.cpp
     Extension/Rendering/display_startup.cpp
     Extension/Rendering/replay_export.cpp
     Engine/Game/World/world_model.cpp
@@ -154,6 +166,7 @@ add_library(dingosdk_runtime SHARED
     Extension/RoadRash/road_rash_commands.cpp
     Extension/BoardBreak/board_break.cpp
     Extension/BoardBreak/board_break_commands.cpp
+    Extension/BoardBreak/board_break_audio.cpp
     Extension/Trainer/trainer.cpp
     Extension/Trainer/trainer_presets.cpp
     Extension/Trainer/trainer_jump.cpp
@@ -222,11 +235,14 @@ add_library(dingosdk_runtime SHARED
     Extension/Progression/neighborhood_unlock_override.cpp
     Extension/Boot/user_data_redirect.cpp
     Extension/Boot/ea_app_block.cpp
-    Extension/Boot/ea_service_block.cpp)
+    Extension/Boot/ea_service_block.cpp
+    Extension/Boot/eadp_errors_arena.cpp
+    Extension/Boot/descriptor_heap_size.cpp
+    Extension/Boot/game_fatal_dump.cpp)
 
 target_link_libraries(dingosdk_runtime PRIVATE dingosdk_logging dingosdk_profiler dingosdk_supported_build dingosdk_overlay dingosdk_console_core dingosdk_steam_restart_guard
-    dingosdk_startup_interventions dingosdk_fast_travel_unlock dingosdk_local_profile dingosdk_initfs dingosdk_mods dingosdk_mod_list dingosdk_launcher_support dingosdk_miniz shell32 dingosdk_startup_window dingosdk_custom_scripts dingosdk_world_layer_scan bcrypt
-    dingosdk_https winhttp ws2_32 xaudio2 ole32 dingosdk_game_archives dingosdk_word_filter)
+    dingosdk_startup_interventions dingosdk_fast_travel_unlock dingosdk_local_profile dingosdk_initfs dingosdk_mods dingosdk_mod_list dingosdk_launcher_support dingosdk_miniz shell32 dingosdk_startup_window dingosdk_custom_scripts dingosdk_world_layer_scan bcrypt crypt32
+    dingosdk_https winhttp ws2_32 xaudio2 ole32 dingosdk_game_archives dingosdk_word_filter dingosdk_monocypher dingosdk_json)
 
 add_library(dingosdk_custom_level_manifest STATIC
     Engine/Game/World/custom_level_manifest.cpp)
@@ -241,7 +257,28 @@ set_target_properties(dingosdk_runtime PROPERTIES OUTPUT_NAME "ReSkate" PREFIX "
 # library is built with the release C runtime.)
 find_program(DINGOSDK_CARGO cargo HINTS "$ENV{USERPROFILE}/.cargo/bin")
 set(dingosdk_spotify_dir "${PROJECT_SOURCE_DIR}/SpotifyHelper")
+set(dingosdk_windows_import "")
 if(WIN32 AND DINGOSDK_CARGO AND EXISTS "${dingosdk_spotify_dir}/Cargo.toml")
+    # An import library of the Windows API that the Rust code is linked against, which cargo
+    # keeps beside the crate that uses it. On a fresh machine (a CI runner) cargo has not
+    # fetched that crate yet, so fetch it now.
+    if(DEFINED ENV{CARGO_HOME})
+        set(dingosdk_cargo_home "$ENV{CARGO_HOME}")
+    else()
+        set(dingosdk_cargo_home "$ENV{USERPROFILE}/.cargo")
+    endif()
+    set(dingosdk_windows_import_glob "${dingosdk_cargo_home}/registry/src/*/windows_x86_64_msvc-0.52.*/lib/windows.0.52.0.lib")
+    file(GLOB dingosdk_windows_import "${dingosdk_windows_import_glob}")
+    if(NOT dingosdk_windows_import)
+        execute_process(COMMAND "${DINGOSDK_CARGO}" fetch --locked
+            WORKING_DIRECTORY "${dingosdk_spotify_dir}" RESULT_VARIABLE dingosdk_cargo_fetch)
+        file(GLOB dingosdk_windows_import "${dingosdk_windows_import_glob}")
+    endif()
+    if(NOT dingosdk_windows_import)
+        message(WARNING "Spotify device left out: cargo could not fetch the windows crate's import library")
+    endif()
+endif()
+if(dingosdk_windows_import)
     set(dingosdk_spotify_lib "${dingosdk_spotify_dir}/target/release/reskate_spotify.lib")
     add_custom_command(OUTPUT "${dingosdk_spotify_lib}"
         COMMAND "${DINGOSDK_CARGO}" build --release --lib
@@ -251,14 +288,6 @@ if(WIN32 AND DINGOSDK_CARGO AND EXISTS "${dingosdk_spotify_dir}/Cargo.toml")
         VERBATIM)
     add_custom_target(dingosdk_spotify_device DEPENDS "${dingosdk_spotify_lib}")
     add_dependencies(dingosdk_runtime dingosdk_spotify_device)
-    # (An import library of the Windows API that the Rust code is linked against, which cargo
-    # has fetched beside the code that uses it.)
-    if(DEFINED ENV{CARGO_HOME})
-        set(dingosdk_cargo_home "$ENV{CARGO_HOME}")
-    else()
-        set(dingosdk_cargo_home "$ENV{USERPROFILE}/.cargo")
-    endif()
-    file(GLOB dingosdk_windows_import "${dingosdk_cargo_home}/registry/src/*/windows_x86_64_msvc-0.52.*/lib/windows.0.52.0.lib")
     list(GET dingosdk_windows_import 0 dingosdk_windows_import)
     set(dingosdk_spotify_release "$<NOT:$<CONFIG:Debug>>")
     target_compile_definitions(dingosdk_runtime PRIVATE "DINGOSDK_SPOTIFY_DEVICE=${dingosdk_spotify_release}")

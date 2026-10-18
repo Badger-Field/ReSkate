@@ -12,8 +12,11 @@ add_library(dingosdk_overlay STATIC
     Extension/UI/Overlay/overlay_notices.cpp
     Extension/UI/Overlay/chat_overlay.cpp
     Extension/UI/Overlay/map_download_card.cpp
+    Extension/UI/Overlay/message_card.cpp
     Extension/UI/Overlay/hub_page.cpp
     Extension/UI/Overlay/game_text_overlay.cpp
+    Extension/UI/Overlay/drone_hud_overlay.cpp
+    Extension/UI/Overlay/drone_page.cpp
     Extension/UI/Overlay/perf_overlay.cpp
     Extension/UI/Overlay/skate_hud_overlay.cpp
     Extension/UI/Overlay/nametag_overlay.cpp

@@ -1,0 +1,97 @@
+# Builds every push to main and every pull request: the launcher, runtime and server on Windows
+# (MSVC, as releases are built), and the dedicated server with the regression tests on Linux.
+# Each job runs a script in ci/, so the same checks run on your own PC with no Actions minutes:
+# ci/local.sh (Linux, LiDAR parks) and ci/local.ps1 (Windows). Changes to docs alone build nothing.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'LICENSE']
+  pull_request:
+    paths-ignore: ['**.md', 'LICENSE']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows (MSVC)
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      # Compiled files are kept between runs (sccache, in a cache below): a change to a few files
+      # rebuilds only those.
+      SCCACHE_DIR: ${{ github.workspace }}\.sccache
+      SCCACHE_CACHE_SIZE: 3G
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # crash reports name the build by git describe
+      - name: Install sccache
+        shell: pwsh
+        run: |
+          $version = "v0.8.2"
+          $sha256 = "2b35d159eff6d662b38d2527e7f362be90f5d9d8b9116f6197243f4b1cd926ff"
+          $zip = "$env:RUNNER_TEMP\sccache.zip"
+          Invoke-WebRequest "https://github.com/mozilla/sccache/releases/download/$version/sccache-$version-x86_64-pc-windows-msvc.zip" -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $sha256) { throw "sccache download does not match its checksum" }
+          Expand-Archive $zip "$env:RUNNER_TEMP\sccache"
+          "$env:RUNNER_TEMP\sccache\sccache-$version-x86_64-pc-windows-msvc" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - name: Compiled files from earlier runs
+        uses: actions/cache@v4
+        with:
+          path: .sccache
+          key: sccache-windows-${{ github.sha }}
+          restore-keys: sccache-windows-
+      - name: The Spotify device from earlier runs (cargo)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            SpotifyHelper/target
+          key: cargo-windows-${{ hashFiles('SpotifyHelper/Cargo.lock', 'SpotifyHelper/Cargo.toml', 'SpotifyHelper/src/**') }}
+          restore-keys: cargo-windows-
+      - name: Configure, build and test
+        shell: pwsh
+        run: ./ci/local.ps1 -Ninja
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reskate-windows-${{ github.sha }}
+          path: |
+            build/ninja-x64/ReSkateLauncher.exe
+            build/ninja-x64/ReSkate.dll
+            build/ninja-x64/ReSkateServer.exe
+          retention-days: 14
+
+  linux:
+    name: Linux (server and tests)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure, build and test
+        run: ci/local.sh linux
+
+  lidar-parks:
+    name: LiDAR parks (Python)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - id: present
+        run: test -f contrib/lidar-parks/requirements.txt && echo "yes=true" >> "$GITHUB_OUTPUT" || true
+      - if: steps.present.outputs.yes
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: steps.present.outputs.yes
+        run: ci/local.sh lidar

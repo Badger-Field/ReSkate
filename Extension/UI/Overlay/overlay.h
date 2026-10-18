@@ -231,6 +231,12 @@ struct RoadRashModel {
 struct BoardBreakModel {
     bool available = false, enabled = false, has_deck = false;
     std::string deck = "None";
+    // Its settings (Extension/BoardBreak/board_break_feel.h) and how worn the board is (0 to 1, and
+    // its word).
+    bool always = false, rails = true, wear = true, crack_sounds = true, body_sounds = true;
+    int sensitivity = 100, joined = 50, wear_rate = 100;
+    float worn = 0;
+    std::string condition = "new";
 };
 
 // Grind exit control's switches (Extension/Skater/grind_exit_control.h): started, switched on,
@@ -239,6 +245,7 @@ struct BoardBreakModel {
 struct GrindExitModel {
     bool available = false, enabled = false, toe_heel = true;
     int stance = 0;
+    int strength = 100; // pop-out strength, percent (10-100)
 };
 
 struct Model {
@@ -266,7 +273,8 @@ struct Model {
     ObjectPersistenceModel object_persistence;
     ParkEditorModel editor;
     float menu_scale = default_menu_scale;
-    // Offline mode: no Steam, so every multiplayer page and control is hidden.
+    // Offline mode without direct multiplayer (Extension/Multiplayer/Direct/direct_play.h): no
+    // Steam and no networking library, so every multiplayer page and control is hidden.
     bool steam_offline = false;
     ControllerBindingsModel bindings;
     GraphicsControlsModel graphics;
@@ -342,6 +350,13 @@ void set_map_vote_icons(const std::vector<MapVoteIcon>& icons) noexcept;
 // That vote's popup (map_download_card.cpp), for the runtime, which reads the controller and
 // holds the game's input while it is up: whether it is, moving the pick, voting for the pick
 // (the popup then closes), and closing it without a vote. Any thread.
+// A message the player has to see and say OK to, in the middle of the screen (message_card.cpp):
+// that they were kicked or banned from a server, and why. One at a time: a new one takes the
+// place of one still up. For the runtime, which reads the controller and holds the game's input
+// while it is up, as for the vote below: whether it is, and closing it. Any thread.
+void show_message(std::string title, std::string text) noexcept;
+bool message_asking() noexcept;
+void message_dismiss() noexcept;
 bool map_vote_asking() noexcept;
 void map_vote_move(int by) noexcept;
 void map_vote_take() noexcept;
@@ -405,6 +420,7 @@ void set_skate_hud_feed(SkateHudFeed) noexcept;
 struct NametagBubble {
     std::string text, raw;
     float appear{1}, fade{1};
+    bool hint{}; // grey typing discs, not a chat line. text is ".", "..", or "..." for 1, 2, or 3 discs
 };
 struct Nametag {
     std::array<float, 3> position{}; // above the skater's head, world space
@@ -413,6 +429,7 @@ struct Nametag {
     std::string tag;                  // role badge before the name ("Dev", "ReSkate Admin", "Content Creator", "Centrix", "Homie", "Admin", "Host", "Friend")
     float distance{};                 // metres from the local skater
     bool talking{};
+    bool flying_drone{};              // flying the FPV drone: a FLYING DRONE label above the name
     // Recent chat lines to show as bubbles above the head, oldest first ("" = none).
     std::vector<NametagBubble> bubbles;
     bool self{};                      // the local player: bubbles only, never a name or dot
@@ -507,6 +524,23 @@ extern "C" __declspec(dllexport) bool DingoSDKOverlayStartV2(
 extern "C" __declspec(dllexport) bool DingoSDKOverlayStartV3(
     const dingosdk::overlay::CallbacksV3* callbacks);
 
+// The first Xbox (XInput) or PlayStation (DualShock 4 / DualSense) controller, read directly.
+// Sticks are -1..1 (up and right positive), triggers 0..1; `buttons` is XInput's wButtons bit mask.
+// Used by the FPV drone's controller selection (Skater/drone_radio.h); safe from any thread.
+struct Gamepad {
+    bool valid = false;
+    bool playstation = false;
+    float left_x = 0, left_y = 0, right_x = 0, right_y = 0;
+    float left_trigger = 0, right_trigger = 0;
+    unsigned buttons = 0;
+};
+Gamepad read_gamepad();
+// Reads of a controller between these two calls see the real device even while ReSkate keeps
+// the game from reading it (freecam or drone controller capture). Same thread, paired.
+// The FPV drone reads its controller this way (Skater/drone_radio.h).
+void begin_input_access() noexcept;
+void end_input_access() noexcept;
+
 // Nonblocking. A later Present releases GPU resources after its fence completes.
 // The DLL stays pinned until process exit so no thread can return into unloaded
 // detours. Input is released immediately, even if rendering has stopped.
@@ -527,6 +561,9 @@ extern "C" unsigned DingoSDKOverlayReadPromptKeys();
 extern "C" void DingoSDKOverlayReadControllerInput(dingosdk::ControllerInput* input, bool allow_menu = false);
 // Installs (or, with nullptr, removes) the one gamepad filter. Any thread.
 extern "C" void DingoSDKOverlaySetGamepadFilter(dingosdk::overlay::GamepadFilter filter);
+// Holds XInput buttons down on the first pad for a moment, as if pressed (the `press` command).
+// 0x10000 and 0x20000 pull the left and right triggers.
+extern "C" void DingoSDKOverlayPressGamepad(unsigned buttons, unsigned milliseconds);
 
 // Optional direct integration for a host that already knows its exact pair.
 struct IDXGISwapChain;

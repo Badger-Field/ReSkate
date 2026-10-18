@@ -1,7 +1,9 @@
 #include "commands.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Core/Platform/path_text.h"
+#include <format>
 #include <memory>
+#include <utility>
 
 namespace dingosdk::console {
 Argument argument(std::string name, Type type, bool optional) {
@@ -44,24 +46,23 @@ void register_console_commands(Commands &registry) {
         if (args.empty()) {
             out("Enter a variable by itself to read it, or follow it with a value: "
                 "noclip 1, nobail 0, flyspeed 60.");
-            out("Use commands [prefix] to list entries, help <command> for details, "
-                "and Tab to complete names and "
-                "arguments.");
+            out("Use commands [prefix] to list entries, help <command> for details and the commands under it "
+                "(help perf, help mp, help trainer), and Tab to complete names and arguments.");
             out("Groups: Movement, Gameplay, World, Graphics, Progression, Objects, "
                 "Engine, Console.");
             return;
         }
         const auto &name = std::get<std::string>(args[0]);
         const auto *entry = registry.find(name);
+        const auto below = registry.under(entry ? entry->name : name);
+        const auto list_below = [&below, &out] {
+            for (const auto *item : below)
+                out(Commands::usage(*item) + (item->description.empty() ? "" : " - " + item->description));
+        };
         if (!entry) {
-            bool found = false;
-            for (const auto &item : registry.entries())
-                if (ascii_case_insensitive_starts_with(item.name, name + " ")) {
-                    out(Commands::usage(item) + (item.description.empty() ? "" : " - " + item.description));
-                    found = true;
-                }
-            if (!found)
+            if (below.empty())
                 out("error: Unknown help topic.");
+            list_below();
             return;
         }
         out(Commands::usage(*entry));
@@ -83,6 +84,10 @@ void register_console_commands(Commands &registry) {
         }
         if (entry->reset)
             out("Restore: reset " + entry->name);
+        // `perf` is a command of its own and the first word of `perf hud`, `perf status` and the rest.
+        if (!below.empty())
+            out(entry->name + " commands:");
+        list_below();
     };
     registry.add(std::move(help));
     auto list = action("commands", "List commands and variables, optionally filtered by prefix", Group::console,
@@ -133,6 +138,33 @@ void register_console_commands(Commands &registry) {
             out(model.offline.status);
     };
     registry.add(std::move(status));
+    // For scripts and test runs: get past a game menu (b is its Back) without a person at the PC.
+    auto button = argument("button");
+    button.choices = {"a", "b", "x", "y", "start", "back", "up", "down", "left", "right",
+                      "lb", "rb", "lt", "rt", "ls", "rs"};
+    auto hold = argument("ms", Type::unsigned_integer, true);
+    hold.minimum = 50;
+    hold.maximum = 2000;
+    auto press = action("press", "Press a controller button on the first pad for a moment", Group::console,
+                        {button, hold});
+    press.execution = Execution::local;
+    press.run = [](const Model &, const Values &args, const Output &out) {
+        static constexpr std::pair<std::string_view, unsigned> buttons[]{
+            {"a", 0x1000},    {"b", 0x2000},  {"x", 0x4000},    {"y", 0x8000},     {"start", 0x0010},
+            {"back", 0x0020}, {"up", 0x0001}, {"down", 0x0002}, {"left", 0x0004},  {"right", 0x0008},
+            {"lb", 0x0100},   {"rb", 0x0200}, {"ls", 0x0040},   {"rs", 0x0080},    {"lt", 0x10000},
+            {"rt", 0x20000}};
+        const auto name = lower(std::get<std::string>(args[0]));
+        const auto ms = args.size() > 1 ? static_cast<unsigned>(std::get<std::uint64_t>(args[1])) : 150u;
+        for (const auto &[label, bits] : buttons)
+            if (label == name) {
+                DingoSDKOverlayPressGamepad(bits, ms);
+                out(std::format("Pressed {} for {} ms.", name, ms));
+                return;
+            }
+        out("error: Unknown button.");
+    };
+    registry.add(std::move(press));
     auto reset_arg = argument("command");
     reset_arg.rest = true;
     reset_arg.complete = [&registry](const Model &, auto) {

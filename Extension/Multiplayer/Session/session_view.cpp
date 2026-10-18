@@ -8,6 +8,8 @@
 #include "Extension/Profile/local_profile_runtime.h"
 #include "Extension/Objects/network_object_runtime.h"
 #include "Engine/Core/Log/logging.h"
+#include "Engine/Core/Platform/launcher_support.h"
+#include "Extension/Multiplayer/Direct/direct_play.h"
 #include "Engine/Core/Text/word_filter.h"
 #include "Extension/Skater/physics_tuning.h"
 #include <cmath>
@@ -172,7 +174,9 @@ void publish(Session &s, const NativeFrame *local) {
     view.map_fetching = s.fetching_since != 0;
     view.echo = s.mode == Mode::echo;
     view.local_id = t.local_id;
-    view.local_name = s.mode != Mode::off ? s.transport.name(t.local_id) : steam_social_snapshot()->local.name;
+    view.direct = launcher::offline_mode() && direct_play_installed();
+    view.local_name = view.direct ? direct_player_name()
+                    : s.mode != Mode::off ? s.transport.name(t.local_id) : steam_social_snapshot()->local.name;
     view.lobby_name = s.lobby_name;
     // A dedicated server's roster capacity counts the server itself.
     view.capacity = static_cast<int>(dedicated_host(s) ? s.capacity - 1 : s.capacity);
@@ -283,6 +287,7 @@ void publish(Session &s, const NativeFrame *local) {
     view.local_ready = s.gameplay_ready && !s.available_map.empty();
     const auto &lobby = s.lobbies.status();
     view.public_host = s.public_host;
+    view.home_host = s.lan_host;
     view.public_lobby = s.mode == Mode::host ? s.lobbies.hosted_lobby() : s.joined_public_lobby;
     view.lobby_listed = lobby.listed;
     view.lobby_searching = lobby.searching || s.servers.searching();
@@ -290,11 +295,17 @@ void publish(Session &s, const NativeFrame *local) {
     view.lobby_searched = lobby.searched;
     view.lobby_status = lobby.hosting;
     view.browser_status = lobby.browser;
+    view.browse_ready_us = s.browsed ? s.browsed + multiplayer_browse_interval_us : 0;
     // Dedicated servers first: they are always up and never a stranger's own session.
     view.lobbies = s.servers.rows();
     // Looked up as the list is shown: the team's list can arrive, or change, after a server was found.
     for (auto &server : view.lobbies) server.official = official_server(server.id);
     view.lobbies.insert(view.lobbies.end(), lobby.rows.begin(), lobby.rows.end());
+    for (auto &found : lan_lobbies(s)) {
+        const auto listed = std::find_if(view.lobbies.begin(), view.lobbies.end(), [&](const auto &r) { return r.id == found.id; });
+        if (listed != view.lobbies.end()) listed->nearby = true;
+        else view.lobbies.push_back(std::move(found));
+    }
     // Steam friends by the public server or lobby their game says they are in.
     if (const auto social = steam_social_snapshot())
         for (const auto &player : social->friends) {
@@ -338,6 +349,7 @@ void publish(Session &s, const NativeFrame *local) {
         view.roster.back().party = p.member.party;
         view.roster.back().party_leader = p.member.party_leader;
         view.roster.back().party_member = party_member(s, p.member.id);
+        view.roster.back().objects_solid = objects_solid(s, p.member.id);
         if (!p.rate_at) {
             p.rate_at = now;
             p.native_rate_count = native_count;

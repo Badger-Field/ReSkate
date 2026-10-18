@@ -55,7 +55,10 @@ void register_park_editor_commands(Commands &registry) {
                          {},
                          false};
         };
-        command.run = [operation, named, described](const Model &, const Values &values, const Output &output) {
+        // From a script (RESKATE_STARTUP_COMMANDS, a test harness), which cannot see the overlay's
+        // selection: map "-" is the current level's map, and generation and revision 0 0 are the
+        // editor's current ones. The overlay passes its own, so a stale selection is still refused.
+        command.run = [operation, named, described](const Model &m, const Values &values, const Output &output) {
             profile::PlacedObject object;
             std::string argument_value;
             std::vector<std::string> texts;
@@ -76,9 +79,14 @@ void register_park_editor_commands(Commands &registry) {
                     object.rotation[i] = static_cast<float>(std::get<double>(values[7 + i]));
                 object.scale = static_cast<float>(std::get<double>(values[11]));
             }
-            output(edit_local_park(operation, std::get<std::string>(values[0]),
-                                   std::get<std::uint64_t>(values[1]), std::get<std::uint64_t>(values[2]),
-                                   argument_value, object, texts));
+            auto map = std::get<std::string>(values[0]);
+            auto generation = std::get<std::uint64_t>(values[1]), revision = std::get<std::uint64_t>(values[2]);
+            if (map == "-") map = m.editor.map;
+            if (generation == 0 && revision == 0) {
+                generation = m.editor.generation;
+                revision = m.editor.revision;
+            }
+            output(edit_local_park(operation, map, generation, revision, argument_value, object, texts));
         };
         registry.add(std::move(command));
     }

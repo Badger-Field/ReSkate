@@ -1,4 +1,5 @@
 #include "gui_internal.h"
+#include "install_here.h"
 
 #include <cmath>
 #include <format>
@@ -377,12 +378,36 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
         ImGui::SameLine();
         ImGui::BeginDisabled(busy);
         if (ImGui::Button("Verify game files")) { open = false; open_sign_in(launcher, ui, true); }
+        ImGui::SameLine();
+        // Takes back ReSkate's files, shortcuts and right-click entry (install_here.h); the game
+        // copy, mods and the profile stay.
+        if (ImGui::Button("Remove ReSkate") &&
+            MessageBoxW(nullptr,
+                        L"Remove ReSkate from this folder?\n\n"
+                        L"Removed: ReSkate's files here, the ReSkate shortcuts and the \"Install as ReSkate mod\" "
+                        L"right-click entry.\nKept: the game files the launcher downloaded here, your Mods folder, "
+                        L"your ReSkate profile, and the config, scripts and logs folders (they can hold your own "
+                        L"edits). Delete the folder yourself to free the space.\n\n"
+                        L"skate. in Steam is not touched.",
+                        L"Remove ReSkate", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND) == IDYES) {
+            try {
+                launcher_app::uninstall_from(paths.directory);
+                launcher.forget_settings(); // closing would write them back
+                MessageBoxW(nullptr, L"ReSkate was removed. The launcher closes now.", L"Remove ReSkate",
+                            MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
+                PostQuitMessage(0);
+            } catch (const std::exception &e) {
+                const auto text = std::string("ReSkate was not removed.\n\n") + e.what();
+                MessageBoxA(nullptr, text.c_str(), "Remove ReSkate", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+            }
+        }
         ImGui::EndDisabled();
         ImGui::Spacing();
         ImGui::Spacing();
         section_caption(fonts, "PLAY");
-        setting_check("Offline mode", "Play without Steam as Unknown Player; multiplayer is hidden. "
-                      "Used automatically whenever Steam isn't running.", settings.offline);
+        setting_check("Always without Steam", "Start without Steam even when it is running. Without Steam is how "
+                      "ReSkate starts anyway when Steam is closed: you choose your name in game, and multiplayer runs "
+                      "on join codes, your home network and ReSkate's own lobbies.", settings.offline);
         setting_check("Loose files", "Export the game's scripts/ and config/ beside Skate.exe so you can edit them.",
                       settings.loose_files);
         setting_check("Discord status", "Show on your Discord profile where you are skating: the map, the server or lobby "
@@ -435,6 +460,11 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
                       "Turn off to keep the ReSkate.dll and launcher you have, such as a test build someone gave you. "
                       "Skate's own Steam updates are not affected.",
                       settings.updates);
+        setting_check("Test pre-releases",
+                      "Update to the newest pre-release on GitHub when there is one, to try what is coming before it "
+                      "is released. Pre-releases are less tested. Turn off to go back to the latest release. "
+                      "The launcher checks again as soon as these settings are closed.",
+                      settings.prereleases);
         ImGui::Spacing();
         section_caption(fonts, "TROUBLESHOOTING");
         ImGui::AlignTextToFramePadding();
@@ -450,8 +480,15 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
                       settings.gpu_diagnostics);
         setting_check("Send crash reports",
                       "When the launcher or Skate crashes, upload a crash dump and that session's log so the ReSkate "
-                      "developers can fix it. The launcher picks a change up when it next starts.",
+                      "developers can fix it. Off unless you tick it. The launcher picks a change up when it next "
+                      "starts.",
                       settings.crash_reports);
+        setting_check("Send performance timings",
+                      "Send how long downloads, mod installs, the mod merge, level loads and joining a "
+                      "session took, and each level's average frame rate, so slow spots can be found and fixed. Nothing "
+                      "about your account is included. Needs crash reports on; the launcher picks a change up when it "
+                      "next starts.",
+                      settings.performance_timings);
         break;
     }
     ImGui::EndChild();
@@ -470,6 +507,7 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
     ImGui::End();
     if (!open) {
         launcher.save();
+        launcher.check_again_if_update_choices_changed();
         // Read again the next time: the game may have run in between.
         ui.game.loaded = false;
     }
