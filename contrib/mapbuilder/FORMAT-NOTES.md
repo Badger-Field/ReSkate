@@ -72,6 +72,7 @@ large as LOD 0's geometry; in 11 of 300 base-game meshes it is looser by 3 to 38
 | +40 | u32 | vertex start: a byte offset into the chunk's vertex data |
 | +44 | u32 | vertex count |
 | +112 | | vertex declaration, below |
+| +0x138 (312) | u64 | shader-block key: an entry key of the ShaderBlockDepot of the bundle holding the MeshSet (below); LODs of one mesh share keys (checked on files, the PC, 2026-10-18) |
 | about +332 to +360 | floats | a per-section box; exact offsets not pinned down |
 
 Vertex declaration, at section +112:
@@ -99,6 +100,28 @@ Element usage and format pairs seen. Only usage 1 is decoded and verified.
 | 2 | 22 | 14 | unknown |
 
 Sections named `…_Shadow` carry positions only. The mod's own meshes use both position forms.
+
+### Shader blocks: why a mesh draws (checked on files and in game, the PC, 2026-10-18)
+
+`MeshMaterial.Shader` is null in every mesh's EBX (the lighthouse's too): shaders are not bound
+there. Every bundle carries a pair of resources:
+
+| Type | Name | Content |
+|---|---|---|
+| 0x73312045 ShaderBlockDepot | `<bundle path>_win32_shaderstate/shaderblockdepot_<decimal>` | header u64 0x10, u64 0, then (u64 key, u64 offset) records; the entries are 24-byte-spaced blocks; not decoded further. bam's root bundle's: 86,348 bytes, id 0x7d48e77663665d5b, meta `304801001c09000003001901c4010000` |
+| 0x2FEC6526 | `<bundle path>_win32_shaderstateshaderstateassetid` | 32 bytes |
+
+Other depots exist (`terrain.layergraphs_shaderblockdepot`, `decals.shaderblockdepot`, the
+compositor's). A section's key at +0x138 must be an entry of the depot of the MeshSet's own
+bundle: util_groundplane's two sections (0x01a30ae610851b95, 0x2ac438e15d40e49e) are in bam
+root's depot, the lighthouse's (LOD 0 0x4b735b0ec188d4c5, 0x3584aedbc3fc1c7e; LOD 1
+0x5918ad80b9252cd6, 0x948964ab2bcc80ea) in the ftue bundle's; the 6 meshes of tile s50_x425z825
+use all 16 entries of its depot. In game: a MeshSet in a bundle whose depot lacks its keys is not
+drawn (our `--mesh own` in the ground bundle), and the lighthouse copied into the ground bundle
+crashed on a null shader block (`[r15+0x20]`). Carrying the ftue depot pair into the ground
+bundle hung the game; adding its shader bytecode, expression shader and textures crashed it: a
+depot seems tied to its own bundle. `meshset.depot_records` reads the records; `mesh-refs` prints
+each section's key and which depot holds it.
 
 ### Geometry chunk
 
@@ -680,6 +703,30 @@ Changes made on the strength of the crash, both guesses:
   bundle name, our renamed root bundle and our new bundle have none, while bam's own
   `game_coremeshes` layer placing util_groundplane lives in `bam_coregameassets`, and the 333 map
   adds 1,251 of its own files to that bundle.
+
+**Since the shader-block finding** (the subsection "Shader blocks" of section 1):
+
+- A blueprint copied from another bundle is refused when its MeshSet's keys are not in a depot of
+  the bundle the copy goes to (the lighthouse case). `--mesh own` warns `NOT DRAWN` when its keys
+  are not in that bundle's depots. The dry runs print each mesh's keys and how many its own
+  bundle's depots hold.
+- `--asset-bundle root` puts the blueprint, its collision and our mesh into the level's root
+  bundle, the copy of bam's root bundle, which keeps bam root's depot (util_groundplane, a mesh of
+  that bundle, resolves in our level).
+- **Stock props** (`--prop BLUEPRINT --prop-at X,Y,Z`, repeatable, also on `new-place-level`): a
+  blueprint of bam's root bundle placed unchanged by one more OROD in our layer (identity
+  rotation, scale 1, at the given game position), importing its root instance. Its mesh, MeshSet
+  and `.physics` stay in the level's root bundle; nothing is copied, so its part count matches its
+  `PhysicsPartInfos` and its keys are in the depot beside it. The dry run prints its collision
+  (shapes, parts, materials) and its mesh's keys. A PC test of the skatepark box as our own
+  blueprint (one part instead of its three) showed neither collision nor mesh.
+- **A stock material for our geometry** (`--mesh own --shader-from MESH[:SECTION] --asset-bundle
+  root`): every section of our MeshSet takes the donor section's bytes per vertex (+30) and its
+  bytes +112..+0x140 (the vertex declaration, the undecoded words after it, and the shader-block
+  key), and every vertex is the donor section's first vertex (each stream) with our position. The
+  dry run prints the donor's layout: elements (usage, format, offset, stream) and stream strides.
+  GUESS: the words between the declaration and the key belong to the shader's vertex layout too;
+  the per-section box after the key stays the template's.
 
 **What the base game does (checked on files, the PC's read-only scans).**
 
