@@ -585,7 +585,7 @@ def test_default_slab_with_padded_bounds_part_boxes_and_bounds_fields(tmp_path, 
 
 
 def test_vertex_helpers():
-    from reskate_mapbuilder.meshset import decode_element, encode_element, padded_bounds, planar_uv, vertex_normals
+    from reskate_mapbuilder.meshset import decode_element, encode_element, padded_bounds, planar_uv, split_by_axis
     lo, hi = padded_bounds([(0.0, 1.0, 0.0), (2.0, 1.0, 3.0)])
     assert lo == [0.0, 0.95, 0.0] and hi == [2.0, 1.05, 3.0]
     assert planar_uv((2.0, 1.0, 3.0), (0.0, 1.0, 0.0), 0.5) == (1.0, 1.5)
@@ -601,7 +601,7 @@ def test_vertex_helpers():
     assert decode_element(6, buffer, 0) == [0.25, -1.0]
     from reskate_mapbuilder.meshset import box_geometry
     vertices, triangles = box_geometry((0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
-    normals = vertex_normals(vertices, triangles)
+    vertices, triangles, normals = split_by_axis(vertices, triangles)          # a box: nothing to split
     assert sorted(set(normals)) == sorted({(0.0, 1.0, 0.0), (0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0),
                                           (0.0, 0.0, 1.0), (0.0, 0.0, -1.0)})
 
@@ -748,3 +748,28 @@ def test_write_mesh_keeps_the_copied_fields_the_second_declaration_and_the_box_p
     assert any("are not copies of the template sections' vertex start / first index: left as they were" in line
                for line in report)
     assert struct.unpack_from("<I", out, read_layout(out)[0].sections[1].at + 84)[0] == 12345
+
+
+def test_a_welded_wall_gets_side_projected_uvs_per_face():
+    from reskate_mapbuilder.meshset import section_element, split_by_axis
+    ms, chunk = meshset(guid(1))
+    # A welded 2 x 4 x 2 m column: 8 shared corners, 12 triangles, outward; the roof shares its corners
+    # with the walls (as the export's buildings do).
+    verts = [(x, y, z) for y in (0.0, 4.0) for z in (0.0, 2.0) for x in (0.0, 2.0)]
+    quads = [(4, 6, 7, 5), (0, 1, 3, 2), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+    tris = [t for a, b, c, d in quads for t in ((a, b, c), (a, c, d))]
+    split_vertices, split_tris, normals = split_by_axis(verts, tris)
+    assert len(split_vertices) == 24 and len(split_tris) == 12      # each corner once per axis it touches
+    out, chunks, report = write_mesh(ms, [chunk], verts, tris, [guid(2)])
+    assert any("vertices split by face axis for per-face UVs: 8 -> 24" in line for line in report)
+    s = read_layout(out)[0].sections[0]
+    positions = section_positions(s, chunks[0])
+    uvs = section_element(s, chunks[0], 33)
+    walls = [t for t in section_triangles(read_layout(out)[0], s, chunks[0])
+             if {positions[i][1] for i in t} == {0.0, 4.0}]
+    assert len(walls) == 8
+    for t in walls:
+        low = [uvs[i][1] for i in t if positions[i][1] == 0.0]
+        high = [uvs[i][1] for i in t if positions[i][1] == 4.0]
+        # v follows y up the wall: 4 m at the default 1 / 6 per metre (the fixture UVs measure no density)
+        assert all(abs(h - lo - 4.0 / 6) < 0.01 for h in high for lo in low)

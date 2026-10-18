@@ -32,7 +32,7 @@ def grid(x0, z0, size, n, y=0.0):
     return vertices, triangles
 
 
-def write_tiles(root: Path, version=2, checks=None, spawn=(5.0, 0.0, 5.0), corrupt=None):
+def write_tiles(root: Path, version=2, checks=None, spawn=(5.0, 0.0, 5.0), corrupt=None, extra=()):
     """Tile (0, 0): ground 50 x 50 m in two chunks sharing an edge (bit-identical vertices), a
     ledge top 0.5 m high on 10..12 x 10..12, and a visual object. Tile (-1, 0): ground in one chunk."""
     root.mkdir(parents=True, exist_ok=True)
@@ -44,6 +44,7 @@ def write_tiles(root: Path, version=2, checks=None, spawn=(5.0, 0.0, 5.0), corru
                  ("ground", "visual", "ground", "ground", grid(0, 0, 50, 2), 0, 1)],
         (-1, 0): [("ground", "collision", "ground", "ground", grid(-50, 0, 50, 2), 0, 1)],
     }
+    tiles[(0, 0)] += list(extra)
     listed = []
     for (i, j), objects in tiles.items():
         stem = f"tile_{i}_{j}"
@@ -449,3 +450,50 @@ def test_part_arrays_must_share_physicspartinfos_length():
                        PartStates=[0, 0]), None)])
     with pytest.raises(ValueError, match="PartStates has 2 entries but .*PhysicsPartInfos has 1"):
         _check_part_tables(bad, [], [object()], "own", False, 1)
+
+
+def column(x0, z0, w, h):
+    """A welded w x h x w column: 8 shared corners, 12 outward triangles (as the export's buildings)."""
+    verts = [(x0 + x, y, z0 + z) for y in (0.0, h) for z in (0.0, w) for x in (0.0, w)]
+    quads = [(4, 6, 7, 5), (0, 1, 3, 2), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+    return verts, [t for a, b, c, d in quads for t in ((a, b, c), (a, c, d))]
+
+
+def test_buildings_are_their_own_class_and_skip_visual_leaves_them_out(tmp_path, capsys):
+    from test_level import BOX, FTUE, PARK_PAVEMENT
+    game_dir = fake_game(tmp_path / "game")
+    extra = [("buildings", "visual", "concrete", "buildings", column(40, 40, 4, 20), 0, 1),
+             ("spot_3_steps", "visual", "concrete", "steps", column(20, 20, 2, 0.5), 0, 1)]
+    tiles = write_tiles(tmp_path / "tiles", extra=extra)
+    args = ["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles", str(tiles),
+            "--at", "0", "300", "0", "--skip-part", "buildings", "--visuals", "--visual-template", BOX, "--dry-run"]
+    main(args + ["--material-bundle", f"auto:{FTUE}"])
+    out = capsys.readouterr().out
+    assert "visual classes (each drawn with its --material-donor): building <- buildings (1); " \
+           "concrete <- steps (1); ground <- ground (1)" in out
+    # The park has no wall material: buildings take the concrete donor (the pavement, its only one).
+    assert "--material-donor building=" not in out
+    assert f"visual class building (1 objects): drawn with concrete's donor {PARK_PAVEMENT}:0" in out
+    assert "vertices split by face axis for per-face UVs: 8 -> 24" in out        # the welded building
+    # Without a building donor, buildings take the concrete donor.
+    main(args + ["--material-donor", f"concrete={BOX}_mesh:1"])
+    out = capsys.readouterr().out
+    assert f"visual class building (1 objects): drawn with concrete's donor {BOX}_mesh:1" in out
+    assert f"visual class concrete (1 objects): drawn with {BOX}_mesh:1" in out
+    main(args + ["--skip-visual", "buildings"])
+    out = capsys.readouterr().out
+    assert "visual objects: 2 of 3" in out and "building <-" not in out
+
+
+def test_auto_donors_give_ground_and_concrete_different_materials():
+    from reskate_mapbuilder.materials import auto_donors
+    def section(mesh, n, material):
+        return (mesh, n, material, ["concrete"], True, [8])
+    row = {"sections": [section("a_mesh", 0, "Concrete_Poured_01_M"), section("b_mesh", 1, "Pavers_Grey_M"),
+                        section("c_mesh", 2, "Brick_Wall_Red_M"), section("d_mesh", 0, "Wood_Accent")]}
+    picks = auto_donors(row)
+    assert picks["ground"] == "b_mesh:1" and picks["concrete"] == "a_mesh:0" and picks["building"] == "c_mesh:2"
+    assert picks["wood"] == "d_mesh:0"
+    only = {"sections": [section("a_mesh", 0, "Concrete_Poured_01_M"), section("d_mesh", 0, "Wood_Accent")]}
+    picks = auto_donors(only)
+    assert picks["ground"] == picks["concrete"] == picks["building"] == "a_mesh:0"   # one concrete: shared
