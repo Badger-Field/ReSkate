@@ -5,6 +5,7 @@
 #include "drone_outfit.h"
 #include "Extension/Multiplayer/Remote/native_prop.h"
 #include "Extension/Multiplayer/Remote/drone_sound.h"
+#include "Engine/Game/Skater/velocity_boost.h"
 #include <algorithm>
 #include <cstdlib>
 #include <format>
@@ -364,7 +365,7 @@ void register_movement_commands(Commands &registry) {
     registry.add(std::move(dark_probe));
     auto boost_speed_argument = argument("speed", Type::number);
     boost_speed_argument.minimum = 1;
-    boost_speed_argument.maximum = 300;
+    boost_speed_argument.maximum = dingosdk::velocity_boost_speed_max; // the menu slider ends at 300
     auto boost_speed = variable("forwardvelocity", "Velocity added along the skater's forward direction", Group::movement, boost_speed_argument);
     boost_speed.aliases = {"debug.forward_velocity_speed"};
     boost_speed.inspect = [](const Model &m) {
@@ -382,7 +383,6 @@ void register_movement_commands(Commands &registry) {
     };
     registry.add(std::move(boost_speed));
     auto up_speed_argument = boost_speed_argument;
-    up_speed_argument.maximum = 25;
     auto up_speed = variable("upvelocity", "Velocity added along world up", Group::movement, up_speed_argument);
     up_speed.aliases = {"debug.up_velocity_speed"};
     up_speed.inspect = [](const Model &m) {

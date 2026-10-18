@@ -673,6 +673,80 @@ void presets_card(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const 
     }
     card_end(p);
 }
+// The cheats and the addons that change how the skater plays (Skater > Cheats, Addons > Grind Exits, Board Break): listed in
+// QUICK SETTINGS, named on the MODIFIED line and turned back by RESET EVERYTHING like the trainer's own values. Road Rash and
+// Hall of Meat only show bails, so they never count.
+struct CheatLine {
+    std::string name, value; // value: what it is set to, empty for a plain switch
+    int addon{-1};           // where it lives: an Addons page, else Skater > Cheats
+    DebugRequest off{};      // how Reset puts it back: a debug request, or (with `console`) a command
+    std::string console;
+};
+std::vector<CheatLine> cheat_lines(const Model &model) {
+    std::vector<CheatLine> lines;
+    const auto &debug = model.debug;
+    if (debug.noclip) lines.push_back({"Noclip", {}, -1, {DebugAction::set_noclip, false}});
+    if (debug.no_bail) lines.push_back({"No Bail", {}, -1, {DebugAction::set_no_bail, false}});
+    if (debug.dark_pop) lines.push_back({"Dark Pop", {}, -1, {DebugAction::set_dark_pop_enabled, false}});
+    // The boosts' stock speed is 20 (InteractiveDebug).
+    const auto boost = [&](const char *name, float speed, DebugAction action) {
+        if (std::abs(speed - 20.0f) > 1e-3f) lines.push_back({name, std::format("+{:.1f}", speed), -1, {action, false, 20.0f}});
+    };
+    boost("Forward boost", debug.forward_velocity_speed, DebugAction::set_forward_velocity_speed);
+    boost("Up boost", debug.up_velocity_speed, DebugAction::set_up_velocity_speed);
+    boost("Off-board up boost", debug.offboard_up_velocity_speed, DebugAction::set_offboard_up_velocity_speed);
+    if (debug.revert_boost)
+        lines.push_back({"Revert Boost", std::format("x{:.1f}", debug.revert_boost_speed), -1, {DebugAction::set_revert_boost_enabled, false}});
+    if (const auto &grind = model.grind_exit; grind.available && grind.enabled) {
+        std::string value = grind.toe_heel ? "Toe / Heel" : "Left / Right";
+        if (grind.toe_heel) value += grind.stance == 2 ? ", goofy" : grind.stance == 1 ? ", regular" : ", no stance";
+        value += std::format(", pop-out {}%", grind.strength);
+        lines.push_back({"Grind exit triggers", value, addon_grind_exits, {}, "grindexit exits off"});
+    }
+    if (const auto &bb = model.board_break; bb.available && bb.enabled)
+        lines.push_back({"Board Break", std::format("break {}%, grip tape {}%, wear {}%, worn {:.0f}%", bb.sensitivity, bb.joined, bb.wear_rate, bb.worn * 100.0f),
+                         addon_board_break, {}, "boardbreak 0"});
+    return lines;
+}
+void cheat_off(SkateMenu &menu, const CallbacksV3 &callbacks, const CheatLine &line) {
+    if (!line.console.empty()) {
+        if (callbacks.queue_console_command) send_console(menu, callbacks, line.console);
+    } else if (callbacks.queue_debug) debug_request(menu, callbacks, line.off);
+}
+// The cheats and addons rows at the top of QUICK SETTINGS: what each is set to, where it lives, and Reset.
+void cheat_rows(SkateMenu &menu, const CallbacksV3 &callbacks, const std::vector<CheatLine> &lines) {
+    if (lines.empty()) return;
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushFont(menu.bold);
+    ImGui::TextUnformatted("CHEATS AND ADDONS");
+    ImGui::PopFont();
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        const auto &line = lines[i];
+        ImGui::PushID(line.name.c_str());
+        if (ImGui::Button("Go to")) {
+            if (line.addon >= 0) open_page(menu, page_addons, line.addon);
+            else {
+                open_page(menu, page_skater);
+                menu.skater_tab = 2;
+            }
+        }
+        tip(line.addon >= 0 ? "Opens the addon's page." : "Opens Skater > Cheats.");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(line.console.empty() ? !callbacks.queue_debug : !callbacks.queue_console_command);
+        if (ImGui::Button("Reset")) cheat_off(menu, callbacks, line);
+        ImGui::EndDisabled();
+        tip(line.off.action == DebugAction::set_forward_velocity_speed || line.off.action == DebugAction::set_up_velocity_speed ||
+                    line.off.action == DebugAction::set_offboard_up_velocity_speed
+                ? "Back to the stock +20."
+                : "Turns it off.");
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        if (line.value.empty()) ImGui::Text("%s: on", line.name.c_str());
+        else ImGui::Text("%s: %s", line.name.c_str(), line.value.c_str());
+        ImGui::PopID();
+    }
+    ImGui::Separator();
+}
 std::string quick_id(std::string_view id) {
     std::string result = "qh:" + std::string(id);
     for (auto &c : result)
@@ -680,7 +754,7 @@ std::string quick_id(std::string_view id) {
     return result;
 }
 // Everything that is changed right now, in one list: change it here, hide a row that is done with, or go to where it lives.
-void quick_card(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const trainer::View &view, bool can_edit) {
+void quick_card(SkateMenu &menu, const Model &model, const CallbacksV3 &callbacks, Page &p, const trainer::View &view, bool can_edit) {
     constexpr std::uint8_t order[]{trainer::topic_game, trainer::topic_pop, trainer::topic_speed, trainer::topic_bails, trainer::topic_grinds, trainer::topic_trickline,
                                    trainer::topic_transition, trainer::topic_pumping, trainer::topic_foot, trainer::topic_none};
     // Once per snapshot: what is changed, section by section.
@@ -735,9 +809,15 @@ void quick_card(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const tr
     }
     // Counted as the section's bar counts: a dial's row stands for values that have rows of their own.
     const auto changed = static_cast<std::size_t>(std::ranges::count_if(p.quick_all, [](const Page::QuickItem &item) { return item.kind != 1; }));
-    const auto subtitle = p.quick_all.empty() ? std::string("Nothing is changed") : std::format("{} changed{}", changed, hidden ? std::format(", {} hidden", hidden) : std::string{});
+    const auto cheats = cheat_lines(model);
+    const auto subtitle = p.quick_all.empty() && cheats.empty()
+        ? std::string("Nothing is changed")
+        : std::format("{} changed{}", changed + cheats.size(), hidden ? std::format(", {} hidden", hidden) : std::string{});
     if (card(menu, p, "quick", "QUICK SETTINGS", subtitle.c_str())) {
-        if (p.quick_all.empty()) {
+        cheat_rows(menu, callbacks, cheats);
+        if (p.quick_all.empty() && !cheats.empty()) {
+            // Only cheats and addons are on: their rows above are the whole list.
+        } else if (p.quick_all.empty()) {
             note("Everything you change shows up here, whatever section it is in: pick a preset above, move a dial or set a value below. Change it again here, hide the "
                  "rows you are done with, or press Go to for where a row lives and what is around it.");
         } else {
@@ -964,7 +1044,7 @@ void topic_body(SkateMenu &menu, const Model &model, const CallbacksV3 &callback
     switch (topic) {
     case trainer::topic_game:
         presets_card(menu, callbacks, p, view, can_edit);
-        quick_card(menu, callbacks, p, view, can_edit);
+        quick_card(menu, model, callbacks, p, view, can_edit);
         return; // its rows are the other sections'
     case trainer::topic_pop:
         dials_card(menu, callbacks, p, view, topic, can_edit);
@@ -2030,8 +2110,8 @@ void trainer_page(SkateMenu &menu, const Model &model, const CallbacksV3 &callba
         bool open{};
         while (take_fold_change(id, open)) trainer_command(menu, callbacks, std::format("fold {} {}", id, open ? 1 : 0));
     }
-    // Everything that changes how the game plays, said in words. The first parts are the trainer's own; No Bail,
-    // Noclip, Dark Pop and the game speed are ReSkate's and count all the same.
+    // Everything that changes how the game plays, said in words. The first parts are the trainer's own; the cheats,
+    // grind exits, Board Break and the game speed are ReSkate's and count all the same.
     const double speed = game_speed(model);
     std::string what;
     const auto add = [&](const std::string &part) { what += (what.empty() ? "" : ", ") + part; };
@@ -2043,23 +2123,21 @@ void trainer_page(SkateMenu &menu, const Model &model, const CallbacksV3 &callba
         for (const auto &[topic, name] : kinds)
             if (view->settings[topic]) add(name);
     }
-    if (model.debug.noclip) add("Noclip");
-    if (model.debug.no_bail) add("No Bail");
-    if (model.debug.dark_pop) add("Dark Pop");
+    const auto cheats = cheat_lines(model);
+    for (const auto &line : cheats) add(line.name);
     if (std::abs(speed - 1.0) > 1e-3) add(std::format("game speed x{:.2f}", speed));
     // A guest under the host's physics would only wipe a setup they cannot see at work here.
     ImGui::BeginDisabled(!callbacks.queue_console_command || view->session_enforced);
     if (ImGui::Button("RESET EVERYTHING")) {
         clear_edits(p);
         trainer_command(menu, callbacks, "reset everything");
-        // No Bail, Noclip, Dark Pop and the game speed change how the game plays too: off with the rest.
-        if (callbacks.queue_debug && model.debug.noclip) debug_request(menu, callbacks, {DebugAction::set_noclip, false});
-        if (callbacks.queue_debug && model.debug.no_bail) debug_request(menu, callbacks, {DebugAction::set_no_bail, false});
-        if (callbacks.queue_debug && model.debug.dark_pop) debug_request(menu, callbacks, {DebugAction::set_dark_pop_enabled, false});
+        // The cheats, grind exits, Board Break and the game speed change how the game plays too: off with the rest.
+        for (const auto &line : cheats) cheat_off(menu, callbacks, line);
         if (callbacks.queue_debug && model.debug.probe) debug_request(menu, callbacks, {DebugAction::set_probe_enabled, false});
         if (std::abs(speed - 1.0) > 1e-3) send_console(menu, callbacks, "reset SimulationTime.TimeScale");
     }
-    tip("Puts back every value, lock, preset, dial, trick, grind, transition and bending setting, turns No Bail, Noclip and Dark Pop off, sets the "
+    tip("Puts back every value, lock, preset, dial, trick, grind, transition and bending setting, turns No Bail, Noclip, Dark Pop, Revert Boost, "
+        "grind exit triggers and Board Break off, puts the boosts back to +20, sets the "
         "game speed to normal and stops loading a preset on this map: the game exactly as it shipped. Your saved presets are kept, and so are your "
         "game's own settings.");
     ImGui::EndDisabled();

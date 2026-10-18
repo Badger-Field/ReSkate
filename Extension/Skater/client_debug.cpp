@@ -716,11 +716,11 @@ void load_saved_debug(InteractiveDebug& debug) noexcept {
         if (const auto speed = saved::number(saved::flight_speed);
             speed && valid_debug_speed(*speed))
             debug.flight_speed = *speed;
-        if (const auto speed = saved::number(saved::forward_velocity); speed && *speed >= 1.0f && *speed <= 300.0f)
+        if (const auto speed = saved::number(saved::forward_velocity); speed && *speed >= 1.0f && *speed <= velocity_boost_speed_max)
             debug.forward_velocity_speed = *speed;
-        if (const auto speed = saved::number(saved::up_velocity); speed && *speed >= 1.0f && *speed <= 25.0f)
+        if (const auto speed = saved::number(saved::up_velocity); speed && *speed >= 1.0f && *speed <= velocity_boost_speed_max)
             debug.up_velocity_speed = *speed;
-        if (const auto speed = saved::number(saved::offboard_up_velocity); speed && *speed >= 1.0f && *speed <= 25.0f)
+        if (const auto speed = saved::number(saved::offboard_up_velocity); speed && *speed >= 1.0f && *speed <= velocity_boost_speed_max)
             debug.offboard_up_velocity_speed = *speed;
         if (const auto enabled = profile_runtime::local_preference(saved::revert_boost)) debug.revert_boost = *enabled;
         if (const auto enabled = profile_runtime::local_preference(saved::dark_pop)) debug.dark_pop = *enabled;
@@ -900,14 +900,14 @@ void debug_action(SourceTrial& trial, std::uintptr_t client, bool can_control, b
         request.action == overlay::DebugAction::set_up_velocity_speed ||
         request.action == overlay::DebugAction::set_offboard_up_velocity_speed) {
         if (request.action == overlay::DebugAction::set_offboard_up_velocity_speed) {
-            source_require(std::isfinite(request.value) && request.value >= 1.0f && request.value <= 25.0f,
-                "Off-board Up Boost speed must be between 1 and 25.");
+            source_require(std::isfinite(request.value) && request.value >= 1.0f && request.value <= velocity_boost_speed_max,
+                "Off-board Up Boost speed must be between 1 and 10000.");
             debug.offboard_up_velocity_speed = request.value;
             debug.status = "Off-board Up Boost speed updated.";
         } else {
             const bool up = request.action == overlay::DebugAction::set_up_velocity_speed;
-            source_require(std::isfinite(request.value) && request.value >= 1.0f && request.value <= (up ? 25.0f : 300.0f),
-                up ? "Up Boost speed must be between 1 and 25." : "Forward Boost speed must be between 1 and 300.");
+            source_require(std::isfinite(request.value) && request.value >= 1.0f && request.value <= velocity_boost_speed_max,
+                up ? "Up Boost speed must be between 1 and 10000." : "Forward Boost speed must be between 1 and 10000.");
             (up ? debug.up_velocity_speed : debug.forward_velocity_speed) = request.value;
             debug.status = up ? "Up Boost speed updated." : "Forward Boost speed updated.";
         }
@@ -1059,7 +1059,7 @@ void debug_action(SourceTrial& trial, std::uintptr_t client, bool can_control, b
     }
     if (request.action == overlay::DebugAction::set_revert_boost_speed) {
         source_require(std::isfinite(request.value) && request.value >= revert_boost_strength_min &&
-            request.value <= revert_boost_strength_max, "Revert Boost strength must be between x0.5 and x5.");
+            request.value <= revert_boost_strength_max, "Revert Boost strength must be between x0.5 and x100.");
         debug.revert_boost_speed = request.value;
         mark_debug_changed(debug);
         debug.status = "Revert Boost strength updated.";

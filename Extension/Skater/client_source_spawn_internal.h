@@ -98,8 +98,8 @@ struct SourceCameraIdentity {
     std::uint32_t priority{};
     bool operator==(const SourceCameraIdentity&) const = default;
 };
-// Revert Boost strength multiplier range (the menu slider and the saved value).
-inline constexpr float revert_boost_strength_min = 0.5f, revert_boost_strength_max = 5.0f;
+// Revert Boost strength multiplier range (the saved value; the menu slider ends at x5, a typed value can go higher).
+inline constexpr float revert_boost_strength_min = 0.5f, revert_boost_strength_max = 100.0f;
 struct InteractiveDebug {
     bool camera_owned{}, camera_ambiguous{}, ui_owned{};
     bool park_editor{}, editor_transition{}, editor_previous_camera{}, editor_previous_ui{}, editor_previous_noclip{};

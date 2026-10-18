@@ -241,19 +241,21 @@ void cheats_tab(SkateMenu& menu, const Model& model, const CallbacksV3& callback
         debug_request(menu, callbacks, {DebugAction::set_no_bail, no_bail});
     end_card();
 
-    begin_card(menu, "boosts", "BOOSTS", "Buttons are set in Settings > Controls");
+    // The sliders cover the usual range; the number box beside each takes more (up to 10000, Revert Boost x100).
+    const auto boost_speed_ok = [](float speed) { return std::isfinite(speed) && speed >= 1.0f && speed <= 10000.0f; };
+    begin_card(menu, "boosts", "BOOSTS", "Buttons are set in Settings > Controls. Type a number past the slider's end for more.");
     ImGui::BeginDisabled(!callbacks.queue_debug);
     field(menu, "Forward boost");
     float forward_velocity = debug.forward_velocity_speed;
-    if (slider_float("##forward-velocity", &forward_velocity, 1.0f, 300.0f, "+%.1f", ImGuiSliderFlags_AlwaysClamp))
+    if (slider_float("##forward-velocity", &forward_velocity, 1.0f, 300.0f, "+%.1f") && boost_speed_ok(forward_velocity))
         debug_request(menu, callbacks, {DebugAction::set_forward_velocity_speed, false, forward_velocity});
     field(menu, "Up boost");
     float up_velocity = debug.up_velocity_speed;
-    if (slider_float("##up-velocity", &up_velocity, 1.0f, 25.0f, "+%.1f", ImGuiSliderFlags_AlwaysClamp))
+    if (slider_float("##up-velocity", &up_velocity, 1.0f, 25.0f, "+%.1f") && boost_speed_ok(up_velocity))
         debug_request(menu, callbacks, {DebugAction::set_up_velocity_speed, false, up_velocity});
     field(menu, "Off-board up boost");
     float offboard_up_velocity = debug.offboard_up_velocity_speed;
-    if (slider_float("##offboard-up-velocity", &offboard_up_velocity, 1.0f, 25.0f, "+%.1f", ImGuiSliderFlags_AlwaysClamp))
+    if (slider_float("##offboard-up-velocity", &offboard_up_velocity, 1.0f, 25.0f, "+%.1f") && boost_speed_ok(offboard_up_velocity))
         debug_request(menu, callbacks, {DebugAction::set_offboard_up_velocity_speed, false, offboard_up_velocity});
     ImGui::EndDisabled();
     bool revert_boost = debug.revert_boost;
@@ -261,9 +263,9 @@ void cheats_tab(SkateMenu& menu, const Model& model, const CallbacksV3& callback
             revert_boost, callbacks.queue_debug != nullptr))
         debug_request(menu, callbacks, {DebugAction::set_revert_boost_enabled, revert_boost});
     ImGui::BeginDisabled(!callbacks.queue_debug || !debug.revert_boost);
-    field(menu, "Revert Boost strength", "Auto reverts add 1.5 m/s and board bends 2 to 2.6 m/s, times this.");
+    field(menu, "Revert Boost strength", "Auto reverts add 1.5 m/s and board bends 2 to 2.6 m/s, times this. Type up to x100 in the box.");
     float revert_speed = debug.revert_boost_speed;
-    if (slider_float("##revert-boost-speed", &revert_speed, 0.5f, 5.0f, "x%.1f", ImGuiSliderFlags_AlwaysClamp))
+    if (slider_float("##revert-boost-speed", &revert_speed, 0.5f, 5.0f, "x%.1f") && revert_speed >= 0.5f && revert_speed <= 100.0f)
         debug_request(menu, callbacks, {DebugAction::set_revert_boost_speed, false, revert_speed});
     ImGui::EndDisabled();
     note("Dark Pop is on SANDBOX > TUNE > TRICKLINING.");
