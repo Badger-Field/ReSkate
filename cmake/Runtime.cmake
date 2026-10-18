@@ -120,6 +120,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Assets/native_patch_support.cpp
     Extension/Assets/mod_layers.cpp
     Extension/Assets/live_mods.cpp
+    Extension/Assets/live_mods_preview.cpp
     Extension/Assets/map_download.cpp
     Extension/Assets/package_install.cpp
     Extension/Assets/mod_browser.cpp

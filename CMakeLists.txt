@@ -489,6 +489,18 @@ if(DINGOSDK_BUILD_HALL_OF_MEAT_TESTS)
         add_test(NAME hall_of_meat_skeleton COMMAND dingosdk_hall_of_meat_skeleton_tests "${DINGOSDK_TEST_GAME_ROOT}")
     endif()
 endif()
+# The MODS page's GET MODS against the real Thunderstore, with no game (it downloads, so it is off by
+# default and not a ctest test): .github/workflows/mod-browser-live.yml builds and runs it.
+option(DINGOSDK_BUILD_MOD_BROWSER_LIVE_TEST "Build the GET MODS test that installs from the real Thunderstore" OFF)
+if(DINGOSDK_BUILD_MOD_BROWSER_LIVE_TEST AND WIN32)
+    add_executable(dingosdk_mod_browser_live_test Extension/Assets/Test/mod_browser_live_test.cpp
+        Extension/Assets/mod_browser.cpp Extension/Assets/package_install.cpp Extension/Assets/live_mods_preview.cpp
+        Engine/Vfs/thunderstore_listing.cpp Engine/Vfs/thunderstore_package.cpp Launcher/mod_manager.cpp)
+    target_include_directories(dingosdk_mod_browser_live_test PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_link_libraries(dingosdk_mod_browser_live_test PRIVATE dingosdk_mods dingosdk_mod_list dingosdk_logging dingosdk_https
+        dingosdk_launcher_support dingosdk_initfs dingosdk_content_cache_install dingosdk_world_layer_scan dingosdk_json dingosdk_miniz
+        shell32 winhttp ole32)
+endif()
 get_property(project_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(target IN LISTS project_targets)
     # (A build step, such as packing the built-in content, compiles nothing.)
