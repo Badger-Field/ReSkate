@@ -283,3 +283,19 @@ def test_visuals_get_a_blueprint_mesh_and_harmless_collision_each(tmp_path, caps
     with pytest.raises(SystemExit, match="no visual object matches"):
         main(["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles", str(tiles),
               "--visuals", "--visuals-only", "nothing", "--dry-run"])
+
+
+def test_resource_ids_keep_the_tag_bits_clear_and_filters_take_printed_names(tmp_path, capsys):
+    from reskate_mapbuilder.ground import resource_id
+    from test_level import BOX
+    # The crash value of 5924574 was this name's id with tag bits 10.
+    assert resource_id("levels/game/dingolevel_reskate_place/visual_ground_0_0_tm2_m1_mesh") == 0x14e9899ef8f39c30
+    assert all(resource_id(f"levels/game/x/visual_{i}_mesh") & 3 == 0 for i in range(64))
+    game_dir = fake_game(tmp_path / "game")
+    tiles = write_tiles(tmp_path / "tiles")
+    main(["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles", str(tiles),
+          "--visuals", "--visual-template", BOX, "--visuals-only", "ground_t0_0", "--visual-slab", "6", "1", "6",
+          "--dry-run"])
+    out = capsys.readouterr().out
+    assert "visual objects: 1 of 1 plus the slab: ground_t0_0 (ground, 9 vertices, 8 triangles), slab (ground, 24 vertices" in out
+    assert "visual slab: 24 vertices, 12 triangles" in out

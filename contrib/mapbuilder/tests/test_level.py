@@ -263,7 +263,7 @@ def meshset(chunk_guid, name=GROUNDPLANE + "_mesh", lods=1):
     for p in quad:
         chunk += struct.pack("<3f", *p)
     for _ in quad:
-        chunk += bytes([0x7F, 0xFF, 0x80, 0x00]) + struct.pack("<2e", 0.5, 0.25)
+        chunk += struct.pack("<2e", 0.5, 0.25) + bytes([0, 0, 255, 200])      # TexCoord0 Half2, colour UByte4N
     for p in quad:
         chunk += struct.pack("<4e", *p, 1.0)
     vertex_bytes = len(chunk)                       # 112
@@ -288,7 +288,7 @@ def meshset(chunk_guid, name=GROUNDPLANE + "_mesh", lods=1):
         struct.pack_into("<4I", data, lod + 80, 0x40, 33, 24, vertex_bytes)
         data[lod + 116:lod + 132] = (chunk_guid if k == 0 else guid(200 + k)).bytes
         for s, (per_vertex, start, first, elements, strides) in enumerate((
-                (20, 0, 0, [(1, 3, 0, 0), (33, 6, 0, 1), (51, 12, 4, 1)], [12, 8]),
+                (20, 0, 0, [(1, 3, 0, 0), (33, 6, 0, 1), (52, 13, 4, 1)], [12, 8]),
                 (8, 80, 6, [(1, 8, 0, 0)], [8]))):
             at = table + 384 * s
             struct.pack_into("<Q", data, at + 8, names - 16)

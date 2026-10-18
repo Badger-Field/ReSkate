@@ -250,7 +250,7 @@ def test_inspect_meshset_prints_the_known_fields(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "type 0x49b156d4" in out and "1 LODs" in out and MESH_CHUNK.string() in out
     assert "header 192, LOD struct 176, section struct 384" in out and "2 sections @" in out
-    assert "(usage, format, offset, stream) [(1, 3, 0, 0), (33, 6, 0, 1), (51, 12, 4, 1)]" in out
+    assert "(usage, format, offset, stream) [(1, 3, 0, 0), (33, 6, 0, 1), (52, 13, 4, 1)]" in out
 
 
 def test_no_world_and_333_keep_references_a_field_holds(tmp_path):
@@ -339,9 +339,12 @@ def test_mesh_own_writes_a_meshset_rigidmesh_and_chunk(tmp_path):
     # The other elements are the template's first vertex's.
     first = lod.sections[0]
     # Stream 1 of vertex 0: the template's normal bytes, then our UV (x / 6, z / 6) at (-10, -10).
-    assert chunk[first.vertex_start + 25 * 12:first.vertex_start + 25 * 12 + 8] == bytes([0x7F, 0xFF, 0x80, 0]) + \
-        __import__("struct").pack("<2e", -10.0, -10.0)                     # 1 UV per metre for ground
-    assert "usage 51 format 12 (float16 x2) at +4 of stream 1" in text
+    # Stream 1 of vertex 0 (-10, 0, -10): TexCoord0 planar at 1 per metre from the template's
+    # minimum (0.5, 0.25), then the template's most common colour.
+    assert chunk[first.vertex_start + 25 * 12:first.vertex_start + 25 * 12 + 8] == \
+        __import__("struct").pack("<2e", -9.5, -9.75) + bytes([0, 0, 255, 200])
+    assert "usage 33 format 6 (Half2) at +0 of stream 1" in text and "usage 52 000000ffc8" not in text
+    assert "usage 52 0000ffc8s" in text
 
 
 def test_write_mesh_refuses_a_chunk_it_does_not_understand():
@@ -440,7 +443,7 @@ def test_shader_from_gives_our_mesh_a_stock_material_in_the_root_bundle(tmp_path
     text = "\n".join(report)
     key = section_keys(BOX + "_mesh")[0]
     assert f"--shader-from {BOX}_mesh section 0 (of 2): key {key:#018x}, in the depots" in text
-    assert "donor section: key" in text and "section layout: usage 1 format 3 (float32 x3) at +0 of stream 0" in text
+    assert "donor section: key" in text and "section layout: usage 1 format 3 (Float3) at +0 of stream 0" in text
     assert "NOT DRAWN" not in text
     toc = read_toc((root / "Win32" / (NEW + ".toc")).read_bytes())
     _, region, manifest = view.bundle(toc, "win32/" + NEW)
@@ -452,7 +455,7 @@ def test_shader_from_gives_our_mesh_a_stock_material_in_the_root_bundle(tmp_path
     ms = view.payload(region, 1 + len(manifest.ebx) + index)
     layout = read_layout(ms)
     assert all(int.from_bytes(ms[s.at + 0x138:s.at + 0x140], "little") == key for lod in layout for s in lod.sections)
-    assert all(s.elements == [(1, 3, 0, 0), (33, 6, 0, 1), (51, 12, 4, 1)] and s.strides == [12, 8]
+    assert all(s.elements == [(1, 3, 0, 0), (33, 6, 0, 1), (52, 13, 4, 1)] and s.strides == [12, 8]
                for lod in layout for s in lod.sections)                # the donor section's declaration everywhere
     # Without the root bundle the dry run says it will not be drawn.
     _, _, report, _, _ = build(tmp_path / "g", mesh="own", shader_from=BOX + "_mesh:0")
@@ -574,7 +577,7 @@ def test_default_slab_with_padded_bounds_part_boxes_and_bounds_fields(tmp_path, 
     assert "ours: 24 vertices, 12 triangles per section" in out and "box [-6.0, -0.2, -4.0]..[6.0, 0.0, 4.0]" in out
     assert "collision part 0: material 0x10e0, box [-6.0, 0.0, -4.0]..[6.0, 0.0, " in out
     assert "collision part 2: material 0x10e0, box [-6.0, 0.0, " in out and ", 0.0, 4.0]" in out
-    assert "UVs: planar per face" in out
+    assert "TexCoord0 (usage 33): planar per face" in out
     for size in ("12", "12 0.2 12", "12;0.2;12"):
         main(["new-ground-level", "--game", str(game_dir), "--name", "zz-g", "--level", LEVEL, "--dry-run",
               "--size", *size.split(" ")])
@@ -582,14 +585,20 @@ def test_default_slab_with_padded_bounds_part_boxes_and_bounds_fields(tmp_path, 
 
 
 def test_vertex_helpers():
-    from reskate_mapbuilder.meshset import _closest, padded_bounds, planar_uv, vertex_normals
+    from reskate_mapbuilder.meshset import decode_element, encode_element, padded_bounds, planar_uv, vertex_normals
     lo, hi = padded_bounds([(0.0, 1.0, 0.0), (2.0, 1.0, 3.0)])
     assert lo == [0.0, 0.95, 0.0] and hi == [2.0, 1.05, 3.0]
     assert planar_uv((2.0, 1.0, 3.0), (0.0, 1.0, 0.0), 0.5) == (1.0, 1.5)
     assert planar_uv((2.0, 1.0, 3.0), (1.0, 0.0, 0.0), 1.0) == (3.0, 1.0)
     assert planar_uv((2.0, 1.0, 3.0), (0.0, 0.0, -1.0), 1.0) == (2.0, 1.0)
-    pool = [((0.0, 1.0, 0.0), [b"up"]), ((1.0, 0.0, 0.0), [b"east"]), ((0.0, -1.0, 0.0), [b"down"])]
-    assert _closest(pool, (0.9, 0.1, 0.0), [b"x"]) == [b"east"] and _closest([], (0, 1, 0), [b"x"]) == [b"x"]
+    buffer = bytearray(struct_pack_half4())
+    encode_element(8, buffer, 0, (1.5, -2.0, 3.0))                     # Half4: the fourth half is kept
+    assert decode_element(8, buffer, 0) == [1.5, -2.0, 3.0, 1.0]
+    buffer = bytearray(4)
+    encode_element(13, buffer, 0, (0.0, 0.0, 1.0, 0.5))                 # UByte4N
+    assert bytes(buffer) == bytes([0, 0, 255, 128]) and decode_element(12, buffer, 0) == [0.0, 0.0, 255.0, 128.0]
+    encode_element(6, buffer, 0, (0.25, -1.0))                          # Half2
+    assert decode_element(6, buffer, 0) == [0.25, -1.0]
     from reskate_mapbuilder.meshset import box_geometry
     vertices, triangles = box_geometry((0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
     normals = vertex_normals(vertices, triangles)
@@ -612,7 +621,7 @@ def test_a_blueprint_importing_its_collision_ebx_gets_ours(tmp_path, capsys):
     assert {i.file_guid for i in bp.imports} == {physics_ebx.file_guid, read_document(
         view.ebx(region, manifest, f"levels/game/{LEVEL}/ground_mesh")).file_guid}
     assert BOX_PHYSICS_GUID not in {i.file_guid for i in bp.imports}
-    assert any("UVs: planar per face, 1 per metre (given" in line for line in report)
+    assert any("TexCoord0 (usage 33): planar per face at 1 per metre (given)" in line for line in report)
     # --collision template keeps the box's collision EBX.
     _, _, report, root, view = build(tmp_path / "t", bam="333", mesh="own", blueprint_template=BOX, asset_bundle="root",
                                      collision_mode="template")
@@ -620,4 +629,8 @@ def test_a_blueprint_importing_its_collision_ebx_gets_ours(tmp_path, capsys):
     # --uv-per-metre reaches the mesh.
     main(["new-ground-level", "--game", str(tmp_path / "game"), "--name", "zz", "--level", LEVEL, "--mesh", "own",
           "--blueprint-template", BOX, "--asset-bundle", "root", "--uv-per-metre", "0.25", "--dry-run"])
-    assert "UVs: planar per face, 0.25 per metre (given" in capsys.readouterr().out
+    assert "TexCoord0 (usage 33): planar per face at 0.25 per metre (given)" in capsys.readouterr().out
+
+
+def struct_pack_half4():
+    return __import__("struct").pack("<4e", 0.0, 0.0, 0.0, 1.0)
