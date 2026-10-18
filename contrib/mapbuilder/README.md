@@ -49,7 +49,8 @@ can be stood on.
         --level dingolevel_reskate_place --tiles <DIR from city --level> --dry-run
     python -m reskate_mapbuilder place-info --tiles <DIR> [--max-height 20]
     python -m reskate_mapbuilder material-donors --game "<Skate>" [--contains skatepark]
-    python -m reskate_mapbuilder scan-materials --game "<Skate>" [--superbundle S] [--bundle-contains T]
+    python -m reskate_mapbuilder scan-materials --game "<Skate>" [--superbundle S] [--bundle-contains T] \
+        [--class wood] [--both] [--every]
     python -m reskate_mapbuilder mesh-refs --game "<Skate>" [--mod <mod>] --superbundle S --bundle B --mesh EBX
     python -m reskate_mapbuilder ebx-roundtrip --game "<Skate>" --superbundle globals \
         --ebx levels/game/dingolevel_root/dingolevel_root/description
@@ -81,9 +82,12 @@ collision is the place's collision chunks merged into util_groundplane's one par
 object is its own copy of the skatepark box with our geometry, textured with the box's surface.
 `--visuals-only NAME` adds objects one at a time; `material-donors --game "<Skate>"` lists stock
 sections for `--material-donor wood=MESH:N` and the like. For materials of other levels,
-`scan-materials --game "<Skate>"` ranks the bundles holding them, and `--material-bundle
-SUPERBUNDLE:BUNDLE` with `--material-donor concrete=MESH:N` (a mesh of that bundle) draws objects
-with them (FORMAT-NOTES 6.4; not yet run in game).
+`scan-materials --game "<Skate>"` ranks the bundles holding them (`--both`: concrete or stone and
+wood in one bundle), and `--material-bundle SUPERBUNDLE:BUNDLE` with `--material-donor
+ground=MESH:N` (a mesh of that bundle) draws objects with them (tested in game: concrete ground
+and wood benches from one of bam's tile sublevels). `--material-bundle auto` picks the smallest
+sublevel bundle of bam's with usable concrete and wood, and donors from it (FORMAT-NOTES 6.4; not
+yet run in game). New resource ids are odd (`--resource-ids clear` for the earlier form).
 
 The format reference is `contrib/mapbuilder/FORMAT-NOTES.md`.
 
