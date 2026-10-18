@@ -16,7 +16,7 @@
         [--prop BLUEPRINT --prop-at X,Y,Z ...] [--dry-run]
   python -m reskate_mapbuilder inspect-meshset --game <dir> [--mod <mod dir>] --superbundle S --bundle B --resource R
   python -m reskate_mapbuilder new-place-level --game <dir> --mods <dir> --name zz-... --level <name> --tiles <DIR> \\
-        [--at X Y Z] [--mirror] [--bam 333|no-world|all] [--asset-bundle ...] [--dry-run]
+        [--at X Y Z] [--north -z|+z] [--bam 333|no-world|all] [--asset-bundle ...] [--dry-run]
   python -m reskate_mapbuilder place-info --tiles <DIR> [--at X Y Z] [--max-height M] [--skip-part P]
   python -m reskate_mapbuilder scan-materials --game <dir> [--superbundle S ...] [--bundle-contains TEXT] \\
         [--class wood ...] [--both] [--every] [--explain SUPERBUNDLE:BUNDLE]
@@ -306,7 +306,7 @@ def _donors(args) -> dict:
 def _read_place_args(args, command: str):
     """The place, filtered, and the `--at` to use (from the spawn unless given); prints the summary."""
     try:
-        place = read_place(args.tiles, args.mirror)
+        place = read_place(args.tiles, args.north == "-z")
         notes = filter_collision(place, args.max_height, tuple(args.skip_part or ()))
     except PlaceError as e:
         sys.exit(f"{command}: {e}")
@@ -357,9 +357,9 @@ def place_info(args):
         print(f"  trainer ground {x} {z}    -> {'-' if y is None else y}    ({label})")
     if args.views:
         print("Where to look at each visual object from: `trainer ground X Z H` lands there facing heading H "
-              "(0 = +z, the place's north; 90 = +x, east; a trainer with the heading argument). The in-game "
-              "compass reads 0 as S and 180 as N (90 E, 270 W): sides below are the place's real ones, with "
-              "the compass's in brackets. Without H the skater faces heading 0: turn until `trainer where` shows H:")
+              "(a trainer with the heading argument; 0 = +z, which the in-game compass reads as S, 90 = +x E, "
+              "180 N, 270 W). Sides below are the place's real ones (and the compass's, where --north +z makes "
+              "them differ). Without H the skater faces heading 0: turn until `trainer where` shows H:")
         for label, x, z, y, heading, note in view_spots(place, tuple(args.at)):
             print(f"  {label}: trainer ground {x} {z} {heading:g}    -> {'-' if y is None else y}  ({note})")
 
@@ -469,7 +469,9 @@ def _place_options(p):
     p.add_argument("--at", nargs="+", metavar="X Y Z",
                    help="where the place's origin (its centre, at its origin elevation) goes in the game: X Y Z, X,Y,Z "
                         "or X;Y;Z (default: the export's spawn at the game's x 0, z 0, the origin at height 300)")
-    p.add_argument("--mirror", action="store_true", help="flip north and south (if the game shows the place mirrored)")
+    p.add_argument("--north", choices=("-z", "+z"), default="-z",
+                   help="the game axis the place's north goes to (default -z: the in-game compass reads +z as south, "
+                        "and the PC saw +z north give a mirror image)")
     p.add_argument("--max-height", type=float, metavar="M",
                    help="drop collision chunks whose top is above M metres (the place's frame), e.g. 20")
     p.add_argument("--skip-part", action="append", metavar="PART",

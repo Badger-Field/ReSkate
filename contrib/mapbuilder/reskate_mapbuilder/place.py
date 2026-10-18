@@ -6,12 +6,13 @@
                               vertices {offset, count} float32 xyz, indices {offset, count} uint32
     DIR/tile_<i>_<j>.bin      their bytes, little-endian
 
-Frame: metres, x east, y up, z north, y = 0 at the origin's elevation. The game's frame is the one
-ReSkate's park mods are placed in (lidar-parks `park.to_game` with no mirror: game x = east,
-y = up, z = north), so a place maps to the game by a translation alone: game = place + `at`.
-Winding: (b - a) x (c - a) points out of the surface, the convention physics.py writes (the grid
-whose normals point up held the skater in game). `mirror` flips z (and so swaps each triangle's
-winding to keep it outward) in case the game turns out to see the place mirrored.
+Frame: metres, x east, y up, z north, y = 0 at the origin's elevation. In the game x is east too
+but +z is south: the in-game compass reads heading 0 (+z) as S, and with the place's north on +z
+the PC saw a mirror image (facing +z, the place's west was on the right). So `mirror` (what
+new-place-level's default --north -z sets) flips z, and swaps each triangle's winding to keep it
+outward; then a place maps to the game by a translation: game = place + `at`. Winding:
+(b - a) x (c - a) points out of the surface, the convention physics.py writes (the grid whose
+normals point up held the skater in game).
 
 Collision objects come welded, in chunks of at most 256 triangles; each chunk becomes one shape and
 one part. Visual objects are read and counted only: drawing is not solved yet (6.3), and
@@ -292,7 +293,7 @@ def summary(place: Place, at: tuple[float, float, float]) -> list[str]:
            f"{len(place.collision)} collision chunks, {sum(len(p.triangles) for p in place.collision)} collision "
            f"triangles, {sum(len(p.vertices) for p in place.collision)} vertices; {len(place.visual)} visual objects "
            f"({sum(len(p.triangles) for p in place.visual)} triangles, not used yet)",
-           f"  bounds (place frame, x east, y up, z north): {[round(c, 2) for c in lo]}..{[round(c, 2) for c in hi]}",
+           f"  bounds (place frame, x east, y up, z {'south' if place.mirror else 'north'}): {[round(c, 2) for c in lo]}..{[round(c, 2) for c in hi]}",
            f"  bounds in the game: {[round(c + a, 2) for c, a in zip(lo, at)]}..{[round(c + a, 2) for c, a in zip(hi, at)]}",
            "  collision by material: " + str(dict(Counter(p.material for p in place.collision))),
            "  collision by part: " + str(dict(Counter(p.part for p in place.collision))),
@@ -312,8 +313,9 @@ def check_spots(place: Place, at: tuple[float, float, float]) -> list[tuple[str,
     spots.append(("origin", 0.0, 0.0))
     cx, cz = (lo[0] + hi[0]) / 2, (lo[2] + hi[2]) / 2
     spots.append(("centre of the bounds", cx, cz))
-    for label, fx, fz in (("south-west quarter", 0.25, 0.25), ("south-east quarter", 0.75, 0.25),
-                          ("north-west quarter", 0.25, 0.75), ("north-east quarter", 0.75, 0.75)):
+    low, high = ("north", "south") if place.mirror else ("south", "north")   # the low-z and high-z sides
+    for label, fx, fz in ((f"{low}-west quarter", 0.25, 0.25), (f"{low}-east quarter", 0.75, 0.25),
+                          (f"{high}-west quarter", 0.25, 0.75), (f"{high}-east quarter", 0.75, 0.75)):
         spots.append((label, lo[0] + fx * (hi[0] - lo[0]), lo[2] + fz * (hi[2] - lo[2])))
     for k, grind in enumerate((place.manifest.get("grinds") or [])[:3]):
         points = grind.get("points") if isinstance(grind, dict) else None
@@ -345,18 +347,18 @@ def visual_class(piece: Piece) -> str:
     return PART_CLASSES.get(piece.part, piece.material)
 
 
-# The in-game compass (the PC, both places): heading 0 (+z) reads S, 90 (+x) E, 270 W. So the
-# place's north is the compass's south; east and west agree.
-GAME_COMPASS_SIDE = {"south": "north", "north": "south", "west": "west", "east": "east"}
+# The in-game compass (the PC, both places): heading 0 (+z) reads S, 90 (+x) E, 270 W. A spot on an
+# object's low-z side faces it at heading 0, so it is on the compass's north side.
+COMPASS_SIDES = {"low z": "north", "high z": "south", "low x": "west", "high x": "east"}
 
 
 def view_spots(place: Place, at: tuple[float, float, float]) -> list[tuple[str, float, float, float | None, float, str]]:
     """Per visual object: (label, game x, game z, expected ground there, heading to face, note).
-    After `trainer tp` and `trainer ground` the camera faces heading 0, +z (the place's north; the
-    PC, e3ed5ee: `trainer where` read 0 after every teleport), so the spot is on the object's south
-    side when there is ground there, looking north; else north (heading 180), west (90) or east
-    (270). Sides are the place's real ones; the in-game compass reads +z as S and -z as N (x as
-    the place: 90 E, 270 W), so the note gives the compass's side too. The distance fits the object (4 m, more for big ones: up to 40 m, or 1.5 times a tall
+    After `trainer tp` and `trainer ground` the camera faces heading 0, +z (the PC, e3ed5ee:
+    `trainer where` read 0 after every teleport; the compass reads it as S), so the spot is on the
+    object's low-z side when there is ground there, facing +z; else high z (heading 180), low x
+    (90) or high x (270). The note names the place's real side, and the compass's when they differ
+    (--north +z). The distance fits the object (4 m, more for big ones: up to 40 m, or 1.5 times a tall
     object's height so it is framed), shortened until the spot has ground."""
     out = []
     for piece in place.visual:
@@ -366,8 +368,8 @@ def view_spots(place: Place, at: tuple[float, float, float]) -> list[tuple[str, 
         height = hi[1] - lo[1]
         far = max(4.0, min(40.0, 0.6 * size) if size > 10 else 4.0, min(150.0, 1.5 * height) if height > 10 else 0.0)
         best = None
-        for side, heading, place_at in (("south", 0.0, lambda g: (cx, lo[2] - g)), ("north", 180.0, lambda g: (cx, hi[2] + g)),
-                                        ("west", 90.0, lambda g: (lo[0] - g, cz)), ("east", 270.0, lambda g: (hi[0] + g, cz))):
+        for side, heading, place_at in (("low z", 0.0, lambda g: (cx, lo[2] - g)), ("high z", 180.0, lambda g: (cx, hi[2] + g)),
+                                        ("low x", 90.0, lambda g: (lo[0] - g, cz)), ("high x", 270.0, lambda g: (hi[0] + g, cz))):
             for gap in sorted({g for g in (far, far / 2, far / 4, 4.0, 2.0) if g >= 2.0}, reverse=True):
                 x, z = place_at(gap)
                 y = place.ground(x, z)
@@ -377,10 +379,13 @@ def view_spots(place: Place, at: tuple[float, float, float]) -> list[tuple[str, 
             if best:
                 break
         if best is None:
-            best = ("south, no ground found near it", 0.0, cx, lo[2] - far, None, far)
+            best = ("low z", 0.0, cx, lo[2] - far, None, far)
         side, heading, x, z, y, gap = best
+        compass = COMPASS_SIDES[side]
+        real = compass if place.mirror else {"north": "south", "south": "north"}.get(compass, compass)
+        where = real + ("" if real == compass else f" ({compass} on the game compass)") + " of it" + \
+            (", no ground found near it" if y is None else "")
         out.append((visual_label(piece), round(x + at[0], 2), round(z + at[2], 2),
                     None if y is None else round(y + at[1], 2), heading,
-                    f"{side} of it ({GAME_COMPASS_SIDE.get(side.split(',')[0], '?')} on the game compass), "
-                    f"{gap:.0f} m off; it spans y {lo[1] + at[1]:.1f}..{hi[1] + at[1]:.1f}"))
+                    f"{where}, {gap:.0f} m off; it spans y {lo[1] + at[1]:.1f}..{hi[1] + at[1]:.1f}"))
     return out

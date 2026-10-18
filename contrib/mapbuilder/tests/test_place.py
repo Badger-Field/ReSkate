@@ -157,7 +157,8 @@ def test_new_place_level_builds_the_collision(tmp_path, capsys):
     game_dir = fake_game(tmp_path / "game")
     tiles = write_tiles(tmp_path / "tiles")
     main(["new-place-level", "--game", str(game_dir), "--mods", str(tmp_path / "Mods"), "--name", "zz-place",
-          "--level", LEVEL, "--tiles", str(tiles), "--at", "0", "300", "0", "--skip-part", "buildings"])
+          "--level", LEVEL, "--tiles", str(tiles), "--at", "0", "300", "0", "--skip-part", "buildings",
+          "--north", "+z"])                                   # the export's own frame, to check the shapes in
     out = capsys.readouterr().out
     assert "2 tiles (tile size 50.0 m), 4 collision chunks, 26 collision triangles" in out
     assert "dropped 1 collision chunk(s) of buildings (skipped part buildings)" in out
@@ -237,7 +238,9 @@ def test_place_info_needs_no_game_and_puts_the_spawn_at_the_origin(tmp_path, cap
     tiles = write_tiles(tmp_path / "t", spawn=(5.0, 0.25, 7.0))
     main(["place-info", "--tiles", str(tiles), "--max-height", "20"])
     out = capsys.readouterr().out
-    assert "--at -5 300 -7: the export's spawn (5.0, 0.25, 7.0) goes to the game's (0, 300.25, 0)" in out
+    # The default --north -z: the place's north (+z in the export) is the game's -z.
+    assert "--at -5 300 7: the export's spawn (5.0, 0.25, -7.0) goes to the game's (0, 300.25, 0)" in out
+    assert "bounds (place frame, x east, y up, z south)" in out and "north-west quarter" in out
     assert "trainer ground 0.0 0.0    -> 300.0    (spawn)" in out and "4 collision chunks" in out
     with pytest.raises(SystemExit, match="place-info: .*not found"):
         main(["place-info", "--tiles", str(tmp_path / "nothing")])
@@ -329,9 +332,20 @@ def test_place_info_views_give_a_spot_and_heading_per_visual_object(tmp_path, ca
     # No ground south or north of it in this export: west of it, facing east, as one command.
     assert re.search(r"trainer ground -?[0-9.]+ -?[0-9.]+ 90 ", line) and "west of it" in line
     assert "`trainer ground X Z H` lands there facing heading H" in out
-    # The game compass reads +z as S (the PC): west stays west, and the header says so.
-    assert "west of it (west on the game compass)" in line
-    assert "compass reads 0 as S and 180 as N" in out
+    # The game compass reads +z as S (the PC), and the header says so; with the default --north -z
+    # the place's sides are the compass's.
+    assert "the in-game compass reads as S" in out and "on the game compass" not in out
+
+
+def test_place_info_views_name_the_compass_side_with_north_on_plus_z(tmp_path, capsys):
+    tiles = write_tiles(tmp_path / "t")
+    main(["place-info", "--tiles", str(tiles), "--at", "0", "300", "0", "--views", "--north", "+z"])
+    out = capsys.readouterr().out
+    assert "bounds (place frame, x east, y up, z north)" in out and "south-west quarter" in out
+    line = next(line for line in out.splitlines() if line.strip().startswith("ground_t0_0:"))
+    assert "west of it, 30 m off" in line                          # x is east either way
+    lines = [line for line in out.splitlines() if " 0    -> " in line or " 180    -> " in line]
+    assert all("on the game compass)" in line for line in lines)
 
 
 def test_material_donors_lists_sections_and_proposes_defaults(tmp_path, capsys):

@@ -973,12 +973,15 @@ in `tests/test_place.py`.
 
 **Axes.** The tiles are in metres, x east, y up, z north, with y = 0 at the origin's elevation and
 the origin at the area's centre. That is the frame ReSkate's park mods are placed in
-(`park.to_game` maps a placement's (east, north, up) to game (x, z, y), no mirror), so place to
-game is a translation: game = place + `--at` (default (0, 300, 0), as the ground's). The
-translation is the OROD's `BlueprintTransform`; the collision stays in the place's frame, as the
-square did (the transform moving the collision is tested in game, 6.3). Whether the game's z
-really is north (and not mirrored) is not tested: `--mirror` flips z and swaps each triangle's
-corners so it still faces out. The exporter's winding, (b - a) x (c - a) pointing out of the
+(`park.to_game` maps a placement's (east, north, up) to game (x, z, y), no mirror). That is not
+the game's frame: the in-game compass reads heading 0 (+z) as S, 90 (+x) as E and 270 as W, and
+with the place's north on +z the PC saw a mirror image (Embarcadero, facing +z: a building 10 m
+to the place's west was on the screen's right). So the place's north goes to -z by default
+(`--north -z`; `--north +z` is the old frame): the reader flips z and swaps each triangle's
+corners so it still faces out, and then place to game is a translation: game = place + `--at`
+(default (0, 300, 0), as the ground's). The translation is the OROD's `BlueprintTransform`; the
+collision stays in the place's frame, as the square did (the transform moving the collision is
+tested in game, 6.3). The exporter's winding, (b - a) x (c - a) pointing out of the
 surface, is the one physics.py writes; the up-facing square held the skater.
 
 **What is written.** Everything as 6.3, but the collision resource holds one shape and one part
