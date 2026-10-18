@@ -187,6 +187,44 @@ def place_piece(place: Place, tile_path: Path, key, k: int, obj: dict, blob: byt
         place.visual.append(piece)
 
 
+TALL = 20.0      # metres above the origin: collision this high is reported (the 130 x 20 Embarcadero
+                 # cut holds one clipped tower whose wall rises to 159 m at its west end)
+
+
+def filter_collision(place: Place, max_height: float | None = None, skip: tuple[str, ...] = ()) -> list[str]:
+    """Drops collision chunks whose part or name is in `skip`, or whose top is above `max_height`
+    (place frame); whole chunks only, as a chunk is one welded shape. Returns what it did."""
+    out, kept = [], []
+    dropped = Counter()
+    for piece in place.collision:
+        top = max(v[1] for v in piece.vertices)
+        if piece.part in skip or piece.name in skip:
+            dropped[f"{piece.name} (skipped part {piece.part})"] += 1
+        elif max_height is not None and top > max_height:
+            dropped[f"{piece.name} (top {top:.1f} m above {max_height} m)"] += 1
+        else:
+            kept.append(piece)
+    for what, n in dropped.items():
+        out.append(f"  dropped {n} collision chunk(s) of {what}")
+    place.collision[:] = kept
+    if not kept:
+        raise PlaceError("every collision chunk was dropped")
+    tall = Counter(p.name for p in kept if max(v[1] for v in p.vertices) > TALL)
+    for name, n in tall.items():
+        top = max(v[1] for p in kept if p.name == name for v in p.vertices)
+        out.append(f"  NOTE: {n} collision chunk(s) of {name!r} rise to {top:.1f} m (a tall wall: --max-height "
+                   f"{TALL:g} or --skip-part {name} drops them)")
+    return out
+
+
+def spawn_at(place: Place, height: float = 300.0) -> tuple[float, float, float]:
+    """The `--at` that puts the export's spawn at the game's (0, height + spawn y, 0); the origin
+    when the export has no spawn."""
+    if place.spawn is None:
+        return (0.0, height, 0.0)
+    return (0.0 - place.spawn[0] + 0.0, height, 0.0 - place.spawn[2] + 0.0)
+
+
 def collision(place: Place, template: Part) -> tuple[list[Shape], list[Part]]:
     """One shape and one part per collision chunk, in the place's frame (the placement moves it),
     each part a copy of the template part's material and words. GUESS: word +0x34 differs per
@@ -231,6 +269,13 @@ def check_spots(place: Place, at: tuple[float, float, float]) -> list[tuple[str,
     for label, fx, fz in (("south-west quarter", 0.25, 0.25), ("south-east quarter", 0.75, 0.25),
                           ("north-west quarter", 0.25, 0.75), ("north-east quarter", 0.75, 0.75)):
         spots.append((label, lo[0] + fx * (hi[0] - lo[0]), lo[2] + fz * (hi[2] - lo[2])))
+    for k, grind in enumerate((place.manifest.get("grinds") or [])[:3]):
+        points = grind.get("points") if isinstance(grind, dict) else None
+        if isinstance(points, list) and len(points) >= 2 and all(isinstance(p, list) and len(p) == 3 for p in points):
+            mx = (points[0][0] + points[1][0]) / 2
+            mz = (points[0][2] + points[1][2]) / 2
+            spots.append((f"grind {k} ({grind.get('what')}, {grind.get('surface')}) midpoint, its top "
+                          f"{(points[0][1] + points[1][1]) / 2 + at[1]:.2f}", mx, -mz if place.mirror else mz))
     spots.append(("outside, 20 m east of the bounds", hi[0] + 20.0, cz))
     out = []
     for label, x, z in spots:

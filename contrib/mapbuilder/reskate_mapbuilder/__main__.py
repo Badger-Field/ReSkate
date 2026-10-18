@@ -17,6 +17,7 @@
   python -m reskate_mapbuilder inspect-meshset --game <dir> [--mod <mod dir>] --superbundle S --bundle B --resource R
   python -m reskate_mapbuilder new-place-level --game <dir> --mods <dir> --name zz-... --level <name> --tiles <DIR> \\
         [--at X Y Z] [--mirror] [--bam 333|no-world|all] [--asset-bundle ...] [--dry-run]
+  python -m reskate_mapbuilder place-info --tiles <DIR> [--at X Y Z] [--max-height M] [--skip-part P]
   python -m reskate_mapbuilder mesh-refs --game <dir> [--mod <mod dir>] --superbundle S --bundle B --mesh EBX \\
         [--scan SUPERBUNDLE:BUNDLE ...] [--level <name>]
   python -m reskate_mapbuilder meshset-diff --game <dir> [--mod-a M] --a S:BUNDLE:RES [--mod-b M] --b S:BUNDLE:RES
@@ -42,7 +43,8 @@ from .game import Game
 from .ground import ASSET_BUNDLES, BAM_MODES, COLLISION_MODES, MESH_MODES, MESH_SHAPES, VISUAL_MODES, BLUEPRINT_BUNDLE, BLUEPRINT_TEMPLATE, DEFAULT_AT, DEFAULT_SIZE, TILE_TEMPLATE, new_ground_level
 from .level import BASE_SUPERBUNDLE, new_level
 from .meshrefs import mesh_refs
-from .place import PlaceError, check_spots, collision as place_collision, read_place, summary as place_summary
+from .place import (PlaceError, check_spots, collision as place_collision, filter_collision, read_place, spawn_at,
+                    summary as place_summary)
 from .meshset import describe_meshset, diff_meshsets
 from .mod import ModBuilder
 from .physics import (KIND_TRIANGLE_MESH, Shape, compute_edge_data, physics_tail, read_physics, replace_shape,
@@ -211,16 +213,35 @@ def _props(args) -> list:
     return [(name, _xyz(where, "--prop-at")) for name, where in zip(names, places)]
 
 
-def new_place_level_command(args):
-    """A level whose collision is a real place's (the lidar-parks tile export, FORMAT-NOTES 6.4)."""
+def _read_place_args(args, command: str):
+    """The place, filtered, and the `--at` to use (from the spawn unless given); prints the summary."""
     try:
         place = read_place(args.tiles, args.mirror)
+        notes = filter_collision(place, args.max_height, tuple(args.skip_part or ()))
     except PlaceError as e:
-        sys.exit(f"new-place-level: {e}")
-    for line in place_summary(place, tuple(args.at)):
+        sys.exit(f"{command}: {e}")
+    if args.at is None:
+        args.at = list(spawn_at(place))
+        print(f"--at {args.at[0]:g} {args.at[1]:g} {args.at[2]:g}: the export's spawn {place.spawn} goes to the game's "
+              f"(0, {args.at[1] + (place.spawn[1] if place.spawn else 0):g}, 0)")
+    for line in place_summary(place, tuple(args.at)) + notes:
         print(line)
+    return place
+
+
+def new_place_level_command(args):
+    """A level whose collision is a real place's (the lidar-parks tile export, FORMAT-NOTES 6.4)."""
+    place = _read_place_args(args, "new-place-level")
     args.size, args.mesh = DEFAULT_SIZE, "template"
     new_ground_level_command(args, place)
+
+
+def place_info(args):
+    """The tile export's summary and the trainer spots, read-only and without the game."""
+    place = _read_place_args(args, "place-info")
+    print("Expected `trainer ground` readings in the level (- means no ground there):")
+    for label, x, z, y in check_spots(place, tuple(args.at)):
+        print(f"  trainer ground {x} {z}    -> {'-' if y is None else y}    ({label})")
 
 
 def list_assets(args):
@@ -324,6 +345,17 @@ def ebx_arrayhash(args):
         print(line)
 
 
+def _place_options(p):
+    p.add_argument("--at", nargs="+", metavar="X Y Z",
+                   help="where the place's origin (its centre, at its origin elevation) goes in the game: X Y Z, X,Y,Z "
+                        "or X;Y;Z (default: the export's spawn at the game's x 0, z 0, the origin at height 300)")
+    p.add_argument("--mirror", action="store_true", help="flip north and south (if the game shows the place mirrored)")
+    p.add_argument("--max-height", type=float, metavar="M",
+                   help="drop collision chunks whose top is above M metres (the place's frame), e.g. 20")
+    p.add_argument("--skip-part", action="append", metavar="PART",
+                   help="drop the collision chunks of this part or object name, e.g. buildings (repeatable)")
+
+
 def _template_options(p):
     p.add_argument("--tile-template", default=TILE_TEMPLATE, help="the bam tile copied for the sublevel")
     p.add_argument("--layer-template", help="the LayerData copied (default: the one the tile references)")
@@ -406,10 +438,7 @@ def main(argv=None):
     p.add_argument("--level", required=True, help="the level's name, e.g. dingolevel_reskate_place")
     p.add_argument("--display-name")
     p.add_argument("--tiles", required=True, help="the directory `city --level DIR` wrote (reskate-level-tiles v2)")
-    p.add_argument("--at", nargs="+", metavar="X Y Z",
-                   help="where the place's origin (its centre, at its origin elevation) goes in the game: X Y Z, X,Y,Z "
-                        f"or X;Y;Z (default {' '.join(str(c) for c in DEFAULT_AT)})")
-    p.add_argument("--mirror", action="store_true", help="flip north and south (if the game shows the place mirrored)")
+    _place_options(p)
     p.add_argument("--bam", choices=sorted(BAM_MODES), default="333",
                    help="which of bam's bundles the level lists (default 333: an empty world)")
     _template_options(p)
@@ -417,6 +446,9 @@ def main(argv=None):
                    help="where the blueprint and collision go: the ground bundle, the level's copy of "
                         "bam_coregameassets, or the level's root bundle")
     p.add_argument("--dry-run", action="store_true", help="read and report only")
+    p = sub.add_parser("place-info", help="a tile export's summary and trainer spots (read-only, no game needed)")
+    p.add_argument("--tiles", required=True, help="the directory `city --level DIR` wrote (reskate-level-tiles v2)")
+    _place_options(p)
     p = sub.add_parser("inspect-meshset", help="print a MeshSet resource's header, LODs and sections (read-only)")
     p.add_argument("--game", required=True)
     p.add_argument("--mod", help="a mod folder laid over the game, to read its TOCs and archives")
@@ -464,11 +496,13 @@ def main(argv=None):
                            help="also say where differing arrays (the first N, default 20) and strings are reached from")
     args = ap.parse_args(argv)
     if hasattr(args, "at"):
-        args.at = list(_xyz(args.at, "--at")) if args.at else list(DEFAULT_AT)
+        places = args.command in ("new-place-level", "place-info")
+        args.at = list(_xyz(args.at, "--at")) if args.at else (None if places else list(DEFAULT_AT))
     if args.command == "new-ground-level":
         args.size = _size(args.size)
     {"inspect": inspect, "raise-ground": raise_ground, "rebuild": rebuild, "new-level": new_level_command,
      "new-ground-level": new_ground_level_command, "new-place-level": new_place_level_command,
+     "place-info": place_info,
      "list-assets": list_assets, "inspect-meshset": inspect_meshset,
      "mesh-refs": mesh_refs_command, "meshset-diff": meshset_diff,
      "dump-ebx": dump_ebx, "ebx-roundtrip": ebx_roundtrip, "ebx-arrayhash": ebx_arrayhash}[args.command](args)
