@@ -308,7 +308,8 @@ def lighthouse(bundle, toc_chunk):
                                LIGHTHOUSE + "_mesh": write_document(mesh), LIGHTHOUSE + "_d": write_document(texture)},
                {LIGHTHOUSE + ".physics": (0x41759364, 0x8888, template_physics()),
                 LIGHTHOUSE + "_mesh": (0x49B156D4, 0x7777, ms),
-                LIGHTHOUSE + "_d": (0x6BDE20BA, 0x9999, b"texture" + LIGHTHOUSE_TEXTURE_CHUNK.bytes)},
+                LIGHTHOUSE + "_d": (0x6BDE20BA, 0x9999, b"texture" + LIGHTHOUSE_TEXTURE_CHUNK.bytes),
+                LIGHTHOUSE + "_mesh/blocks": (0x12345678, 0xAAAA, b"per-mesh data")},
                [(guid(109), b"unrelated"), (LIGHTHOUSE_CHUNK, chunk)])
     return b, [toc_chunk(LIGHTHOUSE_CHUNK, chunk), toc_chunk(LIGHTHOUSE_LOD1_CHUNK, chunk),
                toc_chunk(LIGHTHOUSE_TEXTURE_CHUNK, b"texels"), toc_chunk(guid(110), b"unrelated")]

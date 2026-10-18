@@ -288,13 +288,14 @@ def test_blueprint_from_another_bundle_lists_what_it_needs(tmp_path):
     _, _, report, _, view = build(tmp_path, blueprint_template=LIGHTHOUSE, blueprint_bundle=ISLAND_BUNDLE,
                                      blueprint_superbundle=FTUE)
     text = "\n".join(report)
-    assert f"listed from {ISLAND_BUNDLE} in the ground bundle: 2 EBX" in text
+    assert f"listed from {ISLAND_BUNDLE} with the blueprint: 2 EBX" in text
     assert "flags #1 StaticModelEntityData" in text
     _, region, manifest, (_, _, bp) = ground(view)
     assert [a.name for a in manifest.ebx] == [SUBLEVEL, LAYER, BLUEPRINT, LIGHTHOUSE + "_mesh", LIGHTHOUSE + "_d"]
-    assert [a.name for a in manifest.resources] == [PHYSICS, LIGHTHOUSE + "_mesh", LIGHTHOUSE + "_d"]
+    assert [a.name for a in manifest.resources] == [PHYSICS, LIGHTHOUSE + "_mesh", LIGHTHOUSE + "_d",
+                                                    LIGHTHOUSE + "_mesh/blocks"]    # named under the mesh
     assert [c.guid for c in manifest.chunks] == [LIGHTHOUSE_CHUNK]
-    assert [f.location.patch for f in region.files] == [True] * 4 + [False] * 2 + [True] + [False] * 3
+    assert [f.location.patch for f in region.files] == [True] * 4 + [False] * 2 + [True] + [False] * 4
     assert bp.imports[0].file_guid == LIGHTHOUSE_MESH_GUID
     # The chunks the ftue superbundle's TOC lists for them are in the level's TOC too.
     toc = read_toc(Path(view.mod, "Win32", NEW + ".toc").read_bytes())
@@ -308,7 +309,7 @@ def test_blueprint_from_another_bundle_lists_what_it_needs(tmp_path):
     assert f"mesh {LIGHTHOUSE}_mesh LOD 1 chunk {LIGHTHOUSE_LOD1_CHUNK.string()}: in {FTUE}'s TOC chunk list; " \
            "listed by the level's TOC" in text
     assert f"LOD 0 chunk {LIGHTHOUSE_CHUNK.string()}: in {ISLAND_BUNDLE}'s chunk entries and {FTUE}'s TOC chunk " \
-           "list; listed by the level's TOC, the ground bundle" in text
+           f"list; listed by the level's TOC, win32/{SUBLEVEL}" in text
     assert read_document(view.ebx(region, manifest, LIGHTHOUSE + "_mesh")).file_guid == LIGHTHOUSE_MESH_GUID
 
 
@@ -318,7 +319,7 @@ def test_mesh_own_writes_a_meshset_rigidmesh_and_chunk(tmp_path):
     assert "chunk 144 bytes rebuilds identically" in text and "winding flipped to match" in text
     assert f"mesh {GROUNDPLANE}_mesh (replaced by ours) LOD 0 chunk {MESH_CHUNK.string()}: in win32/{BAM}'s chunk " \
            f"entries and {BAM}'s TOC chunk list; listed by the level's TOC, the level's root bundle" in text
-    assert "mesh ours (" in text and "in the mod's archive; listed by the level's TOC, the ground bundle" in text
+    assert "mesh ours (" in text and f"in the mod's archive; listed by the level's TOC, win32/{SUBLEVEL}" in text
     assert "1 resource references named the template's id" in text and "1 blueprint imports moved to it" in text
     _, region, manifest, (_, _, bp) = ground(view)
     mesh_name = f"levels/game/{LEVEL}/ground_mesh"
@@ -378,3 +379,47 @@ def test_mesh_own_on_a_blueprint_from_another_bundle_keeps_its_texture(tmp_path)
     for k, lod in enumerate(layout):
         chunk = view.payload(region, 1 + 5 + 3 + k)
         assert rebuild_chunk(lod, chunk) == chunk and len(section_positions(lod.sections[0], chunk)) == 121
+
+
+def test_asset_bundle_coregameassets_holds_the_blueprint_and_mesh(tmp_path):
+    _, _, report, root, view = build(tmp_path, bam="333", mesh="own", asset_bundle="coregameassets")
+    assert any(line.startswith("--asset-bundle coregameassets") for line in report)
+    toc = read_toc((root / "Win32" / (NEW + ".toc")).read_bytes())
+    _, region, manifest = view.bundle(toc, "win32/" + SUBLEVEL)
+    assert [a.name for a in manifest.ebx] == [SUBLEVEL, LAYER] and not manifest.resources
+    _, region, manifest = view.bundle(toc, CORE_BUNDLE)
+    mesh_name = f"levels/game/{LEVEL}/ground_mesh"
+    assert [a.name for a in manifest.ebx] == ["levels/game/bam_levelroot/other", CORE_LAYER, BLUEPRINT, mesh_name]
+    assert [a.name for a in manifest.resources] == [PHYSICS, mesh_name] and len(manifest.chunks) == 1
+    assert [f.location.patch for f in region.files] == [True, False, False, True, True, True, True, True]
+    assert [b.name for b in toc.bundles].count(CORE_BUNDLE) == 1
+    with pytest.raises(KeyError, match="does not list"):
+        game = Game(fake_game(tmp_path / "g2"))
+        import reskate_mapbuilder.ground as g
+        saved = g.BAM_MODES["333"]
+        g.BAM_MODES["333"] = lambda name: name.startswith(g.BAM_333) and "coregameassets" not in name
+        try:
+            new_ground_level(game, ModBuilder(game, "zz"), LEVEL, bam="333", asset_bundle="coregameassets")
+        finally:
+            g.BAM_MODES["333"] = saved
+
+
+def test_mesh_refs_finds_the_meshsets_references(tmp_path, capsys):
+    game_dir = fake_game(tmp_path / "game")
+    main(["mesh-refs", "--game", str(game_dir), "--superbundle", FTUE, "--bundle", ISLAND_BUNDLE,
+          "--mesh", LIGHTHOUSE + "_mesh"])
+    out = capsys.readouterr().out
+    assert "document: root RigidMeshAsset" in out and f"{LIGHTHOUSE}_d ({ISLAND_BUNDLE})" in out
+    assert f"LOD 0 +116: GUID {LIGHTHOUSE_CHUNK.string()} = chunk entry of {ISLAND_BUNDLE}" in out
+    assert f"LOD 1 +116: GUID {LIGHTHOUSE_LOD1_CHUNK.string()} = chunk in {FTUE}'s TOC" in out
+    assert "0x12345678 ?: 1" in out and f"res {LIGHTHOUSE}_mesh/blocks type 0x12345678" in out
+    # Against our level: what it lists.
+    _, _, _, root, _ = build(tmp_path / "b", bam="333", blueprint_template=LIGHTHOUSE, blueprint_bundle=ISLAND_BUNDLE,
+                             blueprint_superbundle=FTUE)
+    main(["mesh-refs", "--game", str(tmp_path / "b" / "game"), "--mod", str(root), "--superbundle", FTUE,
+          "--bundle", ISLAND_BUNDLE, "--mesh", LIGHTHOUSE + "_mesh", "--level", LEVEL,
+          "--scan", f"{BAM}:win32/{BAM}"])
+    out = capsys.readouterr().out
+    assert "mesh EBX listed: True; its MeshSet listed: True" in out
+    assert f"LOD 1 chunk {LIGHTHOUSE_LOD1_CHUNK.string()}: listed (in {FTUE}'s TOC)" in out
+    assert f"res {LIGHTHOUSE}_mesh/blocks: listed" in out
