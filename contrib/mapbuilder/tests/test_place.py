@@ -157,7 +157,8 @@ def test_new_place_level_builds_the_collision(tmp_path, capsys):
     game_dir = fake_game(tmp_path / "game")
     tiles = write_tiles(tmp_path / "tiles")
     main(["new-place-level", "--game", str(game_dir), "--mods", str(tmp_path / "Mods"), "--name", "zz-place",
-          "--level", LEVEL, "--tiles", str(tiles), "--at", "0", "300", "0", "--skip-part", "buildings"])
+          "--level", LEVEL, "--tiles", str(tiles), "--at", "0", "300", "0", "--skip-part", "buildings",
+          "--north", "+z"])                                   # the export's own frame, to check the shapes in
     out = capsys.readouterr().out
     assert "2 tiles (tile size 50.0 m), 4 collision chunks, 26 collision triangles" in out
     assert "dropped 1 collision chunk(s) of buildings (skipped part buildings)" in out
@@ -237,7 +238,9 @@ def test_place_info_needs_no_game_and_puts_the_spawn_at_the_origin(tmp_path, cap
     tiles = write_tiles(tmp_path / "t", spawn=(5.0, 0.25, 7.0))
     main(["place-info", "--tiles", str(tiles), "--max-height", "20"])
     out = capsys.readouterr().out
-    assert "--at -5 300 -7: the export's spawn (5.0, 0.25, 7.0) goes to the game's (0, 300.25, 0)" in out
+    # The default --north -z: the place's north (+z in the export) is the game's -z.
+    assert "--at -5 300 7: the export's spawn (5.0, 0.25, -7.0) goes to the game's (0, 300.25, 0)" in out
+    assert "bounds (place frame, x east, y up, z south)" in out and "north-west quarter" in out
     assert "trainer ground 0.0 0.0    -> 300.0    (spawn)" in out and "4 collision chunks" in out
     with pytest.raises(SystemExit, match="place-info: .*not found"):
         main(["place-info", "--tiles", str(tmp_path / "nothing")])
@@ -329,6 +332,20 @@ def test_place_info_views_give_a_spot_and_heading_per_visual_object(tmp_path, ca
     # No ground south or north of it in this export: west of it, facing east, as one command.
     assert re.search(r"trainer ground -?[0-9.]+ -?[0-9.]+ 90 ", line) and "west of it" in line
     assert "`trainer ground X Z H` lands there facing heading H" in out
+    # The game compass reads +z as S (the PC), and the header says so; with the default --north -z
+    # the place's sides are the compass's.
+    assert "the in-game compass reads as S" in out and "on the game compass" not in out
+
+
+def test_place_info_views_name_the_compass_side_with_north_on_plus_z(tmp_path, capsys):
+    tiles = write_tiles(tmp_path / "t")
+    main(["place-info", "--tiles", str(tiles), "--at", "0", "300", "0", "--views", "--north", "+z"])
+    out = capsys.readouterr().out
+    assert "bounds (place frame, x east, y up, z north)" in out and "south-west quarter" in out
+    line = next(line for line in out.splitlines() if line.strip().startswith("ground_t0_0:"))
+    assert "west of it, 30 m off" in line                          # x is east either way
+    lines = [line for line in out.splitlines() if " 0    -> " in line or " 180    -> " in line]
+    assert all("on the game compass)" in line for line in lines)
 
 
 def test_material_donors_lists_sections_and_proposes_defaults(tmp_path, capsys):
@@ -607,3 +624,24 @@ def test_scan_materials_explain_prints_every_section_and_the_verdict(tmp_path, c
     main(["scan-materials", "--game", str(game_dir), "--explain", f"{FTUE}:{VISTA_BUNDLE}"])
     out = capsys.readouterr().out
     assert "bundle name has the proxy word 'vista'" in out and "auto pick: rejected: " in out
+
+
+def test_auto_building_avoids_world_projected_walls():
+    from reskate_mapbuilder.materials import auto_donors, building_quality
+    stair, planter = "dtn_plt_canal_04_base_a_stairselevated_02_mesh", "dtn_plt_canal_04_base_a_plantersmall_01_mesh"
+    five, three = [8, 4, 4, 12, 4], [8, 4, 4]
+    # The PC's Freedom bundle: the wall slabs streaked every wall facing z, the granite drew black,
+    # the planter's poured concrete was clean on both axes.
+    row = {"sections": [(stair, 0, "Concrete_Poured_02_2x2m_M_Grey_SgGrdSlabs01_mat", ["concrete"], True, five),
+                        (stair, 1, "Concrete_Poured_02_2x2m_M_Grey_SgWllSlabs01_mat", ["concrete"], True, five),
+                        (stair, 2, "Concrete_Poured_02_2x2m_M_mat", [], True, five),
+                        (stair, 3, "Stone_Granite_02_2x2m_M_FxGrimeCPVStair02_mat", ["stone"], True, five),
+                        (planter, 0, "Concrete_Poured_01_2x2m_M_mat", ["concrete"], True, three),
+                        ("cmn_prp_woodpalette_01_mesh", 0, "Wood_Pallet_M", ["wood"], True, three)]}
+    assert building_quality(row["sections"][1][2], five)[0] == 0
+    assert building_quality(row["sections"][3][2], five)[0] == 0
+    assert building_quality(row["sections"][2][2], five) == (1, "5 vertex streams")
+    assert building_quality(row["sections"][4][2], three) == (2, "plain")
+    assert auto_donors(row)["building"] == f"{planter}:0"               # shares concrete's section: fine
+    alone = {"sections": [row["sections"][1], row["sections"][0], row["sections"][5]]}
+    assert auto_donors(alone)["building"] in (f"{stair}:0", f"{stair}:1")   # still used when nothing else is

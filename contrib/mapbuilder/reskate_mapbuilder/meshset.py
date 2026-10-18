@@ -518,6 +518,12 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
                   + (f" (the template's, over {[round(c, 3) for c in uv1[1]]}..{[round(c, 3) for c in uv1[2]]})"
                      if uv1 else " (default; the template has none)")
                   + f"; usage 51 zeros; usage 52 {colour.hex() if colour else 'the model vertex'}s")
+    # TexCoord0 is a Half2: its step at |u| 512..1024 is 0.5, half a repeat. Projected from the place's
+    # own origin, a wall 70 m out at 8 per metre got two texels across each repeat (the PC, Freedom:
+    # horizontal streaks on its faces facing z, u = x near -70; the faces facing x, u = z near 0,
+    # were clean). So TexCoord0 is projected from our vertices' minimum corner.
+    uv_base = [min(v[k] for v in vertices) for k in range(3)] if vertices else [0.0, 0.0, 0.0]
+    report.append(f"TexCoord0 projected from our vertices' minimum corner {[round(c, 3) for c in uv_base]}")
     chunks = []
     described = set()
     for lod, old_lod, template_chunk, guid in zip(lods_now, lods, template_chunks, chunk_guids):
@@ -553,7 +559,7 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
                         if usage == POSITION_USAGE:
                             encode_element(f, vertex, o, (x, y, z))
                         elif usage == UV0_USAGE:
-                            u, v = planar_uv((x, y, z), n, density0)
+                            u, v = planar_uv((x - uv_base[0], y - uv_base[1], z - uv_base[2]), n, density0)
                             encode_element(f, vertex, o, (u + origin0[0], v + origin0[1]))
                         elif usage == UV1_USAGE:
                             encode_element(f, vertex, o, planar_uv((x, y, z), n, density1))

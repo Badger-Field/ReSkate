@@ -339,10 +339,12 @@ def test_mesh_own_writes_a_meshset_rigidmesh_and_chunk(tmp_path):
     # The other elements are the template's first vertex's.
     first = lod.sections[0]
     # Stream 1 of vertex 0: the template's normal bytes, then our UV (x / 6, z / 6) at (-10, -10).
-    # Stream 1 of vertex 0 (-10, 0, -10): TexCoord0 planar at 1 per metre from the template's
-    # minimum (0.5, 0.25), then the template's most common colour.
+    # Stream 1 of vertex 0 (-10, 0, -10), our minimum corner: TexCoord0 planar at 1 per metre from
+    # there (a Half2 keeps its precision near 0), plus the template's minimum (0.5, 0.25), then the
+    # template's most common colour.
     assert chunk[first.vertex_start + 25 * 12:first.vertex_start + 25 * 12 + 8] == \
-        __import__("struct").pack("<2e", -9.5, -9.75) + bytes([0, 0, 255, 200])
+        __import__("struct").pack("<2e", 0.5, 0.25) + bytes([0, 0, 255, 200])
+    assert "TexCoord0 projected from our vertices' minimum corner [-10.0, 0.0, -10.0]" in text
     assert "usage 33 format 6 (Half2) at +0 of stream 1" in text and "usage 52 000000ffc8" not in text
     assert "usage 52 0000ffc8s" in text
 
