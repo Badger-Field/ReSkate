@@ -395,7 +395,8 @@ def test_material_bundle_auto_picks_the_best_tile_with_distinct_concrete_ground_
     assert f"--material-bundle auto: 3 sublevel bundles in {FTUE} (1 vista or proxy bundles left out)" in out
     assert VISTA_BUNDLE not in out and VISTA_MESH not in out
     assert f"--material-bundle auto: {FTUE}:{PARK_BUNDLE} (" in out and "the best of 2 qualifying" in out
-    assert "pavers or stone ground 1, poured concrete 1, ground differs 1" in out
+    assert "ground rank 3, poured concrete 1, ground differs 1" in out
+    assert f"    ground candidate {PARK_PAVEMENT}:0 'Pavers_Grey_01_mat': rank 3, paving (paver); picked" in out
     assert f"--material-bundle auto: --material-donor ground={PARK_PAVEMENT}:0" in out
     assert f"--material-bundle auto: --material-donor concrete={PARK_STEP}:0" in out
     assert f"--material-bundle auto: --material-donor wood={PARK_BENCH}:0" in out
@@ -549,14 +550,44 @@ def test_the_known_good_tile_qualifies(monkeypatch):
     for mesh, _, material in names[:4] + names[5:]:
         assert section_problem(bundle, mesh, material, True, True) == ""     # no proxy word inside a word
     assert section_problem(bundle, menu, "Shadow_mat", True, True) == "material name has the proxy word 'shadow'"
-    assert section_problem(bundle, "x/rock_lod1_mesh", "Stone_mat", True, True) == "mesh name has the proxy word 'lod1'"
+    assert section_problem(bundle, "x/rock_lod1_mesh", "Stone_mat", True, True) == "mesh name has the proxy word 'lod'"
     sections = [(mesh, n, material, materials.classes_of(material) or ["metal"], material != "Shadow_mat", [8])
                 for mesh, n, material in names]
     row = {"bundle": bundle, "bytes": 900 * 1024, "sublevel": True, "sections": sections}
     assert auto_rejection(row) == ""
     picks = auto_donors(row)
     assert picks["ground"] == f"{pillar}:0" and picks["concrete"] == f"{pillar}:2" and picks["wood"] == f"{menu}:4"
-    assert materials.auto_score(row) == (1, 1, 1, 1)
+    assert materials.auto_score(row) == (3, 1, 1, 1)                     # SgGrdSlabs01: grd, slab
+    assert {"sg", "grd", "slabs", "slab", "01"} <= materials.name_words("SgGrdSlabs01")
+
+
+def test_a_black_granite_trim_is_not_the_ground():
+    """The PC's M3 on e64ed32: the ground took a planter's 'Stone_Granite_Trim_02_2x2m_M_Black_mat'
+    and drew almost black. Trim, cladding, walls and black are penalised; terrain ranks under
+    paving; a tile with slab ground scores above one whose best ground is a trim."""
+    from reskate_mapbuilder.materials import auto_donors, auto_score, ground_quality
+    planter = "levels/game/bam_levelroot/wproot/wp/props/dtn_plt_01_base_f_planter_01_mesh"
+    menu = "common/props/cmn_prp_menuboard_01_mesh"
+    def row(sections, bundle="win32/levels/game/bam_levelroot/wproot/wp/s50_x1_sublevel"):
+        return {"bundle": bundle, "bytes": 2 ** 20, "sublevel": True,
+                "sections": [(m, n, mat, ["stone"], True, [8]) for m, n, mat in sections]}
+    planter_sections = [(planter, 0, "Concrete_Poured_01_2x2m_M_mat"),
+                        (planter, 1, "Stone_Granite_Trim_02_2x2m_M_Black_mat"),
+                        (planter, 2, "Terrain_Clovers_01_2x2m_M_mat"),
+                        (planter, 3, "Stone_Granite_02_2x2m_M_SgWllCladding01_mat"), (menu, 4, "Wood_Accent")]
+    assert ground_quality("Stone_Granite_Trim_02_2x2m_M_Black_mat")[0] == 0
+    assert ground_quality("Stone_Granite_02_2x2m_M_SgWllCladding01_mat")[0] == 0
+    assert ground_quality("Terrain_Clovers_01_2x2m_M_mat") == (1, "terrain (terrain, clover)")
+    assert ground_quality("Stone_Granite_02_2x2m_M_SgGrdSlabs01_mat")[0] == 3
+    picks = auto_donors(row(planter_sections))
+    assert picks["concrete"] == f"{planter}:0" and picks["ground"] != f"{planter}:1"
+    assert picks["ground"] == f"{planter}:2"                              # terrain beats the penalised trim
+    slabs = row([(planter, 0, "Concrete_Poured_01_2x2m_M_mat"), (planter, 1, "Stone_Granite_02_2x2m_M_SgGrdSlabs01_mat"),
+                 (menu, 4, "Wood_Accent")])
+    assert auto_score(slabs) > auto_score(row(planter_sections))
+    only_trim = row([(planter, 0, "Concrete_Poured_01_2x2m_M_mat"), (planter, 1, "Stone_Granite_Trim_02_2x2m_M_Black_mat"),
+                     (menu, 4, "Wood_Accent")])
+    assert auto_donors(only_trim)["ground"] == f"{planter}:1" and auto_score(only_trim)[0] == 0   # only if nothing else
 
 
 def test_scan_materials_explain_prints_every_section_and_the_verdict(tmp_path, capsys, monkeypatch):
@@ -567,8 +598,10 @@ def test_scan_materials_explain_prints_every_section_and_the_verdict(tmp_path, c
     main(["scan-materials", "--game", str(game_dir), "--explain", f"{FTUE}:{PARK_BUNDLE}"])
     out = capsys.readouterr().out
     assert f"  {PARK_STEP}:0  'Concrete_Poured_01_2x2m_M_Grey_mat'" in out
-    assert "words ['01', '2x2m', 'concrete', 'grey', 'm', 'mat', 'poured']" in out and "auto roles ['concrete'" in out
-    assert "NOT usable: no TexCoord0" in out and "auto pick: qualifies, score (1, 1, 1, 0)" in out
+    assert "words ['01', '2', '2x2m', 'concrete', 'grey', 'm', 'mat', 'poured', 'x']" in out
+    assert "auto roles ['concrete'" in out
+    assert "NOT usable: no TexCoord0" in out and "auto pick: qualifies, score (3, 1, 1, 0)" in out
+    assert "rank 2, plain (concrete); taken by concrete" in out
     assert f"  concrete = {PARK_STEP}:0 ('Concrete_Poured_01_2x2m_M_Grey_mat')" in out
     main(["scan-materials", "--game", str(game_dir), "--explain", f"{FTUE}:{VISTA_BUNDLE}"])
     out = capsys.readouterr().out
