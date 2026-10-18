@@ -1183,6 +1183,20 @@ flat grey or white (impostor shading). No crash. The rule is now:
   ground material different from concrete's, a wproot tile; then the smallest. The dry run lists
   the top 5 candidates with these marks. Not yet run in game.
 
+The PC's M3 (46636f8, Freedom Plaza): the dry run refused ("no sublevel bundle … has usable
+concrete (or stone) and wood"), 1,052 candidates, 155 vista or proxy bundles left out, at most
+400 read, although the trial tile (ground `Stone_Granite_02_2x2m_M_SgGrdSlabs01_mat` :0, concrete
+`Concrete_Poured_01_2x2m_M_Grey_mat` :2 of the same mesh, wood `Wood_Accent`) qualifies by the
+rules (a unit test feeds its exact names). Likely causes: the 400-read cap (smallest first, so
+the 0.9 MB tile may come after it) and the 10-usable minimum. Now: every candidate is read (no
+cap; progress every 100), bundles under 64 KB stored are skipped unread (`AUTO_MIN_BYTES`; the
+vista was 0.02 MB), a bundle needs 3 usable classed sections (`AUTO_MIN_USABLE`), proxy words
+match whole words of a name only (`name_words`: `lod` and `lod1` as words, never inside one),
+and the dry run prints the time, the count read and the first 5 rejected bundles with reasons.
+`scan-materials --explain SUPERBUNDLE:BUNDLE` prints, for one bundle, every section with its
+material-name words, its classes, its auto roles, usable or why not (proxy word, key not in the
+depots, no TexCoord0), and the auto pick's verdict, picks and score.
+
 **Tested in game** (main 0830262, Freedom Plaza 150 x 60): loads, every reading within 0.1 m, 47
 of 47 visuals drawn; banks show their hump and slope. Stairs and kerbs were hard to see (low,
 dark on the ramp-wedge ground), and the west-edge `buildings` sliver was drawn full height with
