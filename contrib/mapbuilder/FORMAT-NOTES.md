@@ -1007,9 +1007,29 @@ packed material; no per-triangle material is known). `--parts grow` keeps one pa
 grows `PhysicsPartInfos` and `PartBoundingBoxes` to that many entries (entry 0 copied, each box
 set to its part's); other per-part tables are only reported.
 
-**Visuals** are read (role `visual`) and counted, not written: drawing is open (6.3). `Place.visual`
-keeps them for the MeshSet writer; `--mesh own` is refused with a place for now. `--bam` defaults
-to `333` (the empty world of 6.3).
+**Tested in game** (976f955, merged into util_groundplane's one part): the Embarcadero collision
+works, every reading within 0.1 m of the printed table (299.4, 299.4, 300.2, 301.0, 300.2, 300.4,
+300.1 near grind 2, none 20 m east); the skater lands on the invisible bench at 301.5 (its top plus
+the skater's offset; `trainer ground` there reports the surface below).
+
+**Visuals** (`--visuals`, written, not yet run in game): each visual object of each tile (13 in
+the Embarcadero export) gets its own blueprint, mesh and placement (at `--at`, like the
+collision's), all in the level's root bundle (bam root's copy, whose depot holds the template's
+shader blocks), cloned from `--visual-template` (default the skatepark box) the way 6.3's own
+mesh is: every section kept, our geometry in one (the default material's section 0, or the
+section `--material-donor MATERIAL=MESH[:N]` names; a donor of another mesh lends its section's
+layout, key and vertex), others drawing one zero-area triangle; per-vertex planar UVs at
+`--uv-per-metre` (default 1) and the closest-normal template vertex for the undecoded 4-byte
+elements; header, LOD and section boxes from the object's own vertices, padded; the blueprint's
+mesh and collision EBX imports moved to its own copies. Its collision is harmless: one 0.1 m
+triangle per template part (3 for the box, so PhysicsPartInfos matches), 500 m below the object,
+in a `.physics` of its own; a template's own collision (`--collision template`) would put a box's
+collision at every placement, and a blueprint without physics has not been tried. `--visuals-only
+OBJECT` (name, part or name prefix) adds objects one at a time. Sizes in the Embarcadero export:
+ground objects 1,271 to 2,911 vertices and 2,400 to 5,600 triangles, the rest 4 to 20 vertices;
+all far under 65,535 vertices. `--skip-part` and `--max-height` filter collision only: the clipped
+tower's visual (`buildings`, tile -2, -1) is drawn unless left out with `--visuals-only`. `--bam`
+defaults to `333` (the empty world of 6.3).
 
 ## 7. Practical notes
 
