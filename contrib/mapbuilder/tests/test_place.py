@@ -320,3 +320,53 @@ def test_material_donors_lists_sections_and_proposes_defaults(tmp_path, capsys):
     assert f"{GROUNDPLANE}_mesh:0  material '{GROUNDPLANE}_mesh'" in out and "class ['ground']" in out
     assert "(not usable" in out                                     # the shadow-like section without TexCoord0
     assert f"  --material-donor ground={GROUNDPLANE}_mesh:0" in out and "wood: no candidate" in out
+
+
+def test_scan_materials_ranks_bundles_with_usable_materials(tmp_path, capsys):
+    from test_level import FTUE, PLAZA_BUNDLE, PLAZA_MESH
+    game_dir = str(fake_game(tmp_path / "game"))
+    main(["scan-materials", "--game", game_dir])                       # layout.toc's superbundles: no FTUE here
+    assert "0 bundles with classed sections" in capsys.readouterr().out
+    main(["scan-materials", "--game", game_dir, "--superbundle", FTUE, "--superbundle", "levels/game/nothing"])
+    out = capsys.readouterr().out
+    assert "levels/game/nothing: not read" in out and "usable sections per class: concrete 1" in out
+    assert f"{FTUE}:{PLAZA_BUNDLE}" in out and "1 depot(s), 1 usable" in out and "a sublevel bundle" in out
+    assert f"    {PLAZA_MESH}:0  '{PLAZA_MESH}' ['concrete']" in out
+
+
+def test_material_bundle_hosts_our_sublevel_and_its_material_objects(tmp_path, capsys):
+    from reskate_mapbuilder.ebx import read_document
+    from test_level import BOX, FTUE, NEW, PLAZA_BUNDLE, PLAZA_MESH, PLAZA_TEXTURE_CHUNK, section_keys
+    from reskate_mapbuilder.meshset import read_layout
+    game_dir = fake_game(tmp_path / "game")
+    tiles = write_tiles(tmp_path / "tiles")
+    main(["new-place-level", "--game", str(game_dir), "--mods", str(tmp_path / "Mods"), "--name", "zz-place",
+          "--level", LEVEL, "--tiles", str(tiles), "--at", "0", "300", "0", "--skip-part", "buildings", "--visuals",
+          "--visual-template", BOX, "--material-bundle", f"{FTUE}:{PLAZA_BUNDLE}",
+          "--material-donor", f"ground={PLAZA_MESH}:0"])
+    out = capsys.readouterr().out
+    host_sub = PLAZA_BUNDLE[len("win32/"):]
+    assert f"it becomes our sublevel {host_sub} (its own sublevel EBX replaced by our tile)" in out
+    assert "(in the material bundle: objects of this material go there)" in out
+    assert f"{PLAZA_BUNDLE}: 1 visual objects drawn with its materials, their keys in its depot" in out
+    root = tmp_path / "Mods" / "zz-place"
+    view = Game(game_dir, mod=root)
+    toc = read_toc((root / "Win32" / (NEW + ".toc")).read_bytes())
+    names = {b.name for b in toc.bundles}
+    assert PLAZA_BUNDLE in names and "win32/" + SUBLEVEL not in names
+    assert PLAZA_TEXTURE_CHUNK in {c.guid for c in toc.chunks}
+    _, region, manifest = view.bundle(toc, PLAZA_BUNDLE)
+    ebx = [a.name for a in manifest.ebx]
+    assert ebx[:2] == [host_sub, PLAZA_MESH] and f"levels/game/{LEVEL}/ground_layer" in ebx
+    assert read_document(view.ebx(region, manifest, host_sub)).root_type == "QuadrantSubWorldData"     # ours now
+    base = f"levels/game/{LEVEL}/visual_ground_t0_0"
+    assert base + "_bp" in ebx and base + "_mesh" in ebx
+    resources = {a.name: 1 + len(manifest.ebx) + i for i, a in enumerate(manifest.resources)}
+    layout = read_layout(view.payload(region, resources[base + "_mesh"]))
+    key = section_keys(PLAZA_MESH)[0]
+    assert all(int.from_bytes(view.payload(region, resources[base + "_mesh"])[s.at + 0x138:s.at + 0x140], "little") == key
+               for lod in layout for s in lod.sections)
+    # The root loads it.
+    _, region, manifest = view.bundle(toc, "win32/" + NEW)
+    doc = read_document(view.ebx(region, manifest, NEW))
+    assert host_sub in [i.object.get("BundleName") for i in doc.instances if i.object.get("BundleName")]

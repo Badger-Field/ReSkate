@@ -381,6 +381,25 @@ def box_physics():
     return write_physics(shapes, parts, 2)
 
 
+# Another level's sublevel bundle with a concrete material (for --material-bundle): its own
+# sublevel EBX, a concrete curb MeshSet whose keys are in its own depot, a texture naming a chunk
+# of its superbundle's TOC.
+PLAZA_BUNDLE = "win32/levels/game/dingolevel_ftue_island/wp_concrete_plaza_sublevel"
+PLAZA_MESH = "world/plots/plaza/concrete_curb_mesh"
+PLAZA_CHUNK, PLAZA_TEXTURE_CHUNK = guid(130), guid(131)
+
+
+def concrete_plaza(bundle, toc_chunk):
+    ms, chunk = meshset(PLAZA_CHUNK, PLAZA_MESH)
+    b = bundle(PLAZA_BUNDLE, {PLAZA_BUNDLE[len("win32/"):]: b"their sublevel", PLAZA_MESH: b"mesh ebx"},
+               {PLAZA_MESH: (0x49B156D4, 0x9990, ms),
+                "world/plots/plaza/concrete_curb_d": (0x6BDE20BA, 0x9994, b"texture" + PLAZA_TEXTURE_CHUNK.bytes),
+                PLAZA_BUNDLE[len("win32/"):] + "_win32_shaderstate/shaderblockdepot_3": (
+                    0x73312045, 0x9998, depot(section_keys(PLAZA_MESH)))},
+               [(PLAZA_CHUNK, chunk)])
+    return b, [toc_chunk(PLAZA_TEXTURE_CHUNK, b"concrete texels")]
+
+
 def template_physics():
     from reskate_mapbuilder.physics import Part, compute_edge_data, flat_grid, write_physics
     shape = flat_grid(50.0, 25.0)
@@ -505,9 +524,10 @@ def fake_game(tmp_path):
         return TocChunk(g, CasIdentifier(False, CHUNK, 2), len(cas) - len(stored), len(stored))
 
     island, island_chunks = lighthouse(bundle, toc_chunk)
-    tocs[FTUE] = [island]
+    plaza, plaza_chunks = concrete_plaza(bundle, toc_chunk)
+    tocs[FTUE] = [island, plaza]
     chunks = {BAM: [TocChunk(guid(50), CasIdentifier(False, CHUNK, 2), 0, 4), toc_chunk(MESH_CHUNK, meshset(MESH_CHUNK)[1])],
-              FTUE: island_chunks}
+              FTUE: island_chunks + plaza_chunks}
     for path, bundles in tocs.items():
         target = data / "Win32" / (path + ".toc")
         target.parent.mkdir(parents=True, exist_ok=True)
