@@ -624,3 +624,24 @@ def test_scan_materials_explain_prints_every_section_and_the_verdict(tmp_path, c
     main(["scan-materials", "--game", str(game_dir), "--explain", f"{FTUE}:{VISTA_BUNDLE}"])
     out = capsys.readouterr().out
     assert "bundle name has the proxy word 'vista'" in out and "auto pick: rejected: " in out
+
+
+def test_auto_building_avoids_world_projected_walls():
+    from reskate_mapbuilder.materials import auto_donors, building_quality
+    stair, planter = "dtn_plt_canal_04_base_a_stairselevated_02_mesh", "dtn_plt_canal_04_base_a_plantersmall_01_mesh"
+    five, three = [8, 4, 4, 12, 4], [8, 4, 4]
+    # The PC's Freedom bundle: the wall slabs streaked every wall facing z, the granite drew black,
+    # the planter's poured concrete was clean on both axes.
+    row = {"sections": [(stair, 0, "Concrete_Poured_02_2x2m_M_Grey_SgGrdSlabs01_mat", ["concrete"], True, five),
+                        (stair, 1, "Concrete_Poured_02_2x2m_M_Grey_SgWllSlabs01_mat", ["concrete"], True, five),
+                        (stair, 2, "Concrete_Poured_02_2x2m_M_mat", [], True, five),
+                        (stair, 3, "Stone_Granite_02_2x2m_M_FxGrimeCPVStair02_mat", ["stone"], True, five),
+                        (planter, 0, "Concrete_Poured_01_2x2m_M_mat", ["concrete"], True, three),
+                        ("cmn_prp_woodpalette_01_mesh", 0, "Wood_Pallet_M", ["wood"], True, three)]}
+    assert building_quality(row["sections"][1][2], five)[0] == 0
+    assert building_quality(row["sections"][3][2], five)[0] == 0
+    assert building_quality(row["sections"][2][2], five) == (1, "5 vertex streams")
+    assert building_quality(row["sections"][4][2], three) == (2, "plain")
+    assert auto_donors(row)["building"] == f"{planter}:0"               # shares concrete's section: fine
+    alone = {"sections": [row["sections"][1], row["sections"][0], row["sections"][5]]}
+    assert auto_donors(alone)["building"] in (f"{stair}:0", f"{stair}:1")   # still used when nothing else is

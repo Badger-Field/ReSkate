@@ -287,6 +287,27 @@ def ground_quality(material: str) -> tuple[int, str] | None:
     return 1, f"terrain ({', '.join(terrain)})"
 
 
+# The building's walls, ranked (the PC, Freedom and Embarcadero): 'Concrete_Poured_02_2x2m_M_Grey_
+# SgWllSlabs01_mat', a section of a mesh with an extra 12-byte stream (strides [8, 4, 4, 12, 4]),
+# drew every wall facing z as horizontal streaks whatever our TexCoord0 held (its shader projects
+# from the world: right on flat ground, smeared on one wall axis), and 'Stone_Granite_02_..._
+# FxGrimeCPVStair02_mat' drew black; 'Concrete_Poured_01_2x2m_M_mat' of a 3-stream mesh was clean
+# on both axes. 0: a shader-graph (sg) or per-vertex-colour (cpv) material; 1: a mesh with more
+# streams than position, UV and colour; 2: neither. A 0 is used only when nothing else is.
+BUILDING_WORLD_WORDS = ("sg", "cpv")
+BUILDING_STREAMS = 3
+
+
+def building_quality(material: str, strides) -> tuple[int, str]:
+    """(rank, reason) of a section as the building's walls (BUILDING_WORLD_WORDS, BUILDING_STREAMS)."""
+    world = [w for w in BUILDING_WORLD_WORDS if w in material_words(material)]
+    if world:
+        return 0, f"world-projected or per-vertex material ({', '.join(world)})"
+    if len(strides or ()) > BUILDING_STREAMS:
+        return 1, f"{len(strides)} vertex streams"
+    return 2, "plain"
+
+
 def ground_candidates(row: dict, taken: set | None = None) -> list[tuple[int, str, tuple]]:
     """The usable sections that could be the ground, best first: (rank, reason, section)."""
     out = []
@@ -316,6 +337,9 @@ def auto_donors(row: dict) -> dict[str, str]:
                 taken_materials.add(pick[2].lower())
             continue
         matches = [s for word in words for s in usable if word in material_words(s[2])]
+        if label == "building" and matches:                      # never a world-projected wall if avoidable
+            best = max(building_quality(s[2], s[5])[0] for s in matches)
+            matches = [s for s in matches if building_quality(s[2], s[5])[0] == best]
         if distinct:
             matches = [s for s in matches if (s[0], s[1]) not in taken_sections]
         if not matches:
