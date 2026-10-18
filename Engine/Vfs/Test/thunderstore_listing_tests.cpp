@@ -194,6 +194,24 @@ int main() {
     check(ts::refuse_contents(std::vector<std::string>{"layout.toc", "evil.dll"}).find("evil.dll") != std::string::npos,
           "the reason names the file");
     check(!may({".png"}) && !may({"layout.toc", "Win32/.toc"}), "an ending is not a name");
+    // Real ReSkate mods exported from a whole patch folder carry the game's InitFS beside their
+    // layout (NOBLE1337-Noble_Lights, HarryBrazzers-Backrooms_Deck_And_Grip): ReSkate never reads it from a mod.
+    check(may({"manifest.json", "icon.png", "README.md", "layout.toc", "initfs_win32", "Win32/levels/x.toc", "Win32/cas_01.cas"}),
+          "an initfs_win32 beside the layout is installed as it is");
+    check(may({"layout.toc", "InitFS_Win32"}), "whatever its case");
+    check(!may({"layout.toc", "Win32/initfs_win32"}) && !may({"layout.toc", "Data/initfs_win32"}) && !may({"layout.toc", "Patch/initfs_win32"}) &&
+              !may({"layout.toc", "initfs_win32.lua"}) && !may({"layout.toc", "initfs_win32/init.lua"}),
+          "but nowhere else, and nothing named like it");
+    check(!may({"manifest.json", "icon.png", "initfs_win32"}), "and it is not something the game loads");
+    {
+        const auto frosty = ts::refuse_contents(std::vector<std::string>{"manifest.json", "icon.png", "Moral_Panic.fbmod"});
+        check(frosty.find("Moral_Panic.fbmod") != std::string::npos && frosty.find("Frosty") != std::string::npos,
+              "a Frosty .fbmod is refused, and said to be one");
+        const auto many = ts::refuse_contents(std::vector<std::string>{"layout.toc", "a.dll", "b.lua", "c.exe", "d.bat", "e.ps1"});
+        check(many.find("a.dll, b.lua, c.exe and 2 other file(s)") != std::string::npos, "the reason names the first few files refused");
+        const auto two = ts::refuse_contents(std::vector<std::string>{"layout.toc", "a.dll", "b.lua"});
+        check(two.find("a.dll and b.lua,") != std::string::npos, "two are named with an and");
+    }
 
     // ------------------------------------------------ what the card and the `mods` commands share
     check(ts::find(packages, "zee-desert_springs") == desert && ts::find(packages, "ZEE-DESERT_SPRINGS") == desert,

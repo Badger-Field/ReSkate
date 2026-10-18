@@ -97,9 +97,11 @@ std::vector<std::string> missing_dependencies(const Package& package, const Inst
 // (layout.toc and Win32/**.toc, .sb and .cas), what maps and parks register themselves with
 // (reskate-levels.json, parks/<map>.park.json), what describes a mod (manifest.json,
 // reskate-mod.json, reskate-build.json, .reskate-studio-patch, its icon, README, CHANGELOG and
-// LICENSE) and pictures and text files (.png, .jpg, .md, .txt), and has to hold something the game
-// loads. Anything else is refused: programs, scripts and settings files, but also Board Break's
-// deck packs and music playlists, which only take effect after a restart.
+// LICENSE), pictures and text files (.png, .jpg, .md, .txt), and an initfs_win32 beside its
+// layout, which ReSkate never reads from a mod (see the .cpp); and it has to hold something the
+// game loads. Anything else is refused: programs, scripts and settings files, Frosty .fbmod files,
+// but also Board Break's deck packs and music playlists, which only take effect after a restart.
+// The reason names the first few files refused.
 std::string refuse_contents(std::span<const std::string> files);
 
 // `text` as one line of printable text, cut to about `most` bytes (never inside a UTF-8 character).

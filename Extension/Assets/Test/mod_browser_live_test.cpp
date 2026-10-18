@@ -30,6 +30,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -201,6 +202,26 @@ std::shared_ptr<const mod_browser::Listing> check_listing() {
     return listing;
 }
 
+// What a refusal was about, to count the live catalogue's by: the kind of the first file refused
+// ("*.fbmod", "initfs_win32 in Win32"), or the reason itself.
+std::string reason_kind(const std::string& error) {
+    const auto holds = error.find("holds ");
+    if (holds != std::string::npos && error.find(", which") != std::string::npos) {
+        auto file = error.substr(holds + 6, error.find_first_of(",(", holds + 6) - holds - 6);
+        if (const auto and_at = file.find(" and "); and_at != std::string::npos) file.resize(and_at);
+        while (!file.empty() && file.back() == ' ') file.pop_back();
+        const auto slash = file.rfind('/');
+        const auto leaf = ts::folder_key(file.substr(slash == std::string::npos ? 0 : slash + 1));
+        const auto dot = leaf.rfind('.');
+        return "holds " + (dot == std::string::npos || dot == 0 ? leaf : "*" + leaf.substr(dot)) +
+               (slash == std::string::npos ? "" : " in " + ts::folder_key(file.substr(0, file.find('/'))) + "/");
+    }
+    if (error.find("nothing for the game to load") != std::string::npos)
+        return error.find("mod pack") != std::string::npos ? "nothing to load (a mod pack)" : "nothing to load";
+    const auto colon = error.find(": ");
+    return ts::one_line(colon == std::string::npos ? error : error.substr(colon + 2), 70);
+}
+
 bool in_category(const ts::Package& package, std::string_view category) {
     return std::any_of(package.categories.begin(), package.categories.end(), [&](const std::string& c) { return ts::folder_key(c) == category; });
 }
@@ -226,10 +247,20 @@ std::string check_install(const mod_browser::Listing& listing) {
         std::sort(candidates.begin(), candidates.end(), [](const auto* a, const auto* b) { return a->package->file_size < b->package->file_size; });
     }
     check(!candidates.empty(), std::to_string(candidates.size()) + " map(s) to try");
-    for (std::size_t i = 0; i < candidates.size() && i < 3; ++i) {
+    // The live catalogue holds maps the game may not install from here (other tools' formats, packs):
+    // the smallest are tried until one installs, and what refused the others is counted.
+    constexpr std::size_t most_tries = 25;
+    std::string installed; // the first that installed, when none was a map and nothing else
+    std::map<std::string, std::pair<int, std::string>> reasons; // kind: how many, and the first package
+    const auto breakdown = [&](std::size_t tried) {
+        say("  tried " + std::to_string(tried) + " map(s); refused:");
+        for (const auto& [kind, seen] : reasons) say("    " + std::to_string(seen.first) + " x " + kind + " (e.g. " + seen.second + ")");
+    };
+    for (std::size_t i = 0; i < candidates.size() && i < most_tries; ++i) {
         const auto& row = *candidates[i];
         const auto folder_name = row.package->folder();
-        say("  installing " + ts::row_text(*row.package, row.action, mod_browser::refusal(row)));
+        say("  installing " + ts::row_text(*row.package, row.action, mod_browser::refusal(row)) +
+            (row.package->dependencies.empty() ? "" : " (names " + std::to_string(row.package->dependencies.size()) + " other mod(s))"));
         const auto begun = GetTickCount64();
         const auto refused = mod_browser::install(row);
         check(refused.empty(), "the install starts" + (refused.empty() ? std::string() : ": " + refused));
@@ -240,11 +271,14 @@ std::string check_install(const mod_browser::Listing& listing) {
         check(claim_released(), "the claim on the Mods folder is released");
         check(!staging_left() && !present(archive_of(folder_name)), "no staging folder or downloaded archive is left");
         if (end.stage != mod_browser::Stage::done) {
-            // (A map holding more than the game may install from here is refused: the next is tried.)
-            check(starts(job.last_error, "refused:") || starts(job.last_error, "failed:"), "it ended as " + job.last_error);
-            check(!present(mods_root() / folder_name), "and nothing of it is in Mods");
-            if (starts(job.last_error, "refused:")) continue;
-            ++failures;
+            // A refusal leaves nothing behind and the next map is tried; any other failure is one.
+            check(!present(mods_root() / folder_name), "nothing of it is in Mods");
+            if (starts(job.last_error, "refused:")) {
+                auto& seen = reasons[reason_kind(job.last_error)];
+                if (!seen.first++) seen.second = row.package->full_name;
+                continue;
+            }
+            check(false, "it ended as " + job.last_error);
             continue;
         }
         check(starts(job.last_result, "done:"), "it is done: " + job.last_result);
@@ -263,10 +297,28 @@ std::string check_install(const mod_browser::Listing& listing) {
         say(std::string("  preview: ") + live_mods::apply_label(effect) + (maps_only ? " (it holds maps only)" : " (it holds more than maps)"));
         check(effect == (maps_only ? live_mods::ApplyEffect::maps_only : live_mods::ApplyEffect::reload_level),
               "preview says what its contents call for");
-        check(maps_only && effect == live_mods::ApplyEffect::maps_only, "the map applies without reloading the level (maps_only)");
-        return folder_name;
+        if (maps_only) {
+            check(effect == live_mods::ApplyEffect::maps_only, "the map applies without reloading the level (maps_only)");
+            breakdown(i + 1);
+            return folder_name;
+        }
+        // Listed as a map but holding more (lights, a deck): installed rightly, and applying it
+        // reloads the level. It is taken out again, so the next one tried is the only mod in
+        // mods.json, and a map that is only a map is looked for.
+        auto& seen = reasons["installed, but holds more than maps (applies with a level reload)"];
+        if (!seen.first++) seen.second = row.package->full_name;
+        if (installed.empty()) installed = folder_name;
+        std::error_code error;
+        fs::remove_all(mods_root() / folder_name, error);
+        const auto left = folder();
+        mods::save_mod_order(left.root, left.entries);
     }
-    check(false, "a map was installed");
+    breakdown(std::min(candidates.size(), most_tries));
+    if (!installed.empty()) {
+        say("  none of them that installed is a map and nothing else, so maps_only is not checked this run.");
+        return installed;
+    }
+    check(false, "a map was installed (none of the " + std::to_string(std::min(candidates.size(), most_tries)) + " smallest could be)");
     return {};
 }
 

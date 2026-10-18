@@ -237,7 +237,15 @@ void run() {
             package_install::install(archive, name, replace, [](float done) { written = done; }, stop_install, checked);
         } catch (const std::exception& failure) {
             if (stop_install.load()) return finish(Result::cancelled, "Install of " + title + " cancelled.");
-            if (refused_files) return finish(Result::refused, std::string(failure.what()) + " " + title + " is not installed from here.");
+            if (refused_files) {
+                // A package with nothing of its own that names other mods is a mod pack: the launcher
+                // installs what it names (as it would refuse the pack itself, which has nothing to load).
+                const std::string why = failure.what();
+                const bool pack = !wanted.dependencies.empty() && why.find("nothing for the game to load") != std::string::npos;
+                return finish(Result::refused, why + " " + title +
+                    (pack ? " is a mod pack of " + std::to_string(wanted.dependencies.size()) + " other mod(s): install it from the launcher, which brings them."
+                          : " is not installed from here."));
+            }
             return finish(Result::failed, replace ? title + " could not be replaced while the game runs (" + failure.what() +
                                                        "). Close the game and update it from the launcher."
                                                  : title + " could not be installed: " + failure.what());

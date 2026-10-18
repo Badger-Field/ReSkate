@@ -285,13 +285,24 @@ std::string refuse_contents(std::span<const std::string> files) {
     if (files.size() > most_files) return "Its package holds more files than any mod does.";
     static constexpr std::string_view top_files[]{
         "manifest.json", "reskate-mod.json", "reskate-build.json", ".reskate-studio-patch", "reskate-levels.json",
-        "layout.toc", "icon.png", "readme.md", "changelog.md", "license", "license.md", "license.txt"};
+        "layout.toc", "icon.png", "readme.md", "changelog.md", "license", "license.md", "license.txt",
+        // A copy of the game's InitFS archive beside the layout, as mods exported from a whole patch
+        // folder carry it. ReSkate never reads it from a mod: the game's InitFS is read from its own
+        // Data and Patch folders only (Engine/Vfs/initfs.cpp), the merge takes a mod's layout.toc
+        // and Win32 TOCs and archives and nothing else (mod_merge.cpp, mod_merge_files.cpp: scan),
+        // and the only layer mounted from Mods is the merged patch (Extension/Assets/mod_layers.cpp).
+        // So it is installed as it is, as the launcher installs it, and nothing in it runs. Anywhere
+        // else in the folder it is refused.
+        "initfs_win32"};
     static constexpr std::string_view game_data[]{".toc", ".sb", ".cas"};
     static constexpr std::string_view inert[]{".png", ".jpg", ".jpeg", ".md", ".txt"};
     const auto ends_in = [](std::string_view name, std::span<const std::string_view> endings) {
         return std::any_of(endings.begin(), endings.end(), [&](std::string_view ending) { return name.size() > ending.size() && name.ends_with(ending); });
     };
     bool loads{};
+    std::vector<std::string> refused; // the first few files that may not be installed, for the reason
+    std::size_t more{};
+    bool frosty{};
     for (const auto& file : files) {
         const auto path = lower(file);
         // Plain ASCII names only, as every name the game uses is (mod_list.h's ascii_path), with no
@@ -317,9 +328,20 @@ std::string refuse_contents(std::span<const std::string> files) {
         }
         if (parts.size() == 2 && parts[0] == "parks" && ends_in(leaf, std::array<std::string_view, 1>{".park.json"})) allowed = loads = true;
         if (parts.size() >= 2 && parts[0] == "win32" && ends_in(leaf, game_data)) allowed = true;
-        if (!allowed)
-            return "Its package holds " + one_line(file, 80) + ", which is not something a mod installed from the game may hold "
-                   "(only game data, maps, parks and what describes them).";
+        if (!allowed) {
+            frosty = frosty || ends_in(leaf, std::array<std::string_view, 1>{".fbmod"});
+            if (refused.size() < 3) refused.push_back(one_line(file, 80));
+            else ++more;
+        }
+    }
+    if (!refused.empty()) {
+        std::string names = refused.front();
+        for (std::size_t i = 1; i < refused.size(); ++i) names += (i + 1 == refused.size() && !more ? " and " : ", ") + refused[i];
+        if (more) names += " and " + std::to_string(more) + " other file(s)";
+        // (A Frosty mod is not something ReSkate loads at all: nothing reads or converts one.)
+        return "Its package holds " + names + ", which a mod installed from the game may not hold "
+               "(only game data, maps, parks and what describes them)." +
+               (frosty ? std::string(" A .fbmod is a Frosty mod, which ReSkate does not load.") : std::string());
     }
     if (!loads) return "Its package has nothing for the game to load (no layout.toc, reskate-levels.json or parks).";
     return {};
