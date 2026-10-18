@@ -290,8 +290,9 @@ def meshset(chunk_guid, name=GROUNDPLANE + "_mesh", lods=1):
             data[at + 30], data[at + 31] = per_vertex, 3
             struct.pack_into("<4I", data, at + 32, 2, first, start, 4)
             struct.pack_into("<Q", data, at + 0x138, section_keys(name)[s])
-            struct.pack_into("<3f", data, at + 332, -25.0, 0.0, -25.0)      # the section's box (min, then max
-            struct.pack_into("<3f", data, at + 348, 25.0, 0.0, 25.0)        # 16 bytes on)
+            struct.pack_into("<f", data, at + 332, 2500.0)                  # the section's area (50 x 50 m)
+            struct.pack_into("<3f", data, at + 336, -25.0, 0.0, -25.0)      # its box (min, then max 16 bytes on)
+            struct.pack_into("<3f", data, at + 352, 25.0, 0.0, 25.0)
             for e, element in enumerate(elements):
                 data[at + 112 + 4 * e:at + 116 + 4 * e] = bytes(element)
             for e, stride in enumerate(strides):

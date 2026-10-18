@@ -325,12 +325,17 @@ def test_mesh_own_writes_a_meshset_rigidmesh_and_chunk(tmp_path):
     assert toc_chunk.location.patch and decode_raw(view.read(toc_chunk.location, toc_chunk.offset, toc_chunk.size)) == chunk
     lod = read_layout(ms)[0]
     assert lod.chunk == chunk_asset.guid and rebuild_chunk(lod, chunk) == chunk
-    for s in lod.sections:
-        points = section_positions(s, chunk)
-        assert len(points) == 25 and min(p[0] for p in points) == -10 and max(p[2] for p in points) == 10
-        tris = section_triangles(lod, s, chunk)
-        a, b, c = (points[i] for i in tris[0])
-        assert (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]) < 0     # the template's winding
+    s = lod.sections[0]                                                # our geometry
+    points = section_positions(s, chunk)
+    assert len(points) == 25 and min(p[0] for p in points) == -10 and max(p[2] for p in points) == 10
+    tris = section_triangles(lod, s, chunk)
+    a, b, c = (points[i] for i in tris[0])
+    assert (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]) < 0     # the template's winding
+    unpack = __import__("struct").unpack_from
+    assert unpack("<f", ms, s.at + 332)[0] == 400.0                     # its area: 20 x 20 m
+    other = lod.sections[1]                                            # kept, one zero-area triangle
+    assert (other.triangle_count, other.vertex_count) == (1, 1)
+    assert section_triangles(lod, other, chunk) == [(0, 0, 0)] and unpack("<f", ms, other.at + 332)[0] == 0.0
     # The other elements are the template's first vertex's.
     first = lod.sections[0]
     # Stream 1 of vertex 0: the template's normal bytes, then our UV (x / 6, z / 6) at (-10, -10).
@@ -482,9 +487,13 @@ def test_coordinates_take_any_separator(tmp_path, capsys):
 
 def test_own_mesh_on_a_stock_blueprint_clone(tmp_path):
     _, _, report, root, view = build(tmp_path, bam="333", mesh="own", blueprint_template=BOX, asset_bundle="root",
-                                     keep_section=0, collision_mode="template", size=20.0)
+                                     collision_mode="template", size=20.0)
     text = "\n".join(report)
-    assert "boxes found in the structs: section +332" in text and "LOD 0: keeps section 0 of 2" in text
+    assert "boxes found in the structs: section +336" in text and "is each template section's surface area" in text
+    assert "    section 1: 1 triangles, 1 vertices, material" in text and "    section 0: 200 triangles" not in text
+    assert "    section 0: 32 triangles, 25 vertices" in text                # 20 m in 5 m cells
+    with pytest.raises(ValueError, match="crashed the game"):
+        build(tmp_path / "k", mesh="own", blueprint_template=BOX, asset_bundle="root", keep_section=0)
     assert "the template's own .physics, unchanged" in text and "NOT DRAWN" not in text
     toc = read_toc((root / "Win32" / (NEW + ".toc")).read_bytes())
     _, region, manifest = view.bundle(toc, "win32/" + NEW)
@@ -492,12 +501,12 @@ def test_own_mesh_on_a_stock_blueprint_clone(tmp_path):
     resources = {a.name: 1 + len(manifest.ebx) + i for i, a in enumerate(manifest.resources)}
     ms = view.payload(region, resources[mesh_name])
     lod = read_layout(ms)[0]
-    assert len(lod.sections) == 1 and int.from_bytes(ms[182:184], "little") == 1
+    assert len(lod.sections) == 2 and int.from_bytes(ms[182:184], "little") == 2     # every section kept
     section = lod.sections[0]
     assert int.from_bytes(ms[section.at + 0x138:section.at + 0x140], "little") == section_keys(BOX + "_mesh")[0]
     unpack = __import__("struct").unpack_from
-    assert unpack("<3f", ms, section.at + 332) == (-10.0, 0.0, -10.0)       # the section's box, ours now
-    assert unpack("<3f", ms, section.at + 348) == (10.0, 0.0, 10.0)
+    assert unpack("<3f", ms, section.at + 336) == (-10.0, 0.0, -10.0)       # the section's box, ours now
+    assert unpack("<3f", ms, section.at + 352) == (10.0, 0.0, 10.0) and unpack("<f", ms, section.at + 332)[0] == 400.0
     assert unpack("<3f", ms, 0x10) == (-10.0, 0.0, -10.0)
     box_physics = Game(view.root).bundle(Game(view.root).superbundle(BAM), "win32/" + BAM)
     physics = view.payload(region, resources[PHYSICS])
@@ -523,7 +532,7 @@ def test_own_collision_takes_the_templates_part_count(tmp_path):
 
 def test_mesh_shapes_box_and_donor_copy(tmp_path):
     _, _, report, _, _ = build(tmp_path / "a", mesh="own", blueprint_template=BOX, asset_bundle="root",
-                               mesh_shape="box", keep_section=0)
+                               mesh_shape="box")
     assert any("--mesh-shape box: a closed box [-25.0, 0.0, -25.0]..[25.0, 0.0, 25.0]" in line for line in report)
     assert any("ours: 24 vertices, 12 triangles per section" in line for line in report)
     _, _, report, root, view = build(tmp_path / "b", mesh="own", blueprint_template=BOX, asset_bundle="root",
@@ -540,9 +549,22 @@ def test_mesh_shapes_box_and_donor_copy(tmp_path):
 
 def test_meshset_diff_prints_the_fields_that_differ(tmp_path, capsys):
     _, _, _, root, _ = build(tmp_path, bam="333", mesh="own", blueprint_template=BOX, asset_bundle="root",
-                             keep_section=0, size=20.0)
+                             size=20.0)
     main(["meshset-diff", "--game", str(tmp_path / "game"), "--mod-a", str(root),
           "--a", f"{NEW}:win32/{NEW}:levels/game/{LEVEL}/ground_mesh", "--b", f"{BAM}:win32/{BAM}:{BOX}_mesh"])
     out = capsys.readouterr().out
-    assert "header +16 box min" in out and "LOD 0 +116 chunk GUID" in out and "LOD 0 +8 section count" in out
-    assert "LOD 0: sections 1 vs 2" in out and "LOD 0 section 0 +32 triangle count" in out
+    assert "header +16 box min" in out and "LOD 0 +116 chunk GUID" in out and "LOD 0 +88 index bytes" in out
+    assert "LOD 0: sections 2 vs 2" in out and "LOD 0 section 0 +32 triangle count" in out
+
+
+def test_write_mesh_warns_on_the_dont_draw_flag_and_can_fill_every_section():
+    ms, chunk = meshset(guid(1))
+    flagged = bytearray(ms)
+    flagged[208 + 80] |= 1
+    verts = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)]
+    _, _, report = write_mesh(bytes(flagged), [chunk], verts, [(0, 2, 1)], [guid(2)])
+    assert any(line.startswith("WARNING: LOD 0 flags 0x41 have bit 0 set") for line in report)
+    out, chunks, report = write_mesh(ms, [chunk], verts, [(0, 2, 1)], [guid(2)], geometry_section=None)
+    lod = read_layout(out)[0]
+    assert [s.triangle_count for s in lod.sections] == [1, 1] and [s.vertex_count for s in lod.sections] == [3, 3]
+    assert not any("WARNING" in line for line in report)
