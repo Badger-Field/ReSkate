@@ -19,7 +19,7 @@
         [--at X Y Z] [--mirror] [--bam 333|no-world|all] [--asset-bundle ...] [--dry-run]
   python -m reskate_mapbuilder place-info --tiles <DIR> [--at X Y Z] [--max-height M] [--skip-part P]
   python -m reskate_mapbuilder scan-materials --game <dir> [--superbundle S ...] [--bundle-contains TEXT] \\
-        [--class wood ...] [--both] [--every]
+        [--class wood ...] [--both] [--every] [--explain SUPERBUNDLE:BUNDLE]
   python -m reskate_mapbuilder material-donors --game <dir> [--contains TEXT]
   python -m reskate_mapbuilder mesh-refs --game <dir> [--mod <mod dir>] --superbundle S --bundle B --mesh EBX \\
         [--scan SUPERBUNDLE:BUNDLE ...] [--level <name>]
@@ -48,7 +48,8 @@ from .ground import material_donors
 from .ground import ASSET_BUNDLES, BAM_MODES, COLLISION_MODES, MESH_MODES, MESH_SHAPES, VISUAL_MODES, BLUEPRINT_BUNDLE, BLUEPRINT_TEMPLATE, DEFAULT_AT, DEFAULT_SIZE, TILE_TEMPLATE, new_ground_level
 from .level import BASE_SUPERBUNDLE, new_level
 from .materials import CLASSES as MATERIAL_CLASSES, auto_bundle as auto_material_bundle
-from .materials import auto_donors as auto_material_donors, report as materials_report, scan as scan_materials
+from .materials import auto_donors as auto_material_donors, explain as explain_materials
+from .materials import report as materials_report, scan as scan_materials
 from .meshrefs import mesh_refs
 from .place import (PlaceError, check_spots, view_spots, collision as place_collision, filter_collision, read_place, spawn_at,
                     summary as place_summary, visual_class, visual_label)
@@ -329,6 +330,13 @@ def scan_materials_command(args):
     """Bundles of the whole game (or chosen superbundles) holding usable concrete, stone, wood or
     metal materials, ranked per MB (read-only)."""
     game = Game(args.game)
+    if args.explain:
+        superbundle, _, bundle = args.explain.partition(":")
+        if not bundle:
+            sys.exit(f"--explain {args.explain!r}: give SUPERBUNDLE:BUNDLE")
+        for line in explain_materials(game, superbundle, bundle):
+            print(line)
+        return
     rows = scan_materials(game, args.superbundle or None, args.bundle_contains or "", args.limit,
                           log=lambda line: print(line, flush=True))
     for line in materials_report(rows, args.top, args.every, args.material_class, args.both):
@@ -595,6 +603,9 @@ def main(argv=None):
     p.add_argument("--limit", type=int, help="read at most this many bundles with meshes")
     p.add_argument("--top", type=int, default=30, help="bundles listed")
     p.add_argument("--every", action="store_true", help="list every usable section of each bundle, not the first 12")
+    p.add_argument("--explain", metavar="SUPERBUNDLE:BUNDLE",
+                   help="one bundle: every section's words, classes, auto roles, usable or why not, and the auto "
+                        "pick's verdict")
     p.add_argument("--class", dest="material_class", action="append", choices=tuple(MATERIAL_CLASSES),
                    help="only sections (and bundles) of this class (repeatable)")
     p.add_argument("--both", action="store_true",
