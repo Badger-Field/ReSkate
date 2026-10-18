@@ -41,14 +41,21 @@ PROXY_WORDS = ("vista", "impostor", "imposter", "proxy", "billboard", "shadow", 
 LOD_WORD = re.compile(r"lod\d+$")
 
 
+CAMEL_PART = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+")
+
+
 def name_words(text: str) -> set[str]:
-    """The words of a name: split at anything not a letter or digit, each also without a plural s."""
+    """The words of a name: split at anything not a letter or digit, and each such token also
+    into its camelCase and digit runs ("SgGrdSlabs01": sggrdslabs01, sg, grd, slabs, 01), each
+    word also without a plural s; lower case."""
     words = set()
-    for token in re.split(r"[^a-z0-9]+", text.lower()):
-        if token:
-            words.add(token)
-            if token.endswith("s") and len(token) > 3:
-                words.add(token[:-1])
+    for token in re.split(r"[^A-Za-z0-9]+", text):
+        if not token:
+            continue
+        for word in {token.lower(), *(part.lower() for part in CAMEL_PART.findall(token))}:
+            words.add(word)
+            if word.endswith("s") and len(word) > 3:
+                words.add(word[:-1])
     return words
 
 
@@ -238,10 +245,11 @@ def report(rows: list[dict], top: int = 30, every: bool = False, only_classes: l
 # may share a section already taken when nothing else matches.
 AUTO_PICKS = (
     ("concrete", ("poured", "concrete", "cement", "curb", "kerb"), True),
-    ("ground", ("paver", "paving", "pavement", "sidewalk", "cobble", "cobblestone", "flagstone", "tile", "granite",
-                "stone", "concrete", "cement"), True),
+    ("ground", ("grd", "ground", "slab", "paver", "paving", "pavement", "sidewalk", "floor", "cobble", "cobblestone",
+                "flagstone", "tile", "granite", "stone", "concrete", "cement"), True),   # ranked by ground_quality
     ("wood", ("wood", "plank", "timber"), True),
-    ("building", ("brick", "wall", "facade", "plaster", "stucco", "stone", "concrete", "cement"), False),
+    ("building", ("brick", "wall", "wll", "cladding", "facade", "plaster", "stucco", "stone", "concrete", "cement"),
+     False),
     ("stone", ("stone", "granite", "marble", "cobble", "cobblestone", "brick"), False),
     ("metal", ("metal", "steel", "iron", "rail", "aluminium", "aluminum"), False),
 )
@@ -251,6 +259,45 @@ AUTO_MIN_BYTES = 64 * 1024     # stored size a bundle needs (near-empty bundles 
 AUTO_ENOUGH = 12               # qualifying bundles compared before choosing
 
 
+# The ground's material, ranked (the PC's M3: a black granite trim picked for the ground drew it
+# almost black): 3 paving words, 2 plain stone or concrete, 1 terrain (clover, grass, dirt),
+# 0 penalised (trim, cladding, walls, roofs, black or dark: used only when nothing else is).
+GROUND_PAVING = ("grd", "ground", "slab", "paver", "paving", "pavement", "sidewalk", "floor", "cobble", "cobblestone",
+                 "flagstone", "tile")
+GROUND_PLAIN = ("stone", "granite", "concrete", "cement")
+GROUND_TERRAIN = ("terrain", "clover", "grass", "dirt", "soil", "mud")
+GROUND_PENALTY = ("trim", "cladding", "wll", "wall", "facade", "roof", "black", "dark")
+
+
+def ground_quality(material: str) -> tuple[int, str] | None:
+    """(rank, reason) of a material as the ground, or None when its words say nothing of ground."""
+    words = material_words(material)
+    paving = [w for w in GROUND_PAVING if w in words]
+    plain = [w for w in GROUND_PLAIN if w in words]
+    terrain = [w for w in GROUND_TERRAIN if w in words]
+    penalty = [w for w in GROUND_PENALTY if w in words]
+    if not (paving or plain or terrain):
+        return None
+    if penalty:
+        return 0, f"penalised ({', '.join(penalty)})"
+    if paving:
+        return 3, f"paving ({', '.join(paving)})"
+    if plain:
+        return 2, f"plain ({', '.join(plain)})"
+    return 1, f"terrain ({', '.join(terrain)})"
+
+
+def ground_candidates(row: dict, taken: set | None = None) -> list[tuple[int, str, tuple]]:
+    """The usable sections that could be the ground, best first: (rank, reason, section)."""
+    out = []
+    for order, sec in enumerate(s for s in row["sections"] if s[4]):
+        quality = ground_quality(sec[2])
+        if quality is not None and (taken is None or (sec[0], sec[1]) not in taken):
+            out.append((quality[0], quality[1], sec, order))
+    out.sort(key=lambda c: (-c[0], c[3]))
+    return [(rank, reason, sec) for rank, reason, sec, _ in out]
+
+
 def auto_donors(row: dict) -> dict[str, str]:
     """CLASS -> "MESH:SECTION" from one scanned bundle's usable sections (AUTO_PICKS)."""
     usable = [s for s in row["sections"] if s[4]]
@@ -258,6 +305,16 @@ def auto_donors(row: dict) -> dict[str, str]:
     taken_sections: set[tuple[str, int]] = set()
     taken_materials: set[str] = set()
     for label, words, distinct in AUTO_PICKS:
+        if label == "ground":
+            ranked = ground_candidates(row, taken_sections)
+            if ranked:
+                best = ranked[0][0]
+                pick = next((sec for rank, _, sec in ranked if rank == best and sec[2].lower() not in taken_materials),
+                            ranked[0][2])
+                out[label] = f"{pick[0]}:{pick[1]}"
+                taken_sections.add((pick[0], pick[1]))
+                taken_materials.add(pick[2].lower())
+            continue
         matches = [s for word in words for s in usable if word in material_words(s[2])]
         if distinct:
             matches = [s for s in matches if (s[0], s[1]) not in taken_sections]
@@ -277,16 +334,29 @@ def _material_of(row: dict, spec: str) -> str:
 
 
 def auto_score(row: dict) -> tuple[int, ...]:
-    """How well a bundle suits a plaza: ground of pavers or stone (not concrete), poured concrete,
-    a ground material different from concrete's, a world-partition tile (wproot/wp/)."""
+    """How well a bundle suits a plaza: its ground's rank (ground_quality: 3 paving, 2 plain stone
+    or concrete, 1 terrain, 0 penalised), poured concrete, a ground material different from
+    concrete's, a world-partition tile (wproot/wp/)."""
     picks = auto_donors(row)
-    ground = material_words(_material_of(row, picks["ground"])) if "ground" in picks else set()
+    quality = ground_quality(_material_of(row, picks["ground"])) if "ground" in picks else None
     concrete = material_words(_material_of(row, picks["concrete"])) if "concrete" in picks else set()
-    pavers = bool(ground & {"paver", "paving", "pavement", "sidewalk", "cobble", "cobblestone", "flagstone", "tile",
-                            "granite", "stone"})
     different = "ground" in picks and "concrete" in picks and _material_of(row, picks["ground"]) != _material_of(
         row, picks["concrete"])
-    return (int(pavers), int("poured" in concrete), int(different), int("/wproot/wp/" in row["bundle"].lower()))
+    return (quality[0] if quality else -1, int("poured" in concrete), int(different),
+            int("/wproot/wp/" in row["bundle"].lower()))
+
+
+def ground_report(row: dict) -> list[str]:
+    """The ground candidates of a bundle, best first, with why each ranks where it does."""
+    picks = auto_donors(row)
+    taken = {tuple(v.rsplit(":", 1)) for k, v in picks.items() if k == "concrete"}
+    out = []
+    for rank, reason, sec in ground_candidates(row):
+        spec = f"{sec[0]}:{sec[1]}"
+        note = ("picked" if picks.get("ground") == spec else
+                "taken by concrete" if (sec[0], str(sec[1])) in taken else "not picked")
+        out.append(f"    ground candidate {spec} {sec[2]!r}: rank {rank}, {reason}; {note}")
+    return out
 
 
 def auto_rejection(row: dict) -> str:
@@ -365,11 +435,13 @@ def auto_bundle(game, superbundles_: list[str], log=print, limit: int | None = N
     found.sort(key=lambda f: (f[0], f[1]), reverse=True)
     for score, size, sb, name, row in found[:5]:
         log(f"  candidate {name} ({-size / 2 ** 20:.2f} MB, {sum(1 for s in row['sections'] if s[4])} usable): "
-            f"pavers or stone ground {score[0]}, poured concrete {score[1]}, ground differs {score[2]}, "
+            f"ground rank {score[0]}, poured concrete {score[1]}, ground differs {score[2]}, "
             f"wproot tile {score[3]}")
     score, size, sb, name, row = found[0]
     log(f"--material-bundle auto: {sb}:{name} ({-size / 2 ** 20:.2f} MB; the best of {len(found)} qualifying, "
         f"{tried} read)")
+    for line in ground_report(row):
+        log(line)
     return sb, name, row
 
 
@@ -396,8 +468,9 @@ def explain(game, superbundle: str, bundle_name: str) -> list[str]:
                    + ("usable" if usable else f"NOT usable: {problem}"))
     reason = auto_rejection(row)
     picks = auto_donors(row)
-    out.append("auto pick: " + (f"qualifies, score {auto_score(row)} (pavers or stone ground, poured concrete, "
+    out.append("auto pick: " + (f"qualifies, score {auto_score(row)} (ground rank, poured concrete, "
                                 "ground differs, wproot tile)" if not reason else f"rejected: {reason}"))
+    out += ground_report(row)
     for label, spec in picks.items():
         out.append(f"  {label} = {spec} ({_material_of(row, spec)!r})")
     return out
