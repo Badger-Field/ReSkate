@@ -479,9 +479,13 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
         report.append("copy of the template's own geometry and vertex bytes, under new chunk GUIDs")
         return bytes(meshset), chunks, report
 
+    given = len(vertices)
+    # Per-face UV planes: vertices shared by faces of different main axes are split (ours, outward).
+    vertices, triangles, normals = split_by_axis(vertices, triangles)
     if len(vertices) > 0xFFFF:
-        raise ValueError("at most 65535 vertices")
-    normals = vertex_normals(vertices, triangles)          # ours, outward: picks each face's UV plane
+        raise ValueError(f"at most 65535 vertices ({len(vertices)} after splitting by face axis)")
+    if len(vertices) != given:
+        report.append(f"vertices split by face axis for per-face UVs: {given} -> {len(vertices)}")
     first, first_chunk = lods[0].sections[0], template_chunks[0]
     theirs = _outward(section_positions(first, first_chunk), section_triangles(lods[0], first, first_chunk))
     flip = theirs is False
@@ -710,21 +714,46 @@ def _unit(n):
     return (n[0] / length, n[1] / length, n[2] / length) if length else (0.0, 1.0, 0.0)
 
 
-def vertex_normals(vertices, triangles):
-    """Per vertex, the sum of its triangles' (b - a) x (c - a), normalised."""
-    sums = [[0.0, 0.0, 0.0] for _ in vertices]
-    for a, b, c in triangles:
-        n = _face_normal(vertices[a], vertices[b], vertices[c])
-        for i in (a, b, c):
+def face_axis(n) -> int:
+    """The main axis of a normal: 0 (faces x), 1 (top or bottom), 2 (faces z)."""
+    return max(range(3), key=lambda i: abs(n[i]))
+
+
+def split_by_axis(vertices, triangles):
+    """(vertices, triangles, normals) with every vertex shared by faces of different main axes
+    split, one copy per axis, so each face's planar UVs use its own projection (x, z on top; z, y
+    facing x; x, y facing z). A vertex's normal is its faces' axis, signed by their summed normal.
+    Welded geometry (a building's roof and walls sharing corners) otherwise gives the wall's top
+    corners a roof projection: UVs constant up the wall, drawn as vertical streaks."""
+    index: dict[tuple[int, int], int] = {}
+    sums: list[list[float]] = []
+    out_vertices, out_triangles = [], []
+    for tri in triangles:
+        n = _face_normal(*(vertices[i] for i in tri))
+        axis = face_axis(n) if any(n) else 1
+        new = []
+        for i in tri:
+            key = (i, axis)
+            if key not in index:
+                index[key] = len(out_vertices)
+                out_vertices.append(vertices[i])
+                sums.append([0.0, 0.0, 0.0])
+            j = index[key]
             for k in range(3):
-                sums[i][k] += n[k]
-    return [_unit(n) for n in sums]
+                sums[j][k] += n[k]
+            new.append(j)
+        out_triangles.append(tuple(new))
+    normals = []
+    for (_, axis), j in sorted(index.items(), key=lambda item: item[1]):
+        normal = [0.0, 0.0, 0.0]
+        normal[axis] = -1.0 if sums[j][axis] < 0 else 1.0
+        normals.append(tuple(normal))
+    return out_vertices, out_triangles, normals
 
 
 def planar_uv(p, n, density):
     """UV by the face's main axis: x, z for top and bottom; z, y facing x; x, y facing z."""
-    axis = max(range(3), key=lambda i: abs(n[i]))
-    u, v = {1: (p[0], p[2]), 0: (p[2], p[1]), 2: (p[0], p[1])}[axis]
+    u, v = {1: (p[0], p[2]), 0: (p[2], p[1]), 2: (p[0], p[1])}[face_axis(n)]
     return u * density, v * density
 
 

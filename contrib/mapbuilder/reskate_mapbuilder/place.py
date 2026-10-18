@@ -335,6 +335,16 @@ def visual_label(piece: Piece) -> str:
     return f"{piece.name}_t{piece.tile[0]}_{piece.tile[1]}".replace("-", "m")
 
 
+# The material class a visual object is drawn as (its --material-donor key): the export's
+# material, except that the buildings part gets its own class (a wall material, not the
+# concrete of steps and kerbs, which the export also calls concrete).
+PART_CLASSES = {"buildings": "building"}
+
+
+def visual_class(piece: Piece) -> str:
+    return PART_CLASSES.get(piece.part, piece.material)
+
+
 def view_spots(place: Place, at: tuple[float, float, float]) -> list[tuple[str, float, float, float | None, float, str]]:
     """Per visual object: (label, game x, game z, expected ground there, heading to face, note).
     After `trainer tp` and `trainer ground` the camera faces heading 0, +z (north; the PC,

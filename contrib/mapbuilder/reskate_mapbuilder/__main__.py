@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from collections import Counter
 
 from .ebx import read_document
 from .ebxcheck import array_hash_report, roundtrip
@@ -50,7 +51,7 @@ from .materials import CLASSES as MATERIAL_CLASSES, auto_bundle as auto_material
 from .materials import auto_donors as auto_material_donors, report as materials_report, scan as scan_materials
 from .meshrefs import mesh_refs
 from .place import (PlaceError, check_spots, view_spots, collision as place_collision, filter_collision, read_place, spawn_at,
-                    summary as place_summary)
+                    summary as place_summary, visual_class, visual_label)
 from .meshset import describe_meshset, diff_meshsets
 from .mod import ModBuilder
 from .physics import (KIND_TRIANGLE_MESH, Shape, compute_edge_data, physics_tail, read_physics, replace_shape,
@@ -227,27 +228,39 @@ def _props(args) -> list:
 
 
 def _visuals(args, place) -> list:
-    """(name, vertices, triangles, material) of the place's visual objects with --visuals, filtered
-    by --visuals-only (an object's name, its part, or a name prefix)."""
+    """(name, vertices, triangles, class) of the place's visual objects with --visuals, filtered
+    by --visuals-only and --skip-visual (an object's name, its part, or a name prefix). The class
+    is the export's material, but `building` for the buildings part (place.visual_class)."""
     if place is None or not getattr(args, "visuals", False):
         return []
     only = getattr(args, "visuals_only", None) or []
+    skip = getattr(args, "skip_visual", None) or []
+
+    def matches(piece, label, names):
+        return any(o in (piece.name, piece.part, label) or piece.name.startswith(o) for o in names)
+
     out = []
+    classes: dict[str, Counter] = {}
     for piece in place.visual:
-        label = f"{piece.name}_t{piece.tile[0]}_{piece.tile[1]}".replace("-", "m")
-        if only and not any(o in (piece.name, piece.part, label) or piece.name.startswith(o) for o in only):
+        label = visual_label(piece)
+        if (only and not matches(piece, label, only)) or matches(piece, label, skip):
             continue
-        out.append((label, piece.vertices, piece.triangles, piece.material))
+        kind = visual_class(piece)
+        out.append((label, piece.vertices, piece.triangles, kind))
+        classes.setdefault(kind, Counter())[piece.part] += 1
     if getattr(args, "visual_slab", None):
         from .meshset import box_geometry
         w, h, d = _xyz(args.visual_slab, "--visual-slab")
         vertices, triangles = box_geometry((-w / 2, -h, -d / 2), (w / 2, 0.0, d / 2))
         out.append(("slab", vertices, triangles, "ground"))
     if not out:
-        sys.exit("--visuals: no visual object matches --visuals-only")
+        sys.exit("--visuals: no visual object matches --visuals-only / --skip-visual")
     extra = " plus the slab" if getattr(args, "visual_slab", None) else ""
     print(f"visual objects: {len(out) - bool(extra)} of {len(place.visual)}{extra}: " + ", ".join(
         f"{name} ({material}, {len(v)} vertices, {len(t)} triangles)" for name, v, t, material in out))
+    print("visual classes (each drawn with its --material-donor): " + "; ".join(
+        f"{kind} <- " + ", ".join(f"{part} ({n})" for part, n in sorted(parts.items()))
+        for kind, parts in sorted(classes.items())))
     return out
 
 
@@ -453,6 +466,8 @@ def _place_options(p):
                    help="drop the collision chunks of this part or object name, e.g. buildings (repeatable)")
     p.add_argument("--visuals", action="store_true",
                    help="draw the place's visual objects: one blueprint and mesh each, cloned from --visual-template")
+    p.add_argument("--skip-visual", action="append", metavar="OBJECT",
+                   help="leave out visual objects by name, part (e.g. buildings) or name prefix (repeatable)")
     p.add_argument("--visuals-only", action="append", metavar="OBJECT",
                    help="only these visual objects (name, part or name prefix; repeatable)")
     p.add_argument("--visual-slab", nargs="+", metavar="W,H,D",

@@ -174,23 +174,35 @@ def report(rows: list[dict], top: int = 30, every: bool = False, only_classes: l
     return out
 
 
-# --material-bundle auto: the material each place label takes from the picked bundle, by class
-# (the first usable section whose material name says it, then one whose mesh name does).
-AUTO_PICKS = {"ground": GROUND_CLASSES, "concrete": GROUND_CLASSES, "stone": ("stone", "concrete"),
-              "wood": ("wood",), "metal": ("metal",)}
+# --material-bundle auto: what each visual class takes from the picked bundle. Per class, words
+# tried in order, first in a usable section's material name, then in its mesh name; a section
+# already taken by an earlier class (by material name) is skipped while another matches, so the
+# ground (pavers or stone first) and steps, kerbs and banks (poured concrete first) differ when
+# the bundle has both, and buildings get a wall material (brick, stone) else concrete.
+AUTO_PICKS = (
+    ("ground", ("paver", "paving", "pavement", "sidewalk", "cobble", "tile", "granite", "stone", "concrete")),
+    ("concrete", ("poured", "concrete", "cement", "curb", "kerb", "stone", "paver", "paving", "pavement")),
+    ("building", ("brick", "wall", "facade", "plaster", "stucco", "stone", "concrete", "cement")),
+    ("stone", ("stone", "granite", "marble", "cobble", "brick")),
+    ("wood", ("wood", "plank", "timber", "deck", "bench")),
+    ("metal", ("metal", "steel", "iron", "rail", "alum")),
+)
 AUTO_SCAN_LIMIT = 400
 
 
 def auto_donors(row: dict) -> dict[str, str]:
-    """MATERIAL -> "MESH:SECTION" from one scanned bundle's usable sections."""
-    out = {}
-    for label, wanted in AUTO_PICKS.items():
-        for kind in wanted:
-            pick = next((s for s in row["sections"] if s[4] and kind in classes_of(s[2])), None) or next(
-                (s for s in row["sections"] if s[4] and kind in s[3]), None)
-            if pick:
-                out[label] = f"{pick[0]}:{pick[1]}"
-                break
+    """CLASS -> "MESH:SECTION" from one scanned bundle's usable sections (AUTO_PICKS)."""
+    usable = [s for s in row["sections"] if s[4]]
+    out: dict[str, str] = {}
+    taken: set[str] = set()
+    for label, words in AUTO_PICKS:
+        matches = [s for word in words for s in usable if word in s[2].lower()]
+        matches += [s for word in words for s in usable if word in s[0].lower()]
+        if not matches:
+            continue
+        pick = next((s for s in matches if s[2].lower() not in taken), matches[0])
+        out[label] = f"{pick[0]}:{pick[1]}"
+        taken.add(pick[2].lower())
     return out
 
 

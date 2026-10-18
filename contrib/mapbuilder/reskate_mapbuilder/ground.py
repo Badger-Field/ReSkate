@@ -955,8 +955,16 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         if not wanted and auto_material:
             wanted = auto_donors(prepared, log)
         donors = _visual_donors(game, prepared, wanted, log, host)
+        drawn = {}
+        for material in sorted({m for _, _, _, m in visuals}):
+            chosen = next((m for m in (material,) + MATERIAL_FALLBACK.get(material, ()) if m in donors), None)
+            drawn[material] = donors[chosen]
+            log.append(f"  visual class {material} ({sum(m == material for _, _, _, m in visuals)} objects): "
+                       + (f"drawn with {donors[chosen][3]}" if chosen == material else
+                          f"drawn with {chosen}'s donor {donors[chosen][3]}" if chosen else
+                          f"drawn with the default {donors[None][3]}"))
         for name, vertices, triangles, material in visuals:
-            asset = _visual_asset(game, level, name, vertices, triangles, prepared, donors.get(material, donors[None]),
+            asset = _visual_asset(game, level, name, vertices, triangles, prepared, drawn[material],
                                   uv_per_metre, log)
             visual_assets.append(asset)
             stock.append((asset["bp_name"], tuple(at), asset["bp"].file_guid, asset["bp"].instances[0].instance_guid))
@@ -1375,7 +1383,8 @@ def _visual_asset(game, level: str, name: str, vertices, triangles, prepared: di
     log.append(f"  visual {name}: {len(vertices)} vertices, {len(triangles)} triangles (limits 65,535 and 16-bit "
                f"indices), box {[round(v, 2) for v in lo]}..{[round(v, 2) for v in hi]}, material {donor_label}"
                + f" -> {bp_name}; "
-               + "; ".join(line.strip() for line in lines if "physics parts:" in line))
+               + "; ".join(line.strip() for line in lines if "physics parts:" in line)
+               + "".join(f"; {line}" for line in report if line.startswith("vertices split by face axis")))
     return {"target": target, "keys": _meshset_keys(meshset),
             "bp_name": bp_name, "bp": bp, "mesh_name": mesh_name, "mesh": mesh, "physics_name": physics_name,
             "physics": physics, "physics_doc": physics_doc, "physics_type": prepared["physics_asset"].resource_type,
@@ -1424,6 +1433,8 @@ MATERIAL_WORDS = {
 # surface for ground, a skatepark rail for metal; concrete the first usable section of a mesh
 # named like concrete, else the template's section 1 (the box's Sides_M); wood stays the template's
 # section 0.
+# A visual class without a donor of its own takes the first of these that has one (else the default).
+MATERIAL_FALLBACK = {"building": ("concrete",), "stone": ("concrete",)}
 AUTO_DONORS = {"ground": ("cmn_prp_skatepark_01_rampwedge", 0), "metal": ("railflatrectangular", 0)}
 
 
