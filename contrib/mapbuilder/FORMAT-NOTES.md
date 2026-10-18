@@ -86,7 +86,25 @@ Vertex declaration, at section +112:
 | +96 | u8 element count |
 | +97 | u8 stream count |
 
-Element usage and format pairs seen. Only usage 1 is decoded and verified.
+**Formats** (the PC, from Skate.exe's reflection names of `VertexElementFormat`, declaration
+order): 0 None, 1 Float, 2 Float2, 3 Float3, 4 Float4, 5 Half, 6 Half2, 7 Half3, 8 Half4, 9 UByteN,
+10 Byte4, 11 Byte4N, 12 UByte4, 13 UByte4N, 14 Short, 15 Short2, 16 Short3, 17 Short4, 18 ShortN,
+19 Short2N, 20 Short3N, 21 Short4N, 22 UShort2, 23 UShort4, 24 UShort2N, 25 UShort4N, 26 Int, ...
+39 UInt4N, 40-43 (U)Comp3(N)_10_10_10, 44-47 (U)Comp3(N)_11_11_10, 48-51 (U)Comp4(N)_10_10_10_2.
+`meshset.FORMAT_CODES` reads and writes 1-26.
+
+**Usages on the skatepark box** (LOD 0; the PC): 33 (Half2) is TexCoord0, atlas-like (section 0
+u 0.277..0.723, v -0.238..0.238; section 1 u -0.217..1.723); 34 (Half2) TexCoord1 at world scale,
+about 0.5 per metre; 51 (UByte4) zeros or (1, 0, 0, 0); 52 (UByte4N) (0, 0, 0 or 255, a), a 56 to
+253. No normal or tangent element. An earlier guess here (format 12 = two halves, a UV in usage 51;
+6 and 13 packed normal frames) was wrong: our planar UVs went into usage 51 and every vertex
+carried one copied TexCoord0, which is why our meshes were one flat colour. The builder now writes
+TexCoord0 planar per face from the template section's own minimum at its own density (or
+`--uv-per-metre`), TexCoord1 planar at the template's density, zeros to 51 and the template
+section's most common value to 52. The section's floats at +88 and +92 (0.0732 and 0.4838 on the
+box) look like those two densities (texture coordinate ratios); they are kept from the template.
+
+Element usage and format pairs seen (first survey; meanings above supersede the guesses below).
 
 | Usage | Format | Sections | Reading |
 |---|---|---|---|
@@ -1017,6 +1035,16 @@ reported.
 works, every reading within 0.1 m of the printed table (299.4, 299.4, 300.2, 301.0, 300.2, 300.4,
 300.1 near grind 2, none 20 m east); the skater lands on the invisible bench at 301.5 (its top plus
 the skater's offset; `trainer ground` there reports the surface below).
+
+**Tested in game** (5924574, `--visuals --visuals-only spot_2_ledge`, and the 6 ground objects):
+the level load crashes 27 s in (read at 0xffffffffffffffff, Skate+0x3dc1b71) in a walk over a
+slot table whose entries carry two tag bits: bit 0 set, skipped; bit 1 set, the value less its tags
+used as an object. The value read, 0x14e9899ef8f39c32, is exactly our resource id of
+`visual_ground_0_0_tm2_m1_mesh` (an MD5 of the name): an id ending in binary 10 is taken for a
+tagged object. The d1b slab's ids ended in 00 (mesh and collision) and Embarcadero's collision in
+01; base ids seen end in 01 and 11. Our ids now always end in 00. `--visuals-only` also takes the
+names the dry run prints (`ground_0_0_tm2_m1`), and `--visual-slab W,H,D` adds the d1b slab's
+shape through the visual path.
 
 **Visuals** (`--visuals`, written, not yet run in game): each visual object of each tile (13 in
 the Embarcadero export) gets its own blueprint, mesh and placement (at `--at`, like the
