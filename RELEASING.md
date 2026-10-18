@@ -40,8 +40,8 @@ ReSkateLauncher.exe --no-gui --no-update
 
 - **Compiled files are kept between runs.** The Windows job builds with Ninja and sccache, and keeps sccache's files in the Actions cache, so a change to a few files rebuilds only those. Debug information goes into each object file (`/Z7`) under Ninja so the cache can hold it; the PDBs come out the same. The Linux job does the same with ccache: a rebuild from its cache takes seconds, not about three minutes.
 - **A pull request runs only the jobs its files need.** `ci/changes.sh` (the first job, "What changed") compares the pull request with its base:
-  - A change only to `contrib/lidar-parks/` skips the Windows and Linux builds.
-  - A change that leaves `contrib/lidar-parks/` alone skips its tests.
+  - A change only to `contrib/lidar-parks/` or `contrib/mapbuilder/` skips the Windows and Linux builds.
+  - Each of those tools' tests run only when its own folder changes. The map builder's tests also run on any change the native builds see, because they check its Python against the C++ format code.
   - A change to `ci/` or `.github/` runs everything.
 
   Pushes to `main` and runs by hand always build everything. A skipped job counts as passed in a required check. To add another tool that the C++ build never reads, add its folder to `PYTHON_ONLY` in `ci/changes.sh`.

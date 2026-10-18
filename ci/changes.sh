@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Which of the Build workflow's jobs a change needs, as key=value lines for $GITHUB_OUTPUT:
 #
-#   native=true|false   the Windows and Linux builds (C++ and everything they read)
-#   lidar=true|false    the LiDAR parks Python tests
+#   native=true|false      the Windows and Linux builds (C++ and everything they read)
+#   lidar=true|false       the LiDAR parks Python tests
+#   mapbuilder=true|false  the map builder's Python tests, which check it against the C++ format
+#                          code: they run on its own changes and on any native change
 #
 #   ci/changes.sh BASE [HEAD]    compare HEAD (default HEAD) with BASE
 #   ci/changes.sh                no base: every job runs
@@ -10,13 +12,13 @@
 # Docs (*.md, LICENSE) need no job. A change only to a Python tool's own folder skips the native
 # builds: each folder in PYTHON_ONLY is read by nothing the C++ build compiles or tests. Anything
 # else, including ci/ and .github/, runs every job. Each Python tool's tests run when its folder,
-# ci/ or .github/ changes.
+# ci/ or .github/ changes (the map builder's also with the native builds).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PYTHON_ONLY=(contrib/lidar-parks/)
+PYTHON_ONLY=(contrib/lidar-parks/ contrib/mapbuilder/)
 
-all() { echo "native=true"; echo "lidar=true"; }
+all() { echo "native=true"; echo "lidar=true"; echo "mapbuilder=true"; }
 
 if [[ $# -eq 0 ]]; then
     all
@@ -30,12 +32,14 @@ fi
 
 native=false
 lidar=false
+mapbuilder=false
 while IFS= read -r file; do
     [[ -z $file ]] && continue
     case $file in
-        ci/* | .github/*) native=true; lidar=true; continue ;;
+        ci/* | .github/*) native=true; lidar=true; mapbuilder=true; continue ;;
         *.md | LICENSE) continue ;;      # docs build nothing, as in the workflow's paths-ignore
         contrib/lidar-parks/*) lidar=true ;;
+        contrib/mapbuilder/*) mapbuilder=true ;;
     esac
     python_only=false
     for dir in "${PYTHON_ONLY[@]}"; do
@@ -44,5 +48,7 @@ while IFS= read -r file; do
     $python_only || native=true
 done <<< "$files"
 
+$native && mapbuilder=true
 echo "native=$native"
 echo "lidar=$lidar"
+echo "mapbuilder=$mapbuilder"

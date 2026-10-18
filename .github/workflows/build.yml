@@ -3,7 +3,8 @@
 # Each job runs a script in ci/, so the same checks run on your own PC with no Actions minutes:
 # ci/local.sh (Linux, LiDAR parks) and ci/local.ps1 (Windows). Changes to docs alone build nothing.
 # On a pull request, ci/changes.sh picks the jobs its files need: a change only to the LiDAR parks
-# tool skips the Windows and Linux builds, and one with no LiDAR parks change skips its tests.
+# tool or the map builder skips the Windows and Linux builds, and each Python tool's tests run
+# only when it changes (the map builder's also on any native change).
 # Pushes to main and runs by hand build everything.
 name: Build
 
@@ -30,6 +31,7 @@ jobs:
     outputs:
       native: ${{ steps.diff.outputs.native }}
       lidar: ${{ steps.diff.outputs.lidar }}
+      mapbuilder: ${{ steps.diff.outputs.mapbuilder }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -143,3 +145,16 @@ jobs:
           cache-dependency-path: contrib/lidar-parks/requirements.txt
       - if: steps.present.outputs.yes
         run: ci/local.sh lidar
+
+  mapbuilder:
+    name: Map builder (Python)
+    needs: changes
+    if: needs.changes.outputs.mapbuilder == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: ci/local.sh mapbuilder
