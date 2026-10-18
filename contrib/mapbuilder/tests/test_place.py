@@ -645,3 +645,12 @@ def test_auto_building_avoids_world_projected_walls():
     assert auto_donors(row)["building"] == f"{planter}:0"               # shares concrete's section: fine
     alone = {"sections": [row["sections"][1], row["sections"][0], row["sections"][5]]}
     assert auto_donors(alone)["building"] in (f"{stair}:0", f"{stair}:1")   # still used when nothing else is
+
+
+def test_a_merge_too_big_for_one_shape_is_refused_with_a_way_out():
+    from reskate_mapbuilder.place import Piece, merge
+    vertices, triangles = grid(0, 0, 150, 105)                     # 22,050 triangles
+    with pytest.raises(PlaceError, match="22050 triangles and 11236 vertices do not fit one shape.*more collision parts"):
+        merge([Piece((0, 0), "ground", "collision", "ground", "ground", vertices, triangles)])
+
+
