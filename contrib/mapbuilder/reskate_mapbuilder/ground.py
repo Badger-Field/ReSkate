@@ -462,7 +462,7 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                      collision=None, shader_from: str | None = None,
                      props: list[tuple[str, tuple[float, float, float]]] = (), keep_section: int | None = None,
                      mesh_shape: str = "slab", collision_mode: str = "own",
-                     geometry_section: int | None = 0) -> list[str]:
+                     geometry_section: int | None = 0, uv_per_metre: float | None = None) -> list[str]:
     """Adds a level whose content is our own ground to `mod` (see the module's text). Appends a
     report to `log` (also when it refuses) and returns it.
 
@@ -588,7 +588,41 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
             holder.set(field_name, ResourceReference(physics_id))
             moved += 1
     log.append(f"  new {bp_name}: file guid {bp.file_guid.string()}, {flags} Flags renewed; collision {physics_name} "
-               f"(id {physics_id:#x}, matched by name); {len(refs)} resource references, {moved} named the template's id")
+               f"(id {physics_id:#x}); {len(refs)} resource references, {moved} named the template's id")
+
+    # The blueprint's collision EBX, when it imports one (<blueprint>.physics, beside the resource
+    # of that name): the skatepark box does, so its copy kept using the box's collision until the
+    # import was moved to a copy of that EBX naming our resource (PC, ae03ddd).
+    physics_doc = template_physics_doc = None
+    template_physics_name = blueprint_template + PHYSICS_SUFFIX
+    if bp_source.has_ebx(template_physics_name):
+        template_physics_doc = _read(bp_source.ebx(template_physics_name), template_physics_name, log)
+        imported = sum(imp.file_guid == template_physics_doc.file_guid for imp in bp_old.imports)
+        log.append(f"  collision EBX {template_physics_name}: {template_physics_doc.root_type}, instance types "
+                   f"{dict(Counter(type_name(template_physics_doc, i.object) for i in template_physics_doc.instances if i.object))}"
+                   f", imported {imported} time(s) by the blueprint")
+        log.extend(_bounds_fields(template_physics_doc, "collision EBX"))
+        if collision_mode == "own" and imported:
+            physics_doc = clone_document(template_physics_doc, derived_guid(level, "ground_physics",
+                                                                            template_physics_doc.file_guid.string()),
+                                         level + ":ground_physics")
+            refresh_flags(template_physics_doc, physics_doc)
+            if isinstance(physics_doc.instances[0].object.get("Name"), str):
+                physics_doc.instances[0].object.set("Name", physics_name)
+            named = 0
+            for holder, field_name, ref in _resource_refs([i.object for i in physics_doc.instances if i.object]):
+                if ref.id == physics_asset.resource_id:
+                    holder.set(field_name, ResourceReference(physics_id))
+                    named += 1
+            moved_imports = 0
+            for imp in bp.imports:
+                if imp.file_guid == template_physics_doc.file_guid:
+                    imp.file_guid, imp.class_guid = physics_doc.file_guid, _new_guid_of(
+                        template_physics_doc, physics_doc, imp.class_guid)[0]
+                    moved_imports += 1
+            log.append(f"    new collision EBX {physics_name}: file guid {physics_doc.file_guid.string()}, {named} resource "
+                       f"references moved to our resource" + ("" if named else " (none held the template's id: by name)")
+                       + f", {moved_imports} blueprint imports moved to it")
 
     # 2b. With --mesh own: a MeshSet of our own geometry (the collision's grid), patched into a
     # copy of the template's, a copy of its RigidMeshAsset naming it, and its geometry chunk.
@@ -632,8 +666,9 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
             log.append(f"  --mesh-shape box: a closed box {[round(v, 2) for v in box_lo]}..{[round(v, 2) for v in box_hi]}")
         else:
             geometry = (grid_mesh.vertices, grid_mesh.triangles)
+        density = uv_per_metre if uv_per_metre is not None else (1.0 if mesh_shape in ("slab", "plane") else None)
         new_ms, new_chunks, lines = write_mesh(ms_data, chunk_data, geometry[0], geometry[1], chunk_guids, donor,
-                                               None, mesh_shape == "donor-copy", geometry_section)
+                                               None, mesh_shape == "donor-copy", geometry_section, density)
         mesh_new = clone_document(mesh_old, derived_guid(level, "ground_mesh", mesh_old.file_guid.string()),
                                   level + ":ground_mesh")
         refresh_flags(mesh_old, mesh_new)
@@ -675,6 +710,23 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         if missing:
             log.append(f"  WARNING: NOT DRAWN: our mesh's shader-block keys {[f'{k:#018x}' for k in missing]} are in no "
                        f"depot of the bundle it goes to ({asset_bundle}); use --asset-bundle root with --shader-from")
+
+    # Every import of our blueprint, and where it resolves; none may still name the template's own
+    # mesh (with --mesh own) or collision EBX (with --collision own).
+    names = dict(bp_source.guids())
+    for doc, name in ((physics_doc, physics_name), (own[0] if own else None, mesh_name)):
+        if doc is not None:
+            names[doc.file_guid] = name + " (ours)"
+    stale = set()
+    if own is not None:
+        stale.add(template_mesh[1].file_guid)
+    if physics_doc is not None and template_physics_doc is not None:
+        stale.add(template_physics_doc.file_guid)
+    for imp in bp.imports:
+        log.append(f"  our blueprint imports {names.get(imp.file_guid, imp.file_guid.string() + ' (another bundle)')}")
+    left = [names.get(imp.file_guid) for imp in bp.imports if imp.file_guid in stale]
+    if left:
+        raise ValueError(f"our blueprint still imports the template's {left}; not written")
 
     # 3. Our collision, with the template part's material and words.
     shapes, parts, version = read_physics(bp_source.payload("res", physics_index))
@@ -931,9 +983,11 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         log.append(f"--asset-bundle {asset_bundle}: the blueprint, its collision"
                    + (", our mesh" if own else "") + f" and what they need go into the level's copy of {assets_bundle}")
     mod.add_ebx(path, assets_bundle, bp_name, _checked_bytes(bp, bp_name))
+    if physics_doc is not None:
+        mod.add_ebx(path, assets_bundle, physics_name, _checked_bytes(physics_doc, physics_name))
     mod.add_resource(path, assets_bundle, physics_name, physics_asset.resource_type, physics, physics_id,
                      copy.copy(physics_asset.resource_meta))
-    new_counts = [1, 1, 0]
+    new_counts = [1 + (physics_doc is not None), 1, 0]
     if own is not None:
         mesh_new, new_ms, new_chunks, chunk_guids, ms_asset = own
         mod.add_ebx(path, assets_bundle, mesh_name, _checked_bytes(mesh_new, mesh_name))
@@ -944,7 +998,7 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         for guid, data in zip(chunk_guids, new_chunks):
             mod.add_chunk(path, assets_bundle, guid, data)
             mod.add_toc_chunk_payload(path, guid, data, chunk)
-        new_counts = [2, 2, len(new_chunks)]
+        new_counts = [new_counts[0] + 1, 2, len(new_chunks)]
     for kind, assets in ((EBX, bp_source.manifest.ebx), ("res", bp_source.manifest.resources),
                          (CHUNK, bp_source.manifest.chunks)):
         for i in copied[kind]:

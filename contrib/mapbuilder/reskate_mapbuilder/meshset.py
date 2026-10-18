@@ -321,7 +321,8 @@ def box_geometry(lo, hi):
 def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangles,
                chunk_guids: list[Guid], donor: tuple[bytes, list[bytes]] | None = None,
                keep_section: int | None = None, copy_template: bool = False,
-               geometry_section: int | None = 0) -> tuple[bytes, list[bytes], list[str]]:
+               geometry_section: int | None = 0, uv_per_metre: float | None = None
+               ) -> tuple[bytes, list[bytes], list[str]]:
     """A MeshSet and its geometry chunks (one per LOD, under `chunk_guids`), patched into a copy of
     `template` (the drawn mesh whose fields we keep). Returns (meshset, chunks, report).
 
@@ -418,9 +419,12 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
     # same layout in its LOD) whose face normal is closest to ours, so the undecoded normal and
     # tangent bytes face the right way; UVs are planar per face at the template's texel density.
     sign = -1.0 if flip else 1.0                     # the template's normals, made outward
-    density = uv_density(lods[0], lods[0].sections[min(geometry_section or 0, len(lods[0].sections) - 1)],
-                         template_chunks[0]) or 1.0 / UV_METRES
-    report.append(f"UVs: planar per face, {density:.4g} per metre (the template section's texel density)")
+    measured = uv_density(lods[0], lods[0].sections[min(geometry_section or 0, len(lods[0].sections) - 1)],
+                          template_chunks[0])
+    density = uv_per_metre or measured or 1.0 / UV_METRES
+    report.append(f"UVs: planar per face, {density:.4g} per metre ("
+                  + ("given" if uv_per_metre else "the template section's texel density" if measured else "default")
+                  + (f"; the template's is {measured:.4g}" if measured and uv_per_metre else "") + ")")
     report += normal_formats(lods[0], template_chunks[0], sign)
     chunks = []
     described = set()
@@ -669,12 +673,50 @@ def _closest(pool, normal, fallback):
     return max(pool, key=lambda entry: sum(entry[0][k] * normal[k] for k in range(3)))[1]
 
 
+def _oct(x, y):
+    z = 1.0 - abs(x) - abs(y)
+    if z < 0:
+        x, y = (1.0 - abs(y)) * (1 if x >= 0 else -1), (1.0 - abs(x)) * (1 if y >= 0 else -1)
+    return [x, y, z]
+
+
+def _quat_axis(q, axis):
+    x, y, z, w = q
+    columns = {0: [1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)],
+               1: [2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)],
+               2: [2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)]}
+    return columns[axis]
+
+
+def _s8(c):
+    return max(-1.0, (c - 256 if c > 127 else c) / 127.0)
+
+
+def _decoders():
+    u8 = (lambda c: c / 127.5 - 1.0)
+    out = {"unorm8 xyz": lambda b: [u8(c) for c in b[:3]], "snorm8 xyz": lambda b: [_s8(c) for c in b[:3]]}
+    for name, read in (("snorm16", lambda b: [max(-1.0, v / 32767.0) for v in struct.unpack("<2h", b)]),
+                       ("unorm16", lambda b: [v / 32767.5 - 1.0 for v in struct.unpack("<2H", b)])):
+        out[f"octahedral {name} (z)"] = (lambda r: lambda b: _oct(*r(b)))(read)
+        out[f"octahedral {name} (y)"] = (lambda r: lambda b: (lambda v: [v[0], v[2], v[1]])(_oct(*r(b))))(read)
+    for name, read in (("unorm8", lambda b: [u8(c) for c in b]), ("snorm8", lambda b: [_s8(c) for c in b])):
+        for axis in range(3):
+            out[f"quaternion {name} axis {'xyz'[axis]}"] = (lambda r, a: lambda b: _quat_axis(_unit4(r(b)), a))(read, axis)
+    return out
+
+
+def _unit4(q):
+    length = sum(c * c for c in q) ** 0.5
+    return [c / length for c in q] if length else [0.0, 0.0, 0.0, 1.0]
+
+
 def normal_formats(lod, chunk, sign) -> list[str]:
-    """Scores ways of reading the 4-byte elements (format 6 and 13) as a normal against the
-    template's face normals: unsigned or signed 8-bit xyz. Report only; writing copies matched
-    template vertices (_closest)."""
+    """One line per 4-byte element (formats 6 and 13) of the template's first section: how well
+    each reading as a normal (8-bit xyz, octahedral 16-bit, an 8-bit quaternion's axes) agrees with
+    the face normals. Report only: none fitted plain 8-bit xyz on the skatepark box (PC); our
+    vertices copy matched template vertices (_closest) whatever the format is."""
     out = []
-    for s in lod.sections:
+    for s in lod.sections[:1]:
         points = section_positions(s, chunk)
         faces = {}
         for a, b, c in section_triangles(lod, s, chunk):
@@ -686,17 +728,13 @@ def normal_formats(lod, chunk, sign) -> list[str]:
                 continue
             base, stride = _stream_base(s, t), s.strides[t]
             scores = {}
-            for label, decode in (("unorm8 xyz", lambda b: [c / 127.5 - 1.0 for c in b[:3]]),
-                                  ("snorm8 xyz", lambda b: [max(-1.0, (c - 256 if c > 127 else c) / 127.0) for c in b[:3]]),
-                                  ("unorm8 zyx", lambda b: [c / 127.5 - 1.0 for c in b[2::-1]])):
+            for label, decode in _decoders().items():
                 total = 0.0
                 for i, n in faces.items():
                     d = _unit(decode(chunk[base + i * stride + o:base + i * stride + o + 4]))
                     total += sum(d[k] * n[k] for k in range(3))
                 scores[label] = total / len(faces)
             best = max(scores, key=scores.get)
-            out.append(f"usage {usage} format {f} in section at {s.at}: as a normal, mean agreement with the face "
-                       f"normals " + ", ".join(f"{k} {v:.3f}" for k, v in scores.items())
-                       + (f" (best {best})" if scores[best] > 0.9 else " (none fits: copied from matching vertices)"))
-        break
+            out.append(f"usage {usage} format {f}: best reading as a normal {best} ({scores[best]:.3f} agreement"
+                       + (", a fit" if scores[best] > 0.9 else ", no fit") + "); vertices copy matched template ones")
     return out

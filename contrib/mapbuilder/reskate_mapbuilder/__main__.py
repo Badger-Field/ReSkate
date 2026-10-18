@@ -160,7 +160,7 @@ def new_ground_level_command(args, place=None):
                          getattr(args, "shader_from", None), _props(args), getattr(args, "keep_section", None),
                          getattr(args, "mesh_shape", "slab"), getattr(args, "collision", "own"),
                          None if getattr(args, "other_sections", "degenerate") == "geometry"
-                         else getattr(args, "geometry_section", 0))
+                         else getattr(args, "geometry_section", 0), getattr(args, "uv_per_metre", None))
     finally:
         for line in log:
             print(line)
@@ -425,6 +425,9 @@ def main(argv=None):
     p.add_argument("--mesh-shape", choices=MESH_SHAPES, default="slab",
                    help="with --mesh own: our square, a box the size of the template mesh, or the template's own "
                         "geometry copied (plumbing test)")
+    p.add_argument("--uv-per-metre", type=float, metavar="U",
+                   help="with --mesh own: texture repeats per metre (default 1 for slab and plane; the template's "
+                        "own density for box)")
     p.add_argument("--collision", choices=COLLISION_MODES, default="own",
                    help="own: our square, in as many parts as the template's .physics; template: its .physics unchanged")
     p.add_argument("--shader-from", metavar="MESH[:SECTION]",
