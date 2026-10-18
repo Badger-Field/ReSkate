@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from test_level import (FTUE, LIGHTHOUSE_LOD1_CHUNK, ISLAND_BUNDLE, LIGHTHOUSE, LIGHTHOUSE_CHUNK,  # noqa: E402
                         LIGHTHOUSE_TEXTURE_CHUNK, meshset)
-from test_level import BOX, BOX_CHUNK, BOX_GUID, section_keys  # noqa: E402
+from test_level import BOX, BOX_CHUNK, BOX_GUID, BOX_PHYSICS_GUID, section_keys  # noqa: E402
 from test_level import (BAM, BP_GUID, BP_ROOT_GUID, CHUNK, CORE_BUNDLE, CORE_LAYER, GROUNDPLANE, LAYER_GUID,  # noqa: E402
                         LAYER_REFERENCE_GUID, LEVEL, MESH_CHUNK, MESH_GUID, NEW, PLACEMENT_GUID, TEMPLATE_MATERIAL, TILE,
                         TILE_GUID, fake_game, genprefab, guid, ptr)
@@ -66,7 +66,7 @@ def test_ground_level_copies_the_chain_and_writes_the_collision(tmp_path):
     assert f"imports {TILE[:-len('_sublevel')]}_layer" in text
     assert "places 0b1a2948" in text or "(another bundle)" in text        # the worklight is elsewhere
     assert f"imports {GROUNDPLANE}_mesh: MeshSet box [-25.0, 0.0, -25.0]..[25.0, 0.0, 25.0]" in text
-    assert f"collision {GROUNDPLANE}.physics" in text and "matched by name" in text
+    assert f"collision {GROUNDPLANE}.physics" in text and f"our blueprint imports {GROUNDPLANE}_mesh" in text
     assert not any("MISSING" in line or "NOT semantically" in line or "WARNING" in line for line in report)
 
     toc, region, manifest, (sub, layer, bp) = ground(view)
@@ -340,7 +340,7 @@ def test_mesh_own_writes_a_meshset_rigidmesh_and_chunk(tmp_path):
     first = lod.sections[0]
     # Stream 1 of vertex 0: the template's normal bytes, then our UV (x / 6, z / 6) at (-10, -10).
     assert chunk[first.vertex_start + 25 * 12:first.vertex_start + 25 * 12 + 8] == bytes([0x7F, 0xFF, 0x80, 0]) + \
-        __import__("struct").pack("<2e", -10 / 6, -10 / 6)
+        __import__("struct").pack("<2e", -10.0, -10.0)                     # 1 UV per metre for ground
     assert "usage 51 format 12 (float16 x2) at +4 of stream 1" in text
 
 
@@ -595,3 +595,29 @@ def test_vertex_helpers():
     normals = vertex_normals(vertices, triangles)
     assert sorted(set(normals)) == sorted({(0.0, 1.0, 0.0), (0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0),
                                           (0.0, 0.0, 1.0), (0.0, 0.0, -1.0)})
+
+
+def test_a_blueprint_importing_its_collision_ebx_gets_ours(tmp_path, capsys):
+    _, _, report, root, view = build(tmp_path, bam="333", mesh="own", blueprint_template=BOX, asset_bundle="root")
+    text = "\n".join(report)
+    assert f"collision EBX {BOX}.physics" in text and "imported 1 time(s) by the blueprint" in text
+    assert "1 resource references moved to our resource, 1 blueprint imports moved to it" in text
+    assert f"our blueprint imports {PHYSICS} (ours)" in text and f"our blueprint imports levels/game/{LEVEL}/ground_mesh (ours)" in text
+    toc = read_toc((root / "Win32" / (NEW + ".toc")).read_bytes())
+    _, region, manifest = view.bundle(toc, "win32/" + NEW)
+    bp = read_document(view.ebx(region, manifest, BLUEPRINT))
+    physics_ebx = read_document(view.ebx(region, manifest, PHYSICS))
+    assert physics_ebx.instances[0].object.get("Name") == PHYSICS
+    assert physics_ebx.instances[0].object.get("MeshSetResource").id == resource_id(PHYSICS)
+    assert {i.file_guid for i in bp.imports} == {physics_ebx.file_guid, read_document(
+        view.ebx(region, manifest, f"levels/game/{LEVEL}/ground_mesh")).file_guid}
+    assert BOX_PHYSICS_GUID not in {i.file_guid for i in bp.imports}
+    assert any("UVs: planar per face, 1 per metre (given" in line for line in report)
+    # --collision template keeps the box's collision EBX.
+    _, _, report, root, view = build(tmp_path / "t", bam="333", mesh="own", blueprint_template=BOX, asset_bundle="root",
+                                     collision_mode="template")
+    assert f"our blueprint imports {BOX}.physics" in "\n".join(report)
+    # --uv-per-metre reaches the mesh.
+    main(["new-ground-level", "--game", str(tmp_path / "game"), "--name", "zz", "--level", LEVEL, "--mesh", "own",
+          "--blueprint-template", BOX, "--asset-bundle", "root", "--uv-per-metre", "0.25", "--dry-run"])
+    assert "UVs: planar per face, 0.25 per metre (given" in capsys.readouterr().out

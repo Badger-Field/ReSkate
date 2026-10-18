@@ -343,11 +343,21 @@ BOX_GUID, BOX_MESH_GUID, BOX_CHUNK = guid(120), guid(121), guid(122)
 BOX_MATERIAL = 0x10E0
 
 
+BOX_PHYSICS_GUID = guid(126)
+
+
 def box():
+    """The box imports its collision EBX (<blueprint>.physics) besides its mesh, as the real one does."""
     return document(BOX_GUID, [
         (lambda d: obj(d, "ObjectBlueprint", Name=BOX, Object=ptr(1)), guid(123)),
         (lambda d: obj(d, "StaticModelEntityData", Mesh=PointerReference(PointerKind.external, 0)), guid(124))],
-        imports=[(BOX_MESH_GUID, guid(125))])
+        imports=[(BOX_MESH_GUID, guid(125)), (BOX_PHYSICS_GUID, guid(127))])
+
+
+def box_physics_ebx():
+    """Its collision EBX naming the .physics resource (a stand-in type holding a ResourceReference)."""
+    return document(BOX_PHYSICS_GUID, [(lambda d: obj(d, "RigidMeshAsset", Name=BOX + ".physics",
+                                                      MeshSetResource=ResourceReference(0xB0B0)), guid(127))])
 
 
 def box_mesh():
@@ -462,7 +472,8 @@ def fake_game(tmp_path):
         BAM: [bundle("win32/" + BAM, {BAM: write_document(bam_root()), "levels/game/bam_levelroot/pool": b"pool",
                                       GROUNDPLANE: write_document(groundplane()),
                                       GROUNDPLANE + "_mesh": write_document(groundplane_mesh()),
-                                      BOX: write_document(box()), BOX + "_mesh": write_document(box_mesh())},
+                                      BOX: write_document(box()), BOX + "_mesh": write_document(box_mesh()),
+                                      BOX + ".physics": write_document(box_physics_ebx())},
                      {GROUNDPLANE + ".physics": (0x41759364, PHYSICS_ID, template_physics()),
                       GROUNDPLANE + "_mesh": (0x49B156D4, MESHSET_ID, meshset(MESH_CHUNK)[0]),
                       BOX + ".physics": (0x41759364, 0xB0B0, box_physics()),
@@ -594,10 +605,10 @@ def test_new_level_writes_the_registration(tmp_path):
     assert sorted(c.guid.bytes for c in toc.chunks) == sorted([guid(50).bytes, MESH_CHUNK.bytes])
     _, region, manifest = view.bundle(toc, "win32/" + NEW)
     assert [a.name for a in manifest.ebx] == [BAM, "levels/game/bam_levelroot/pool", GROUNDPLANE, GROUNDPLANE + "_mesh",
-                                              BOX, BOX + "_mesh", NEW]
-    assert [f.location.patch for f in region.files] == [True] + [False] * 6 + [True] + [False] * 8
+                                              BOX, BOX + "_mesh", BOX + ".physics", NEW]
+    assert [f.location.patch for f in region.files] == [True] + [False] * 7 + [True] + [False] * 8
     raw = view.ebx(region, manifest, NEW)
-    assert manifest.ebx[6].sha1 == hashlib.sha1(raw).digest() and manifest.ebx[6].original_size == len(raw)
+    assert manifest.ebx[7].sha1 == hashlib.sha1(raw).digest() and manifest.ebx[7].original_size == len(raw)
     new_root = read_document(raw)
     o = new_root.instances[0].object
     assert new_root.file_guid != BAM_ROOT_GUID and new_root.instances[0].instance_guid != guid(2)
