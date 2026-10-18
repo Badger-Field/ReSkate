@@ -87,7 +87,8 @@ void draw_analog(ImDrawList* draw, const ImVec2& display) {
     // Range breaks the picture up near its limit (drone_flight.h: signal_strength), with or without
     // the analogue look; past the limit only static is left.
     const float signal = std::clamp(telemetry().signal.load(std::memory_order_relaxed), 0.0f, 1.0f);
-    const float breakup = 1.0f - signal;
+    // A hit breaks the picture up for a moment too (drone_flight.h: the glitch after a crash).
+    const float breakup = std::max(1.0f - signal, std::clamp(telemetry().glitch.load(std::memory_order_relaxed), 0.0f, 1.0f));
     const bool look = analog_knob(kAnalog) >= 0.5f;
     if (!look && breakup <= 0.0f) return;
     const float noise = std::max(look ? std::clamp(analog_knob(kAnalogNoise), 0.0f, 1.0f) : 0.0f, breakup);
@@ -220,7 +221,10 @@ void draw_beacons(const std::vector<dingosdk::drone::beacon::Remote>& list) {
     const ImU32 colour = IM_COL32(90, 232, 255, static_cast<int>(255 * pulse));
     const ImU32 shadow = IM_COL32(0, 0, 0, 200);
     for (const auto& other : list) {
-        const float dx = other.position[0] - m[12], dy = other.position[1] - m[13], dz = other.position[2] - m[14];
+        // The marker sits above the drone's model (Multiplayer/Remote/native_prop.h), not on it:
+        // anchored this far above the drone, then lifted by half the icon and a gap on screen.
+        constexpr float above_model = 0.25f;
+        const float dx = other.position[0] - m[12], dy = other.position[1] + above_model - m[13], dz = other.position[2] - m[14];
         const float depth = -(dx * m[8] + dy * m[9] + dz * m[10]);
         const float side = dx * m[0] + dy * m[1] + dz * m[2];
         const float height = dx * m[4] + dy * m[5] + dz * m[6];
@@ -235,17 +239,20 @@ void draw_beacons(const std::vector<dingosdk::drone::beacon::Remote>& list) {
             on_screen = at.x >= margin && at.x <= display.x - margin && at.y >= margin && at.y <= display.y - margin;
         }
         if (on_screen) {
-            drone_icon(draw, at, std::clamp(34.0f * k, 22.0f, 60.0f), colour, shadow);
-            const auto text_size = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label.c_str());
-            const ImVec2 text_at(at.x - text_size.x * 0.5f, at.y - 34.0f * k - text_size.y);
+            // Stacked upwards from the model: the icon, the distance, then the name.
+            const float icon = std::clamp(18.0f * k, 12.0f, 32.0f);
+            const ImVec2 icon_at(at.x, at.y - icon * 0.5f - 6.0f * k);
+            drone_icon(draw, icon_at, icon, colour, shadow);
             const float offset = std::max(1.0f, size / 14.0f);
-            draw->AddText(font, size, ImVec2(text_at.x + offset, text_at.y + offset), shadow, label.c_str());
-            draw->AddText(font, size, text_at, colour, label.c_str());
             const float fine_size = size * 0.78f;
             const auto metres_size = font->CalcTextSizeA(fine_size, FLT_MAX, 0.0f, metres.c_str());
-            const ImVec2 metres_at(at.x - metres_size.x * 0.5f, at.y + 30.0f * k);
+            const ImVec2 metres_at(at.x - metres_size.x * 0.5f, icon_at.y - icon * 0.5f - 4.0f * k - metres_size.y);
             draw->AddText(font, fine_size, ImVec2(metres_at.x + offset, metres_at.y + offset), shadow, metres.c_str());
             draw->AddText(font, fine_size, metres_at, IM_COL32(235, 235, 235, 230), metres.c_str());
+            const auto text_size = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label.c_str());
+            const ImVec2 text_at(at.x - text_size.x * 0.5f, metres_at.y - text_size.y);
+            draw->AddText(font, size, ImVec2(text_at.x + offset, text_at.y + offset), shadow, label.c_str());
+            draw->AddText(font, size, text_at, colour, label.c_str());
         } else {
             // Off screen: an arrow at the screen's edge pointing to it, with the distance.
             float ex = depth > 0.1f ? at.x - centre.x : side, ey = depth > 0.1f ? at.y - centre.y : -height;

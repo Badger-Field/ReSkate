@@ -80,6 +80,12 @@ bool unshift(const ArchivePlacement& placement, std::string_view directory, std:
 
 fb::Sha1 sha1_of(std::span<const std::byte> bytes);
 
+// A mod's EBX as stored in cas, with the type-reference fixups that would crash the game's
+// load taken out (Engine/Resource/ebx_fixup_repair.h): the payload is encoded again and the
+// asset's sha1 and size follow it. How many came out; with none, or a payload that does not
+// decode, both stay as they were.
+std::size_t repair_ebx_payload(std::vector<std::byte>& encoded, fb::BundleAsset& asset, const fs::path& gameRoot);
+
 // Where the launch's merge put every installed mod's archives, and which
 // superbundle TOCs the patch holds: Mods/.reskate/reskate-placements.json.
 inline constexpr wchar_t placements_file[] = L"reskate-placements.json";
@@ -132,11 +138,19 @@ public:
     // own has been settled, settle() appends what it holds to the real archives, and
     // settled() then moves a placement that points into it to where that went.
     static constexpr std::uint16_t waiting_archive = 0xFFFF;
+    // A carried payload, by its index in the waiting store's list: settle() writes it once per install chunk.
+    static constexpr std::uint16_t carried_archive = 0xFFFE;
     [[nodiscard]] CasStore waiting() const;
-    [[nodiscard]] bool holding() const noexcept { return !held_.empty(); }
-    [[nodiscard]] static bool waits(const fb::CasIdentifier& location) noexcept {
-        return location.patch && location.archive == waiting_archive;
+    [[nodiscard]] bool holding() const noexcept { return !held_.empty() || !carried_.empty(); }
+    [[nodiscard]] static bool placeholder(std::uint16_t archive) noexcept {
+        return archive == waiting_archive || archive == carried_archive;
     }
+    [[nodiscard]] static bool placeholder(const fb::CasIdentifier& location) noexcept {
+        return location.patch && placeholder(location.archive);
+    }
+    // A waiting store only. The bytes must stay valid until settle().
+    [[nodiscard]] fb::BundleFileInfo carry(std::uint32_t installChunk, std::uint16_t archive,
+                                           std::span<const std::byte> encoded);
     void settle(CasStore& waiting);
     // True when the placement was one of this waiting store's; it now names the archive.
     bool settled(fb::CasIdentifier& location, std::uint32_t& offset) const;
@@ -160,6 +174,15 @@ private:
     bool waiting_{};
     std::optional<std::uint16_t> archive_;
     std::map<std::wstring, Held> held_;
+    // Carried payloads (waiting store) and where each landed (settling store).
+    struct Carried {
+        std::uint32_t installChunk{};
+        fb::Sha1 sha1;
+        std::span<const std::byte> bytes;
+        fb::BundleFileInfo at;
+    };
+    std::vector<Carried> carried_;
+    std::map<std::pair<std::uint32_t, fb::Sha1>, fb::BundleFileInfo> carriedAt_;
 };
 
 using ArchiveUse = std::set<std::pair<std::uint32_t, std::uint16_t>>;
@@ -178,6 +201,24 @@ std::optional<Listing> list_bundle(const CasStore& store, const fs::path& root, 
 // The manifest's `ebxIndex`th EBX asset, decoded.
 std::vector<std::byte> read_asset(const CasStore& store, const fs::path& root, const fs::path& baseRoot,
                                   const Listing& listing, std::size_t ebxIndex, const fs::path& gameRoot);
+
+// A map's world textures (texture group Worlds_*) flagged to stream that keep every mip with the
+// bundle, so the game loads them whole (an older Studio built maps that way: 404 MB of PQS
+// Cordoba's, 2026-10-17). Cosmetics are not touched: Studio keeps them whole. Each is made
+// to stream as the game's own world textures do: the bundle keeps the mip tail, from a 64 KB
+// block, and the sharper mips stream from the chunk its TOC (`tocChunks`) lists in full. A
+// texture is changed only when all of it can be: its chunk in this bundle whole, a block at the
+// tail, and its record in the chunk metadata. `manifest` and `files` (the region's, `first` the
+// region index of the manifest's first asset) are changed in place; the texture headers that
+// change are returned encoded, by region index, for the merged patch.
+struct StreamedTextures {
+    std::map<std::size_t, std::vector<std::byte>> headers;
+    std::uint64_t bytes{};   // what no longer stays loaded
+    std::string example;
+};
+StreamedTextures stream_resident_textures(const CasStore& store, const fs::path& root, fb::BinaryBundle& manifest,
+                                          std::vector<fb::BundleFileInfo>& files, std::size_t first,
+                                          const std::set<fb::Guid>& tocChunks, const fs::path& gameRoot);
 
 // The loading screens the mods add (the rows of the game's loading-screen
 // configuration each one appends). Never throws; an unreadable mod is noted.
@@ -278,6 +319,17 @@ AssetOverrides collect_asset_overrides(const std::vector<const Mod*>& mods,
                                        const CasStore& store, const fs::path& baseRoot,
                                        const fs::path& gameRoot, MergeReport& report,
                                        std::size_t threads = 0, bool background = false);
+
+// Of two mods that change one of the game's assets in ways that cannot both be in the game, the
+// one lower in the load order, found from the mods' asset lists before anything is merged: the
+// rule the merge applies as it combines (MergeReport::conflicts), read off the bundles two or
+// more mods ship, so the catalog can leave the losing mods out before the one merge that builds
+// the patch. `mods` highest priority first; `output` is only where the patch would go. Never
+// throws: what cannot be read is left to the merge, which still checks for itself.
+std::vector<MergeReport::Conflict> find_conflicts(const std::vector<const Mod*>& mods,
+                                                  const std::map<const Mod*, RelativeFiles>& modFiles,
+                                                  const fs::path& dataRoot, const fs::path& output,
+                                                  std::size_t threads = 0, bool background = false);
 
 // A bundle's chunk metadata is a list with one record for each of its chunks: the
 // hash of the name of the resource the chunk belongs to ("h64") and what the

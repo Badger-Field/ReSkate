@@ -1,4 +1,6 @@
 #include "mod_catalog.h"
+#include "Engine/Core/Platform/path_text.h"
+#include "builtin_packs.h"
 
 #include "mod_merge.h"
 #include "native_db.h"
@@ -127,23 +129,36 @@ std::vector<std::pair<std::string, fs::path>> decks_inside(const fs::path& mod) 
     std::error_code error;
     for (fs::directory_iterator at(mod / L"decks", error), end; !error && at != end; at.increment(error)) {
         if (!at->is_directory(error) || !fs::is_regular_file(at->path() / L"layout.toc", error)) continue;
-        auto name = lower(at->path().filename().string());
+        auto name = lower(path_utf8(at->path().filename()));
         if (deck_name(name)) found.emplace_back(std::move(name), at->path());
     }
     std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return deck_before(a.first, b.first); });
+    return found;
+}
+// Every mod folder a deck can come from: those in the Mods folder (but one a built-in pack
+// replaces), then the built-in packs (builtin_packs.h), which the merge also puts after them.
+std::vector<fs::path> deck_mod_folders() {
+    std::vector<fs::path> found;
+    const auto mods = engine_data_root() / L"Mods";
+    std::error_code error;
+    for (fs::directory_iterator at(mods, error), end; !error && at != end; at.increment(error))
+        if (at->is_directory(error) && !kept_by_reskate(mods, path_utf8(at->path().filename()))) found.push_back(at->path());
+    error.clear();
+    for (fs::directory_iterator at(mods / std::string(builtin_folder), error), end; !error && at != end; at.increment(error))
+        if (at->is_directory(error) && at->path().filename().wstring().find(L".unpacking-") == std::wstring::npos)
+            found.push_back(at->path());
+    for (auto& official : official_packs(mods)) found.push_back(std::move(official.directory));
     return found;
 }
 // Every deck in the Mods folder with the folder of the mod that brings it, in the menus' order,
 // whatever mods.json says of that mod: the decks inside a pack, or else the one a folder is named for.
 std::vector<std::pair<std::string, fs::path>> installed_decks() {
     std::vector<std::pair<std::string, fs::path>> decks;
-    std::error_code error;
-    for (fs::directory_iterator at(engine_data_root() / L"Mods", error), end; !error && at != end; at.increment(error)) {
-        if (!at->is_directory(error)) continue;
-        auto inside = decks_inside(at->path());
-        for (auto& one : inside) decks.emplace_back(std::move(one.first), at->path());
+    for (const auto& folder : deck_mod_folders()) {
+        auto inside = decks_inside(folder);
+        for (auto& one : inside) decks.emplace_back(std::move(one.first), folder);
         if (!inside.empty()) continue;
-        if (auto deck = board_break_deck_of(at->path().filename().string()); !deck.empty()) decks.emplace_back(std::move(deck), at->path());
+        if (auto deck = board_break_deck_of(path_utf8(folder.filename())); !deck.empty()) decks.emplace_back(std::move(deck), folder);
     }
     std::stable_sort(decks.begin(), decks.end(), [](const auto& a, const auto& b) { return deck_before(a.first, b.first); });
     return decks;
@@ -223,13 +238,11 @@ std::vector<std::filesystem::path> board_break_folders() noexcept {
 std::filesystem::path board_break_deck_folder(std::string_view deck) noexcept {
     try {
         const auto wanted = lower(deck);
-        std::error_code error;
-        for (fs::directory_iterator at(engine_data_root() / L"Mods", error), end; !error && at != end; at.increment(error)) {
-            if (!at->is_directory(error)) continue;
-            const auto inside = decks_inside(at->path());
+        for (const auto& folder : deck_mod_folders()) {
+            const auto inside = decks_inside(folder);
             for (const auto& one : inside)
                 if (one.first == wanted) return one.second;
-            if (inside.empty() && board_break_deck_of(at->path().filename().string()) == wanted) return at->path();
+            if (inside.empty() && board_break_deck_of(path_utf8(folder.filename())) == wanted) return folder;
         }
     } catch (...) {}
     return {};
@@ -305,7 +318,12 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
         result.issue = "The engine data root could not be resolved";
         return result;
     }
+    // Content ReSkate carries itself (builtin_packs.h), unpacked first: it makes the Mods folder
+    // when there is none, so the content loads without any mod installed.
+    std::vector<std::string> builtin_notes;
+    const auto builtin = unpack_builtin_packs(data_root / mods_folder, builtin_notes);
     auto list = scan_mods(data_root);
+    for (auto& note : builtin_notes) list.notes.push_back(std::move(note));
     result.root = std::move(list.root);
     result.present = list.present;
     if (!result.present) return result;
@@ -319,6 +337,19 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
     try {
         for (const auto& name : list.missing)
             result.notes.push_back("mods.json names a folder that is not present: " + name);
+        // A mod ReSkate keeps itself (an official mod, or one retired with it: builtin_packs.h) is
+        // left out, should the launcher not have taken it away yet: its content would load twice.
+        std::erase_if(list.entries, [&](const ModEntry& entry) {
+            if (!kept_by_reskate(data_root / mods_folder, entry.mod.name)) return false;
+            result.notes.push_back(entry.mod.name + " is an official mod ReSkate keeps itself; the copy in the Mods folder is left out");
+            return true;
+        });
+        // After every installed mod, so none of theirs is ever shadowed by it; always on. Official
+        // mods (builtin_packs.h) the same way, those installed and not turned off.
+        for (const auto& pack : builtin)
+            list.entries.push_back({describe_mod(pack.directory, pack.name, result.notes), true});
+        for (const auto& pack : official_packs(data_root / mods_folder))
+            list.entries.push_back({describe_mod(pack.directory, pack.name, result.notes), true});
         // Board Break: a deck pack holds several decks in one mod folder (mod_catalog.h). Each deck
         // inside becomes a mod of its own for the run, listed after the pack as <folder>#<deck>, so
         // that a pack's decks are chosen, set aside and switched like decks in folders of their own.
@@ -417,8 +448,10 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
         auto exclusions = read_exclusions(result.root);
         const auto sdk = sdk_identity();
         std::map<std::string, Exclusion, std::less<>> still_excluded;
-        // `remembered`: it stays out on later launches without a retry, until its files or ReSkate change.
-        const auto leave_out = [&](std::size_t index, std::vector<std::string> problems, const std::string& fingerprint, bool remembered = true) {
+        // `remembered`: it stays out on later launches without a retry, until its files or ReSkate change
+        // (or, left out for a conflict, the mod it conflicts with: `conflict`, that mod's name and files).
+        const auto leave_out = [&](std::size_t index, std::vector<std::string> problems, const std::string& fingerprint, bool remembered = true,
+                                   std::pair<std::string, std::string> conflict = {}) {
             auto mod = std::move(result.mods[index]);
             result.mods.erase(result.mods.begin() + static_cast<std::ptrdiff_t>(index));
             // Level bundles decide whether a map loads at all, so their problems lead.
@@ -426,7 +459,7 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
                 return problem.find("levels/game/") != std::string::npos;
             });
             mod.problems = std::move(problems);
-            if (remembered) still_excluded[mod.name] = {fingerprint, sdk, mod.problems};
+            if (remembered) still_excluded[mod.name] = {fingerprint, sdk, mod.problems, conflict.first, conflict.second};
             result.excluded.push_back(std::move(mod));
         };
         for (std::size_t i = result.mods.size(); i-- > 0;) {
@@ -438,6 +471,18 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
             // game may have been put right since (its files verified), with the mod untouched.
             // Remembered, it stayed out for good with the game fixed (seen 2026-10-13).
             if (!found->second.empty() && found->second.front().starts_with("made for game build ")) continue;
+            // Left out for a conflict: only while the mod it lost to still loads above it, as it was.
+            if (!previous.conflictWith.empty()) {
+                const auto winner = std::find_if(result.mods.begin(), result.mods.begin() + static_cast<std::ptrdiff_t>(i),
+                                                 [&](const Mod& mod) { return mod.name == previous.conflictWith; });
+                if (winner == result.mods.begin() + static_cast<std::ptrdiff_t>(i) ||
+                    mod_fingerprint(winner->directory) != previous.conflictFingerprint)
+                    continue;
+                result.notes.push_back("Leaving out " + result.mods[i].name + ": it conflicts with " + previous.conflictWith +
+                    ", which loads above it, and neither has changed since");
+                leave_out(i, found->second, previous.fingerprint, true, {previous.conflictWith, previous.conflictFingerprint});
+                continue;
+            }
             result.notes.push_back("Leaving out " + result.mods[i].name +
                 ": it could not be merged cleanly before and its files have not changed since");
             leave_out(i, found->second, previous.fingerprint);
@@ -488,18 +533,69 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
             // without it. Removing one mod cannot break another, but a few rounds
             // are allowed in case two damaged mods hid each other's problems.
             for (int round = 0;; ++round) {
-                merge = merge_mods(result, observe);
+                // The first looks for conflicts before building anything (find_conflicts).
+                merge = merge_mods(result, observe, {.conflicts_first = round == 0});
                 if (!merge.issue.empty() || round == 4) break; // a fifth merge only rebuilds without round four's removals
-                bool removed = false;
-                for (std::size_t i = result.mods.size(); i-- > 0;) {
-                    const auto found = merge.problems.find(result.mods[i].name);
-                    if (found == merge.problems.end() || found->second.empty()) continue;
-                    result.notes.push_back("Leaving out " + result.mods[i].name +
-                        ": it could not be merged cleanly; merging the other mods again without it");
-                    leave_out(i, found->second, mod_fingerprint(result.mods[i].directory));
-                    removed = true;
+                // (What the check before the merge noted, which the merge's own notes below would not carry.)
+                if (merge.stopped_for_conflicts)
+                    for (auto& note : merge.notes) result.notes.push_back(std::move(note));
+                // Everything this merge found is settled at once, so one more merge is enough: the
+                // mods that could not be merged cleanly, and, of two mods that change one asset in
+                // ways that cannot both be in the game, the one lower in the load order, whole (so
+                // neither loads half its changes). Mods are looked at from the top of the load
+                // order down, so one that lost only to a mod that is itself left out stays in.
+                // ReSkate's own packs, which load below every mod, are never left out for this.
+                const auto official = official_packs(data_root / mods_folder, true);
+                const auto ours = [&](const std::string& name) {
+                    return name.starts_with("reskate-builtin-") || name.find('#') != std::string::npos ||
+                           std::ranges::any_of(official, [&](const BuiltinPack& pack) { return pack.name == name; });
+                };
+                struct Out {
+                    std::vector<std::string> problems;
+                    std::string winner;   // left out for a conflict with this mod
+                };
+                std::map<std::size_t, Out> out;
+                std::set<std::string> leaving;
+                for (std::size_t i = 0; i < result.mods.size(); ++i) {
+                    const auto& name = result.mods[i].name;
+                    if (const auto found = merge.problems.find(name); found != merge.problems.end() && !found->second.empty()) {
+                        out[i].problems = found->second;
+                        leaving.insert(name);
+                        continue;
+                    }
+                    if (ours(name)) continue;
+                    for (const auto& row : merge.conflicts) {
+                        if (row.lost != name || leaving.contains(row.kept)) continue;
+                        auto& entry = out[i];
+                        if (entry.winner.empty()) entry.winner = row.kept;
+                        entry.problems.push_back("conflicts with " + row.kept + ": both change " + row.asset +
+                            (row.assets > 1 ? " and " + std::to_string(row.assets - 1) + " other asset(s)" : std::string{}) +
+                            ", and " + row.kept + " is higher in the load order");
+                    }
+                    if (out.contains(i)) leaving.insert(name);
                 }
-                if (!removed) break;
+                const bool removed = !out.empty();
+                if (removed)
+                    result.notes.push_back((merge.stopped_for_conflicts ? std::string("The check before merging")
+                                                                        : "Merge " + std::to_string(round + 1)) +
+                        " left " + std::to_string(out.size()) + " mod(s) out; merging once more without them");
+                for (auto at = out.rbegin(); at != out.rend(); ++at) {
+                    const auto i = at->first;
+                    const auto& [problems, winner] = at->second;
+                    if (winner.empty()) {
+                        result.notes.push_back("Leaving out " + result.mods[i].name +
+                            ": it could not be merged cleanly; merging the other mods again without it");
+                        leave_out(i, problems, mod_fingerprint(result.mods[i].directory));
+                        continue;
+                    }
+                    const auto kept = std::ranges::find_if(result.mods, [&](const Mod& mod) { return mod.name == winner; });
+                    result.notes.push_back("Leaving out " + result.mods[i].name + ": it conflicts with " + winner +
+                        ", which is higher in the load order; merging the other mods again without it");
+                    leave_out(i, problems, mod_fingerprint(result.mods[i].directory), true,
+                              {winner, kept != result.mods.end() ? mod_fingerprint(kept->directory) : std::string{}});
+                }
+                // (Conflicts only of ReSkate's own packs leave nothing out: then the merge itself runs.)
+                if (!removed && !merge.stopped_for_conflicts) break;
             }
             for (auto& note : merge.notes) result.notes.push_back(std::move(note));
             result.merged = merge.built;
@@ -522,6 +618,13 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
             if (!mod.outdated.empty()) {
                 result.warnings.push_back("Mod " + mod.name + " was not loaded: it is outdated (" + mod.outdated +
                     "). Update it for this game version.");
+                continue;
+            }
+            if (!mod.problems.empty() && mod.problems.front().starts_with("conflicts with ")) {
+                const auto& problem = mod.problems.front();
+                const auto other = problem.substr(15, problem.find(':') - 15);
+                result.warnings.push_back("Mod " + mod.name + " was not loaded: it " + problem + ". Only " + other +
+                    " is loaded. To use " + mod.name + " instead, move it above " + other + " in the mod list, or turn one of them off.");
                 continue;
             }
             if (!mod.problems.empty() && mod.problems.front().starts_with("made for game build ")) {
