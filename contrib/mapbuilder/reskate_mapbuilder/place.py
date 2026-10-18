@@ -264,7 +264,7 @@ def collision(place: Place, template: Part, part_count: int | None = None,
     """Shapes and parts in the place's frame (the placement moves them).
 
     `part_count` None: one shape and one part per collision chunk. Otherwise exactly that many
-    parts (the blueprint's PhysicsPartInfos count, FORMAT-NOTES 6.4), each one shape merging its
+    parts (the template's own .physics part count, FORMAT-NOTES 6.4), each one shape merging its
     group of chunks (groups()). Part i copies `templates[i]` (or `template`): material, hashes and
     words; GUESS: word +0x34 the part's index when there are several parts."""
     if part_count is None:
@@ -274,7 +274,7 @@ def collision(place: Place, template: Part, part_count: int | None = None,
         sets = groups(place, part_count)
         if any(not group for group in sets):
             raise PlaceError(f"{len(place.collision)} collision chunks cannot fill {part_count} parts")
-        what = (f"{part_count} part(s) as the blueprint declares, each one shape merging its chunks ("
+        what = (f"{part_count} part(s) as the template's .physics has, each one shape merging its chunks ("
                 + ", ".join(f"{len(g)} chunks of {sorted({p.part for p in g})}" for g in sets) + ")")
     shapes, parts = [], []
     for i, group in enumerate(sets):

@@ -378,28 +378,33 @@ def _part_tables(doc: Document) -> dict[str, list[tuple[str, list]]]:
     return out
 
 
-def _check_part_tables(bp: Document, shapes, parts, collision_mode: str, grow: bool) -> list[str]:
-    """Our physics part count against the blueprint's PhysicsPartInfos: grown with `grow`
-    (PartBoundingBoxes set per part), else refused on a mismatch. Other per-part tables printed."""
+def _check_part_tables(bp: Document, shapes, parts, collision_mode: str, grow: bool, template_parts: int) -> list[str]:
+    """Our physics part count against the template's own `.physics` part count (the rule the game
+    results fit: the skatepark box declares one PhysicsPartInfos entry over a 3-part file, and our
+    3-part file under its copy worked; util_groundplane's 1-part file replaced by 38 parts gave no
+    collision). A mismatch is refused, or with `grow` the blueprint's PhysicsPartInfos and
+    PartBoundingBoxes are grown to one entry per part (untested). The blueprint's per-part tables
+    and PhysicsPartInfos' entries are printed, to find what the game counts."""
     tables = _part_tables(bp)
     out = ["  blueprint per-part tables: " + (", ".join(f"{path} [{len(values)}]" for name in sorted(tables)
-                                                          for path, values in tables[name]) or "none")]
-    declared = tables.get(PART_COUNT_TABLE)
+                                                         for path, values in tables[name]) or "none")]
+    for path, values in tables.get(PART_COUNT_TABLE, []):
+        for i, value in enumerate(values[:4]):
+            fields = ", ".join(f"{f.name}={f.value!r}" for f in value.fields) if isinstance(value, Object) else repr(value)
+            out.append(f"    {path}[{i}]: {fields}")
     if collision_mode == "template":
         return out
-    if not declared:
-        return out + [f"  no {PART_COUNT_TABLE} in the blueprint: the part count ({len(parts)}) is not checked"]
-    have = len(declared[0][1])
-    if have == len(parts):
-        return out + [f"  {PART_COUNT_TABLE}: {have}, our physics parts: {len(parts)}: consistent"]
+    if len(parts) == template_parts:
+        return out + [f"  physics parts: ours {len(parts)}, the template's {template_parts}: consistent"]
     if not grow:
-        raise ValueError(f"our collision has {len(parts)} parts but the blueprint's {PART_COUNT_TABLE} has {have} "
-                         f"(a mismatch left the whole body out in game): merge the chunks (--parts merge) or grow the "
-                         f"tables (--parts grow)")
+        raise ValueError(f"our collision has {len(parts)} parts but the template's own .physics has {template_parts} "
+                         f"(38 parts under util_groundplane's 1 gave no collision in game): merge the chunks "
+                         f"(--parts merge) or try --parts grow")
     for name in GROWABLE:
         for path, values in tables.get(name, []):
             if not values or any(isinstance(v, PointerReference) for v in values):
                 raise ValueError(f"{path} holds pointers or nothing; growing it is not supported")
+            have = len(values)
             values[:] = [copy.deepcopy(values[min(i, len(values) - 1)]) for i in range(len(parts))]
             if name == "PartBoundingBoxes":
                 for value, part in zip(values, parts):
@@ -407,11 +412,7 @@ def _check_part_tables(bp: Document, shapes, parts, collision_mode: str, grow: b
                     lo, hi = padded_bounds(world)
                     _set_aabbs_in(value, lo, hi)
             out.append(f"  grew {path} from {have} to {len(parts)} entries (entry 0 copied)")
-    left = [f"{path} [{len(values)}]" for name, entries in tables.items() if name not in GROWABLE
-            for path, values in entries if len(values) == have and have != len(parts)]
-    if left:
-        out.append(f"  WARNING: per-part tables not grown (unknown): {left}")
-    return out
+    return out + [f"  physics parts: ours {len(parts)}, the template's {template_parts}: grown (untested)"]
 
 
 def _set_aabbs_in(value: Object, lo, hi) -> None:
@@ -820,16 +821,16 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                     f"{len(shaped)} parts as the template has (strips of the square, materials "
                     f"{[f'{p.material:#x}' for p in shaped]})")
         else:
-            declared = _part_tables(bp).get("PhysicsPartInfos")
-            new_shapes, new_parts, what = collision(template_part, [p for p in parts if p.shape >= 0],
-                                                    len(declared[0][1]) if declared else None)
+            shaped_parts = [p for p in parts if p.shape >= 0]
+            new_shapes, new_parts, what = collision(template_part, shaped_parts, len(shaped_parts) or 1)
         compute_edge_data(new_shapes, new_parts)
         physics = write_physics(new_shapes, new_parts, 2)
         back_shapes, back_parts, back_version = read_physics(physics)
         if (back_version != 2 or len(back_shapes) != len(new_shapes) or len(back_parts) != len(new_parts)
                 or any(a.triangles != b.triangles for a, b in zip(back_shapes, new_shapes))):
             raise ValueError("the collision written does not read back")
-    log.extend(_check_part_tables(bp, new_shapes, new_parts, collision_mode, grow_parts))
+    log.extend(_check_part_tables(bp, new_shapes, new_parts, collision_mode, grow_parts,
+                                  len([p for p in parts if p.shape >= 0]) or 1))
     template_box = ""
     if shapes:
         world = [template_part.to_world(v) for v in shapes[max(template_part.shape, 0)].vertices]
@@ -1245,7 +1246,7 @@ def _visual_asset(game, level: str, name: str, vertices, triangles, prepared: di
     stale = {prepared["mesh_import"].file_guid} | ({prepared["physics_doc"].file_guid} if physics_doc else set())
     if any(imp.file_guid in stale for imp in bp.imports):
         raise ValueError(f"visual {name}: its blueprint still imports the template's mesh or collision")
-    lines = _check_part_tables(bp, shapes, parts, "own", False)
+    lines = _check_part_tables(bp, shapes, parts, "own", False, len(prepared["parts"]))
 
     geometry_section, donor_section = donor
     chunk_guids = [derived_guid(level, name, "chunk", str(k)) for k in range(len(prepared["chunks"]))]
@@ -1257,7 +1258,7 @@ def _visual_asset(game, level: str, name: str, vertices, triangles, prepared: di
     log.append(f"  visual {name}: {len(vertices)} vertices, {len(triangles)} triangles (limits 65,535 and 16-bit "
                f"indices), box {[round(v, 2) for v in lo]}..{[round(v, 2) for v in hi]}, section {geometry_section}"
                + (" with a donor section" if donor_section else "") + f" -> {bp_name}; "
-               + "; ".join(line.strip() for line in lines if "consistent" in line or "not checked" in line))
+               + "; ".join(line.strip() for line in lines if "physics parts:" in line))
     return {"bp_name": bp_name, "bp": bp, "mesh_name": mesh_name, "mesh": mesh, "physics_name": physics_name,
             "physics": physics, "physics_doc": physics_doc, "physics_type": prepared["physics_asset"].resource_type,
             "physics_meta": copy.copy(prepared["physics_asset"].resource_meta), "meshset": meshset,

@@ -149,8 +149,8 @@ def new_ground_level_command(args, place=None):
     mod = ModBuilder(game, args.name, description=f"New level {args.level} with {what}")
     log: list[str] = []
     def collision(template, templates, declared):
-        # --parts merge (default): as many parts as the blueprint declares; chunks: one per chunk
-        # (and the blueprint's tables grown to match, --parts grow).
+        # --parts merge (default): as many parts as the template's own .physics has; grow: one per
+        # chunk (and the blueprint's tables grown to match).
         mode = getattr(args, "parts", "merge")
         count = None if mode in ("chunks", "grow") else (declared or len(templates) or 1)
         return place_collision(place, template, count, templates)
@@ -398,8 +398,8 @@ def _place_options(p):
                    help="the mesh section whose material draws objects of MATERIAL (default the template's section 0)")
     p.add_argument("--uv-per-metre", type=float, metavar="U", help="visual objects' texture repeats per metre (default 1)")
     p.add_argument("--parts", choices=("merge", "grow"), default="merge",
-                   help="merge: the chunks merged into as many parts as the blueprint declares (PhysicsPartInfos; one "
-                        "shape each); grow: one part per chunk, the blueprint's per-part tables grown to match")
+                   help="merge: the chunks merged into as many parts as the template's own .physics has (one shape "
+                        "each); grow: one part per chunk, the blueprint's per-part tables grown (untested)")
 
 
 def _template_options(p):
