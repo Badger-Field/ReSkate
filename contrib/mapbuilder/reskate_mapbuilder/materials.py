@@ -10,6 +10,7 @@ game's archives).
 """
 from __future__ import annotations
 
+import re
 import struct
 from collections import Counter
 
@@ -29,6 +30,29 @@ UV0_USAGE = 33
 def classes_of(text: str) -> list[str]:
     low = text.lower()
     return [k for k, words in CLASSES.items() if any(w in low for w in words)]
+
+
+# Not real materials: distant-scenery vistas (baked, impostor-shaded: the PC's M1 auto pick of a
+# vista drew the ground almost black and the features flat grey), impostors, proxies, LODs and
+# shadows. A section of such a bundle, mesh or material is never usable.
+PROXY_WORDS = ("vista", "impostor", "imposter", "proxy", "billboard", "shadow", "_lod")
+
+
+def is_proxy(text: str) -> bool:
+    low = text.lower()
+    return any(w in low for w in PROXY_WORDS)
+
+
+def material_words(material: str) -> set[str]:
+    """The words of a material name (split at anything not a letter or digit; a plural 's'
+    dropped), so 'Wood_Accent' has wood but 'benchbacklessstone_01_3m_Stone_mat' has only stone."""
+    words = set()
+    for token in re.split(r"[^a-z0-9]+", material.lower()):
+        if token:
+            words.add(token)
+            if token.endswith("s"):
+                words.add(token[:-1])
+    return words
 
 
 def superbundles(game) -> list[str]:
@@ -81,7 +105,8 @@ def scan_bundle(game, superbundle: str, toc, bundle) -> dict | None:
             kinds = classes_of(material) or classes_of(r.name)
             if not kinds or "shadow" in material.lower():
                 continue
-            usable = section_key(data, s) in keys and any(u == UV0_USAGE for u, _, _, _ in s.elements)
+            usable = (section_key(data, s) in keys and any(u == UV0_USAGE for u, _, _, _ in s.elements)
+                      and not (is_proxy(bundle.name) or is_proxy(r.name) or is_proxy(material)))
             sections.append((r.name, n, material, kinds, usable, s.strides))
     if not sections:
         return {"meshes": True}
@@ -136,9 +161,10 @@ def usable_classes(row: dict, by_material: bool = False) -> set[str]:
 
 
 def has_ground_and_wood(row: dict) -> bool:
-    """Usable concrete (or stone) and usable wood sections in one bundle."""
-    kinds = usable_classes(row)
-    return bool(kinds & set(GROUND_CLASSES)) and "wood" in kinds
+    """Usable concrete or stone and usable wood, in distinct sections whose material names say so
+    (auto_donors' rules)."""
+    picks = auto_donors(row)
+    return ("ground" in picks or "concrete" in picks) and "wood" in picks
 
 
 def report(rows: list[dict], top: int = 30, every: bool = False, only_classes: list[str] | None = None,
@@ -174,57 +200,112 @@ def report(rows: list[dict], top: int = 30, every: bool = False, only_classes: l
     return out
 
 
-# --material-bundle auto: what each visual class takes from the picked bundle. Per class, words
-# tried in order, first in a usable section's material name, then in its mesh name; a section
-# already taken by an earlier class (by material name) is skipped while another matches, so the
-# ground (pavers or stone first) and steps, kerbs and banks (poured concrete first) differ when
-# the bundle has both, and buildings get a wall material (brick, stone) else concrete.
+# --material-bundle auto: what each visual class takes from the picked bundle, by the words of a
+# usable section's material name (material_words; not its mesh name, not a substring of a long
+# baked name), tried in order. Concrete (steps, kerbs, banks) first, poured concrete preferred;
+# then the ground, pavers or stone preferred, never concrete's section and a different material
+# while one matches; wood never a section taken by the two before. Building, stone and metal
+# may share a section already taken when nothing else matches.
 AUTO_PICKS = (
-    ("ground", ("paver", "paving", "pavement", "sidewalk", "cobble", "tile", "granite", "stone", "concrete")),
-    ("concrete", ("poured", "concrete", "cement", "curb", "kerb", "stone", "paver", "paving", "pavement")),
-    ("building", ("brick", "wall", "facade", "plaster", "stucco", "stone", "concrete", "cement")),
-    ("stone", ("stone", "granite", "marble", "cobble", "brick")),
-    ("wood", ("wood", "plank", "timber", "deck", "bench")),
-    ("metal", ("metal", "steel", "iron", "rail", "alum")),
+    ("concrete", ("poured", "concrete", "cement", "curb", "kerb"), True),
+    ("ground", ("paver", "paving", "pavement", "sidewalk", "cobble", "cobblestone", "flagstone", "tile", "granite",
+                "stone", "concrete", "cement"), True),
+    ("wood", ("wood", "plank", "timber"), True),
+    ("building", ("brick", "wall", "facade", "plaster", "stucco", "stone", "concrete", "cement"), False),
+    ("stone", ("stone", "granite", "marble", "cobble", "cobblestone", "brick"), False),
+    ("metal", ("metal", "steel", "iron", "rail", "aluminium", "aluminum"), False),
 )
-AUTO_SCAN_LIMIT = 400
+AUTO_SCAN_LIMIT = 400          # sublevel bundles read at most
+AUTO_MIN_USABLE = 10           # usable sections a bundle needs (near-empty bundles are skipped)
+AUTO_ENOUGH = 12               # qualifying bundles compared before choosing
 
 
 def auto_donors(row: dict) -> dict[str, str]:
     """CLASS -> "MESH:SECTION" from one scanned bundle's usable sections (AUTO_PICKS)."""
     usable = [s for s in row["sections"] if s[4]]
     out: dict[str, str] = {}
-    taken: set[str] = set()
-    for label, words in AUTO_PICKS:
-        matches = [s for word in words for s in usable if word in s[2].lower()]
-        matches += [s for word in words for s in usable if word in s[0].lower()]
+    taken_sections: set[tuple[str, int]] = set()
+    taken_materials: set[str] = set()
+    for label, words, distinct in AUTO_PICKS:
+        matches = [s for word in words for s in usable if word in material_words(s[2])]
+        if distinct:
+            matches = [s for s in matches if (s[0], s[1]) not in taken_sections]
         if not matches:
             continue
-        pick = next((s for s in matches if s[2].lower() not in taken), matches[0])
+        pick = next((s for s in matches if s[2].lower() not in taken_materials and (s[0], s[1]) not in taken_sections),
+                    matches[0])
         out[label] = f"{pick[0]}:{pick[1]}"
-        taken.add(pick[2].lower())
+        taken_sections.add((pick[0], pick[1]))
+        taken_materials.add(pick[2].lower())
     return out
 
 
-def auto_bundle(game, superbundles_: list[str], log=print, limit: int = AUTO_SCAN_LIMIT):
-    """The smallest sublevel bundle (by stored size) of `superbundles_` with usable concrete (or
-    stone) and usable wood sections: (superbundle, bundle, row), or None. Bundles named
-    *_sublevel are tried smallest first, at most `limit` of them."""
+def _material_of(row: dict, spec: str) -> str:
+    mesh, _, n = spec.rpartition(":")
+    return next(s[2] for s in row["sections"] if s[0] == mesh and s[1] == int(n))
+
+
+def auto_score(row: dict) -> tuple[int, ...]:
+    """How well a bundle suits a plaza: ground of pavers or stone (not concrete), poured concrete,
+    a ground material different from concrete's, a world-partition tile (wproot/wp/)."""
+    picks = auto_donors(row)
+    ground = material_words(_material_of(row, picks["ground"])) if "ground" in picks else set()
+    concrete = material_words(_material_of(row, picks["concrete"])) if "concrete" in picks else set()
+    pavers = bool(ground & {"paver", "paving", "pavement", "sidewalk", "cobble", "cobblestone", "flagstone", "tile",
+                            "granite", "stone"})
+    different = "ground" in picks and "concrete" in picks and _material_of(row, picks["ground"]) != _material_of(
+        row, picks["concrete"])
+    return (int(pavers), int("poured" in concrete), int(different), int("/wproot/wp/" in row["bundle"].lower()))
+
+
+def auto_qualifies(row: dict) -> bool:
+    picks = auto_donors(row)
+    return (row.get("sublevel", False) and all(k in picks for k in ("ground", "concrete", "wood"))
+            and sum(1 for s in row["sections"] if s[4]) >= AUTO_MIN_USABLE)
+
+
+def auto_bundle(game, superbundles_: list[str], log=print, limit: int | None = None):
+    """The best sublevel bundle of `superbundles_` for a plaza: (superbundle, bundle, row), or
+    None. Candidates: bundles named *_sublevel, not proxies (vistas and the like); world-partition
+    tiles (wproot/wp/) first, each group smallest first by stored size, at most `limit` read. A
+    bundle qualifies with distinct usable sections for concrete, ground and wood (auto_donors)
+    and at least AUTO_MIN_USABLE usable sections; of the first AUTO_ENOUGH that qualify, the best
+    auto_score wins, then the smallest."""
+    limit = AUTO_SCAN_LIMIT if limit is None else limit
     candidates = []
+    skipped = 0
     for sb in superbundles_:
         toc = _read_toc(game, sb, False, log)
         if toc is None:
             continue
         for b in toc.bundles:
-            if b.name.lower().endswith("_sublevel"):
-                candidates.append((stored_size(b), sb, toc, b))
-    candidates.sort(key=lambda c: (c[0], c[3].name))
-    log(f"--material-bundle auto: {len(candidates)} sublevel bundles in {', '.join(superbundles_)}, "
-        f"tried smallest first (at most {limit})")
-    for tried, (size, sb, toc, b) in enumerate(candidates[:limit], 1):
+            if not b.name.lower().endswith("_sublevel"):
+                continue
+            if is_proxy(b.name):
+                skipped += 1
+                continue
+            candidates.append(("/wproot/wp/" not in b.name.lower(), stored_size(b), sb, toc, b))
+    candidates.sort(key=lambda c: (c[0], c[1], c[4].name))
+    log(f"--material-bundle auto: {len(candidates)} sublevel bundles in {', '.join(superbundles_)} "
+        f"({skipped} vista or proxy bundles left out), wproot/wp/ tiles first, smallest first (at most {limit} read); "
+        f"each needs distinct usable concrete, ground and wood sections and {AUTO_MIN_USABLE}+ usable sections")
+    found = []
+    tried = 0
+    for _, size, sb, toc, b in candidates[:limit]:
+        tried += 1
         row = scan_bundle(game, sb, toc, b)
-        if row and "sections" in row and row["sublevel"] and has_ground_and_wood(row):
-            log(f"--material-bundle auto: {sb}:{b.name} ({size / 2 ** 20:.2f} MB, the smallest of "
-                f"{tried} tried with usable concrete or stone and wood)")
-            return sb, b.name, row
-    return None
+        if row and "sections" in row and auto_qualifies(row):
+            found.append((auto_score(row), -size, sb, b.name, row))
+            if len(found) >= AUTO_ENOUGH:
+                break
+    if not found:
+        return None
+    found.sort(key=lambda f: (f[0], f[1]), reverse=True)
+    for score, size, sb, name, row in found[:5]:
+        log(f"  candidate {name} ({-size / 2 ** 20:.2f} MB, {sum(1 for s in row['sections'] if s[4])} usable): "
+            f"pavers or stone ground {score[0]}, poured concrete {score[1]}, ground differs {score[2]}, "
+            f"wproot tile {score[3]}")
+    score, size, sb, name, row = found[0]
+    log(f"--material-bundle auto: {sb}:{name} ({-size / 2 ** 20:.2f} MB; the best of {len(found)} qualifying, "
+        f"{tried} read)")
+    return sb, name, row

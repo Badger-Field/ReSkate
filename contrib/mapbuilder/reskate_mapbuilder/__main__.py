@@ -266,8 +266,8 @@ def _visuals(args, place) -> list:
 
 def _material_bundle(args, game, donors: dict):
     """(--material-bundle as (superbundle, bundle) or None, the material donors). `auto` (or
-    `auto:SUPERBUNDLE[,...]`, default bam's) picks the smallest sublevel bundle with usable concrete
-    or stone and wood, and donors from it for the materials not given by --material-donor."""
+    `auto:SUPERBUNDLE[,...]`, default bam's) picks a sublevel bundle (materials.auto_bundle) and
+    donors from it for the materials not given by --material-donor."""
     spec = getattr(args, "material_bundle", None)
     if not spec:
         return None, donors
@@ -481,8 +481,9 @@ def _place_options(p):
     p.add_argument("--material-bundle", metavar="SUPERBUNDLE:BUNDLE",
                    help="another level's bundle (scan-materials finds them), copied under its own name: it becomes our "
                         "sublevel, and objects whose --material-donor is one of its meshes go into it. auto (or "
-                        "auto:SUPERBUNDLE[,...], default bam's): the smallest sublevel bundle with usable concrete or "
-                        "stone and wood, with donors from it for the materials --material-donor does not give")
+                        "auto:SUPERBUNDLE[,...], default bam's): a tile sublevel with distinct usable concrete, ground "
+                        "and wood (vistas and proxies left out), with donors from it for the materials "
+                        "--material-donor does not give")
     p.add_argument("--no-auto-materials", action="store_true",
                    help="without --material-donor, keep the template's section 0 for every material instead of the "
                         "auto picks (ramp wedge surface for ground, a rail for metal, a concrete section)")
@@ -493,8 +494,8 @@ def _place_options(p):
 
 def _template_options(p):
     p.add_argument("--resource-ids", choices=("odd", "clear"), default="odd",
-                   help="new resource ids: odd (low bit set, as every stock id) or clear (low two bits clear, the "
-                        "form that worked in game before)")
+                   help="new resource ids: odd (low bit set, as every stock id; confirmed in game) or clear (low "
+                        "two bits clear, the earlier form)")
     p.add_argument("--tile-template", default=TILE_TEMPLATE, help="the bam tile copied for the sublevel")
     p.add_argument("--layer-template", help="the LayerData copied (default: the one the tile references)")
     p.add_argument("--layer-bundle", help="its bundle (default: the tile's, or found by search)")

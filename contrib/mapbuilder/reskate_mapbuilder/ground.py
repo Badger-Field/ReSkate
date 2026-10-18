@@ -124,7 +124,8 @@ BAM_MODES = {
 # How new resource ids are made from their names (MD5). "odd": low bit set, never 0, as every one
 # of the 147,564 distinct stock ids is (REA's static survey; the reference fix-up's slot walk treats
 # bit 0 as an unresolved handle to skip). "clear": low two bits clear, the form that worked in game
-# (d1b, Embarcadero, Freedom Plaza builds before the survey). An id ending in binary 10 crashed the
+# (d1b, Embarcadero, Freedom Plaza builds before the survey). Odd ids confirmed in game (24fe5c6,
+# the PC's M1: Embarcadero loads, readings unchanged). An id ending in binary 10 crashed the
 # level load (89109ff, 5924574: read as a tagged pointer). Set by --resource-ids.
 RESOURCE_ID_STYLES = ("odd", "clear")
 RESOURCE_ID_STYLE = "odd"
