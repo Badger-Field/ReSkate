@@ -341,7 +341,7 @@ def test_material_donors_lists_sections_and_proposes_defaults(tmp_path, capsys):
 
 def test_scan_materials_ranks_bundles_with_usable_materials(tmp_path, capsys):
     from reskate_mapbuilder import nativedb
-    from test_level import BIG_PARK_BUNDLE, FTUE, PARK_BENCH, PARK_BUNDLE, PLAZA_BUNDLE, PLAZA_MESH
+    from test_level import BIG_PARK_BUNDLE, FTUE, PARK_BENCH, PARK_BUNDLE, PLAZA_BUNDLE, PLAZA_MESH, VISTA_BUNDLE
     game_dir = fake_game(tmp_path / "game")
     main(["scan-materials", "--game", str(game_dir)])                  # layout.toc's superbundles: no FTUE here
     assert "0 bundles with classed sections" in capsys.readouterr().out
@@ -351,11 +351,12 @@ def test_scan_materials_ranks_bundles_with_usable_materials(tmp_path, capsys):
                                                 "Win32/" + FTUE))
     main(["scan-materials", "--game", str(game_dir)])
     out = capsys.readouterr().out
-    assert "loc/wc" not in out and "not read" not in out and "3 bundles with classed sections" in out
+    assert "loc/wc" not in out and "not read" not in out and "4 bundles with classed sections" in out
     main(["scan-materials", "--game", str(game_dir), "--superbundle", FTUE, "--superbundle", "levels/game/nothing"])
     out = capsys.readouterr().out
     assert "levels/game/nothing: not read" in out                     # asked for by name: said
-    assert "usable sections per class: concrete 3, stone 0, wood 2, metal 0" in out
+    # The vista's baked stone-and-bench material is never usable (and so not listed).
+    assert "usable sections per class: concrete 5, stone 0, wood 2, metal 0" in out and VISTA_BUNDLE not in out
     assert f"{FTUE}:{PLAZA_BUNDLE}" in out and "1 depot(s), 1 usable" in out and "a sublevel bundle" in out
     assert f"    {PLAZA_MESH}:0  '{PLAZA_MESH}' ['concrete']" in out
     main(["scan-materials", "--game", str(game_dir), "--superbundle", FTUE, "--class", "wood"])
@@ -363,6 +364,7 @@ def test_scan_materials_ranks_bundles_with_usable_materials(tmp_path, capsys):
     assert "2 bundles with classed sections; usable sections per class: wood 2" in out
     assert PLAZA_BUNDLE not in out and f"    {PARK_BENCH}:0" in out and "pavement" not in out
     main(["scan-materials", "--game", str(game_dir), "--superbundle", FTUE, "--both", "--top", "1"])
+    # (--both: auto_donors' rules: wood only from a material name with a wood word.)
     out = capsys.readouterr().out
     assert "2 bundles with classed sections (usable concrete or stone and usable wood)" in out
     assert PLAZA_BUNDLE not in out and f"{FTUE}:{PARK_BUNDLE}" in out and BIG_PARK_BUNDLE not in out
@@ -377,8 +379,11 @@ def test_scan_materials_every_lists_past_twelve(monkeypatch):
     assert "    m14:0  'Wood_Accent' ['wood'] strides [8]" in lines and not any("more" in line for line in lines)
 
 
-def test_material_bundle_auto_picks_the_smallest_with_concrete_and_wood(tmp_path, capsys):
-    from test_level import BOX, FTUE, PARK_BENCH, PARK_BUNDLE, PARK_PAVEMENT
+def test_material_bundle_auto_picks_the_best_tile_with_distinct_concrete_ground_and_wood(tmp_path, capsys,
+                                                                                         monkeypatch):
+    import reskate_mapbuilder.materials as materials
+    from test_level import BOX, FTUE, PARK_BENCH, PARK_BUNDLE, PARK_PAVEMENT, PARK_STEP, VISTA_BUNDLE, VISTA_MESH
+    monkeypatch.setattr(materials, "AUTO_MIN_USABLE", 3)                # the fixture parks have 3 usable sections
     game_dir = fake_game(tmp_path / "game")
     tiles = write_tiles(tmp_path / "tiles")
     args = ["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles", str(tiles),
@@ -386,17 +391,41 @@ def test_material_bundle_auto_picks_the_smallest_with_concrete_and_wood(tmp_path
             "--material-bundle", f"auto:{FTUE}", "--dry-run"]
     main(args)
     out = capsys.readouterr().out
-    assert f"--material-bundle auto: 3 sublevel bundles in {FTUE}, tried smallest first" in out
-    assert f"--material-bundle auto: {FTUE}:{PARK_BUNDLE} (" in out and "the smallest of 2 tried" in out
+    # The vista (the smallest bundle, its one baked material naming stone and a bench) is left out.
+    assert f"--material-bundle auto: 3 sublevel bundles in {FTUE} (1 vista or proxy bundles left out)" in out
+    assert VISTA_BUNDLE not in out and VISTA_MESH not in out
+    assert f"--material-bundle auto: {FTUE}:{PARK_BUNDLE} (" in out and "the best of 2 qualifying" in out
+    assert "pavers or stone ground 1, poured concrete 1, ground differs 1" in out
     assert f"--material-bundle auto: --material-donor ground={PARK_PAVEMENT}:0" in out
+    assert f"--material-bundle auto: --material-donor concrete={PARK_STEP}:0" in out
     assert f"--material-bundle auto: --material-donor wood={PARK_BENCH}:0" in out
-    assert f"--material-bundle {FTUE}:{PARK_BUNDLE} --material-donor concrete={PARK_PAVEMENT}:0" in out
     assert f"it becomes our sublevel {PARK_BUNDLE[len('win32/'):]}" in out
-    # A given donor wins; nothing with both in bam's superbundle: refused, saying where to look.
+    # A given donor wins; too few usable sections, or nothing in bam's superbundle: refused.
     main(args + ["--material-donor", f"ground={PARK_BENCH}:0"])
     assert f"--material-donor ground={PARK_BENCH}:0 (given)" in capsys.readouterr().out
+    monkeypatch.setattr(materials, "AUTO_MIN_USABLE", 10)
+    with pytest.raises(SystemExit, match="no sublevel bundle of .* has usable"):
+        main(args)
     with pytest.raises(SystemExit, match="no sublevel bundle of levels/game/bam_levelroot/bam_levelroot has usable"):
         main(args[:-2] + ["auto", "--dry-run"])
+
+
+def test_a_baked_vista_material_is_never_a_donor():
+    """The PC's bad M1 pick: one vista section classed as stone and wood (its baked name holds
+    'benchbacklessstone_01_3m_Stone_mat') was every donor, and drew black and impostor-grey."""
+    from reskate_mapbuilder.materials import auto_donors, has_ground_and_wood, is_proxy, material_words
+    baked = "vista_medium_quadrant_095x095_vista_m_benchbacklessstone_01_3m_Stone_mat"
+    assert is_proxy("levels/game/bam_levelroot/vistas/vista_medium_quadrant_095x095_vista_m_vista_0_mesh")
+    assert is_proxy("win32/levels/game/bam_levelroot/wp_vista_medium_vistarootquadrant3/wp/s100_x4750z4750_sublevel")
+    assert "wood" not in material_words(baked) and "bench" not in material_words(baked)
+    assert "wood" in material_words("Wood_Accent") and "wood" in material_words("Planks_Wood_mat")
+    # Even outside a vista: one section never serves two classes, and no wood word means no wood.
+    row = {"sections": [("x_mesh", 0, "benchbacklessstone_01_3m_Stone_mat", ["stone", "wood"], True, [8])]}
+    assert "wood" not in auto_donors(row) and not has_ground_and_wood(row)
+    row["sections"].append(("y_mesh", 0, "Concrete_Poured_01_M", ["concrete"], True, [8]))
+    picks = auto_donors(row)
+    assert picks["concrete"] == "y_mesh:0" and picks["ground"] == "x_mesh:0" and "wood" not in picks
+
 
 
 def test_material_bundle_hosts_our_sublevel_and_its_material_objects(tmp_path, capsys):
@@ -459,21 +488,23 @@ def column(x0, z0, w, h):
     return verts, [t for a, b, c, d in quads for t in ((a, b, c), (a, c, d))]
 
 
-def test_buildings_are_their_own_class_and_skip_visual_leaves_them_out(tmp_path, capsys):
-    from test_level import BOX, FTUE, PARK_PAVEMENT
+def test_buildings_are_their_own_class_and_skip_visual_leaves_them_out(tmp_path, capsys, monkeypatch):
+    from test_level import BOX, FTUE, PARK_STEP
     game_dir = fake_game(tmp_path / "game")
     extra = [("buildings", "visual", "concrete", "buildings", column(40, 40, 4, 20), 0, 1),
              ("spot_3_steps", "visual", "concrete", "steps", column(20, 20, 2, 0.5), 0, 1)]
     tiles = write_tiles(tmp_path / "tiles", extra=extra)
     args = ["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles", str(tiles),
             "--at", "0", "300", "0", "--skip-part", "buildings", "--visuals", "--visual-template", BOX, "--dry-run"]
+    import reskate_mapbuilder.materials as materials
+    monkeypatch.setattr(materials, "AUTO_MIN_USABLE", 3)
     main(args + ["--material-bundle", f"auto:{FTUE}"])
     out = capsys.readouterr().out
     assert "visual classes (each drawn with its --material-donor): building <- buildings (1); " \
            "concrete <- steps (1); ground <- ground (1)" in out
-    # The park has no wall material: buildings take the concrete donor (the pavement, its only one).
-    assert "--material-donor building=" not in out
-    assert f"visual class building (1 objects): drawn with concrete's donor {PARK_PAVEMENT}:0" in out
+    # The park has no wall material: buildings take its poured concrete, as the steps do.
+    assert f"--material-bundle auto: --material-donor building={PARK_STEP}:0" in out
+    assert f"visual class building (1 objects): drawn with {PARK_STEP}:0" in out
     assert "vertices split by face axis for per-face UVs: 8 -> 24" in out        # the welded building
     # Without a building donor, buildings take the concrete donor.
     main(args + ["--material-donor", f"concrete={BOX}_mesh:1"])
@@ -496,4 +527,7 @@ def test_auto_donors_give_ground_and_concrete_different_materials():
     assert picks["wood"] == "d_mesh:0"
     only = {"sections": [section("a_mesh", 0, "Concrete_Poured_01_M"), section("d_mesh", 0, "Wood_Accent")]}
     picks = auto_donors(only)
-    assert picks["ground"] == picks["concrete"] == picks["building"] == "a_mesh:0"   # one concrete: shared
+    # One concrete section: concrete takes it, the ground gets none (distinct sections), the building shares it.
+    assert picks["concrete"] == picks["building"] == "a_mesh:0" and "ground" not in picks
+    two = {"sections": only["sections"] + [section("e_mesh", 3, "Concrete_Poured_01_M")]}
+    assert auto_donors(two)["ground"] == "e_mesh:3"                       # same material, another section

@@ -254,7 +254,7 @@ def depot(keys):
     return bytes(out)
 
 
-def meshset(chunk_guid, name=GROUNDPLANE + "_mesh", lods=1):
+def meshset(chunk_guid, name=GROUNDPLANE + "_mesh", lods=1, material=None):
     """(MeshSet, chunk): a rigid MeshSet with `lods` LODs (LOD k names chunk_guid, then guid(200 +
     k)) of two sections, a 50 m quad each, laid out as FORMAT-NOTES 1 says: section 0 with float
     positions in stream 0 and a normal and UV in stream 1, section 1 (a shadow) with half-float
@@ -276,12 +276,15 @@ def meshset(chunk_guid, name=GROUNDPLANE + "_mesh", lods=1):
     chunk += bytes(-len(chunk) % 16)
     tables = 208 + 176 * lods
     names = tables + 2 * 384 * lods
-    data = bytearray(max(1376, names + 64))
+    material_at = names + len(name) + 1
+    data = bytearray(max(1376, material_at + len(material or "") + 64))
     struct.pack_into("<III", data, 0, 192, 176, 384)
     struct.pack_into("<4f", data, 0x10, -25.0, 0.0, -25.0, 0.0)
     struct.pack_into("<4f", data, 0x20, 25.0, 0.0, 25.0, 0.0)
     struct.pack_into("<HH", data, 180, lods, 2 * lods)
     data[names:names + len(name) + 1] = name.encode() + b"\0"
+    if material:                                      # the sections' material name (default: the mesh name)
+        data[material_at:material_at + len(material) + 1] = material.encode() + b"\0"
     struct.pack_into("<Q", data, 0x68, names - 16)
     for k in range(lods):
         lod = 208 + 176 * k
@@ -295,7 +298,7 @@ def meshset(chunk_guid, name=GROUNDPLANE + "_mesh", lods=1):
                 (20, 0, 0, [(1, 3, 0, 0), (33, 6, 0, 1), (52, 13, 4, 1)], [12, 8]),
                 (8, 80, 6, [(1, 8, 0, 0)], [8]))):
             at = table + 384 * s
-            struct.pack_into("<Q", data, at + 8, names - 16)
+            struct.pack_into("<Q", data, at + 8, (material_at if material else names) - 16)
             data[at + 30], data[at + 31] = per_vertex, 3
             struct.pack_into("<4I", data, at + 32, 2, first, start, 4)
             struct.pack_into("<Q", data, at + 0x138, section_keys(name)[s])
@@ -407,27 +410,33 @@ def concrete_plaza(bundle, toc_chunk):
     return b, [toc_chunk(PLAZA_TEXTURE_CHUNK, b"concrete texels")]
 
 
-# Two more sublevel bundles with usable concrete and wood (for --material-bundle auto): a small
-# park and a bigger one (padded with a filler resource); auto picks the small one.
+# More sublevel bundles for --material-bundle auto: a park with pavers, poured concrete and wood
+# (as the trial's tile: Concrete_Poured_01_2x2m_M_Grey_mat, Wood_Accent), a bigger one (padded
+# with a filler resource), and a tiny vista whose one baked material names stone and a bench
+# (the PC's bad M1 pick): never usable.
 PARK_BUNDLE = "win32/levels/game/dingolevel_ftue_island/wp_park_sublevel"
 BIG_PARK_BUNDLE = "win32/levels/game/dingolevel_ftue_island/wp_big_park_sublevel"
-PARK_PAVEMENT, PARK_BENCH = "world/plots/park/park_pavement_mesh", "world/plots/park/park_bench_mesh"
+VISTA_BUNDLE = "win32/levels/game/dingolevel_ftue_island/wp_vista_medium_quadrant3_sublevel"
+PARK_PAVEMENT, PARK_STEP, PARK_BENCH = ("world/plots/park/park_pavement_mesh", "world/plots/park/park_step_mesh",
+                                        "world/plots/park/park_bench_mesh")
+VISTA_MESH = "levels/game/bam_levelroot/vistas/vista_medium_quadrant_095x095_vista_m_vista_0_mesh"
+PARK_MATERIALS = {PARK_PAVEMENT: "Pavers_Grey_01_mat", PARK_STEP: "Concrete_Poured_01_2x2m_M_Grey_mat",
+                  PARK_BENCH: "Wood_Accent", VISTA_MESH: "vista_m_benchbacklessstone_01_3m_Stone_mat"}
 
 
-def park(bundle, name, n, filler=0):
-    meshes = [(PARK_PAVEMENT, guid(140 + 4 * n)), (PARK_BENCH, guid(141 + 4 * n))]
+def park(bundle, name, n, filler=0, meshes=(PARK_PAVEMENT, PARK_STEP, PARK_BENCH)):
     sub = name[len("win32/"):]
-    resources, chunks = {}, []
-    for k, (mesh, chunk_guid) in enumerate(meshes):
-        ms, chunk = meshset(chunk_guid, mesh)
+    resources, chunks, keys = {}, [], []
+    for k, mesh in enumerate(meshes):
+        chunk_guid = guid(140 + 4 * n + k)
+        ms, chunk = meshset(chunk_guid, mesh, material=PARK_MATERIALS[mesh])
         resources[mesh] = (0x49B156D4, 0x9A00 + 16 * n + k, ms)
         chunks.append((chunk_guid, chunk))
-    resources[sub + "_win32_shaderstate/shaderblockdepot_1"] = (
-        0x73312045, 0x9A08 + 16 * n, depot(section_keys(PARK_PAVEMENT) + section_keys(PARK_BENCH)))
+        keys += section_keys(mesh)
+    resources[sub + "_win32_shaderstate/shaderblockdepot_1"] = (0x73312045, 0x9A08 + 16 * n, depot(keys))
     if filler:
         resources[sub + "/filler"] = (0x12345678, 0x9A09 + 16 * n, bytes(range(256)) * filler)
-    return bundle(name, {sub: b"their sublevel", PARK_PAVEMENT: b"mesh ebx", PARK_BENCH: b"mesh ebx"},
-                  resources, chunks)
+    return bundle(name, {sub: b"their sublevel", **{m: b"mesh ebx" for m in meshes}}, resources, chunks)
 
 
 def template_physics():
@@ -555,7 +564,8 @@ def fake_game(tmp_path):
 
     island, island_chunks = lighthouse(bundle, toc_chunk)
     plaza, plaza_chunks = concrete_plaza(bundle, toc_chunk)
-    tocs[FTUE] = [island, plaza, park(bundle, BIG_PARK_BUNDLE, 1, filler=64), park(bundle, PARK_BUNDLE, 0)]
+    tocs[FTUE] = [island, plaza, park(bundle, BIG_PARK_BUNDLE, 1, filler=64), park(bundle, PARK_BUNDLE, 0),
+                  park(bundle, VISTA_BUNDLE, 2, meshes=(VISTA_MESH,))]
     chunks = {BAM: [TocChunk(guid(50), CasIdentifier(False, CHUNK, 2), 0, 4), toc_chunk(MESH_CHUNK, meshset(MESH_CHUNK)[1])],
               FTUE: island_chunks + plaza_chunks}
     for path, bundles in tocs.items():
