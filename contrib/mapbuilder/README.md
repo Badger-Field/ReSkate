@@ -80,7 +80,8 @@ Keep one level mod in `Mods`. In game: `load levels/game/dingolevel_reskate_plac
 then the `trainer ground X Z` spots `place-info` prints (the export's spawn is at 0 0). The
 collision is the place's collision chunks merged into util_groundplane's one part; each visual
 object is its own copy of the skatepark box with our geometry, textured with the box's surface.
-`--visuals-only NAME` adds objects one at a time; `material-donors --game "<Skate>"` lists stock
+`--visuals-only NAME` adds objects one at a time, `--skip-visual buildings` leaves the buildings
+(their own class, `building`) out; `material-donors --game "<Skate>"` lists stock
 sections for `--material-donor wood=MESH:N` and the like. For materials of other levels,
 `scan-materials --game "<Skate>"` ranks the bundles holding them (`--both`: concrete or stone and
 wood in one bundle), and `--material-bundle SUPERBUNDLE:BUNDLE` with `--material-donor

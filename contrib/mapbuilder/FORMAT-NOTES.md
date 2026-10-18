@@ -1162,6 +1162,24 @@ concrete, else one whose mesh name does, else stone; wood; stone; metal when the
 the equivalent explicit command. A `--material-donor` given wins over the auto pick for its
 material. Not yet run in game.
 
+**Tested in game** (main 0830262, Freedom Plaza 150 x 60): loads, every reading within 0.1 m, 47
+of 47 visuals drawn; banks show their hump and slope. Stairs and kerbs were hard to see (low,
+dark on the ramp-wedge ground), and the west-edge `buildings` sliver was drawn full height with
+its texture in vertical streaks. Cause: the planar UVs picked each vertex's plane from the
+average normal of the faces sharing it, and the export's buildings are welded (roof and walls
+share corners), so a wall's top corners took the roof's top-down projection and its v stayed
+constant up the wall. The writer now splits every vertex shared by faces of different main axes
+(one copy per axis, `meshset.split_by_axis`), so each face is projected by its own normal (x, z
+on top; z, y facing x; x, y facing z); the dry run prints "vertices split by face axis" when it
+splits. The `buildings` part is now its own visual class, `building` (`place.PART_CLASSES`;
+the export calls it concrete), drawn with `--material-donor building=...`, else with concrete's
+donor (`ground.MATERIAL_FALLBACK`); `--skip-visual buildings` leaves it out (it is drawn by
+default). The dry run prints which parts make each class and which donor draws it. With
+`--material-bundle auto` the picks prefer different materials per class: ground pavers, paving,
+pavement, cobble, tile or stone first; concrete (steps, kerbs, banks) poured concrete first;
+building brick, wall, facade or stone, then concrete; a section already taken by an earlier class
+is skipped while another matches (`materials.AUTO_PICKS`). Not yet run in game.
+
 **Visuals** (`--visuals`, written, not yet run in game): each visual object of each tile (13 in
 the Embarcadero export) gets its own blueprint, mesh and placement (at `--at`, like the
 collision's), all in the level's root bundle (bam root's copy, whose depot holds the template's
