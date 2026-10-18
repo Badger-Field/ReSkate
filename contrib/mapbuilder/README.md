@@ -86,9 +86,10 @@ sections for `--material-donor wood=MESH:N` and the like. For materials of other
 `scan-materials --game "<Skate>"` ranks the bundles holding them (`--both`: concrete or stone and
 wood in one bundle), and `--material-bundle SUPERBUNDLE:BUNDLE` with `--material-donor
 ground=MESH:N` (a mesh of that bundle) draws objects with them (tested in game: concrete ground
-and wood benches from one of bam's tile sublevels). `--material-bundle auto` picks the smallest
-sublevel bundle of bam's with usable concrete and wood, and donors from it (FORMAT-NOTES 6.4; not
-yet run in game). New resource ids are odd (`--resource-ids clear` for the earlier form).
+and wood benches from one of bam's tile sublevels). `--material-bundle auto` picks a world-partition
+tile sublevel of bam's with distinct poured concrete, paver or stone ground and wood (vistas and
+proxies left out), and donors from it (FORMAT-NOTES 6.4). New resource ids are odd, confirmed in
+game (`--resource-ids clear` for the earlier form).
 
 The format reference is `contrib/mapbuilder/FORMAT-NOTES.md`.
 

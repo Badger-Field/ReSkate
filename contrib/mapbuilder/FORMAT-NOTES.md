@@ -1063,8 +1063,9 @@ tagged object. The d1b slab's ids ended in 00 (mesh and collision) and Embarcade
 loaded. REA's static survey found every stock id odd (147,564 distinct ids), and the slot walk
 skips an entry with bit 0 set as an unresolved handle, so ids are now the name's MD5 with the low
 bit set (`ground.RESOURCE_ID_STYLE = "odd"`; never 0, never ending in 10); the dry run prints
-"New resource ids: odd". `--resource-ids clear` falls back to the 00 form that worked in game
-until a build with odd ids has been run (not yet run in game). `--visuals-only` also takes the
+"New resource ids: odd". **Tested in game** (24fe5c6, the PC's M1): the Embarcadero with odd
+ids loads, no crash, readings unchanged; odd is the confirmed default. `--resource-ids clear`
+keeps the 00 form. `--visuals-only` also takes the
 names the dry run prints (`ground_0_0_tm2_m1`), and `--visual-slab W,H,D` adds the d1b slab's
 shape through the visual path.
 
@@ -1154,13 +1155,33 @@ bam's chunk list (`COPY_BASE_CHUNKS`), so a bam bundle's chunks are all listed a
 now says how many chunks the bundle's resources name, how many were added and how many were
 already there.
 
-`--material-bundle auto` (or `auto:SUPERBUNDLE[,...]`; default bam's superbundle) tries the
-bundles named `*_sublevel` smallest first by stored size (from the TOC, at most 400), and takes the
-first sublevel bundle with usable concrete (or stone) and usable wood; it prints the pick and the
-donors it takes from it (ground and concrete: the first usable section whose material name says
-concrete, else one whose mesh name does, else stone; wood; stone; metal when there is one), and
-the equivalent explicit command. A `--material-donor` given wins over the auto pick for its
-material. Not yet run in game.
+`--material-bundle auto` (or `auto:SUPERBUNDLE[,...]`; default bam's superbundle) prints the
+pick, the donors it takes from it and the equivalent explicit command; a `--material-donor` given
+wins over the auto pick for its material.
+
+**Tested in game** (24fe5c6, the PC's M1, the first auto rule: the smallest sublevel with usable
+concrete or stone and wood): it chose `wp_vista_medium_vistarootquadrant3/wp/s100_x4750z4750_sublevel`
+(0.02 MB, the smallest of 46 tried) and took every donor (ground, concrete, stone, wood) from one
+section, `levels/game/bam_levelroot/vistas/vista_medium_quadrant_095x095_vista_m_vista_0_mesh:0`, a
+baked vista material whose long name holds `benchbacklessstone_01_3m_Stone_mat`, so substring
+matching classed it stone and wood. In game the ground drew almost black and the ledges and stairs
+flat grey or white (impostor shading). No crash. The rule is now:
+
+- Never usable (in `scan-materials` too): a section of a bundle, mesh or material whose name
+  holds vista, impostor, imposter, proxy, billboard, shadow or `_lod` (`materials.PROXY_WORDS`).
+- Classes for the auto pick come from the words of the material name only (split at anything not
+  a letter or digit, a plural s dropped): `Wood_Accent` and `Planks_Wood_mat` are wood,
+  `benchbacklessstone_01_3m_Stone_mat` is only stone (`materials.material_words`).
+- Distinct sections: concrete (steps, kerbs, banks; poured first), then ground (pavers, paving,
+  pavement, cobble, tile, granite or stone first, then concrete; never concrete's section, a
+  different material while one matches), then wood; none reuses a section taken before. Building,
+  stone and metal may share one (`materials.AUTO_PICKS`).
+- Candidates: `*_sublevel` bundles, vista or proxy bundles left out, world-partition tiles
+  (`wproot/wp/`) first, each group smallest first; a bundle qualifies with distinct concrete,
+  ground and wood sections and at least 10 usable sections (`AUTO_MIN_USABLE`). Of the first 12
+  that qualify (at most 400 read), the best wins by: pavers or stone ground, poured concrete,
+  ground material different from concrete's, a wproot tile; then the smallest. The dry run lists
+  the top 5 candidates with these marks. Not yet run in game.
 
 **Tested in game** (main 0830262, Freedom Plaza 150 x 60): loads, every reading within 0.1 m, 47
 of 47 visuals drawn; banks show their hump and slope. Stairs and kerbs were hard to see (low,
