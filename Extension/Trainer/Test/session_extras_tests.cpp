@@ -95,7 +95,7 @@ int main() {
     // Values no trainer holds are brought into range rather than handed to the game.
     {
         auto wild = bytes;
-        poke<float>(wild, numbers_at, 50.0f);          // flip speed
+        poke<float>(wild, numbers_at, 500.0f);         // flip speed (past flip_high)
         poke<float>(wild, numbers_at + 4, 1.0e9f);     // hippy jump height
         poke<float>(wild, numbers_at + 8, -3.0f);      // no comply height
         poke<float>(wild, numbers_at + 20, 5000.0f);   // auto push speed

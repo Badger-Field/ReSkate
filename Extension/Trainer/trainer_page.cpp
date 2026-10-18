@@ -61,7 +61,7 @@ struct Page {
     std::uint64_t open_serial{}; // the last `trainer open` acted on
     std::uint64_t share_serial{}; // the last `preset export` put on the clipboard
     bool share_seen{};
-    bool show_page{};
+    bool show_page{}, show_cheats{};
     float gravity_edit{1};
     bool gravity_editing{};
     // QUICK SETTINGS: what is changed (kind 0 a section's line, 1 a dial, 2 one of the trainer's settings, 3 a value).
@@ -240,6 +240,31 @@ bool row_works(const trainer::Row &row) { return row.used || row.touched || row.
 
 void value_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const trainer::View &view, const trainer::Row &row,
                bool with_group, bool friendly) {
+    if (console_style()) {
+        // Full screen: a switch, or the value nudged a step at a time (a fiftieth of its size).
+        ImGui::PushID(row.id.c_str());
+        const auto label = friendly && !row.friendly.empty() ? row.friendly : with_group ? row.group + " / " + row.label : row.label;
+        const auto hint = std::format("{}. The game's own is {}.{}", row.id, number(row.stock),
+                                      row.used ? "" : " The game was not found reading it, so changing it may do nothing.");
+        const bool can = view.editable && callbacks.queue_console_command;
+        if (row.kind == trainer::Kind::flag) {
+            bool on = row.value != 0;
+            if (toggle_row(menu, label.c_str(), hint.c_str(), on, can)) // (a label that changes would lose the focus)
+                trainer_command(menu, callbacks, std::format("set {} {}", row.id, on ? 1 : 0));
+        } else {
+            field(menu, (row.touched ? label + "  *" : label).c_str(), hint.c_str());
+            const bool scale = row.kind == trainer::Kind::curve || row.kind == trainer::Kind::graph;
+            const bool whole = row.kind == trainer::Kind::integer;
+            double value = row.value;
+            set_console_step(whole ? 1.0 : scale ? 0.05 : std::max({std::abs(row.stock), std::abs(value), 0.01}) * 0.02);
+            ImGui::BeginDisabled(!can);
+            if (slider_double("##value", &value, scale ? 0.0 : -1.0e6, 1.0e6, whole ? "%.0f" : scale ? "x %.2f" : "%.4g", ImGuiSliderFlags_AlwaysClamp))
+                trainer_command(menu, callbacks, std::format("set {} {}", row.id, number(value)));
+            ImGui::EndDisabled();
+        }
+        ImGui::PopID();
+        return;
+    }
     ImGui::PushID(row.id.c_str());
     if (!p.in_quick && !p.flash.empty() && p.flash == row.id) {
         // "Go to" pointed here.
@@ -312,6 +337,18 @@ void preset_switch(SkateMenu &menu, const CallbacksV3 &callbacks, const trainer:
 }
 // A built-in preset as a dial: one multiplier that moves everything the preset moves.
 void dial_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const trainer::PresetRow &preset) {
+    if (console_style()) {
+        ImGui::PushID(preset.name.c_str());
+        const auto hint = std::format("{} 1 is the game's own; \"{}\" is x {}.", preset.note, preset.name, number(preset.amount));
+        field(menu, std::abs(preset.factor - 1.0) > 1e-4 ? (preset.title + "  *").c_str() : preset.title.c_str(), hint.c_str());
+        double value = preset.factor;
+        const double low = preset.amount < 1 ? 0.05 : 0.2, high = preset.amount < 1 ? 3.0 : 10.0;
+        if (slider_double("##dial", &value, low, high, "x %.2f", ImGuiSliderFlags_Logarithmic) && value > 0)
+            trainer_command(menu, callbacks, std::format("dial {} {}", number(value), preset.name));
+        ImGui::PopID();
+        (void)p;
+        return;
+    }
     ImGui::PushID(preset.name.c_str());
     const float column = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x * 0.40f;
     const bool moved = std::abs(preset.factor - 1.0) > 1e-4;
@@ -1085,6 +1122,17 @@ void trick_heights(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const
         if (!always && !wanted(label)) return false;
         field(menu, label);
         ImGui::PushID(option);
+        if (console_style()) {
+            float shown = editing ? edit : value;
+            if (slider_float("##height", &shown, 0.1f, high, "x %.2f", (limited ? ImGuiSliderFlags_AlwaysClamp : 0) | ImGuiSliderFlags_Logarithmic)) {
+                edit = shown;
+                editing = true;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) trainer_command(menu, callbacks, std::format("option {} {:.2f}", option, edit));
+            if (!ImGui::IsItemActive() && editing && std::abs(value - edit) < 0.005f * std::max(1.0f, std::abs(edit))) editing = false;
+            ImGui::PopID();
+            return true;
+        }
         float shown = editing ? edit : value;
         const float box = px(64);
         ImGui::SetNextItemWidth(std::max(px(70), ImGui::GetContentRegionAvail().x - box - ImGui::GetStyle().ItemSpacing.x));
@@ -1242,16 +1290,13 @@ void practice_tab(SkateMenu &menu, const Model &model, const CallbacksV3 &callba
             };
             field(menu, "Speed");
             auto value = static_cast<float>(current);
-            if (ImGui::SliderFloat("##game-speed", &value, 0.05f, 2.0f, current == 0.0 ? "paused" : "%.2fx", ImGuiSliderFlags_AlwaysClamp))
+            if (::dingosdk::overlay::menu::slider_float("##game-speed", &value, 0.05f, 2.0f, current == 0.0 ? "paused" : "%.2fx", ImGuiSliderFlags_AlwaysClamp))
                 set(value);
-                if (!ImGui::IsItemActive()) tip("Slows the whole game down or speeds it up. 1x is normal speed.");
-            if (ImGui::Button(current == 0.0 ? "Resume" : "Pause")) set(current == 0.0 ? 1.0 : 0.0);
-            tip("Freezes the game where it is. Press again to carry on.");
-            for (const auto quick : {0.1, 0.25, 0.5, 0.75, 1.0}) {
-                ImGui::SameLine();
-                if (ImGui::Button(std::format("{}x", number(quick)).c_str())) set(quick);
-                tip("Sets the game speed to this straight away.");
-            }
+            const int pressed = button_row(menu, "speeds", {{current == 0.0 ? "RESUME" : "PAUSE", true, current == 0.0}, {"0.1x", true, current == 0.1},
+                {"0.25x", true, current == 0.25}, {"0.5x", true, current == 0.5}, {"0.75x", true, current == 0.75}, {"1x", true, current == 1.0}});
+            constexpr std::array<double, 5> quick{0.1, 0.25, 0.5, 0.75, 1.0};
+            if (pressed == 0) set(current == 0.0 ? 1.0 : 0.0);
+            else if (pressed > 0) set(quick[static_cast<std::size_t>(pressed - 1)]);
             note("The jump read-out measures real time, so it reads low while the game is slowed.");
         }
     }
@@ -1263,26 +1308,20 @@ void practice_tab(SkateMenu &menu, const Model &model, const CallbacksV3 &callba
     if (choice(menu, "marker-slot", slot, {"1", "2", "3", "4", "5"})) trainer_command(menu, callbacks, std::format("slot {}", slot + 1));
     const auto &marker = view.markers[static_cast<std::size_t>(std::clamp(view.slot, 0, static_cast<int>(trainer::marker_slots) - 1))];
     info(menu, "Selected", marker.set ? std::format("{:.1f}, {:.1f}, {:.1f}", marker.position[0], marker.position[1], marker.position[2]) : "empty");
-    ImGui::BeginDisabled(view.map.empty());
-    ImGui::BeginDisabled(!telemetry.skater);
-    if (ImGui::Button("Save here")) trainer_command(menu, callbacks, "marker save");
-    tip("Saves where you are standing in the selected slot, for this map.");
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!marker.set);
-    if (ImGui::Button("Go")) trainer_command(menu, callbacks, "marker go");
-    tip("Puts you back at the selected marker.");
-    ImGui::SameLine();
-    if (ImGui::Button("Clear")) trainer_command(menu, callbacks, "marker clear");
-    tip("Empties the selected slot.");
-    ImGui::EndDisabled();
-    ImGui::EndDisabled();
+    {
+        const bool map = !view.map.empty();
+        const int pressed = button_row(menu, "marker-actions", {{"SAVE HERE", map && telemetry.skater, false, "Put the selected marker where you are."},
+            {"GO", map && marker.set, false, "Go to the selected marker."}, {"CLEAR", map && marker.set, false, "Empty the selected marker."}});
+        if (pressed == 0) trainer_command(menu, callbacks, "marker save");
+        if (pressed == 1) trainer_command(menu, callbacks, "marker go");
+        if (pressed == 2) trainer_command(menu, callbacks, "marker clear");
+    }
     bool auto_return = view.auto_return;
     if (toggle_row(menu, "Return after a bail", "Go back to the selected marker when the skater wipes out.", auto_return))
         trainer_command(menu, callbacks, std::format("option auto_return {}", auto_return ? 1 : 0));
     field(menu, "Return delay");
     float delay = view.return_delay;
-    ImGui::SliderFloat("##return-delay", &delay, 0.0f, 10.0f, "%.1f s", ImGuiSliderFlags_AlwaysClamp);
+    ::dingosdk::overlay::menu::slider_float("##return-delay", &delay, 0.0f, 10.0f, "%.1f s", ImGuiSliderFlags_AlwaysClamp);
     if (!ImGui::IsItemActive()) tip("How long after a bail before you are put back at the marker.");
     if (ImGui::IsItemDeactivatedAfterEdit()) trainer_command(menu, callbacks, std::format("option return_delay {:.1f}", delay));
     bool pad = view.pad_shortcuts;
@@ -1296,11 +1335,20 @@ void practice_tab(SkateMenu &menu, const Model &model, const CallbacksV3 &callba
     trainer::note_teleport_card_shown();
     info(menu, "Map waypoint", view.waypoint_set ? std::format("{:.1f}, {:.1f}, {:.1f}", view.waypoint[0], view.waypoint[1], view.waypoint[2])
                                                  : "none - place one on the pause map");
-    ImGui::BeginDisabled(!view.waypoint_set || !telemetry.skater);
-    if (ImGui::Button("Go to map waypoint")) trainer_command(menu, callbacks, "waypoint");
-    ImGui::EndDisabled();
+    if (button_row(menu, "waypoint", {{"GO TO MAP WAYPOINT", view.waypoint_set && telemetry.skater, false, "The waypoint you placed on the pause map."}}) == 0)
+        trainer_command(menu, callbacks, "waypoint");
     if (telemetry.skater)
         info(menu, "You are at", std::format("{:.2f}, {:.2f}, {:.2f}", telemetry.position[0], telemetry.position[1], telemetry.position[2]));
+    if (console_style()) {
+        // Typing a position wants a keyboard: full screen keeps one, set from where you are.
+        info(menu, "Saved spot", std::format("{:.2f}, {:.2f}, {:.2f}", p.teleport[0], p.teleport[1], p.teleport[2]));
+        const int pressed = button_row(menu, "teleport-actions", {{"SET IT TO HERE", telemetry.skater, false, "Keep where you are now."},
+            {"GO THERE", telemetry.skater, false, "Teleport to the saved spot."}});
+        if (pressed == 0) p.teleport = telemetry.position;
+        if (pressed == 1) trainer_command(menu, callbacks, std::format("tp {:.3f} {:.3f} {:.3f}", p.teleport[0], p.teleport[1], p.teleport[2]));
+        end_card();
+        return;
+    }
     field(menu, "X, Y, Z");
     ImGui::InputFloat3("##teleport", p.teleport.data(), "%.2f");
     tip("A position in the game's own coordinates: X, height, Z.");
@@ -1890,18 +1938,18 @@ void map_tab(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const train
     if (!view.map_note.empty()) note(view.map_note.c_str());
     if (!view.map_preset.empty()) {
         info(menu, "Author's preset", view.map_preset);
-        ImGui::BeginDisabled(!view.editable);
-        if (ImGui::Button("Apply the author's preset")) trainer_command(menu, callbacks, "preset apply map");
-        tip("Sets the values this map's maker recommends for it.");
-        ImGui::EndDisabled();
+        if (button_row(menu, "author-preset", {{"APPLY THE AUTHOR'S PRESET", view.editable}}) == 0) trainer_command(menu, callbacks, "preset apply map");
     }
     for (std::size_t i = 0; i < view.spots.size(); ++i) {
         ImGui::PushID(static_cast<int>(i));
-        if (ImGui::Button("Go")) trainer_command(menu, callbacks, std::format("spot {}", i + 1));
-        tip("Takes you to this spot.");
-        ImGui::SameLine();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(view.spots[i].name.c_str());
+        if (console_style()) {
+            if (button_row(menu, "spot", {{("GO TO " + view.spots[i].name).c_str()}}) == 0) trainer_command(menu, callbacks, std::format("spot {}", i + 1));
+        } else {
+            if (ImGui::Button("Go")) trainer_command(menu, callbacks, std::format("spot {}", i + 1));
+            ImGui::SameLine();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(view.spots[i].name.c_str());
+        }
         ImGui::PopID();
     }
     if (view.map_note.empty() && view.map_preset.empty() && view.spots.empty())
@@ -1918,10 +1966,15 @@ bool trainer_take_open() {
     auto &p = page();
     if (view->open_serial == p.open_serial) return false;
     p.open_serial = view->open_serial;
-    // By name, see `trainer open`: 0 tune, 1 presets, 2 practice, 3 map, 7 movement; the rest are sections of TUNE
-    // (4 realistic and 5 fun were lists of earlier versions: the top of TUNE).
+    // By name, see `trainer open`: 0 tune, 1 presets, 2 practice, 3 map; the rest are sections of TUNE
+    // (4 realistic and 5 fun were lists of earlier versions: the top of TUNE). 7 movement: noclip, No Bail
+    // and the boosts are on Skater > Cheats.
     const int tab = view->open_tab;
-    p.tab = tab == 7 ? 3 : tab == 2 ? 1 : tab == 3 ? 2 : 0;
+    if (tab == 7) {
+        p.show_cheats = true;
+        return true;
+    }
+    p.tab = tab == 2 ? 1 : tab == 3 ? 2 : 0;
     if (tab == 1) p.manage = true;
     constexpr int sections[]{-1, -1, -1, -1, -1, -1, trainer::topic_none, -1, trainer::topic_trickline, trainer::topic_transition, trainer::topic_pop, trainer::topic_speed,
                              trainer::topic_bails, trainer::topic_grinds, trainer::topic_pumping, trainer::topic_foot, trainer::topic_trickline, trainer::topic_pop,
@@ -1937,6 +1990,12 @@ bool trainer_page_wanted() {
     auto &p = page();
     const bool wanted = p.show_page;
     p.show_page = false;
+    return wanted;
+}
+bool trainer_cheats_wanted() {
+    auto &p = page();
+    const bool wanted = p.show_cheats;
+    p.show_cheats = false;
     return wanted;
 }
 // The game speed the PRACTICE tab sets (1: the game's own; also when it cannot be read).
@@ -2044,14 +2103,13 @@ void trainer_page(SkateMenu &menu, const Model &model, const CallbacksV3 &callba
         }
     card_end(p);
     }
-    category_tabs(menu, p.tab, {"TUNE", "PRACTICE", "MAP & HUD", "MOVEMENT"}, "trainer-tabs");
+    category_tabs(menu, p.tab, {"TUNE", "PRACTICE", "MAP & HUD"}, "trainer-tabs"); // (the cheats are on Skater > Cheats)
     ImGui::PushID(p.tab);
-    ImGui::BeginChild("trainer-tab", ImVec2(0, page_body_height(menu)));
+    ImGui::BeginChild("trainer-tab", ImVec2(0, page_body_height(menu)), ImGuiChildFlags_NavFlattened);
     p.pick.clear();
     switch (p.tab) {
     case 0: tune_tab(menu, model, callbacks, p, *view); break;
     case 1: practice_tab(menu, model, callbacks, p, *view); break;
-    case 3: movement_controls(menu, model, callbacks); break; // ReSkate's own flight, bail and boost controls
     default: map_tab(menu, callbacks, p, *view); break;
     }
     ImGui::EndChild();

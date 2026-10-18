@@ -1,5 +1,7 @@
 #pragma once
+#include "board_break_feel.h"
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -60,4 +62,27 @@ std::string choose_deck(std::string wanted);
 // respawns. Or makes a broken board whole.
 void snap(int place) noexcept;
 void mend() noexcept;
+
+// ---- the feel of it -------------------------------------------------------------------------------
+// The player's settings (board_break_feel.h), kept in %LOCALAPPDATA%\ReSkate\BoardBreak.settings.
+// Any thread; set_setting saves at once and is false for no such setting.
+Settings settings() noexcept;
+bool set_setting(std::string_view name, int value) noexcept;
+// Wear and tear: how worn the board of the deck in the game is (0 new, 1 worn out), kept per deck
+// with the settings. A board that broke is a new one once it is whole again. A worn board handles
+// worse (softer trucks, a lazier turn: the game's own physics tuning, only outside multiplayer
+// sessions, which share tuning), breaks more easily and, worn out, can give way under the rider.
+// Its scratches are the game's own board wear (Mod Options > Board wear), reset with it.
+float wear() noexcept;
+void set_wear(float wear) noexcept;
+// Client thread: what wear has set the game's physics tuning value at `offset` (in the tuning
+// asset) to, when it is one of the four handling values wear changes and wear has written it; for
+// the trainer, which hands such a value back to wear while the player has not changed it.
+std::optional<float> handling_value(std::uint16_t offset) noexcept;
+// Metal: the level's materials a board breaking on them sounds like metal on. They are learned
+// from the contacts while grinding (`boardbreak metal mark` marks what the board is on now as
+// metal), and a pack can bring a list (sounds/metal/materials.txt). For the console.
+std::string metal_command(std::string_view action);
+std::string materials_report();
+std::string status();
 }

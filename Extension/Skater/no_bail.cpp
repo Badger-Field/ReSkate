@@ -26,6 +26,9 @@ using SkeletonResponse = void (*)(std::uintptr_t, float, bool);
 using PublishAnimation = void (*)(std::uintptr_t);
 using ResetCauses = void (*)(std::uintptr_t);
 constexpr std::uintptr_t highest = memory::highest_user_address;
+// The cause most real slams record (Board Break's logs: cause 6 at forces of 9.6 to 10.7): a wipeout
+// asked for goes in as one of those.
+constexpr std::int32_t wanted_wipeout_reason = 6;
 // The hooks re-resolve the local skater's ownership (some 35 fields) on every
 // protected physics step: guarded same-process copies, not a system call each.
 template<class T> bool read(std::uintptr_t address, T& value) noexcept { return memory::peek(address, value); }
@@ -166,6 +169,12 @@ void track_spin(std::uintptr_t selector, std::uint32_t chosen) noexcept {
     if (!s.airborne) s.board_ok = board_ok; // on the ground: whether the next takeoff has a board pose
     s.board_yaw = board_yaw;
 }
+// A wipeout asked for (no_bail_request_wipeout): the cause goes in at the watched selector's next pick.
+struct WantedWipeout {
+    std::atomic<float> magnitude{};
+    std::atomic<std::uint64_t> until{};
+};
+WantedWipeout& wanted_wipeout() { static auto* value = new WantedWipeout; return *value; }
 
 // Recheck live local ownership at use time. A retained physics address alone
 // must never protect another skater after a respawn or level change.
@@ -1988,12 +1997,28 @@ std::uint32_t choose_state(std::uintptr_t selector, std::uint32_t current) {
         hold_off_board(selector, current);
         dark_pop_before(selector, current);
     }
+    // A wipeout asked for (no_bail_request_wipeout): its cause goes in as the game's contact tests
+    // record theirs, and the pick is Wipeout, as some of those tests return it directly.
+    bool force_wipeout{};
+    if (auto& wanted = wanted_wipeout(); wanted.until.load(std::memory_order_acquire) &&
+        selector == state_watch().selector.load(std::memory_order_acquire)) {
+        LastError error;
+        if (const auto until = wanted.until.exchange(0, std::memory_order_acq_rel); GetTickCount64() < until)
+            if (const auto causes = state_watch().causes.load(std::memory_order_acquire); causes && !protected_owner(selector, &Owner::selector)) {
+                record_cause(causes, wanted_wipeout_reason, wanted.magnitude.load(std::memory_order_relaxed));
+                force_wipeout = true;
+            }
+    }
     // Clear shared requests before selection so native ground/air/walking
     // transitions can still run. Some contact tests return Wipeout directly;
     // retain the current state only for that result, never ordinary Offboard.
     const bool filtered = filter_requests(selector, &Owner::selector);
-    const auto next = protection().choose_original(selector, current);
+    auto next = protection().choose_original(selector, current);
     LastError error;
+    if (force_wipeout && next != wipeout_physics_state) {
+        logging::log(logging::Level::debug, logging::Channel::skater, "No Bail: a wipeout was asked for (state {} would have been {}).", current, next);
+        next = wipeout_physics_state;
+    }
     auto chosen = filtered && next == wipeout_physics_state && protected_owner(selector, &Owner::selector) ? current : next;
     chosen = dark_pop_after(selector, current, chosen);
     fast_probe_record(selector, current, next, chosen);
@@ -2382,6 +2407,11 @@ std::size_t fast_probe_drain(FastProbeRow* rows, std::size_t capacity) noexcept 
     while (tail != head && count < capacity) rows[count++] = f.rows[tail++ % fast_probe_capacity];
     f.tail.store(tail, std::memory_order_release);
     return count;
+}
+void no_bail_request_wipeout(float magnitude) noexcept {
+    auto& wanted = wanted_wipeout();
+    wanted.magnitude.store(magnitude, std::memory_order_relaxed);
+    wanted.until.store(GetTickCount64() + 250, std::memory_order_release);
 }
 bool add_no_bail_step_listener(NoBailStepObserver listener) noexcept {
     if (!listener) return false;

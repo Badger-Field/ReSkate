@@ -161,7 +161,7 @@ ReSkateLauncher.exe --no-gui --no-update
 
 then read the `trainer selftest:` lines in `logs\ReSkate.log`. `dingosdk_trainer_tuning_dump <Skate
 folder>` (CMake option `DINGOSDK_BUILD_TRAINER_TESTS`) lists the tuning values without the game;
-the same option builds the `trainer_session_extras` and `trainer_landing` tests (`ctest -R trainer`).
+the same option builds the `trainer_session_extras`, `trainer_landing` and `trainer_presets` tests (`ctest -R trainer`).
 
 ## Known limits
 
