@@ -1046,6 +1046,28 @@ tagged object. The d1b slab's ids ended in 00 (mesh and collision) and Embarcade
 names the dry run prints (`ground_0_0_tm2_m1`), and `--visual-slab W,H,D` adds the d1b slab's
 shape through the visual path.
 
+**Tested in game** (3bc3aa5): everything loads, no crash. The d1b slab is textured (the skatepark
+surface tiling across 50 m at 1 per metre); the Embarcadero ground objects are drawn and textured
+with the real terrain's rise, one object or all six; all 13 objects load ("13 visual objects
+added") with the readings exact; the skater lands on the spot_2 bench at 301.5. So Embarcadero
+Plaza is a visible, textured, skateable level. The ground's TexCoord0 default is 1 per metre and
+the dry run says so (it printed "given" before).
+
+**Looking at objects.** The trainer's `tp x y z` and `ground x z` take no heading, and the camera
+after a teleport faces wherever it did; `trainer where` prints the heading (0 = +z, north; 90 =
++x, east: `atan2(forward.x, forward.z)` in `Extension/Trainer/trainer.cpp`). `place-info --views`
+prints, per visual object, a `trainer ground` spot outside it on the side with ground and the
+heading to face. Proposal (not in this branch): an optional heading argument, `trainer ground <x>
+<z> [heading]` and `tp <x> <y> <z> [heading]`, setting the skater's yaw (forward = (sin h, 0,
+cos h)) after the teleport, so a test can face an object without turning by hand.
+
+**Materials.** `material-donors --game G [--contains TEXT]` lists the MeshSets of bam's root
+bundle whose names contain TEXT (default `skatepark`): each LOD 0 section's material name,
+triangles, strides, whether its key is in the root depot, and a class (concrete, wood, metal,
+ground) guessed from the words of its names; then a proposed `--material-donor CLASS=MESH:N` per
+class (the first usable section). A donor of another mesh lends its section's declaration, key,
+model vertex, and its own TexCoord0/TexCoord1 densities and colour value.
+
 **Visuals** (`--visuals`, written, not yet run in game): each visual object of each tile (13 in
 the Embarcadero export) gets its own blueprint, mesh and placement (at `--at`, like the
 collision's), all in the level's root bundle (bam root's copy, whose depot holds the template's
