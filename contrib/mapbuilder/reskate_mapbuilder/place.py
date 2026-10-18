@@ -243,8 +243,10 @@ def merge(pieces: list[Piece]) -> Shape:
             local.append(index[key])
         triangles += [(local[a], local[b], local[c]) for a, b, c in piece.triangles]
     if 3 * len(triangles) > 0xFFFF or len(vertices) > 0xFFFF:
-        raise PlaceError(f"{len(triangles)} triangles do not fit one shape ({MAX_SHAPE_TRIANGLES} at most): "
-                         f"use more parts")
+        raise PlaceError(f"{len(triangles)} triangles and {len(vertices)} vertices do not fit one shape "
+                         f"({MAX_SHAPE_TRIANGLES} triangles and 65,535 vertices at most): use a template with more "
+                         f"collision parts (the skatepark box has 3: --blueprint-template <its blueprint> --asset-bundle "
+                         f"root), drop chunks (--max-height, --skip-part), or export a smaller area")
     return Shape(vertices, [t for t in triangles if len(set(t)) == 3])
 
 

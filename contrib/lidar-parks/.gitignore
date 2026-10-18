@@ -1,0 +1,9 @@
+# Downloads and outputs stay out of git (see DATA-SOURCES.md).
+.cache/
+cache/
+out/
+*.laz
+*.las
+*.glb
+*.ply
+*.parquet
