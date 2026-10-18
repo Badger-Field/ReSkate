@@ -1,6 +1,7 @@
 """new-place-level: a real place's collision from the lidar-parks tile export (reskate-level-tiles
 v2), on a small synthetic tile directory written here (FORMAT-NOTES 6.4)."""
 import json
+import re
 import struct
 import sys
 from pathlib import Path
@@ -324,10 +325,10 @@ def test_place_info_views_give_a_spot_and_heading_per_visual_object(tmp_path, ca
     out = capsys.readouterr().out
     # The visual ground (0..50 x 0..50): ground south of it? none there (z < 0), so north at z 50 + 30.
     line = next(line for line in out.splitlines() if line.strip().startswith("ground_t0_0:"))
-    assert "trainer ground" in line and "face heading" in line and "it spans y 300.0..300.0" in line
-    # No ground south or north of it in this export: west of it, facing east.
-    assert "face heading 90" in line and "west of it" in line
-    assert "after `trainer ground` the camera faces heading 0" in out
+    assert "trainer ground" in line and "it spans y 300.0..300.0" in line
+    # No ground south or north of it in this export: west of it, facing east, as one command.
+    assert re.search(r"trainer ground -?[0-9.]+ -?[0-9.]+ 90 ", line) and "west of it" in line
+    assert "`trainer ground X Z H` lands there facing heading H" in out
 
 
 def test_material_donors_lists_sections_and_proposes_defaults(tmp_path, capsys):

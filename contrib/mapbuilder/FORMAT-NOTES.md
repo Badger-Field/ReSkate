@@ -1084,9 +1084,10 @@ camera faces heading 0 (+z, north) after `tp` and `ground`: `trainer where` read
 teleport (e3ed5ee; an earlier "+x" guess was wrong), so spots are on each object's south side
 looking north where there is ground, else north, west or east with the heading to turn to. A V2 run teleported 3 to 4 m west of the spot_2 bench showed the textured
 plaza with raised textured objects (a long ledge or step edge, a raised slab): the non-ground
-visuals draw. Proposal (not in this branch): an optional heading argument, `trainer ground <x>
-<z> [heading]` and `tp <x> <y> <z> [heading]`, setting the skater's yaw (forward = (sin h, 0,
-cos h)) after the teleport, so a test can face an object without turning by hand.
+visuals draw. The trainer now takes an optional heading, `trainer ground <x> <z> [heading]` and `tp <x> <y> <z>
+[heading]` (branch trainer-heading): the game's teleport is handed a transform whose rotation is
+a yaw (forward = (sin h, 0, cos h)) instead of the identity, so `place-info --views` prints
+`trainer ground X Z H` as one command. Not yet run in game.
 
 **Materials.** `material-donors --game G [--contains TEXT]` lists the MeshSets of bam's root
 bundle whose names contain TEXT (default `skatepark`): each LOD 0 section's material name,
