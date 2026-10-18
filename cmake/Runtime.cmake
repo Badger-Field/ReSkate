@@ -280,14 +280,21 @@ if(WIN32 AND DINGOSDK_CARGO AND EXISTS "${dingosdk_spotify_dir}/Cargo.toml")
 endif()
 if(dingosdk_windows_import)
     set(dingosdk_spotify_lib "${dingosdk_spotify_dir}/target/release/reskate_spotify.lib")
+    # Every file cargo reads, so a change to any of them runs cargo again.
+    file(GLOB dingosdk_spotify_sources CONFIGURE_DEPENDS "${dingosdk_spotify_dir}/src/*.rs")
     add_custom_command(OUTPUT "${dingosdk_spotify_lib}"
         COMMAND "${DINGOSDK_CARGO}" build --release --lib
         WORKING_DIRECTORY "${dingosdk_spotify_dir}"
-        DEPENDS "${dingosdk_spotify_dir}/src/lib.rs" "${dingosdk_spotify_dir}/Cargo.toml" "${dingosdk_spotify_dir}/Cargo.lock"
+        DEPENDS ${dingosdk_spotify_sources} "${dingosdk_spotify_dir}/Cargo.toml" "${dingosdk_spotify_dir}/Cargo.lock"
+            "${dingosdk_spotify_dir}/.cargo/config.toml"
         COMMENT "Building the Spotify device (cargo)"
         VERBATIM)
     add_custom_target(dingosdk_spotify_device DEPENDS "${dingosdk_spotify_lib}")
-    add_dependencies(dingosdk_runtime dingosdk_spotify_device)
+    if(NOT CMAKE_GENERATOR MATCHES "Ninja")
+        # Visual Studio only orders whole projects. Ninja sees the library as an input of the
+        # DLL's link alone, so the runtime compiles while cargo builds, instead of after it.
+        add_dependencies(dingosdk_runtime dingosdk_spotify_device)
+    endif()
     list(GET dingosdk_windows_import 0 dingosdk_windows_import)
     set(dingosdk_spotify_release "$<NOT:$<CONFIG:Debug>>")
     target_compile_definitions(dingosdk_runtime PRIVATE "DINGOSDK_SPOTIFY_DEVICE=${dingosdk_spotify_release}")

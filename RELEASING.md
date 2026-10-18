@@ -46,7 +46,7 @@ ReSkateLauncher.exe --no-gui --no-update
 
   Pushes to `main` and runs by hand always build everything. A skipped job counts as passed in a required check. To add another tool that the C++ build never reads, add its folder to `PYTHON_ONLY` in `ci/changes.sh`.
 - **The LiDAR parks job keeps pip's downloads** in the Actions cache until `requirements.txt` changes.
-- **The Spotify device (Rust) is kept too.** Its cargo build is cached until `SpotifyHelper` changes.
+- **The Spotify device (Rust) is kept too.** Its cargo build is cached until `SpotifyHelper` changes. On an exact cache hit, CI marks cargo's fingerprints newer than the fresh checkout, so cargo doesn't rebuild the crate. Under Ninja, only `ReSkate.dll`'s link waits for cargo; the runtime's sources compile alongside it.
 - **Releases build only what ships**, the launcher and `ReSkate.dll`, and skip the tests, which the Build workflow already ran on that commit. So cut releases from `main` once its checks are green.
 
 Changes only to Markdown files or `LICENSE` start no build.
