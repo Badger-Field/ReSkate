@@ -32,6 +32,8 @@ add_library(dingosdk_runtime SHARED
     Extension/UI/NativeMenu/native_menu_data.cpp
     Extension/Multiplayer/Remote/native_skater.cpp
     Extension/Multiplayer/Remote/native_skater_spawn.cpp
+    Extension/Multiplayer/Remote/native_prop.cpp
+    Extension/Multiplayer/Remote/drone_sound.cpp
     Extension/Multiplayer/Remote/puppet_cost.cpp
     Extension/Multiplayer/Remote/native_cosmetics.cpp
     Extension/Multiplayer/Remote/native_audio.cpp
@@ -83,6 +85,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Music/spotify_station.cpp
     Extension/Music/spotify_cover.cpp
     Extension/Music/spotify_web.cpp
+    Extension/Music/plex_web.cpp
     Extension/Music/spotify_device.cpp
     Extension/Music/spotify_dashboard.cpp
     Extension/Music/external_audio.cpp
@@ -92,7 +95,9 @@ add_library(dingosdk_runtime SHARED
     Extension/Music/app_audio_capture.cpp
     Extension/Music/music_inject.cpp
     Extension/World/mesh_unload_guard.cpp
+    Extension/World/mesh_settings_guard.cpp
     Extension/World/shader_permutation_guard.cpp
+    Extension/World/shader_registry_guard.cpp
     Extension/World/light_table_guard.cpp
     Extension/World/stack_check_report.cpp
     Extension/World/texture_handle_limit.cpp
@@ -134,6 +139,10 @@ add_library(dingosdk_runtime SHARED
     Extension/World/spatial_cull_ids.cpp
     Extension/Rendering/display_startup.cpp
     Extension/Rendering/replay_export.cpp
+    Extension/ReplayKeyframes/replay_curve.cpp
+    Extension/ReplayKeyframes/replay_keyframes.cpp
+    Extension/ReplayKeyframes/replay_keyframes_commands.cpp
+    Extension/ReplayKeyframes/replay_settings.cpp
     Engine/Game/World/world_model.cpp
     Extension/World/level_loading.cpp
     Extension/World/loading_screen.cpp
@@ -194,6 +203,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Profile/local_profile_objects.cpp
     Extension/Profile/local_profile_missions.cpp
     Extension/Customization/local_cosmetic_catalog.cpp
+    Extension/Customization/item_origins.cpp
     Extension/Customization/local_customization_runtime.cpp
     Extension/Customization/item_browser.cpp
     Extension/Progression/local_entitlement_trigger_runtime.cpp
@@ -343,6 +353,41 @@ if(EXISTS "${dingosdk_emotes}/emotes.json" AND EXISTS "${dingosdk_emotes}/emotes
         "EMOTES_JSON RCDATA \"${dingosdk_emotes_native}\\\\emotes.json\"\n"
         "EMOTES_PNG RCDATA \"${dingosdk_emotes_native}\\\\emotes.png\"\n")
     target_sources(dingosdk_runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/emotes.rc")
+endif()
+# Game content ReSkate carries itself (Engine/Vfs/builtin_packs.h), one zip each in assets/builtin:
+# the FPV drone's model (tools/models/build_drone_pack.py; without it other players' drones use a
+# stand-in prop). A missing zip is left out. (Mods that are content for ReSkate's features, such
+# as Board Break's decks, are official mods the launcher downloads: Launcher/official_mods.h.)
+# Each zip is made into a zstd pack by ReSkateBuiltinPacker as the build goes (again only when the
+# zip changes), which is what the DLL carries: compressed whole, a pack's repeated files cost
+# next to nothing.
+set(dingosdk_builtin_rc "")
+set(dingosdk_builtin_packs "")
+foreach(pack IN ITEMS "FPV_DRONE fpv_drone")
+    separate_arguments(pack)
+    list(GET pack 0 pack_resource)
+    list(GET pack 1 pack_file)
+    set(pack_zip "${PROJECT_SOURCE_DIR}/assets/builtin/${pack_file}.zip")
+    if(EXISTS "${pack_zip}")
+        set(pack_out "${CMAKE_CURRENT_BINARY_DIR}/generated/builtin/${pack_file}.rskpack")
+        add_custom_command(OUTPUT "${pack_out}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated/builtin"
+            COMMAND dingosdk_builtin_packer "${pack_zip}" "${pack_out}"
+            DEPENDS "${pack_zip}" dingosdk_builtin_packer
+            COMMENT "Packing built-in content ${pack_file}"
+            VERBATIM)
+        file(TO_NATIVE_PATH "${pack_out}" pack_out_native)
+        string(REPLACE "\\" "\\\\" pack_out_native "${pack_out_native}")
+        string(APPEND dingosdk_builtin_rc "BUILTIN_PACK_${pack_resource} RCDATA \"${pack_out_native}\"\n")
+        list(APPEND dingosdk_builtin_packs "${pack_out}")
+    endif()
+endforeach()
+if(dingosdk_builtin_rc)
+    add_custom_target(dingosdk_builtin_content DEPENDS ${dingosdk_builtin_packs})
+    add_dependencies(dingosdk_runtime dingosdk_builtin_content)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/builtin_packs.rc" "${dingosdk_builtin_rc}")
+    target_sources(dingosdk_runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/builtin_packs.rc")
+    set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/builtin_packs.rc" APPEND PROPERTY OBJECT_DEPENDS "${dingosdk_builtin_packs}")
 endif()
 # The music sources' setup page (Extension/Music/spotify_dashboard.h).
 file(TO_NATIVE_PATH "${PROJECT_SOURCE_DIR}/Extension/Music/setup_page.html" dingosdk_music_page_native)

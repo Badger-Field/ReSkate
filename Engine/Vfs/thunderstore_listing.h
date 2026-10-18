@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <span>
 #include <string>
@@ -74,17 +75,22 @@ enum class Action {
 };
 Action action(const Package& package, const InstalledMods& installed);
 
+// Mod folders (Owner-Name) ReSkate keeps itself: official mods, which the launcher's OFFICIAL tab
+// installs (Engine/Vfs/builtin_packs.h), and the mods they retired.
+using Kept = std::function<bool(std::string_view folder)>;
+
 // The packages to list for `query`, in the order to list them: pinned ones first, then the most
 // recently updated. Never one marked NSFW (by its flag or a category of that name), nor a deprecated
-// one that is not installed. Each word of the query has to be in its title, owner, description or
-// one of its categories, ignoring case.
+// one that is not installed, nor one ReSkate keeps. Each word of the query has to be in its title,
+// owner, description or one of its categories, ignoring case.
 std::vector<const Package*> search(std::span<const Package> packages, std::string_view query,
-                                   const InstalledMods& installed);
+                                   const InstalledMods& installed, const Kept& kept = {});
 bool nsfw(const Package& package);
 
 // The packages it names as dependencies that are not installed at that version or newer
 // (Owner-Name-1.2.3 each). The game installs one package at a time; the launcher brings the rest.
-std::vector<std::string> missing_dependencies(const Package& package, const InstalledMods& installed);
+// One ReSkate keeps is never missing: as in the launcher, it is the OFFICIAL tab's to install.
+std::vector<std::string> missing_dependencies(const Package& package, const InstalledMods& installed, const Kept& kept = {});
 
 // Why a package holding `files` (paths inside the mod folder it installs as, '/' between folders)
 // is not installed from the game, or empty when it may be. It may hold what the game merges

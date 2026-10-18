@@ -151,6 +151,9 @@ int main() {
     check(names(ts::search(packages, "kay gold", installed)) == "Kay-Gold_Deck", "every word has to be found");
     check(names(ts::search(packages, "desert springs", installed)) == "Zee-Desert_Springs", "in the title as the site shows it");
     check(ts::search(packages, "spicy", installed).empty() && ts::search(packages, "ann", installed).empty(), "NSFW is never found");
+    const ts::Kept official = [](std::string_view folder) { return folder == "Kay-Gold_Deck"; };
+    check(names(ts::search(packages, "", installed, official)) == "Kay-Old_Pin,Zee-Desert_Springs,SunJay-Low_Cam",
+          "a mod ReSkate keeps (an official one) is not listed");
 
     // ------------------------------------------------ dependencies
     check(desert && ts::missing_dependencies(*desert, installed) == std::vector<std::string>{"Zee-Desert_Textures-1.2.0"}, "a dependency not here is missing");
@@ -158,6 +161,9 @@ int main() {
     check(desert && ts::missing_dependencies(*desert, installed).size() == 1, "as is one at an older version");
     installed[ts::folder_key("Zee-Desert_Textures")] = {"1.2.0", false};
     check(desert && ts::missing_dependencies(*desert, installed).empty(), "one at that version or newer is not");
+    installed.erase(ts::folder_key("Zee-Desert_Textures"));
+    check(desert && ts::missing_dependencies(*desert, installed, [](std::string_view folder) { return folder == "Zee-Desert_Textures"; }).empty(),
+          "nor one ReSkate keeps, which the OFFICIAL tab installs");
 
     // ------------------------------------------------ what a package may hold
     const auto may = [](std::vector<std::string> files) { return ts::refuse_contents(files).empty(); };

@@ -67,6 +67,10 @@ struct Exclusion {
     std::string fingerprint;           // mod_fingerprint() when it was left out
     std::string sdk;                   // the ReSkate.dll that left it out; a new one retries
     std::vector<std::string> problems; // why, most important first
+    // Left out for a conflict with this mod, higher in the load order, as its files were then
+    // (its mod_fingerprint()). It stays out only while that mod still loads above it unchanged.
+    std::string conflictWith;
+    std::string conflictFingerprint;
 };
 // Names, sizes and write times of every file in the mod folder.
 std::string mod_fingerprint(const std::filesystem::path& directory);
@@ -110,6 +114,9 @@ std::string ascii_path(const std::filesystem::path& path);
 // malformed, `issue` says why and `entries` still lists the folders (all
 // shown as enabled) so a manager can offer to rewrite it.
 ModList scan_mods(const std::filesystem::path& data_root) noexcept;
+// One mod folder as scan_mods reads it: its layout, levels, parks, info files and build stamp.
+// `name` is how it is known (for a folder under Mods/, the folder's name). Throws on I/O errors.
+Mod describe_mod(const std::filesystem::path& directory, std::string name, std::vector<std::string>& notes);
 
 // Writes mods.json for `entries` in order, replacing the file atomically.
 // Throws with a readable message on failure.

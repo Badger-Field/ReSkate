@@ -1,7 +1,9 @@
 #pragma once
+#include "Engine/Vfs/builtin_packs.h"
 #include "Engine/Vfs/thunderstore_listing.h"
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -15,8 +17,10 @@
 // community, not deprecated, not marked NSFW and not rejected by its moderators (asked of
 // Thunderstore again before the download); every file in it has to be one a mod is made of
 // (thunderstore_listing.h: refuse_contents), which is checked before anything is written and again
-// on the installed folder; and whatever it depends on has to be installed already. Downloads come
-// from thunderstore.io only. Anything else is the launcher's to install.
+// on the installed folder; and whatever it depends on has to be installed already. Official mods
+// (Engine/Vfs/builtin_packs.h) are not listed or installed here: they are the launcher's OFFICIAL
+// tab's, as in its own browser. Downloads come from thunderstore.io only. Anything else is the
+// launcher's to install.
 namespace dingosdk::mod_browser {
 struct Listing {
     std::vector<thunderstore_listing::Package> packages;
@@ -46,6 +50,10 @@ struct View {
     std::string message;                  // done and failed: what happened, for the player
 };
 View view();
+// Whether ReSkate keeps the mod folder itself (thunderstore_listing.h: Kept): one of the official
+// mods its features are made for, one in place among `officials` (the folders official_packs found,
+// read elsewhere: this reads nothing), or a mod an official one retired.
+bool kept(std::string_view folder, std::span<const mods::BuiltinPack> officials) noexcept;
 // True from an install's start until it is done or has failed.
 bool busy() noexcept;
 // Why an install cannot start now (another install, a map download or an apply under way), or empty.

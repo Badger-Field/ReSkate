@@ -240,7 +240,8 @@ bool nsfw(const Package& package) {
                                        [](const std::string& category) { return lower(category) == "nsfw"; });
 }
 
-std::vector<const Package*> search(std::span<const Package> packages, std::string_view query, const InstalledMods& installed) {
+std::vector<const Package*> search(std::span<const Package> packages, std::string_view query, const InstalledMods& installed,
+                                   const Kept& kept) {
     std::vector<std::string> words;
     const auto wanted = lower(query);
     for (std::size_t at = 0; at < wanted.size();) {
@@ -252,6 +253,7 @@ std::vector<const Package*> search(std::span<const Package> packages, std::strin
     for (const auto& package : packages) {
         if (nsfw(package)) continue;
         if (package.deprecated && !installed.contains(folder_key(package.folder()))) continue;
+        if (kept && kept(package.folder())) continue;
         if (std::all_of(words.begin(), words.end(), [&](const std::string& word) { return contains_word(package, word); }))
             result.push_back(&package);
     }
@@ -263,11 +265,13 @@ std::vector<const Package*> search(std::span<const Package> packages, std::strin
     return result;
 }
 
-std::vector<std::string> missing_dependencies(const Package& package, const InstalledMods& installed) {
+std::vector<std::string> missing_dependencies(const Package& package, const InstalledMods& installed, const Kept& kept) {
     std::vector<std::string> missing;
     for (const auto& dependency : package.dependencies) {
         const auto [name, version] = split_dependency(dependency);
-        const auto found = installed.find(folder_key(name.substr(0, std::min(name.size(), longest_folder))));
+        const auto folder = name.substr(0, std::min(name.size(), longest_folder));
+        if (kept && kept(folder)) continue;
+        const auto found = installed.find(folder_key(folder));
         if (found != installed.end() && (version.empty() || compare_versions(found->second.version, version) >= 0)) continue;
         missing.push_back(dependency);
     }

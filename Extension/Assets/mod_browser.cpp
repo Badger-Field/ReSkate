@@ -117,6 +117,8 @@ bool advance(Stage from, Stage to) {
 
 std::string accept(std::span<const std::string> files) { return listing_::refuse_contents(files); }
 
+bool same(std::string_view a, std::string_view b) { return a.size() == b.size() && _strnicmp(a.data(), b.data(), a.size()) == 0; }
+
 listing_::InstalledMods installed_mods(const mods::ModList& list) {
     listing_::InstalledMods installed;
     for (const auto& entry : list.entries)
@@ -148,7 +150,13 @@ void run() {
         if (!choice.ok) return finish(Stage::failed, choice.reason + " " + title + " is not installed from here.");
         const auto list = mods::scan_mods(mods::engine_data_root());
         const auto installed = installed_mods(list);
-        if (const auto missing = listing_::missing_dependencies(wanted, installed); !missing.empty())
+        const auto officials = mods::official_packs(package_install::mods_root(), true);
+        const auto keeps = [&](std::string_view other) {
+            return kept(other, officials) || mods::kept_by_reskate(package_install::mods_root(), other);
+        };
+        if (keeps(folder))
+            return finish(Stage::failed, title + " is an official mod: it is installed on the launcher's OFFICIAL tab.");
+        if (const auto missing = listing_::missing_dependencies(wanted, installed, keeps); !missing.empty())
             return finish(Stage::failed, title + " needs " + missing.front() + (missing.size() > 1 ? " and " + std::to_string(missing.size() - 1) + " other mod(s)" : "") +
                                              ". Install it from the launcher, which brings what a mod needs.");
         const auto have = installed.find(listing_::folder_key(folder));
@@ -174,8 +182,9 @@ void run() {
                                            : "The download of " + title + " failed (Windows error " + std::to_string(got.error) + ").");
         if (!advance(Stage::downloading, Stage::installing)) return finish(Stage::failed, "Install of " + title + " cancelled.");
         try {
-            // (An installed version goes to the Recycle Bin. The game may hold its files open when it
-            // was used this run: then it cannot be replaced until the game is closed.)
+            // (An installed version is set aside and deleted once the new one is in. The game may hold
+            // its files open when it was used this run: then it cannot be replaced until the game is
+            // closed, and stays as it was.)
             package_install::install(archive, name, replace, [](float done) { written = done; }, stop_install, accept);
         } catch (const std::exception& failure) {
             if (stop_install.load()) return finish(Stage::failed, "Install of " + title + " cancelled.");
@@ -237,6 +246,11 @@ View view() {
 }
 
 bool busy() noexcept { return working(stage.load()); }
+
+bool kept(std::string_view folder, std::span<const mods::BuiltinPack> officials) noexcept {
+    return same(folder, mods::board_break_official) || same(folder, mods::road_rash_official) || mods::retired_mod(folder) ||
+           std::any_of(officials.begin(), officials.end(), [&](const mods::BuiltinPack& pack) { return same(pack.name, folder); });
+}
 
 std::string blocked() {
     if (busy()) return "Another mod is being installed.";

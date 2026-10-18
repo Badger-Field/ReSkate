@@ -41,8 +41,8 @@ Downloaded download(const thunderstore_package::Name& name, const std::string& v
                     const Archive& archive, std::uint64_t most_bytes, std::uint32_t seconds, https::Watch& watch);
 
 using Accept = std::function<std::string(std::span<const std::string> files)>;
-// Installs the archive as Mods/<Owner-Name>, replacing the installed one when asked (it goes to the
-// Recycle Bin first). `accept` is asked about every file before anything is written. Throws a
+// Installs the archive as Mods/<Owner-Name>, replacing the installed one when asked (it is deleted
+// once the new copy is in). `accept` is asked about every file before anything is written. Throws a
 // message for the player; a refused or failed install leaves the Mods folder as it was.
 void install(const Archive& archive, const thunderstore_package::Name& name, bool replace,
              const std::function<void(float)>& progress, const std::atomic<bool>& stop, const Accept& accept = {});
