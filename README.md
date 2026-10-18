@@ -35,6 +35,8 @@ the launcher, the runtime that loads into the game, and the dedicated server.
     launcher. A mod that needs others (a mod pack) brings them with it.
   - Save sets of mods as profiles, switch between them, and share one as a code or a file.
   - Most mod changes apply in game without a restart.
+  - Turn a LiDAR scan of a real skatepark into a park mod of Build Kit objects with
+    [LiDAR parks](contrib/lidar-parks/README.md).
 - **Launcher.**
   - Checks that you have the supported game build, and can download exactly that build with your Steam
     account.
