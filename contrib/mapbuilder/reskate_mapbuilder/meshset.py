@@ -5,6 +5,7 @@ Pointers are u64 counted from byte 16 of the resource.
 from __future__ import annotations
 
 import struct
+from collections import Counter
 from dataclasses import dataclass
 
 from .bundle import Guid
@@ -192,8 +193,8 @@ def rebuild_chunk(lod: Lod, chunk: bytes) -> bytes:
 
 def _position(section: Section) -> tuple[int, int, int]:
     found = [e for e in section.elements if e[0] == POSITION_USAGE]
-    if len(found) != 1 or found[0][1] not in (3, 8):
-        raise ValueError(f"section at {section.at}: position element {found}; only formats 3 and 8 are handled")
+    if len(found) != 1 or found[0][1] not in FORMAT_CODES or FORMAT_CODES[found[0][1]][1] < 3:
+        raise ValueError(f"section at {section.at}: position element {found}; not a readable 3-component format")
     _, fmt, offset, stream = found[0]
     return fmt, offset, stream
 
@@ -201,8 +202,17 @@ def _position(section: Section) -> tuple[int, int, int]:
 def section_positions(section: Section, chunk: bytes) -> list[tuple[float, float, float]]:
     fmt, offset, stream = _position(section)
     base, stride = _stream_base(section, stream), section.strides[stream]
-    code = "<3f" if fmt == 3 else "<3e"
-    return [struct.unpack_from(code, chunk, base + i * stride + offset) for i in range(section.vertex_count)]
+    return [tuple(decode_element(fmt, chunk, base + i * stride + offset)[:3]) for i in range(section.vertex_count)]
+
+
+def section_element(section: Section, chunk: bytes, usage: int) -> list[list[float]] | None:
+    """Every vertex's values of the element with this usage, or None."""
+    found = next(((f, o, t) for u, f, o, t in section.elements if u == usage and f in FORMAT_CODES), None)
+    if found is None:
+        return None
+    f, o, t = found
+    base, stride = _stream_base(section, t), section.strides[t]
+    return [decode_element(f, chunk, base + i * stride + o) for i in range(section.vertex_count)]
 
 
 def section_triangles(lod: Lod, section: Section, chunk: bytes) -> list[tuple[int, int, int]]:
@@ -220,11 +230,51 @@ def _align(value: int, to: int) -> int:
 # usage 51); 6 and 13 = 4 bytes, not decoded (usage 33/34: probably a packed normal and tangent
 # frame; 52: UV or colour): taken from the model vertex, which faces up when the section has an
 # up-facing triangle.
-UV_USAGE, UV_FORMAT = 51, 12
+# Vertex element formats: Skate's VertexElementFormat enum, read from its reflection names by the PC
+# (2026-10-18), in declaration order. (struct code, components, normalisation divisor or None.)
+FORMAT_NAMES = {0: "None", 1: "Float", 2: "Float2", 3: "Float3", 4: "Float4", 5: "Half", 6: "Half2", 7: "Half3",
+                8: "Half4", 9: "UByteN", 10: "Byte4", 11: "Byte4N", 12: "UByte4", 13: "UByte4N", 14: "Short",
+                15: "Short2", 16: "Short3", 17: "Short4", 18: "ShortN", 19: "Short2N", 20: "Short3N", 21: "Short4N",
+                22: "UShort2", 23: "UShort4", 24: "UShort2N", 25: "UShort4N", 26: "Int",
+                40: "Comp3_10_10_10", 41: "Comp3N_10_10_10", 42: "UComp3_10_10_10", 43: "UComp3N_10_10_10"}
+FORMAT_CODES = {1: ("f", 1, None), 2: ("f", 2, None), 3: ("f", 3, None), 4: ("f", 4, None),
+                5: ("e", 1, None), 6: ("e", 2, None), 7: ("e", 3, None), 8: ("e", 4, None),
+                9: ("B", 1, 255.0), 10: ("b", 4, None), 11: ("b", 4, 127.0), 12: ("B", 4, None), 13: ("B", 4, 255.0),
+                14: ("h", 1, None), 15: ("h", 2, None), 16: ("h", 3, None), 17: ("h", 4, None),
+                18: ("h", 1, 32767.0), 19: ("h", 2, 32767.0), 20: ("h", 3, 32767.0), 21: ("h", 4, 32767.0),
+                22: ("H", 2, None), 23: ("H", 4, None), 24: ("H", 2, 65535.0), 25: ("H", 4, 65535.0), 26: ("i", 1, None)}
+FORMATS = FORMAT_NAMES
+
+# Vertex usages, as read on the skatepark box (PC): 1 position; 33 and 34 texture coordinates
+# (TexCoord0, atlas-like, and TexCoord1, world scale) as Half2; 51 UByte4, zeros or (1, 0, 0, 0);
+# 52 UByte4N, (0, 0, 0 or 255, a). No normal or tangent in this layout.
+UV0_USAGE, UV1_USAGE, ZERO_USAGE, COLOUR_USAGE = 33, 34, 51, 52
 AREA_OFFSET = 332                     # section: surface area (float), by the PC's diff
-UV_METRES = 6.0                       # our UVs: one texture repeat every 6 m of x and z
-FORMATS = {3: "float32 x3", 8: "float16 x4", 12: "float16 x2", 6: "4 bytes, not decoded",
-           13: "4 bytes, not decoded"}
+UV_METRES = 6.0
+UV1_DEFAULT = 0.5           # per metre, when the template has no TexCoord1 to measure
+
+
+def decode_element(fmt: int, data: bytes, at: int) -> list[float]:
+    code, n, norm = FORMAT_CODES[fmt]
+    values = struct.unpack_from("<" + code * n, data, at)
+    return [v / norm for v in values] if norm else [float(v) for v in values]
+
+
+def encode_element(fmt: int, buffer: bytearray, at: int, values) -> None:
+    """Writes the first len(values) components; the rest keep what the buffer holds."""
+    if fmt not in FORMAT_CODES:
+        raise ValueError(f"vertex format {fmt} ({FORMAT_NAMES.get(fmt, '?')}) is not written by this builder")
+    code, n, norm = FORMAT_CODES[fmt]
+    current = list(struct.unpack_from("<" + code * n, buffer, at))
+    for i, v in enumerate(list(values)[:n]):
+        v = v * norm if norm else v
+        current[i] = int(round(v)) if code in "bBhHi" else v
+    struct.pack_into("<" + code * n, buffer, at, *current)
+
+
+def element_size(fmt: int) -> int:
+    code, n, _ = FORMAT_CODES[fmt]
+    return struct.calcsize("<" + code * n)
 
 
 def model_vertex(lod: Lod, section: Section, chunk: bytes) -> tuple[list[bytes], int]:
@@ -406,7 +456,7 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
 
     if len(vertices) > 0xFFFF:
         raise ValueError("at most 65535 vertices")
-    normals = vertex_normals(vertices, triangles)          # ours, outward
+    normals = vertex_normals(vertices, triangles)          # ours, outward: picks each face's UV plane
     first, first_chunk = lods[0].sections[0], template_chunks[0]
     theirs = _outward(section_positions(first, first_chunk), section_triangles(lods[0], first, first_chunk))
     flip = theirs is False
@@ -415,21 +465,30 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
     report.append(f"winding {'flipped to match' if flip else 'as the template'}"
                   + ("" if theirs is not None else " (the template's could not be told)"))
 
-    # Per-vertex data: each of our vertices takes the template vertex (of any section with the
-    # same layout in its LOD) whose face normal is closest to ours, so the undecoded normal and
-    # tangent bytes face the right way; UVs are planar per face at the template's texel density.
-    sign = -1.0 if flip else 1.0                     # the template's normals, made outward
-    measured = uv_density(lods[0], lods[0].sections[min(geometry_section or 0, len(lods[0].sections) - 1)],
-                          template_chunks[0])
-    density = uv_per_metre or measured or 1.0 / UV_METRES
-    report.append(f"UVs: planar per face, {density:.4g} per metre ("
-                  + ("given" if uv_per_metre else "the template section's texel density" if measured else "default")
-                  + (f"; the template's is {measured:.4g}" if measured and uv_per_metre else "") + ")")
-    report += normal_formats(lods[0], template_chunks[0], sign)
+    # Per-vertex data, by usage: position ours; TexCoord0 (33) planar per face at the template
+    # section's own density (or --uv-per-metre) from its own minimum; TexCoord1 (34) planar at
+    # the template's density (world scale); 51 zeros; 52 the template section's most common value;
+    # anything else the section's most up-facing template vertex's.
+    geometry_index = min(geometry_section or 0, len(lods[0].sections) - 1)
+    measure_section = lods[0].sections[geometry_index]
+    uv0 = uv_measure(lods[0], measure_section, template_chunks[0], UV0_USAGE)
+    uv1 = uv_measure(lods[0], measure_section, template_chunks[0], UV1_USAGE)
+    density0 = uv_per_metre or (uv0[0] if uv0 and uv0[0] else 1.0 / UV_METRES)
+    origin0 = uv0[1] if uv0 else [0.0, 0.0]
+    density1 = uv1[0] if uv1 and uv1[0] else UV1_DEFAULT
+    colour = common_value(measure_section, template_chunks[0], COLOUR_USAGE)
+    report.append(f"TexCoord0 (usage 33): planar per face at {density0:.4g} per metre ("
+                  + ("given" if uv_per_metre else "the template section's") + ") from "
+                  f"{[round(c, 3) for c in origin0]}"
+                  + (f"; the template's: {uv0[0]:.4g} per metre over {[round(c, 3) for c in uv0[1]]}.."
+                     f"{[round(c, 3) for c in uv0[2]]}" if uv0 else "; the template has none"))
+    report.append(f"TexCoord1 (usage 34): planar at {density1:.4g} per metre"
+                  + (f" (the template's, over {[round(c, 3) for c in uv1[1]]}..{[round(c, 3) for c in uv1[2]]})"
+                     if uv1 else " (default; the template has none)")
+                  + f"; usage 51 zeros; usage 52 {colour.hex() if colour else 'the model vertex'}s")
     chunks = []
     described = set()
     for lod, old_lod, template_chunk, guid in zip(lods_now, lods, template_chunks, chunk_guids):
-        pools = {}
         vertex_data = bytearray()
         index_parts = []
         first_index = 0
@@ -438,37 +497,38 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
             verts, tris = (vertices, triangles) if ours else (vertices[:1], [(0, 0, 0)])
             if donor is not None:
                 model = donor[1]
-                models = [model] * len(verts)
             else:
                 old = next(o for o in old_lod.sections if o.at == s.at)
                 model, _ = model_vertex(old_lod, old, template_chunk)
-                key = (tuple(s.elements), tuple(s.strides))
-                if key not in pools:
-                    pools[key] = _normal_pool(old_lod, [o for o in old_lod.sections
-                                                        if (tuple(o.elements), tuple(o.strides)) == key],
-                                              template_chunk, sign)
-                models = ([_closest(pools[key], n, model) for n in normals] if ours else [model])
             if len(model) != len(s.strides) or any(len(m) != w for m, w in zip(model, s.strides)):
                 raise ValueError(f"section at {s.at}: the model vertex does not match its streams")
             key = (tuple(s.elements), tuple(s.strides))
             if key not in described:
                 described.add(key)
                 report.append("section layout: " + ", ".join(
-                    f"usage {u} format {f} ({FORMATS.get(f, '?')}) at +{o} of stream {t}" for u, f, o, t in s.elements)
+                    f"usage {u} format {f} ({FORMAT_NAMES.get(f, '?')}) at +{o} of stream {t}" for u, f, o, t in s.elements)
                     + f"; strides {s.strides}")
             fmt, offset, stream = _position(s)
             start = _align(len(vertex_data), 16)
             vertex_data += bytes(start - len(vertex_data))
             for t, stride in enumerate(s.strides):
                 for v_i, (x, y, z) in enumerate(verts):
-                    vertex = bytearray(models[v_i][t])
+                    vertex = bytearray(model[t])
+                    n = normals[v_i] if ours else (0.0, 1.0, 0.0)
                     for usage, f, o, st in s.elements:
-                        if st != t:
+                        if st != t or f not in FORMAT_CODES:
                             continue
                         if usage == POSITION_USAGE:
-                            struct.pack_into("<3f" if f == 3 else "<3e", vertex, o, x, y, z)
-                        elif usage == UV_USAGE and f == UV_FORMAT:
-                            struct.pack_into("<2e", vertex, o, *planar_uv((x, y, z), normals[v_i], density))
+                            encode_element(f, vertex, o, (x, y, z))
+                        elif usage == UV0_USAGE:
+                            u, v = planar_uv((x, y, z), n, density0)
+                            encode_element(f, vertex, o, (u + origin0[0], v + origin0[1]))
+                        elif usage == UV1_USAGE:
+                            encode_element(f, vertex, o, planar_uv((x, y, z), n, density1))
+                        elif usage == ZERO_USAGE:
+                            vertex[o:o + element_size(f)] = bytes(element_size(f))
+                        elif usage == COLOUR_USAGE and colour is not None and len(colour) == element_size(f):
+                            vertex[o:o + element_size(f)] = colour
                     vertex_data += vertex
             struct.pack_into("<4I", meshset, s.at + 32, len(tris), first_index, start, len(verts))
             if area_ok:
@@ -628,113 +688,31 @@ def planar_uv(p, n, density):
     return u * density, v * density
 
 
-def _uv_element(section):
-    return next(((o, t) for u, f, o, t in section.elements if u == UV_USAGE and f == UV_FORMAT), None)
-
-
-def uv_density(lod, section, chunk) -> float | None:
-    """The section's UV units per metre: over its triangles' edges, |delta UV| / |delta position|."""
-    found = _uv_element(section)
-    if found is None:
+def uv_measure(lod, section, chunk, usage) -> tuple[float, list[float], list[float]] | None:
+    """(UV units per metre over the section's triangle edges, UV minimum, UV maximum) of the
+    element with this usage, or None."""
+    uvs = section_element(section, chunk, usage)
+    if not uvs:
         return None
-    o, t = found
-    base, stride = _stream_base(section, t), section.strides[t]
     points = section_positions(section, chunk)
-    uvs = [struct.unpack_from("<2e", chunk, base + i * stride + o) for i in range(section.vertex_count)]
     world = uv = 0.0
     for a, b, c in section_triangles(lod, section, chunk):
         for p, q in ((a, b), (b, c), (c, a)):
             world += sum((points[p][k] - points[q][k]) ** 2 for k in range(3)) ** 0.5
             uv += sum((uvs[p][k] - uvs[q][k]) ** 2 for k in range(2)) ** 0.5
-    return uv / world if world and uv else None
+    lo = [min(v[k] for v in uvs) for k in range(2)]
+    hi = [max(v[k] for v in uvs) for k in range(2)]
+    return (uv / world if world and uv else 0.0), lo, hi
 
 
-def _normal_pool(lod, sections, chunk, sign):
-    """(outward face normal, bytes per stream) for every vertex of the given sections."""
-    pool = []
-    for s in sections:
-        points = section_positions(s, chunk)
-        seen = set()
-        for a, b, c in section_triangles(lod, s, chunk):
-            n = _unit(_face_normal(points[a], points[b], points[c]))
-            n = (sign * n[0], sign * n[1], sign * n[2])
-            for i in (a, b, c):
-                if i in seen:
-                    continue
-                seen.add(i)
-                pool.append((n, [chunk[_stream_base(s, t) + i * w:_stream_base(s, t) + (i + 1) * w]
-                                 for t, w in enumerate(s.strides)]))
-    return pool
+def common_value(section, chunk, usage) -> bytes | None:
+    """The most common bytes of the element with this usage in the section."""
+    found = next(((f, o, t) for u, f, o, t in section.elements if u == usage and f in FORMAT_CODES), None)
+    if found is None or not section.vertex_count:
+        return None
+    f, o, t = found
+    base, stride, size = _stream_base(section, t), section.strides[t], element_size(f)
+    counts = Counter(chunk[base + i * stride + o:base + i * stride + o + size] for i in range(section.vertex_count))
+    return counts.most_common(1)[0][0]
 
 
-def _closest(pool, normal, fallback):
-    if not pool:
-        return fallback
-    return max(pool, key=lambda entry: sum(entry[0][k] * normal[k] for k in range(3)))[1]
-
-
-def _oct(x, y):
-    z = 1.0 - abs(x) - abs(y)
-    if z < 0:
-        x, y = (1.0 - abs(y)) * (1 if x >= 0 else -1), (1.0 - abs(x)) * (1 if y >= 0 else -1)
-    return [x, y, z]
-
-
-def _quat_axis(q, axis):
-    x, y, z, w = q
-    columns = {0: [1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)],
-               1: [2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)],
-               2: [2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)]}
-    return columns[axis]
-
-
-def _s8(c):
-    return max(-1.0, (c - 256 if c > 127 else c) / 127.0)
-
-
-def _decoders():
-    u8 = (lambda c: c / 127.5 - 1.0)
-    out = {"unorm8 xyz": lambda b: [u8(c) for c in b[:3]], "snorm8 xyz": lambda b: [_s8(c) for c in b[:3]]}
-    for name, read in (("snorm16", lambda b: [max(-1.0, v / 32767.0) for v in struct.unpack("<2h", b)]),
-                       ("unorm16", lambda b: [v / 32767.5 - 1.0 for v in struct.unpack("<2H", b)])):
-        out[f"octahedral {name} (z)"] = (lambda r: lambda b: _oct(*r(b)))(read)
-        out[f"octahedral {name} (y)"] = (lambda r: lambda b: (lambda v: [v[0], v[2], v[1]])(_oct(*r(b))))(read)
-    for name, read in (("unorm8", lambda b: [u8(c) for c in b]), ("snorm8", lambda b: [_s8(c) for c in b])):
-        for axis in range(3):
-            out[f"quaternion {name} axis {'xyz'[axis]}"] = (lambda r, a: lambda b: _quat_axis(_unit4(r(b)), a))(read, axis)
-    return out
-
-
-def _unit4(q):
-    length = sum(c * c for c in q) ** 0.5
-    return [c / length for c in q] if length else [0.0, 0.0, 0.0, 1.0]
-
-
-def normal_formats(lod, chunk, sign) -> list[str]:
-    """One line per 4-byte element (formats 6 and 13) of the template's first section: how well
-    each reading as a normal (8-bit xyz, octahedral 16-bit, an 8-bit quaternion's axes) agrees with
-    the face normals. Report only: none fitted plain 8-bit xyz on the skatepark box (PC); our
-    vertices copy matched template vertices (_closest) whatever the format is."""
-    out = []
-    for s in lod.sections[:1]:
-        points = section_positions(s, chunk)
-        faces = {}
-        for a, b, c in section_triangles(lod, s, chunk):
-            n = _unit(_face_normal(points[a], points[b], points[c]))
-            for i in (a, b, c):
-                faces.setdefault(i, (sign * n[0], sign * n[1], sign * n[2]))
-        for usage, f, o, t in s.elements:
-            if f not in (6, 13) or not faces:
-                continue
-            base, stride = _stream_base(s, t), s.strides[t]
-            scores = {}
-            for label, decode in _decoders().items():
-                total = 0.0
-                for i, n in faces.items():
-                    d = _unit(decode(chunk[base + i * stride + o:base + i * stride + o + 4]))
-                    total += sum(d[k] * n[k] for k in range(3))
-                scores[label] = total / len(faces)
-            best = max(scores, key=scores.get)
-            out.append(f"usage {usage} format {f}: best reading as a normal {best} ({scores[best]:.3f} agreement"
-                       + (", a fit" if scores[best] > 0.9 else ", no fit") + "); vertices copy matched template ones")
-    return out

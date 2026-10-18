@@ -120,7 +120,11 @@ BAM_MODES = {
 
 
 def resource_id(name: str) -> int:
-    return int.from_bytes(hashlib.md5(("resource|" + name.lower()).encode()).digest()[:8], "little")
+    """A new resource's id: from its name, with the low two bits clear. The game keeps tag bits
+    there while it fixes up references: a mesh id ending in binary 10 crashed the level load
+    (89109ff, 5924574: the crash read our MeshSet's id as a tagged pointer), ids ending in 00 (the
+    d1b slab's mesh and collision) and 01 (Embarcadero's collision) worked."""
+    return int.from_bytes(hashlib.md5(("resource|" + name.lower()).encode()).digest()[:8], "little") & ~3
 
 
 class _Source:

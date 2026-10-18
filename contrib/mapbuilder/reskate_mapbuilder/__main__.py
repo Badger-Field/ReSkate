@@ -226,13 +226,19 @@ def _visuals(args, place) -> list:
     only = getattr(args, "visuals_only", None) or []
     out = []
     for piece in place.visual:
-        if only and not any(piece.name == o or piece.part == o or piece.name.startswith(o) for o in only):
-            continue
         label = f"{piece.name}_t{piece.tile[0]}_{piece.tile[1]}".replace("-", "m")
+        if only and not any(o in (piece.name, piece.part, label) or piece.name.startswith(o) for o in only):
+            continue
         out.append((label, piece.vertices, piece.triangles, piece.material))
+    if getattr(args, "visual_slab", None):
+        from .meshset import box_geometry
+        w, h, d = _xyz(args.visual_slab, "--visual-slab")
+        vertices, triangles = box_geometry((-w / 2, -h, -d / 2), (w / 2, 0.0, d / 2))
+        out.append(("slab", vertices, triangles, "ground"))
     if not out:
         sys.exit("--visuals: no visual object matches --visuals-only")
-    print(f"visual objects: {len(out)} of {len(place.visual)}: " + ", ".join(
+    extra = " plus the slab" if getattr(args, "visual_slab", None) else ""
+    print(f"visual objects: {len(out) - bool(extra)} of {len(place.visual)}{extra}: " + ", ".join(
         f"{name} ({material}, {len(v)} vertices, {len(t)} triangles)" for name, v, t, material in out))
     return out
 
@@ -392,6 +398,9 @@ def _place_options(p):
                    help="draw the place's visual objects: one blueprint and mesh each, cloned from --visual-template")
     p.add_argument("--visuals-only", action="append", metavar="OBJECT",
                    help="only these visual objects (name, part or name prefix; repeatable)")
+    p.add_argument("--visual-slab", nargs="+", metavar="W,H,D",
+                   help="also a slab W x H x D (top at the place's origin height) through the visual path, the d1b "
+                        "slab's shape, to compare the two commands")
     p.add_argument("--visual-template", metavar="BLUEPRINT",
                    help="the stock blueprint (bam root bundle) each visual object copies (default the skatepark box)")
     p.add_argument("--material-donor", action="append", metavar="MATERIAL=MESH[:SECTION]",
