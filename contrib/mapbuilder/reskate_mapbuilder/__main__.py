@@ -14,6 +14,8 @@
         [--blueprint-superbundle S] [--visual none|template] [--mesh template|own] \\
         [--asset-bundle ground|coregameassets] [--dry-run]
   python -m reskate_mapbuilder inspect-meshset --game <dir> [--mod <mod dir>] --superbundle S --bundle B --resource R
+  python -m reskate_mapbuilder new-place-level --game <dir> --mods <dir> --name zz-... --level <name> --tiles <DIR> \\
+        [--at X Y Z] [--mirror] [--bam 333|no-world|all] [--asset-bundle ...] [--dry-run]
   python -m reskate_mapbuilder mesh-refs --game <dir> [--mod <mod dir>] --superbundle S --bundle B --mesh EBX \\
         [--scan SUPERBUNDLE:BUNDLE ...] [--level <name>]
   python -m reskate_mapbuilder list-assets --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] [--contains TEXT]
@@ -37,6 +39,7 @@ from .game import Game
 from .ground import ASSET_BUNDLES, BAM_MODES, MESH_MODES, VISUAL_MODES, BLUEPRINT_BUNDLE, BLUEPRINT_TEMPLATE, DEFAULT_AT, DEFAULT_SIZE, TILE_TEMPLATE, new_ground_level
 from .level import BASE_SUPERBUNDLE, new_level
 from .meshrefs import mesh_refs
+from .place import PlaceError, check_spots, collision as place_collision, read_place, summary as place_summary
 from .meshset import describe_meshset
 from .mod import ModBuilder
 from .physics import (KIND_TRIANGLE_MESH, Shape, compute_edge_data, physics_tail, read_physics, replace_shape,
@@ -132,17 +135,23 @@ def new_level_command(args):
     print(f"wrote {mod.write(args.mods)}")
 
 
-def new_ground_level_command(args):
-    """Builds the own-ground level mod (FORMAT-NOTES 6.3). --dry-run writes nothing. The report is
-    printed also when the build refuses, so a dry run on the PC says what was found."""
+def new_ground_level_command(args, place=None):
+    """Builds the own-ground level mod (FORMAT-NOTES 6.3), or with `place` the real-place one
+    (6.4). --dry-run writes nothing. The report is printed also when the build refuses, so a dry
+    run on the PC says what was found."""
     game = Game(args.game)
-    mod = ModBuilder(game, args.name, description=f"New level {args.level} with its own ground")
+    what = f"the place in {args.tiles}" if place else "its own ground"
+    mod = ModBuilder(game, args.name, description=f"New level {args.level} with {what}")
     log: list[str] = []
+    def collision(template):
+        shapes, parts = place_collision(place, template)
+        return shapes, parts, f"{len(parts)} parts, one per collision chunk"
+    grid = getattr(args, "grid", None)
     try:
         new_ground_level(game, mod, args.level, args.display_name, args.size, tuple(args.at), args.bam,
                          args.tile_template, args.layer_template, args.layer_bundle, args.blueprint_template,
-                         args.blueprint_bundle, args.tiles, log, args.blueprint_superbundle, args.visual, args.mesh,
-                         args.asset_bundle)
+                         args.blueprint_bundle, grid if grid is not None else 1, log, args.blueprint_superbundle,
+                         args.visual, args.mesh, args.asset_bundle, collision if place is not None else None)
     finally:
         for line in log:
             print(line)
@@ -150,12 +159,28 @@ def new_ground_level_command(args):
     print("Mod files:")
     for relative, data in sorted(files.items()):
         print(f"  {relative}: {len(data)} bytes")
+    if place is not None:
+        print("In game, after `load levels/game/{0}/{0}` (expected readings; - means no ground there):".format(args.level))
+        for label, x, z, y in check_spots(place, tuple(args.at)):
+            print(f"  trainer ground {x} {z}    -> {'-' if y is None else y}    ({label})")
     if args.dry_run:
         print("dry run: nothing written")
         return
     if not args.mods:
         sys.exit("--mods is required unless --dry-run")
     print(f"wrote {mod.write(args.mods)}")
+
+
+def new_place_level_command(args):
+    """A level whose collision is a real place's (the lidar-parks tile export, FORMAT-NOTES 6.4)."""
+    try:
+        place = read_place(args.tiles, args.mirror)
+    except PlaceError as e:
+        sys.exit(f"new-place-level: {e}")
+    for line in place_summary(place, tuple(args.at)):
+        print(line)
+    args.size, args.mesh = DEFAULT_SIZE, "template"
+    new_ground_level_command(args, place)
 
 
 def list_assets(args):
@@ -238,6 +263,17 @@ def ebx_arrayhash(args):
         print(line)
 
 
+def _template_options(p):
+    p.add_argument("--tile-template", default=TILE_TEMPLATE, help="the bam tile copied for the sublevel")
+    p.add_argument("--layer-template", help="the LayerData copied (default: the one the tile references)")
+    p.add_argument("--layer-bundle", help="its bundle (default: the tile's, or found by search)")
+    p.add_argument("--blueprint-template", default=BLUEPRINT_TEMPLATE, help="the ObjectBlueprint copied")
+    p.add_argument("--blueprint-bundle", default=BLUEPRINT_BUNDLE, help="its bundle, which holds <blueprint>.physics")
+    p.add_argument("--blueprint-superbundle", default=BASE_SUPERBUNDLE, help="the superbundle holding that bundle")
+    p.add_argument("--visual", choices=VISUAL_MODES, default="none",
+                   help="template: also keep the layer's own placement of its own blueprint, beside ours")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m reskate_mapbuilder")
     sub = ap.add_subparsers(dest="command", required=True)
@@ -270,25 +306,35 @@ def main(argv=None):
     p.add_argument("--display-name")
     p.add_argument("--size", type=float, default=DEFAULT_SIZE,
                    help="side of each placement's square collision, and their spacing, metres")
-    p.add_argument("--tiles", type=int, default=1, help="N: an N x N grid of placements")
+    p.add_argument("--tiles", type=int, default=1, dest="grid", help="N: an N x N grid of placements")
     p.add_argument("--at", type=float, nargs=3, default=list(DEFAULT_AT), metavar=("X", "Y", "Z"),
                    help="where the ground's centre is placed")
     p.add_argument("--bam", choices=sorted(BAM_MODES), default="all",
                    help="which of bam's bundles the level lists: all (as new-level), no-world (without bam's "
                         "world-partition tiles), 333 (the 42 the 333 map carries)")
-    p.add_argument("--tile-template", default=TILE_TEMPLATE, help="the bam tile copied for the sublevel")
-    p.add_argument("--layer-template", help="the LayerData copied (default: the one the tile references)")
-    p.add_argument("--layer-bundle", help="its bundle (default: the tile's, or found by search)")
-    p.add_argument("--blueprint-template", default=BLUEPRINT_TEMPLATE, help="the ObjectBlueprint copied")
-    p.add_argument("--blueprint-bundle", default=BLUEPRINT_BUNDLE, help="its bundle, which holds <blueprint>.physics")
-    p.add_argument("--blueprint-superbundle", default=BASE_SUPERBUNDLE, help="the superbundle holding that bundle")
-    p.add_argument("--visual", choices=VISUAL_MODES, default="none",
-                   help="template: also keep the layer's own placement of its own blueprint, beside ours")
+    _template_options(p)
     p.add_argument("--asset-bundle", choices=tuple(ASSET_BUNDLES), default="ground",
                    help="where the blueprint, collision and our mesh go: the ground bundle, or the level's copy of "
                         "bam_coregameassets")
     p.add_argument("--mesh", choices=MESH_MODES, default="template",
                    help="own: draw a MeshSet of our own (a copy of the template's with our plane); untested")
+    p.add_argument("--dry-run", action="store_true", help="read and report only")
+    p = sub.add_parser("new-place-level", help="a mod adding a level whose collision is a real place's tiles")
+    p.add_argument("--game", required=True, help="the game folder (holding Data/)")
+    p.add_argument("--mods", help="output folder; the mod is written inside it")
+    p.add_argument("--name", required=True, help="the mod's folder name, e.g. zz-place-level")
+    p.add_argument("--level", required=True, help="the level's name, e.g. dingolevel_reskate_place")
+    p.add_argument("--display-name")
+    p.add_argument("--tiles", required=True, help="the directory `city --level DIR` wrote (reskate-level-tiles v2)")
+    p.add_argument("--at", type=float, nargs=3, default=list(DEFAULT_AT), metavar=("X", "Y", "Z"),
+                   help="where the place's origin (its centre, at its origin elevation) goes in the game")
+    p.add_argument("--mirror", action="store_true", help="flip north and south (if the game shows the place mirrored)")
+    p.add_argument("--bam", choices=sorted(BAM_MODES), default="333",
+                   help="which of bam's bundles the level lists (default 333: an empty world)")
+    _template_options(p)
+    p.add_argument("--asset-bundle", choices=tuple(ASSET_BUNDLES), default="ground",
+                   help="where the blueprint and collision go: the ground bundle, or the level's copy of "
+                        "bam_coregameassets")
     p.add_argument("--dry-run", action="store_true", help="read and report only")
     p = sub.add_parser("inspect-meshset", help="print a MeshSet resource's header, LODs and sections (read-only)")
     p.add_argument("--game", required=True)
@@ -331,7 +377,8 @@ def main(argv=None):
                            help="also say where differing arrays (the first N, default 20) and strings are reached from")
     args = ap.parse_args(argv)
     {"inspect": inspect, "raise-ground": raise_ground, "rebuild": rebuild, "new-level": new_level_command,
-     "new-ground-level": new_ground_level_command, "list-assets": list_assets, "inspect-meshset": inspect_meshset,
+     "new-ground-level": new_ground_level_command, "new-place-level": new_place_level_command,
+     "list-assets": list_assets, "inspect-meshset": inspect_meshset,
      "mesh-refs": mesh_refs_command,
      "dump-ebx": dump_ebx, "ebx-roundtrip": ebx_roundtrip, "ebx-arrayhash": ebx_arrayhash}[args.command](args)
 

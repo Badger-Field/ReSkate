@@ -344,9 +344,16 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                      layer_template: str | None = LAYER_TEMPLATE, layer_bundle: str | None = None,
                      blueprint_template: str = BLUEPRINT_TEMPLATE, blueprint_bundle: str | None = BLUEPRINT_BUNDLE,
                      tiles: int = 1, log: list[str] | None = None, blueprint_superbundle: str = BASE_SUPERBUNDLE,
-                     visual: str = "none", mesh: str = "template", asset_bundle: str = "ground") -> list[str]:
+                     visual: str = "none", mesh: str = "template", asset_bundle: str = "ground",
+                     collision=None) -> list[str]:
     """Adds a level whose content is our own ground to `mod` (see the module's text). Appends a
-    report to `log` (also when it refuses) and returns it."""
+    report to `log` (also when it refuses) and returns it.
+
+    `collision(template_part) -> (shapes, parts, label)`, when given, replaces the flat square
+    (new-place-level: a real place's collision chunks, place.py); the shapes are in the
+    placement's frame, as the square is."""
+    if collision is not None and mesh == "own":
+        raise ValueError("--mesh own draws the flat square; a place's own mesh is not written yet")
     log = [] if log is None else log
     if not LEVEL_NAME.fullmatch(level):
         raise ValueError("level names use lower-case letters, digits and _, starting with a letter")
@@ -489,14 +496,20 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
     shapes, parts, version = read_physics(bp_source.payload("res", physics_index))
     template_part = next((p for p in parts if p.shape >= 0 and p.kind == KIND_TRIANGLE_MESH),
                          next((p for p in parts if p.shape >= 0), parts[0] if parts else Part(0)))
-    grid = flat_grid(size, GRID_CELL)
-    part = Part(0, (0.0, 0.0, 0.0) if PHYSICS_IN_OBJECT_SPACE else tuple(at), (0.0, 0.0, 0.0, 1.0), 1.0,
-                template_part.material, KIND_TRIANGLE_MESH, template_part.hashes, 0, template_part.float_30, 0,
-                template_part.word_3c, template_part.word_44)
-    compute_edge_data([grid], [part])
-    physics = write_physics([grid], [part], 2)
-    back_shapes, _, back_version = read_physics(physics)
-    if back_version != 2 or len(back_shapes) != 1 or back_shapes[0].triangles != grid.triangles:
+    if collision is None:
+        grid = flat_grid(size, GRID_CELL)
+        new_shapes = [grid]
+        new_parts = [Part(0, (0.0, 0.0, 0.0) if PHYSICS_IN_OBJECT_SPACE else tuple(at), (0.0, 0.0, 0.0, 1.0), 1.0,
+                          template_part.material, KIND_TRIANGLE_MESH, template_part.hashes, 0, template_part.float_30,
+                          0, template_part.word_3c, template_part.word_44)]
+        what = "one part"
+    else:
+        new_shapes, new_parts, what = collision(template_part)
+    compute_edge_data(new_shapes, new_parts)
+    physics = write_physics(new_shapes, new_parts, 2)
+    back_shapes, back_parts, back_version = read_physics(physics)
+    if (back_version != 2 or len(back_shapes) != len(new_shapes) or len(back_parts) != len(new_parts)
+            or any(a.triangles != b.triangles for a, b in zip(back_shapes, new_shapes))):
         raise ValueError("the collision written does not read back")
     template_box = ""
     if shapes:
@@ -504,8 +517,9 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         template_box = (f", box {[round(min(p[i] for p in world), 2) for i in range(3)]}.."
                         f"{[round(max(p[i] for p in world), 2) for i in range(3)]}")
     log.append(f"  collision: template is version {version} with {len(shapes)} shapes, {len(parts)} parts (material "
-               f"{template_part.material:#010x}, kind {template_part.kind}{template_box}); ours: version 2, one part, "
-               f"{len(grid.vertices)} vertices, {len(grid.triangles)} triangles, {len(physics)} bytes, "
+               f"{template_part.material:#010x}, kind {template_part.kind}{template_box}); ours: version 2, {what}, "
+               f"{sum(len(g.vertices) for g in new_shapes)} vertices, {sum(len(g.triangles) for g in new_shapes)} "
+               f"triangles, {len(physics)} bytes, "
                f"{'object space' if PHYSICS_IN_OBJECT_SPACE else 'world space'}")
 
     # 4. The layer: one placement of our blueprint (or a grid of them).
