@@ -231,6 +231,22 @@ def groundplane_mesh():
                                                MeshSetResource=ResourceReference(MESHSET_ID)), guid(96))])
 
 
+def section_keys(name):
+    """The shader-block keys of a fixture mesh's two sections (the same in every LOD)."""
+    return [int.from_bytes(hashlib.md5(f"{name}|{s}".encode()).digest()[:8], "little") for s in range(2)]
+
+
+def depot(keys):
+    """A ShaderBlockDepot: u64 0x10, u64 0, (key, offset) records, then 24-byte blocks."""
+    head = 16 + 16 * len(keys)
+    out = bytearray(struct.pack("<QQ", 0x10, 0))
+    for n, key in enumerate(keys):
+        out += struct.pack("<QQ", key, head + 24 * n)
+    for n in range(len(keys)):
+        out += struct.pack("<3Q", n + 1, 0, 0)
+    return bytes(out)
+
+
 def meshset(chunk_guid, name=GROUNDPLANE + "_mesh", lods=1):
     """(MeshSet, chunk): a rigid MeshSet with `lods` LODs (LOD k names chunk_guid, then guid(200 +
     k)) of two sections, a 50 m quad each, laid out as FORMAT-NOTES 1 says: section 0 with float
@@ -273,6 +289,7 @@ def meshset(chunk_guid, name=GROUNDPLANE + "_mesh", lods=1):
             struct.pack_into("<Q", data, at + 8, names - 16)
             data[at + 30], data[at + 31] = per_vertex, 3
             struct.pack_into("<4I", data, at + 32, 2, first, start, 4)
+            struct.pack_into("<Q", data, at + 0x138, section_keys(name)[s])
             for e, element in enumerate(elements):
                 data[at + 112 + 4 * e:at + 116 + 4 * e] = bytes(element)
             for e, stride in enumerate(strides):
@@ -309,10 +326,38 @@ def lighthouse(bundle, toc_chunk):
                {LIGHTHOUSE + ".physics": (0x41759364, 0x8888, template_physics()),
                 LIGHTHOUSE + "_mesh": (0x49B156D4, 0x7777, ms),
                 LIGHTHOUSE + "_d": (0x6BDE20BA, 0x9999, b"texture" + LIGHTHOUSE_TEXTURE_CHUNK.bytes),
-                LIGHTHOUSE + "_mesh/blocks": (0x12345678, 0xAAAA, b"per-mesh data")},
+                LIGHTHOUSE + "_mesh/blocks": (0x12345678, 0xAAAA, b"per-mesh data"),
+                ISLAND_BUNDLE[len("win32/"):] + "_win32_shaderstate/shaderblockdepot_7": (
+                    0x73312045, 0xAAAB, depot(section_keys(LIGHTHOUSE + "_mesh")))},
                [(guid(109), b"unrelated"), (LIGHTHOUSE_CHUNK, chunk)])
     return b, [toc_chunk(LIGHTHOUSE_CHUNK, chunk), toc_chunk(LIGHTHOUSE_LOD1_CHUNK, chunk),
                toc_chunk(LIGHTHOUSE_TEXTURE_CHUNK, b"texels"), toc_chunk(guid(110), b"unrelated")]
+
+
+# A stock prop of bam's root bundle: blueprint, mesh, MeshSet and a three-part .physics.
+BOX = "common/props/skatepark/cmn_prp_skatepark_01_box_100x600x600cm"
+BOX_GUID, BOX_MESH_GUID, BOX_CHUNK = guid(120), guid(121), guid(122)
+BOX_MATERIAL = 0x10E0
+
+
+def box():
+    return document(BOX_GUID, [
+        (lambda d: obj(d, "ObjectBlueprint", Name=BOX, Object=ptr(1)), guid(123)),
+        (lambda d: obj(d, "StaticModelEntityData", Mesh=PointerReference(PointerKind.external, 0)), guid(124))],
+        imports=[(BOX_MESH_GUID, guid(125))])
+
+
+def box_mesh():
+    return document(BOX_MESH_GUID, [(lambda d: obj(d, "RigidMeshAsset", Name=BOX + "_mesh",
+                                                   MeshSetResource=ResourceReference(0xB0B1)), guid(125))])
+
+
+def box_physics():
+    from reskate_mapbuilder.physics import Part, compute_edge_data, flat_grid, write_physics
+    shapes = [flat_grid(1.0, 1.0, y) for y in (0.0, 0.5, 1.0)]
+    parts = [Part(i, material=BOX_MATERIAL, word_34=i) for i in range(3)]
+    compute_edge_data(shapes, parts)
+    return write_physics(shapes, parts, 2)
 
 
 def template_physics():
@@ -413,10 +458,16 @@ def fake_game(tmp_path):
                                                     ROOT + "/description": write_document(root_description())})],
         BAM: [bundle("win32/" + BAM, {BAM: write_document(bam_root()), "levels/game/bam_levelroot/pool": b"pool",
                                       GROUNDPLANE: write_document(groundplane()),
-                                      GROUNDPLANE + "_mesh": write_document(groundplane_mesh())},
+                                      GROUNDPLANE + "_mesh": write_document(groundplane_mesh()),
+                                      BOX: write_document(box()), BOX + "_mesh": write_document(box_mesh())},
                      {GROUNDPLANE + ".physics": (0x41759364, PHYSICS_ID, template_physics()),
-                      GROUNDPLANE + "_mesh": (0x49B156D4, MESHSET_ID, meshset(MESH_CHUNK)[0])},
-                     [(MESH_CHUNK, meshset(MESH_CHUNK)[1])]),
+                      GROUNDPLANE + "_mesh": (0x49B156D4, MESHSET_ID, meshset(MESH_CHUNK)[0]),
+                      BOX + ".physics": (0x41759364, 0xB0B0, box_physics()),
+                      BOX + "_mesh": (0x49B156D4, 0xB0B1, meshset(BOX_CHUNK, BOX + "_mesh")[0]),
+                      BAM + "_win32_shaderstate/shaderblockdepot_1": (0x73312045, 0xD0D0, depot(
+                          section_keys(GROUNDPLANE + "_mesh") + section_keys(BOX + "_mesh"))),
+                      BAM + "_win32_shaderstateshaderstateassetid": (0x2FEC6526, 0xD0D1, bytes(32))},
+                     [(MESH_CHUNK, meshset(MESH_CHUNK)[1]), (BOX_CHUNK, meshset(BOX_CHUNK, BOX + "_mesh")[1])]),
               bundle("win32/levels/game/bam_levelroot/tod_2_noon", {"levels/game/bam_levelroot/tod_2_noon": b"tod"}),
               bundle("win32/levels/game/bam_levelroot/startpoint_sublevels", {"sp": b"sp"}),
               bundle(CORE_BUNDLE, {"levels/game/bam_levelroot/other": b"zz",
@@ -539,10 +590,11 @@ def test_new_level_writes_the_registration(tmp_path):
             assert b.region == base[b.name]
     assert sorted(c.guid.bytes for c in toc.chunks) == sorted([guid(50).bytes, MESH_CHUNK.bytes])
     _, region, manifest = view.bundle(toc, "win32/" + NEW)
-    assert [a.name for a in manifest.ebx] == [BAM, "levels/game/bam_levelroot/pool", GROUNDPLANE, GROUNDPLANE + "_mesh", NEW]
-    assert [f.location.patch for f in region.files] == [True, False, False, False, False, True, False, False, False]
+    assert [a.name for a in manifest.ebx] == [BAM, "levels/game/bam_levelroot/pool", GROUNDPLANE, GROUNDPLANE + "_mesh",
+                                              BOX, BOX + "_mesh", NEW]
+    assert [f.location.patch for f in region.files] == [True] + [False] * 6 + [True] + [False] * 8
     raw = view.ebx(region, manifest, NEW)
-    assert manifest.ebx[4].sha1 == hashlib.sha1(raw).digest() and manifest.ebx[4].original_size == len(raw)
+    assert manifest.ebx[6].sha1 == hashlib.sha1(raw).digest() and manifest.ebx[6].original_size == len(raw)
     new_root = read_document(raw)
     o = new_root.instances[0].object
     assert new_root.file_guid != BAM_ROOT_GUID and new_root.instances[0].instance_guid != guid(2)

@@ -8,8 +8,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from test_level import (FTUE, LIGHTHOUSE_LOD1_CHUNK, ISLAND_BUNDLE, LIGHTHOUSE, LIGHTHOUSE_CHUNK, LIGHTHOUSE_MESH_GUID,  # noqa: E402
+from test_level import (FTUE, LIGHTHOUSE_LOD1_CHUNK, ISLAND_BUNDLE, LIGHTHOUSE, LIGHTHOUSE_CHUNK,  # noqa: E402
                         LIGHTHOUSE_TEXTURE_CHUNK, meshset)
+from test_level import BOX, BOX_GUID, section_keys  # noqa: E402
 from test_level import (BAM, BP_GUID, BP_ROOT_GUID, CHUNK, CORE_BUNDLE, CORE_LAYER, GROUNDPLANE, LAYER_GUID,  # noqa: E402
                         LAYER_REFERENCE_GUID, LEVEL, MESH_CHUNK, MESH_GUID, NEW, PLACEMENT_GUID, TEMPLATE_MATERIAL, TILE,
                         TILE_GUID, fake_game, genprefab, guid, ptr)
@@ -284,33 +285,18 @@ def test_visual_template_keeps_the_layers_own_placement(tmp_path):
     assert theirs.instance_guid != ours.instance_guid
 
 
-def test_blueprint_from_another_bundle_lists_what_it_needs(tmp_path):
-    _, _, report, _, view = build(tmp_path, blueprint_template=LIGHTHOUSE, blueprint_bundle=ISLAND_BUNDLE,
-                                     blueprint_superbundle=FTUE)
-    text = "\n".join(report)
-    assert f"listed from {ISLAND_BUNDLE} with the blueprint: 2 EBX" in text
-    assert "flags #1 StaticModelEntityData" in text
-    _, region, manifest, (_, _, bp) = ground(view)
-    assert [a.name for a in manifest.ebx] == [SUBLEVEL, LAYER, BLUEPRINT, LIGHTHOUSE + "_mesh", LIGHTHOUSE + "_d"]
-    assert [a.name for a in manifest.resources] == [PHYSICS, LIGHTHOUSE + "_mesh", LIGHTHOUSE + "_d",
-                                                    LIGHTHOUSE + "_mesh/blocks"]    # named under the mesh
-    assert [c.guid for c in manifest.chunks] == [LIGHTHOUSE_CHUNK]
-    assert [f.location.patch for f in region.files] == [True] * 4 + [False] * 2 + [True] + [False] * 4
-    assert bp.imports[0].file_guid == LIGHTHOUSE_MESH_GUID
-    # The chunks the ftue superbundle's TOC lists for them are in the level's TOC too.
-    toc = read_toc(Path(view.mod, "Win32", NEW + ".toc").read_bytes())
-    listed = {c.guid: c for c in toc.chunks}
-    source = {c.guid: c for c in Game(view.root).superbundle(FTUE).chunks}
-    for g in (LIGHTHOUSE_CHUNK, LIGHTHOUSE_LOD1_CHUNK, LIGHTHOUSE_TEXTURE_CHUNK):
-        assert (listed[g].location, listed[g].offset, listed[g].size) == (source[g].location, source[g].offset,
-                                                                          source[g].size)
-    assert guid(110) not in listed
-    assert "3 of 3 chunks of " + FTUE in text
-    assert f"mesh {LIGHTHOUSE}_mesh LOD 1 chunk {LIGHTHOUSE_LOD1_CHUNK.string()}: in {FTUE}'s TOC chunk list; " \
-           "listed by the level's TOC" in text
-    assert f"LOD 0 chunk {LIGHTHOUSE_CHUNK.string()}: in {ISLAND_BUNDLE}'s chunk entries and {FTUE}'s TOC chunk " \
-           f"list; listed by the level's TOC, win32/{SUBLEVEL}" in text
-    assert read_document(view.ebx(region, manifest, LIGHTHOUSE + "_mesh")).file_guid == LIGHTHOUSE_MESH_GUID
+def test_blueprint_from_another_bundle_is_refused_for_its_shader_blocks(tmp_path):
+    """Its MeshSet's sections name shader blocks of its own bundle's depot, which our bundles do
+    not have: the lighthouse crashed so (FORMAT-NOTES 6.3)."""
+    game = Game(fake_game(tmp_path / "game"))
+    log = []
+    with pytest.raises(ValueError, match="only win32/levels/game/dingolevel_ftue_island/wp_dst_ftue_island's depot"):
+        new_ground_level(game, ModBuilder(game, "zz"), LEVEL, blueprint_template=LIGHTHOUSE,
+                         blueprint_bundle=ISLAND_BUNDLE, blueprint_superbundle=FTUE, log=log)
+    text = "\n".join(log)
+    assert f"listed from {ISLAND_BUNDLE} with the blueprint: 2 EBX" in text and "flags #1 StaticModelEntityData" in text
+    assert "3 chunks of " + FTUE in text                         # its TOC's chunks found for the level's TOC
+    assert f"4 of 4 in {ISLAND_BUNDLE}'s own depots" in text
 
 
 def test_mesh_own_writes_a_meshset_rigidmesh_and_chunk(tmp_path):
@@ -413,13 +399,69 @@ def test_mesh_refs_finds_the_meshsets_references(tmp_path, capsys):
     assert f"LOD 0 +116: GUID {LIGHTHOUSE_CHUNK.string()} = chunk entry of {ISLAND_BUNDLE}" in out
     assert f"LOD 1 +116: GUID {LIGHTHOUSE_LOD1_CHUNK.string()} = chunk in {FTUE}'s TOC" in out
     assert "0x12345678 ?: 1" in out and f"res {LIGHTHOUSE}_mesh/blocks type 0x12345678" in out
-    # Against our level: what it lists.
-    _, _, _, root, _ = build(tmp_path / "b", bam="333", blueprint_template=LIGHTHOUSE, blueprint_bundle=ISLAND_BUNDLE,
-                             blueprint_superbundle=FTUE)
-    main(["mesh-refs", "--game", str(tmp_path / "b" / "game"), "--mod", str(root), "--superbundle", FTUE,
-          "--bundle", ISLAND_BUNDLE, "--mesh", LIGHTHOUSE + "_mesh", "--level", LEVEL,
-          "--scan", f"{BAM}:win32/{BAM}"])
+    assert "depot " in out and "ShaderBlockDepot" in out
+    assert "LOD 0 section 0: shader-block key" in out and f"_win32_shaderstate/shaderblockdepot_7 ({ISLAND_BUNDLE})" in out
+    # Against our level: util_groundplane's mesh is in our root bundle, whose depot (bam's) holds its keys.
+    _, _, _, root, _ = build(tmp_path / "b", bam="333")
+    main(["mesh-refs", "--game", str(tmp_path / "b" / "game"), "--mod", str(root), "--superbundle", BAM,
+          "--bundle", "win32/" + BAM, "--mesh", GROUNDPLANE + "_mesh", "--level", LEVEL])
     out = capsys.readouterr().out
     assert "mesh EBX listed: True; its MeshSet listed: True" in out
-    assert f"LOD 1 chunk {LIGHTHOUSE_LOD1_CHUNK.string()}: listed (in {FTUE}'s TOC)" in out
-    assert f"res {LIGHTHOUSE}_mesh/blocks: listed" in out
+    assert f"the MeshSet is in our win32/{NEW}: its depots hold 2 of 2 section keys" in out
+    assert f"in {BAM}_win32_shaderstate/shaderblockdepot_1 (win32/{BAM})" in out
+
+
+def test_stock_prop_is_placed_as_it_is(tmp_path):
+    _, _, report, root, view = build(tmp_path, bam="333", props=[(BOX, (3.0, 300.0, 4.0))])
+    text = "\n".join(report)
+    assert f"--prop {BOX} at [3.0, 300.0, 4.0]: its {BOX}.physics (version 2, 3 shapes, 3 parts, materials ['0x10e0'])" \
+        in text and f"2 of 2 in win32/{BAM}'s depots" in text
+    _, _, manifest, (_, layer, bp) = ground(view)
+    placements = [layer.instances[p.index] for p in layer.instances[0].object.get("Objects")]
+    assert len(placements) == 2
+    prop = placements[1]
+    assert (layer.imports[prop.object.get("Blueprint").index].file_guid,
+            layer.imports[prop.object.get("Blueprint").index].class_guid) == (BOX_GUID, guid(123))
+    assert transform(prop.object) == [[1, 0, 0], [0, 1, 0], [0, 0, 1], [3, 300, 4]]
+    assert prop.instance_guid not in {placements[0].instance_guid, PLACEMENT_GUID}
+    assert BOX not in [a.name for a in manifest.ebx]               # nothing of the box is copied: it is in the root copy
+
+
+def test_shader_from_gives_our_mesh_a_stock_material_in_the_root_bundle(tmp_path):
+    _, _, report, root, view = build(tmp_path, bam="333", mesh="own", shader_from=BOX + "_mesh:0",
+                                     asset_bundle="root", size=20.0)
+    text = "\n".join(report)
+    key = section_keys(BOX + "_mesh")[0]
+    assert f"--shader-from {BOX}_mesh section 0 (of 2): key {key:#018x}, in the depots" in text
+    assert "donor section: key" in text and "elements (usage, format, offset, stream) [(1, 3, 0, 0)" in text
+    assert "NOT DRAWN" not in text
+    toc = read_toc((root / "Win32" / (NEW + ".toc")).read_bytes())
+    _, region, manifest = view.bundle(toc, "win32/" + NEW)
+    mesh_name = f"levels/game/{LEVEL}/ground_mesh"
+    names = [a.name for a in manifest.ebx]
+    assert BLUEPRINT in names and mesh_name in names
+    assert {PHYSICS, mesh_name} <= {a.name for a in manifest.resources}
+    index = next(i for i, a in enumerate(manifest.resources) if a.name == mesh_name)
+    ms = view.payload(region, 1 + len(manifest.ebx) + index)
+    layout = read_layout(ms)
+    assert all(int.from_bytes(ms[s.at + 0x138:s.at + 0x140], "little") == key for lod in layout for s in lod.sections)
+    assert all(s.elements == [(1, 3, 0, 0), (33, 6, 0, 1), (51, 12, 4, 1)] and s.strides == [12, 8]
+               for lod in layout for s in lod.sections)                # the donor section's declaration everywhere
+    # Without the root bundle the dry run says it will not be drawn.
+    _, _, report, _, _ = build(tmp_path / "g", mesh="own", shader_from=BOX + "_mesh:0")
+    assert any("WARNING: NOT DRAWN" in line for line in report)
+    with pytest.raises(ValueError, match="add --mesh own"):
+        build(tmp_path / "h", shader_from=BOX + "_mesh")
+
+
+def test_cli_props_on_a_place(tmp_path, capsys):
+    from test_place import write_tiles
+    game_dir = fake_game(tmp_path / "game")
+    tiles = write_tiles(tmp_path / "tiles")
+    main(["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles", str(tiles),
+          "--prop", BOX, "--prop-at", "1,300.5,2", "--dry-run"])
+    out = capsys.readouterr().out
+    assert f"--prop {BOX} at [1.0, 300.5, 2.0]" in out and "and 1 stock props" in out
+    with pytest.raises(SystemExit, match="one --prop-at"):
+        main(["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles",
+              str(tiles), "--prop", BOX, "--dry-run"])
