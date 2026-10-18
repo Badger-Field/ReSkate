@@ -357,8 +357,9 @@ def place_info(args):
         print(f"  trainer ground {x} {z}    -> {'-' if y is None else y}    ({label})")
     if args.views:
         print("Where to look at each visual object from: `trainer ground X Z H` lands there facing heading H "
-              "(0 = north, +z; 90 = east, +x; a trainer with the heading argument). Without H the skater faces "
-              "heading 0: turn until `trainer where` shows H:")
+              "(0 = +z, the place's north; 90 = +x, east; a trainer with the heading argument). The in-game "
+              "compass reads 0 as S and 180 as N (90 E, 270 W): sides below are the place's real ones, with "
+              "the compass's in brackets. Without H the skater faces heading 0: turn until `trainer where` shows H:")
         for label, x, z, y, heading, note in view_spots(place, tuple(args.at)):
             print(f"  {label}: trainer ground {x} {z} {heading:g}    -> {'-' if y is None else y}  ({note})")
 

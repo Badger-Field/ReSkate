@@ -345,12 +345,18 @@ def visual_class(piece: Piece) -> str:
     return PART_CLASSES.get(piece.part, piece.material)
 
 
+# The in-game compass (the PC, both places): heading 0 (+z) reads S, 90 (+x) E, 270 W. So the
+# place's north is the compass's south; east and west agree.
+GAME_COMPASS_SIDE = {"south": "north", "north": "south", "west": "west", "east": "east"}
+
+
 def view_spots(place: Place, at: tuple[float, float, float]) -> list[tuple[str, float, float, float | None, float, str]]:
     """Per visual object: (label, game x, game z, expected ground there, heading to face, note).
-    After `trainer tp` and `trainer ground` the camera faces heading 0, +z (north; the PC,
-    e3ed5ee: `trainer where` read 0 after every teleport), so the spot is on the object's south
+    After `trainer tp` and `trainer ground` the camera faces heading 0, +z (the place's north; the
+    PC, e3ed5ee: `trainer where` read 0 after every teleport), so the spot is on the object's south
     side when there is ground there, looking north; else north (heading 180), west (90) or east
-    (270). The distance fits the object (4 m, more for big ones: up to 40 m, or 1.5 times a tall
+    (270). Sides are the place's real ones; the in-game compass reads +z as S and -z as N (x as
+    the place: 90 E, 270 W), so the note gives the compass's side too. The distance fits the object (4 m, more for big ones: up to 40 m, or 1.5 times a tall
     object's height so it is framed), shortened until the spot has ground."""
     out = []
     for piece in place.visual:
@@ -375,5 +381,6 @@ def view_spots(place: Place, at: tuple[float, float, float]) -> list[tuple[str, 
         side, heading, x, z, y, gap = best
         out.append((visual_label(piece), round(x + at[0], 2), round(z + at[2], 2),
                     None if y is None else round(y + at[1], 2), heading,
-                    f"{side} of it, {gap:.0f} m off; it spans y {lo[1] + at[1]:.1f}..{hi[1] + at[1]:.1f}"))
+                    f"{side} of it ({GAME_COMPASS_SIDE.get(side.split(',')[0], '?')} on the game compass), "
+                    f"{gap:.0f} m off; it spans y {lo[1] + at[1]:.1f}..{hi[1] + at[1]:.1f}"))
     return out

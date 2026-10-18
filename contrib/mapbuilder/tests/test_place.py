@@ -329,6 +329,9 @@ def test_place_info_views_give_a_spot_and_heading_per_visual_object(tmp_path, ca
     # No ground south or north of it in this export: west of it, facing east, as one command.
     assert re.search(r"trainer ground -?[0-9.]+ -?[0-9.]+ 90 ", line) and "west of it" in line
     assert "`trainer ground X Z H` lands there facing heading H" in out
+    # The game compass reads +z as S (the PC): west stays west, and the header says so.
+    assert "west of it (west on the game compass)" in line
+    assert "compass reads 0 as S and 180 as N" in out
 
 
 def test_material_donors_lists_sections_and_proposes_defaults(tmp_path, capsys):
