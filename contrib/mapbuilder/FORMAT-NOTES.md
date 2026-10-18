@@ -954,6 +954,24 @@ the origin, the bounds' centre and quarters, and one outside) with the height th
 gives there (the highest surface above the point; walls seen from above are skipped). The spawn
 itself is game logic (6.1); the skater is put there with `trainer ground`.
 
+**The first real export** (Embarcadero Plaza 130 x 20, the `level-exports` branch, sha256
+8fc41c8e…f022b6041; not in this repository) reads without a change: 4 tiles, 39 collision chunks,
+5,320 collision triangles, 3,428 vertices (largest chunk 175 triangles), 13 visual objects
+(20,920 triangles); collision by part ground 32, bench 4, steps 2, buildings 1; by material ground
+32, wood 4, concrete 3; bounds x -65..65, y -0.68..159.06, z -25..-0.47; spawn (0, -0.522, -15);
+6 grinds. The one buildings chunk is a clipped tower whose wall rises to 159 m at the west end.
+Written with util_groundplane's part as template it is a 239,264-byte version-2 resource of 39
+shapes and 39 parts (one per chunk, every part util_groundplane's material and words, +0x34 its
+index: still a guess, as no many-part version-2 file has been loaded), 3,252 of 15,960 half-edges
+flat across chunk seams; 0.1 s.
+
+`place-info --tiles DIR` prints the summary and the `trainer ground` spots without the game.
+`--at` now defaults to putting the export's spawn at the game's x 0, z 0 with the origin at
+height 300 (so the skater teleported to `trainer ground 0 0` stands at the spawn); the spots
+include each of the first three grinds' midpoints with the grind's top. `--max-height M` drops
+collision chunks whose top is above M (whole chunks: a chunk is one welded shape), `--skip-part
+P` drops a part's or object's chunks; collision above 20 m is noted.
+
 **Visuals** are read (role `visual`) and counted, not written: drawing is open (6.3). `Place.visual`
 keeps them for the MeshSet writer; `--mesh own` is refused with a place for now. `--bam` defaults
 to `333` (the empty world of 6.3).

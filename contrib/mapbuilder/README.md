@@ -47,6 +47,7 @@ can be stood on.
     python -m reskate_mapbuilder inspect-meshset --game "<Skate>" --superbundle S --bundle B --resource R
     python -m reskate_mapbuilder new-place-level --game "<Skate>" --name zz-place-level \
         --level dingolevel_reskate_place --tiles <DIR from city --level> --dry-run
+    python -m reskate_mapbuilder place-info --tiles <DIR> [--max-height 20]
     python -m reskate_mapbuilder mesh-refs --game "<Skate>" [--mod <mod>] --superbundle S --bundle B --mesh EBX
     python -m reskate_mapbuilder ebx-roundtrip --game "<Skate>" --superbundle globals \
         --ebx levels/game/dingolevel_root/dingolevel_root/description
