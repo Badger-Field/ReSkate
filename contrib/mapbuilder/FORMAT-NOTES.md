@@ -52,7 +52,7 @@ large as LOD 0's geometry; in 11 of 300 base-game meshes it is looser by 3 to 38
 | +0 | u32 | 0 (the skinned reader requires 1 here and so rejects rigid meshes) |
 | +8 | u32 | section count |
 | +12 | u64 | pointer to the section table |
-| +80 | u32 | flags; 0x40, 0x41, 0x51 seen; meaning unknown |
+| +80 | u32 | flags; 0x40, 0x41, 0x51 seen. Bit 0: util_groundplane, which is never drawn, has 0x41; the drawn box 0x40: likely "don't draw" (a utility mesh). Not tested by flipping it |
 | +84 | u32 | index format; 33 (16-bit) in all 639 LODs seen |
 | +88 | u32 | index bytes |
 | +92 | u32 | vertex bytes |
@@ -73,7 +73,9 @@ large as LOD 0's geometry; in 11 of 300 base-game meshes it is looser by 3 to 38
 | +44 | u32 | vertex count |
 | +112 | | vertex declaration, below |
 | +0x138 (312) | u64 | shader-block key: an entry key of the ShaderBlockDepot of the bundle holding the MeshSet (below); LODs of one mesh share keys (checked on files, the PC, 2026-10-18) |
-| about +332 to +360 | floats | a per-section box; exact offsets not pinned down |
+| +324, +328 | u32, u32 | a hash-like word and a small number (box section 0: 0x722325fd, 4); not decoded |
+| +332 | float | the section's surface area (the PC's diff: 2,500 for our 50 m plane; 36.96 for the box's section 0) |
+| +336 | 3 floats, then 3 floats 16 bytes on | the section's box (found on the box's sections by its own bounds) |
 
 Vertex declaration, at section +112:
 
@@ -759,6 +761,25 @@ carries the template's `.physics` unchanged under our blueprint's name; `--colli
 default) writes our square split into as many strips as the template has parts, each part copying
 its template part's material and words. `meshset-diff` prints every 4-byte word that differs
 between two MeshSets' headers, LOD and section structs, with field names where known.
+
+**Tested in game** (cd6d149): our plane cloned from the box with `--keep-section 0` (each LOD
+listing one section) crashed 33 s in, right after "Level content loaded": a read through a garbage
+index (`mov rdx,[rax+rcx*8]`, Skate+0x506d2c2) in code walking 4 and 3 sections, that is the
+template's section counts, which something other than the LOD structs still holds (the
+RigidMeshAsset's Materials, the blueprint's tables, the header's +184/+188 words). `meshset-diff`
+of the 6239cf7 plane against the box: the plane had 1 LOD of 2 sections (header +180
+0x00020001) against the box's 3 LODs of 4, 3 and 2 (0x00090003); header +56/+64 are pointers in
+the box and zero in ours; +184/+188 are 0x40000 and 7 in the box; LOD +80 was 0x41 (from
+util_groundplane) against 0x40; the section's +88/+92 floats, +324, +328 and +332 differ.
+
+Since then `--keep-section` is refused, and every section is kept: our geometry goes into
+`--geometry-section` (default 0) of each LOD, and every other section keeps its struct, material
+and layout and draws one zero-area triangle on one vertex of its own, inside our buffers
+(`--other-sections geometry` puts our geometry in every section instead). Section +332 gets our
+area (0 for those triangles) when every template section's +332 equals its own area. The dry run
+lists every LOD (flags, the six floats at +140) and section (triangles, vertices, material name,
++324, +328, +332, key, strides) of the template and of ours, and warns when a LOD's flags have
+bit 0 set.
 
 **What the base game does (checked on files, the PC's read-only scans).**
 
