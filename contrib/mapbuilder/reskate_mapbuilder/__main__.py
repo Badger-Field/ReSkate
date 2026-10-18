@@ -12,7 +12,8 @@
         [--size 50] [--tiles N] [--at X Y Z] [--bam all|no-world|333] [--tile-template EBX] \\
         [--layer-template EBX [--layer-bundle B]] [--blueprint-template EBX [--blueprint-bundle B]] \\
         [--blueprint-superbundle S] [--visual none|template] [--mesh template|own] \\
-        [--asset-bundle ground|coregameassets] [--dry-run]
+        [--asset-bundle ground|coregameassets|root] [--shader-from MESH[:SECTION]] \\
+        [--prop BLUEPRINT --prop-at X,Y,Z ...] [--dry-run]
   python -m reskate_mapbuilder inspect-meshset --game <dir> [--mod <mod dir>] --superbundle S --bundle B --resource R
   python -m reskate_mapbuilder new-place-level --game <dir> --mods <dir> --name zz-... --level <name> --tiles <DIR> \\
         [--at X Y Z] [--mirror] [--bam 333|no-world|all] [--asset-bundle ...] [--dry-run]
@@ -151,7 +152,8 @@ def new_ground_level_command(args, place=None):
         new_ground_level(game, mod, args.level, args.display_name, args.size, tuple(args.at), args.bam,
                          args.tile_template, args.layer_template, args.layer_bundle, args.blueprint_template,
                          args.blueprint_bundle, grid if grid is not None else 1, log, args.blueprint_superbundle,
-                         args.visual, args.mesh, args.asset_bundle, collision if place is not None else None)
+                         args.visual, args.mesh, args.asset_bundle, collision if place is not None else None,
+                         getattr(args, "shader_from", None), _props(args))
     finally:
         for line in log:
             print(line)
@@ -169,6 +171,20 @@ def new_ground_level_command(args, place=None):
     if not args.mods:
         sys.exit("--mods is required unless --dry-run")
     print(f"wrote {mod.write(args.mods)}")
+
+
+def _props(args) -> list:
+    names, places = args.prop or [], args.prop_at or []
+    if len(names) != len(places):
+        sys.exit("give one --prop-at X,Y,Z for each --prop")
+    out = []
+    for name, where in zip(names, places):
+        try:
+            x, y, z = (float(c) for c in where.split(","))
+        except ValueError:
+            sys.exit(f"--prop-at {where!r}: give X,Y,Z")
+        out.append((name, (x, y, z)))
+    return out
 
 
 def new_place_level_command(args):
@@ -272,6 +288,9 @@ def _template_options(p):
     p.add_argument("--blueprint-superbundle", default=BASE_SUPERBUNDLE, help="the superbundle holding that bundle")
     p.add_argument("--visual", choices=VISUAL_MODES, default="none",
                    help="template: also keep the layer's own placement of its own blueprint, beside ours")
+    p.add_argument("--prop", action="append", metavar="BLUEPRINT",
+                   help="a stock blueprint of bam's root bundle placed as it is (repeatable; pair with --prop-at)")
+    p.add_argument("--prop-at", action="append", metavar="X,Y,Z", help="where the matching --prop goes, in the game")
 
 
 def main(argv=None):
@@ -314,10 +333,13 @@ def main(argv=None):
                         "world-partition tiles), 333 (the 42 the 333 map carries)")
     _template_options(p)
     p.add_argument("--asset-bundle", choices=tuple(ASSET_BUNDLES), default="ground",
-                   help="where the blueprint, collision and our mesh go: the ground bundle, or the level's copy of "
-                        "bam_coregameassets")
+                   help="where the blueprint, collision and our mesh go: the ground bundle, the level's copy of "
+                        "bam_coregameassets, or the level's root bundle (bam root's copy, with its shader depot)")
     p.add_argument("--mesh", choices=MESH_MODES, default="template",
                    help="own: draw a MeshSet of our own (a copy of the template's with our plane); untested")
+    p.add_argument("--shader-from", metavar="MESH[:SECTION]",
+                   help="with --mesh own: give our sections this stock mesh's (bam root bundle) shader-block key, vertex "
+                        "declaration and vertex, so a stock material draws our geometry; use --asset-bundle root")
     p.add_argument("--dry-run", action="store_true", help="read and report only")
     p = sub.add_parser("new-place-level", help="a mod adding a level whose collision is a real place's tiles")
     p.add_argument("--game", required=True, help="the game folder (holding Data/)")
@@ -333,8 +355,8 @@ def main(argv=None):
                    help="which of bam's bundles the level lists (default 333: an empty world)")
     _template_options(p)
     p.add_argument("--asset-bundle", choices=tuple(ASSET_BUNDLES), default="ground",
-                   help="where the blueprint and collision go: the ground bundle, or the level's copy of "
-                        "bam_coregameassets")
+                   help="where the blueprint and collision go: the ground bundle, the level's copy of "
+                        "bam_coregameassets, or the level's root bundle")
     p.add_argument("--dry-run", action="store_true", help="read and report only")
     p = sub.add_parser("inspect-meshset", help="print a MeshSet resource's header, LODs and sections (read-only)")
     p.add_argument("--game", required=True)

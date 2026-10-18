@@ -42,7 +42,8 @@ from .ebxcheck import semantically_equal
 from .ebxedit import (add_import, after_last_of_type, clone_document, clone_instance, derived_guid, find_objects, guid_flags,
                       field_referrers, path_to, pointer_arrays, prune_imports, prune_unreachable, refresh_flags, remove_instances,
                       set_fields, type_name, used_imports)
-from .meshset import describe_meshset, read_layout as read_mesh_layout, write_mesh
+from .meshset import (DEPOT_TYPE, depot_keys, describe_meshset, first_vertex, read_layout as read_mesh_layout,
+                      section_key, write_mesh)
 from .level import (BASE_ROOT_BUNDLE, BASE_SUPERBUNDLE, LEVEL_NAME, SUBWORLD_REFERENCE_TYPE, _clone_found, _identity, _read,
                     new_level)
 from .physics import KIND_TRIANGLE_MESH, RESOURCE_TYPE as PHYSICS_TYPE, Part, compute_edge_data, flat_grid, read_physics, write_physics
@@ -62,7 +63,11 @@ MESH_MODES = ("template", "own")
 # ground bundle. "coregameassets": the level's copy of bam's bam_coregameassets, which keeps its
 # name (GUESS: data such as shaders is found per bundle name; the 333 map adds 1,251 of its own
 # files to that bundle, and bam's own game_coremeshes layer placing util_groundplane is in it).
-ASSET_BUNDLES = {"ground": None, "coregameassets": "win32/levels/game/bam_levelroot/bam_coregameassets"}
+# "root": the level's root bundle (the copy of bam's root bundle, which holds bam's root
+# ShaderBlockDepot): where a MeshSet must be for its sections' shader-block keys to resolve
+# (FORMAT-NOTES 1, 6.3), so --mesh own with --shader-from goes there.
+ASSET_BUNDLES = {"ground": None, "coregameassets": "win32/levels/game/bam_levelroot/bam_coregameassets",
+                 "root": BASE_ROOT_BUNDLE}
 # Templates, all in bam's superbundle (found by the PC's scan of the base game, FORMAT-NOTES 6.3).
 TILE_TEMPLATE = ("levels/game/bam_levelroot/wproot/wp/s9600_x0z0/s200_x500z900/s100_x450z850/s50_x425z825/"
                  "s50_x425z825_sublevel")
@@ -256,6 +261,26 @@ def _closure(source: _Source, roots: list[Guid], skip: set[str], log: list[str])
     return copied
 
 
+def _meshset_keys(data: bytes) -> list[int]:
+    """Each section's shader-block key, LOD by LOD (empty when the MeshSet is not a rigid one)."""
+    try:
+        return [section_key(data, s) for lod in read_mesh_layout(data) for s in lod.sections]
+    except (ValueError, struct.error):
+        return []
+
+
+def _source_depot_keys(source: _Source) -> set[int]:
+    keys: set[int] = set()
+    for i, r in enumerate(source.manifest.resources):
+        if r.resource_type == DEPOT_TYPE:
+            keys |= depot_keys(source.payload("res", i))
+    return keys
+
+
+def _bundle_depot_keys(game, superbundle: str, bundle: str) -> set[int]:
+    return _source_depot_keys(_Source(game, superbundle, bundle))
+
+
 def _chunk_payload(game, source: _Source, guid: Guid) -> bytes:
     """A chunk's decoded bytes: from the bundle's manifest, or from its superbundle's TOC chunks."""
     for i, c in enumerate(source.manifest.chunks):
@@ -345,13 +370,16 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                      blueprint_template: str = BLUEPRINT_TEMPLATE, blueprint_bundle: str | None = BLUEPRINT_BUNDLE,
                      tiles: int = 1, log: list[str] | None = None, blueprint_superbundle: str = BASE_SUPERBUNDLE,
                      visual: str = "none", mesh: str = "template", asset_bundle: str = "ground",
-                     collision=None) -> list[str]:
+                     collision=None, shader_from: str | None = None,
+                     props: list[tuple[str, tuple[float, float, float]]] = ()) -> list[str]:
     """Adds a level whose content is our own ground to `mod` (see the module's text). Appends a
     report to `log` (also when it refuses) and returns it.
 
     `collision(template_part) -> (shapes, parts, label)`, when given, replaces the flat square
     (new-place-level: a real place's collision chunks, place.py); the shapes are in the
     placement's frame, as the square is."""
+    if shader_from and mesh != "own":
+        raise ValueError("--shader-from gives our own mesh (--mesh own) a stock shader; add --mesh own")
     if collision is not None and mesh == "own":
         raise ValueError("--mesh own draws the flat square; a place's own mesh is not written yet")
     log = [] if log is None else log
@@ -425,6 +453,13 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
     physics_index, physics_asset = found
     log.append(f"  collision {physics_asset.name}: id {physics_asset.resource_id:#x}, meta {physics_asset.resource_meta.hex()}")
     guids = bp_source.guids()
+    # The depots of the bundle our blueprint's (and our mesh's) data goes to, by the base bundle
+    # it is a copy of (none for the new ground bundle).
+    depot_source = ASSET_BUNDLES[asset_bundle]
+    target_keys = _bundle_depot_keys(game, BASE_SUPERBUNDLE, depot_source) if depot_source else set()
+    log.append(f"  shader-block keys our data can use: {len(target_keys)} in the depots of "
+               + (f"{depot_source} (copied as the level's {'root bundle' if asset_bundle == 'root' else depot_source})"
+                  if depot_source else "the ground bundle (none: it has no ShaderBlockDepot)"))
     template_mesh = None      # (EBX name, import, MeshSet (index, asset))
     for imp in used_imports(bp_old):
         name = guids.get(imp.file_guid)
@@ -434,6 +469,11 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                       f"{found_ms[1].resource_meta.hex()}" if found_ms else ""))
         if found_ms and template_mesh is None:
             template_mesh = (name, imp, found_ms)
+        if found_ms:
+            keys = _meshset_keys(bp_source.payload("res", found_ms[0]))
+            home = _source_depot_keys(bp_source)
+            log.append(f"    section shader-block keys {[f'{k:#018x}' for k in keys]}: "
+                       f"{sum(k in home for k in keys)} of {len(keys)} in {bp_source.name}'s own depots")
     bp = clone_document(bp_old, derived_guid(level, "ground_bp", bp_old.file_guid.string()), level + ":ground_bp")
     flags = refresh_flags(bp_old, bp)
     if isinstance(bp.instances[0].object.get("Name"), str):
@@ -461,7 +501,27 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         chunk_data = [_chunk_payload(game, bp_source, lod.chunk) for lod in layout]
         grid_mesh = flat_grid(size, GRID_CELL)
         chunk_guids = [derived_guid(level, "ground_mesh_chunk", *([str(k)] if k else [])) for k in range(len(layout))]
-        new_ms, new_chunks, lines = write_mesh(ms_data, chunk_data, grid_mesh.vertices, grid_mesh.triangles, chunk_guids)
+        donor = None
+        if shader_from:
+            donor_mesh, _, donor_section = shader_from.partition(":")
+            root_source = _source(game, BASE_ROOT_BUNDLE, donor_mesh)
+            found_donor = root_source.resource(donor_mesh, MESHSET_TYPE)
+            if found_donor is None:
+                raise KeyError(f"--shader-from: no MeshSet {donor_mesh} in {root_source.name}")
+            donor_data = root_source.payload("res", found_donor[0])
+            donor_lod = read_mesh_layout(donor_data)[0]
+            index = int(donor_section or 0)
+            if not 0 <= index < len(donor_lod.sections):
+                raise ValueError(f"--shader-from: {donor_mesh} LOD 0 has {len(donor_lod.sections)} sections")
+            section = donor_lod.sections[index]
+            donor_chunk = _chunk_payload(game, root_source, donor_lod.chunk)
+            donor = (donor_data[section.at:section.at + 384], first_vertex(section, donor_chunk))
+            log.append(f"  --shader-from {donor_mesh} section {index} (of {len(donor_lod.sections)}): key "
+                       f"{struct.unpack_from('<Q', donor_data, section.at + 0x138)[0]:#018x}, "
+                       f"{'in' if struct.unpack_from('<Q', donor_data, section.at + 0x138)[0] in target_keys else 'NOT in'}"
+                       f" the depots our mesh's bundle has")
+        new_ms, new_chunks, lines = write_mesh(ms_data, chunk_data, grid_mesh.vertices, grid_mesh.triangles, chunk_guids,
+                                               donor)
         mesh_new = clone_document(mesh_old, derived_guid(level, "ground_mesh", mesh_old.file_guid.string()),
                                   level + ":ground_mesh")
         refresh_flags(mesh_old, mesh_new)
@@ -491,6 +551,10 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         for line in describe_meshset(new_ms)[:2]:
             log.append("    " + line)
         own = (mesh_new, new_ms, new_chunks, chunk_guids, ms_asset)
+        missing = [k for k in _meshset_keys(new_ms) if k not in target_keys]
+        if missing:
+            log.append(f"  WARNING: NOT DRAWN: our mesh's shader-block keys {[f'{k:#018x}' for k in missing]} are in no "
+                       f"depot of the bundle it goes to ({asset_bundle}); use --asset-bundle root with --shader-from")
 
     # 3. Our collision, with the template part's material and words.
     shapes, parts, version = read_physics(bp_source.payload("res", physics_index))
@@ -521,6 +585,36 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                f"{sum(len(g.vertices) for g in new_shapes)} vertices, {sum(len(g.triangles) for g in new_shapes)} "
                f"triangles, {len(physics)} bytes, "
                f"{'object space' if PHYSICS_IN_OBJECT_SPACE else 'world space'}")
+
+    # 3b. Stock props: blueprints of bam's root bundle placed as they are (mesh and collision
+    # their own, all in the level's root bundle, which copies bam's).
+    stock = []
+    for name, where in props:
+        prop_source = _source(game, BASE_ROOT_BUNDLE, name)
+        prop = read_document(prop_source.ebx(name))
+        if prop.root_type != BLUEPRINT_TYPE:
+            raise ValueError(f"--prop {name} is a {prop.root_type}, not an {BLUEPRINT_TYPE}")
+        physics_found = prop_source.resource(name + PHYSICS_SUFFIX, PHYSICS_TYPE)
+        text = f"  --prop {name} at {list(where)}: "
+        if physics_found:
+            prop_shapes, prop_parts, prop_version = read_physics(prop_source.payload("res", physics_found[0]))
+            text += (f"its {name + PHYSICS_SUFFIX} (version {prop_version}, {len(prop_shapes)} shapes, "
+                     f"{len(prop_parts)} parts, materials {sorted({f'{p.material:#x}' for p in prop_parts})})")
+        else:
+            text += "NO .physics of its name (no collision)"
+        root_keys = _source_depot_keys(prop_source)
+        for imp in used_imports(prop):
+            mesh_name_ = prop_source.guids().get(imp.file_guid)
+            found_ms = prop_source.resource(mesh_name_, MESHSET_TYPE) if mesh_name_ else None
+            if found_ms:
+                keys = _meshset_keys(prop_source.payload("res", found_ms[0]))
+                text += (f"; mesh {mesh_name_}: {_meshset_summary(prop_source.payload('res', found_ms[0]))}, "
+                         f"keys {[f'{k:#018x}' for k in keys]}, {sum(k in root_keys for k in keys)} of {len(keys)} "
+                         f"in {prop_source.name}'s depots")
+        if prop_source.name.lower() != BASE_ROOT_BUNDLE:
+            raise ValueError(f"--prop {name} is in {prop_source.name}, not bam's root bundle, which the level copies")
+        log.append(text)
+        stock.append((name, where, prop.file_guid, prop.instances[0].instance_guid))
 
     # 4. The layer: one placement of our blueprint (or a grid of them).
     layer = clone_document(layer_old, derived_guid(level, "ground_layer", layer_old.file_guid.string()), level + ":ground_layer")
@@ -562,12 +656,24 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         if source.exported and isinstance(copy_obj.get("Flags"), int):
             copy_obj.set("Flags", guid_flags(layer.instances[index].instance_guid, copy_obj.get("Flags")))
         _place(copy_obj, (at[0] + dx, at[1], at[2] + dz))
+    for n, (name, where, file_guid, root_guid) in enumerate(stock):
+        source = layer.instances[placed]
+        index = clone_instance(layer, placed, derived_guid(level, "prop_placement", str(n)) if source.exported else None,
+                               after_last_of_type(layer, placed))
+        for _, array in holders:
+            array.append(PointerReference(PointerKind.internal, index))
+        copy_obj = layer.instances[index].object
+        if source.exported and isinstance(copy_obj.get("Flags"), int):
+            copy_obj.set("Flags", guid_flags(layer.instances[index].instance_guid, copy_obj.get("Flags")))
+        copy_obj.set(PLACEMENT_BLUEPRINT, add_import(layer, file_guid, root_guid))
+        _place(copy_obj, where)
     dropped = prune_imports(layer)
     if isinstance(layer.instances[0].object.get("Name"), str):
         layer.instances[0].object.set("Name", layer_name)
     log.append(f"  new {layer_name}: file guid {layer.file_guid.string()}, {len(layer.instances)} instances "
                f"({dict(Counter(type_name(layer, i.object) for i in layer.instances if i.object))}), {len(removed)} removed, "
-               f"{tiles * tiles} placements of {bp_name} (root instance {instance_guid.string()}) centred on "
+               f"{tiles * tiles} placements of {bp_name} (root instance {instance_guid.string()}) and {len(stock)} stock "
+               f"props, centred on "
                f"{list(at)}, {'imports kept (boxed values)' if dropped is None else f'{dropped} unused imports dropped'}, "
                f"{len(layer.imports)} left")
 
@@ -603,6 +709,15 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         roots = [imp.file_guid for d in docs for imp in d.imports if imp.file_guid not in new_files]
         skip = {blueprint_template.lower()} | ({template_mesh[0].lower()} if own else set())
         copied = _closure(bp_source, roots, skip, log)
+        for i in copied["res"]:
+            r = bp_source.manifest.resources[i]
+            if r.resource_type == MESHSET_TYPE:
+                missing = [k for k in _meshset_keys(bp_source.payload("res", i)) if k not in target_keys]
+                if missing:
+                    raise ValueError(f"{r.name}'s sections name shader blocks {[f'{k:#018x}' for k in missing]} that "
+                                     f"only {bp_source.name}'s depot holds; copied into our {asset_bundle} bundle they "
+                                     f"resolve to nothing (the lighthouse crashed so). Use a blueprint of bam's root "
+                                     f"bundle, or --mesh own with --shader-from and --asset-bundle root")
 
     # 6. The level, registered as new-level does, its root loading the ground.
     def edit_root(root: Document, listed: set[str], lines: list[str]) -> None:
@@ -668,7 +783,11 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
     mod.add_ebx(path, ground_bundle, sublevel_name, _checked_bytes(sub, sublevel_name))
     mod.add_ebx(path, ground_bundle, layer_name, _checked_bytes(layer, layer_name))
     assets_bundle = ground_bundle
-    if ASSET_BUNDLES[asset_bundle] is not None:
+    if asset_bundle == "root":
+        assets_bundle = "win32/" + path
+        log.append("--asset-bundle root: the blueprint, its collision" + (", our mesh" if own else "")
+                   + f" and what they need go into the level's root bundle {assets_bundle}")
+    elif ASSET_BUNDLES[asset_bundle] is not None:
         assets_bundle = ASSET_BUNDLES[asset_bundle]
         if mod._find(path, assets_bundle) is None:
             raise KeyError(f"the level's TOC does not list {assets_bundle} with --bam {bam}")

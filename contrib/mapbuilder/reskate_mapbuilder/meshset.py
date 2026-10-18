@@ -74,6 +74,51 @@ def describe_meshset(data: bytes) -> list[str]:
 POSITION_USAGE = 1
 INDEX_FORMAT_U16 = 33
 TRIANGLE_LIST = 3
+# Each section's shader-block key (the PC's finding, FORMAT-NOTES 1): an entry key in the
+# ShaderBlockDepot of the bundle holding the MeshSet. LODs of one mesh share keys.
+SECTION_KEY = 0x138
+# What a section takes from a shader donor (--shader-from): bytes per vertex (+30) and everything
+# from the vertex declaration (+112) through the key (+0x138..+0x140).
+DONOR_SPANS = ((30, 31), (112, SECTION_KEY + 8))
+
+DEPOT_TYPE = 0x73312045          # ShaderBlockDepot: "<bundle path>_win32_shaderstate/shaderblockdepot_<n>"
+SHADER_STATE_ID_TYPE = 0x2FEC6526  # 32 bytes: "<bundle path>_win32_shaderstateshaderstateassetid"
+
+
+def section_key(data: bytes, section: "Section") -> int:
+    return struct.unpack_from("<Q", data, section.at + SECTION_KEY)[0]
+
+
+def depot_records(data: bytes) -> list[tuple[int, int]]:
+    """(key, offset) records of a ShaderBlockDepot. Header as read on the PC: u64 0x10, u64 0, then
+    (u64 key, u64 offset) pairs; the pairs end where the first block begins (the smallest offset)
+    or at a zero key. Only the keys and offsets are decoded."""
+    if len(data) < 16:
+        raise ValueError("ShaderBlockDepot shorter than its header")
+    first, zero = struct.unpack_from("<QQ", data, 0)
+    if first != 0x10 or zero != 0:
+        raise ValueError(f"ShaderBlockDepot header {first:#x}, {zero:#x}; expected 0x10, 0")
+    records, at, end = [], 16, len(data)
+    while at + 16 <= end:
+        key, offset = struct.unpack_from("<QQ", data, at)
+        if key == 0 or offset >= len(data) or offset < at:
+            break
+        records.append((key, offset))
+        end = min(end, offset)
+        at += 16
+    return records
+
+
+def depot_keys(data: bytes) -> set[int]:
+    """The depot's entry keys: its records', or (if the records do not parse) every u64 at an
+    8-byte boundary of the first 64 KiB, which still answers "is this key in there"."""
+    try:
+        records = depot_records(data)
+    except (ValueError, struct.error):
+        records = []
+    if records:
+        return {k for k, _ in records}
+    return {struct.unpack_from("<Q", data, at)[0] for at in range(0, min(len(data), 0x10000) - 7, 8)}
 
 
 @dataclass
@@ -171,11 +216,17 @@ def _align(value: int, to: int) -> int:
 
 
 def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangles,
-               chunk_guids: list[Guid]) -> tuple[bytes, list[bytes], list[str]]:
+               chunk_guids: list[Guid], donor: tuple[bytes, list[bytes]] | None = None
+               ) -> tuple[bytes, list[bytes], list[str]]:
     """A MeshSet and its geometry chunks (one per LOD) holding `vertices` and `triangles` in every
     section of every LOD of the template; every vertex's other elements are the template section's
     first vertex's. Triangles take the template's winding (seen from +y), read from LOD 0's first
-    section. Returns (meshset, chunks, report)."""
+    section. Returns (meshset, chunks, report).
+
+    `donor` = (a section struct of another mesh, its first vertex's bytes per stream): every
+    section then takes the donor's bytes per vertex, vertex declaration and shader-block key
+    (DONOR_SPANS), and every vertex is the donor's first vertex with our position, so the
+    geometry is drawn with the donor's material."""
     lods = read_layout(template)
     if len(template_chunks) != len(lods) or len(chunk_guids) != len(lods):
         raise ValueError(f"the template has {len(lods)} LODs; give one chunk and one GUID for each")
@@ -200,6 +251,20 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
         + f"; winding {'flipped to match' if flip else 'as the template'}"]
 
     meshset = bytearray(template)
+    if donor is not None:
+        donor_section, donor_vertex = donor
+        for lod in lods:
+            for s in lod.sections:
+                for a, b in DONOR_SPANS:
+                    meshset[s.at + a:s.at + b] = donor_section[a:b]
+        lods = read_layout(bytes(meshset))
+        first_donor = lods[0].sections[0]
+        if len(donor_vertex) != len(first_donor.strides) or any(
+                len(v) != w for v, w in zip(donor_vertex, first_donor.strides)):
+            raise ValueError("the donor's first vertex does not match its declaration's streams")
+        report.append(f"donor section: key {section_key(bytes(meshset), first_donor):#018x}, "
+                      f"{donor_section[30]} bytes per vertex, elements (usage, format, offset, stream) "
+                      f"{first_donor.elements}, stream strides {first_donor.strides}")
     chunks = []
     for lod, template_chunk, guid in zip(lods, template_chunks, chunk_guids):
         vertex_data = bytearray()
@@ -209,7 +274,8 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
             start = _align(len(vertex_data), 16)
             vertex_data += bytes(start - len(vertex_data))
             for t, stride in enumerate(s.strides):
-                model = template_chunk[_stream_base(s, t):_stream_base(s, t) + stride]
+                model = donor[1][t] if donor is not None else \
+                    template_chunk[_stream_base(s, t):_stream_base(s, t) + stride]
                 for x, y, z in vertices:
                     vertex = bytearray(model)
                     if t == stream:
@@ -243,3 +309,8 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
                     abs(a - b) > tolerance * max(1.0, abs(b)) for p, v in zip(read, vertices) for a, b in zip(p, v)):
                 raise ValueError("the written mesh does not read back")
     return bytes(meshset), chunks, report
+
+
+def first_vertex(section: Section, chunk: bytes) -> list[bytes]:
+    """A section's first vertex: its bytes in each stream."""
+    return [chunk[_stream_base(section, t):_stream_base(section, t) + stride] for t, stride in enumerate(section.strides)]

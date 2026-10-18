@@ -20,10 +20,12 @@ from .bundle import Guid
 from .ebx import read_document, read_file_guid
 from .ebxcheck import _djb2_add, _djb2_xor, _fnv1, _fnv1a
 from .ebxedit import describe
-from .meshset import HEADER_SIZE, LOD_SIZE, SECTION_SIZE, describe_meshset, read_layout
+from .meshset import (DEPOT_TYPE, HEADER_SIZE, LOD_SIZE, SECTION_SIZE, depot_records, depot_keys, describe_meshset,
+                      read_layout, section_key)
 
 MESHSET_TYPE = 0x49B156D4
-KNOWN_TYPES = {0x49B156D4: "MeshSet", 0x41759364: "PhysicsResource", 0x6BDE20BA: "Texture"}
+KNOWN_TYPES = {0x49B156D4: "MeshSet", 0x41759364: "PhysicsResource", 0x6BDE20BA: "Texture",
+               0x73312045: "ShaderBlockDepot", 0x2FEC6526: "ShaderStateAssetId"}
 WORDS = ("shader", "block", "depot", "material", "vt", "virtualtexture", "surface")
 HASHES = (("djb2-xor", _djb2_xor), ("djb2-add", _djb2_add), ("fnv1", _fnv1), ("fnv1a", _fnv1a))
 
@@ -126,6 +128,33 @@ def mesh_refs(game, superbundle: str, bundle: str, mesh: str, scan: list[tuple[s
         data = home.payload("res", j)
         out.append(f"MeshSet {asset.name}: id {asset.resource_id:#018x}, meta {asset.resource_meta.hex()}")
         out += ["  " + line for line in describe_meshset(data)]
+    # Each section's shader-block key and the depot that holds it.
+    depots: dict[int, list[str]] = defaultdict(list)
+    for b in scanned:
+        for j2, r in enumerate(b.manifest.resources):
+            if r.resource_type == DEPOT_TYPE:
+                payload = b.payload("res", j2)
+                try:
+                    count = f"{len(depot_records(payload))} records"
+                except (ValueError, struct.error) as e:
+                    count = f"records not parsed ({e})"
+                out.append(f"depot {r.name} in {b.name}: {len(payload)} bytes, id {r.resource_id:#018x}, meta "
+                           f"{r.resource_meta.hex()}, {count}")
+                for key in depot_keys(payload):
+                    depots[key].append(f"{r.name} ({b.name})")
+    section_keys = []
+    try:
+        for k, lod in enumerate(read_layout(data) if data else []):
+            for n, sec in enumerate(lod.sections):
+                key = section_key(data, sec)
+                section_keys.append(key)
+                held = depots.get(key)
+                out.append(f"LOD {k} section {n}: shader-block key {key:#018x} (+0x138): "
+                           + (f"in {', '.join(held)}" + ("" if any(f"({home.name})" in h for h in held)
+                                                        else f"; NOT in a depot of {home.name}, the MeshSet's bundle")
+                              if held else "in NO depot of the bundles scanned"))
+    except (ValueError, struct.error):
+        pass
     guids: dict[bytes, str] = {}
     for b in scanned:
         for c in b.manifest.chunks:
@@ -195,6 +224,18 @@ def mesh_refs(game, superbundle: str, bundle: str, mesh: str, scan: list[tuple[s
             chunks |= {c.guid for c in manifest.chunks}
         out.append(f"level {path}: {len(toc.bundles)} bundles, {len(ebx)} EBX, {len(res)} res, {len(chunks)} chunks")
         out.append(f"  mesh EBX listed: {mesh.lower() in ebx}; its MeshSet listed: {mesh.lower() in res}")
+        for b in toc.bundles:
+            _, region, manifest = game.bundle(toc, b.name)
+            if not any(a.name.lower() == mesh.lower() for a in manifest.resources):
+                continue
+            keys = set()
+            base = 0 if region.inline_manifest else 1
+            for j2, r in enumerate(manifest.resources):
+                if r.resource_type == DEPOT_TYPE:
+                    keys |= depot_keys(game.payload(region, base + len(manifest.ebx) + j2))
+            missing = [k for k in section_keys if k not in keys]
+            out.append(f"  the MeshSet is in our {b.name}: its depots hold {len(section_keys) - len(missing)} of "
+                       f"{len(section_keys)} section keys" + (f"; MISSING {[f'{k:#018x}' for k in missing]}" if missing else ""))
         for imp in doc.imports:
             name = by_guid.get(imp.file_guid, "").split(" (")[0]
             out.append(f"  import {name or imp.file_guid.string()}: "
