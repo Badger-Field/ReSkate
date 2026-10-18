@@ -116,8 +116,11 @@ add_library(dingosdk_runtime SHARED
     Extension/Assets/mod_layers.cpp
     Extension/Assets/live_mods.cpp
     Extension/Assets/map_download.cpp
+    Extension/Assets/package_install.cpp
+    Extension/Assets/mod_browser.cpp
     Extension/Assets/map_icons.cpp
     Engine/Vfs/thunderstore_package.cpp
+    Engine/Vfs/thunderstore_listing.cpp
     Launcher/mod_manager.cpp
     Extension/Assets/loose_files.cpp
     Extension/Scripting/lua_startup.cpp

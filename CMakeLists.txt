@@ -366,6 +366,20 @@ if(DINGOSDK_BUILD_TESTS)
     add_executable(dingosdk_mesh_registry_tests Extension/World/Test/mesh_registry_tests.cpp)
     target_include_directories(dingosdk_mesh_registry_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     add_test(NAME mesh_registry COMMAND dingosdk_mesh_registry_tests)
+    # The MODS page's Thunderstore browser: the listing, search, versions and what may be installed.
+    add_executable(dingosdk_thunderstore_listing_tests Engine/Vfs/Test/thunderstore_listing_tests.cpp
+        Engine/Vfs/thunderstore_listing.cpp)
+    target_include_directories(dingosdk_thunderstore_listing_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_link_libraries(dingosdk_thunderstore_listing_tests PRIVATE dingosdk_json dingosdk_miniz)
+    add_test(NAME thunderstore_listing COMMAND dingosdk_thunderstore_listing_tests)
+    # The package a map comes from (Windows builds run it with the launcher's tests).
+    if(NOT WIN32)
+        add_executable(dingosdk_thunderstore_package_tests Engine/Vfs/Test/thunderstore_package_tests.cpp
+            Engine/Vfs/thunderstore_package.cpp)
+        target_include_directories(dingosdk_thunderstore_package_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+        target_link_libraries(dingosdk_thunderstore_package_tests PRIVATE dingosdk_json)
+        add_test(NAME thunderstore_package COMMAND dingosdk_thunderstore_package_tests)
+    endif()
 endif()
 
 # Header-only game contracts belong to the runtime's subsystem tree.
