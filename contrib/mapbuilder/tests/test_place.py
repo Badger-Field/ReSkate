@@ -383,7 +383,7 @@ def test_material_bundle_auto_picks_the_best_tile_with_distinct_concrete_ground_
                                                                                          monkeypatch):
     import reskate_mapbuilder.materials as materials
     from test_level import BOX, FTUE, PARK_BENCH, PARK_BUNDLE, PARK_PAVEMENT, PARK_STEP, VISTA_BUNDLE, VISTA_MESH
-    monkeypatch.setattr(materials, "AUTO_MIN_USABLE", 3)                # the fixture parks have 3 usable sections
+    monkeypatch.setattr(materials, "AUTO_MIN_BYTES", 0)                 # the fixture bundles are tiny
     game_dir = fake_game(tmp_path / "game")
     tiles = write_tiles(tmp_path / "tiles")
     args = ["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles", str(tiles),
@@ -406,6 +406,8 @@ def test_material_bundle_auto_picks_the_best_tile_with_distinct_concrete_ground_
     monkeypatch.setattr(materials, "AUTO_MIN_USABLE", 10)
     with pytest.raises(SystemExit, match="no sublevel bundle of .* has usable"):
         main(args)
+    out = capsys.readouterr().out
+    assert f"  rejected {PARK_BUNDLE} (" in out and "3 usable classed sections, under 10" in out
     with pytest.raises(SystemExit, match="no sublevel bundle of levels/game/bam_levelroot/bam_levelroot has usable"):
         main(args[:-2] + ["auto", "--dry-run"])
 
@@ -497,7 +499,7 @@ def test_buildings_are_their_own_class_and_skip_visual_leaves_them_out(tmp_path,
     args = ["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles", str(tiles),
             "--at", "0", "300", "0", "--skip-part", "buildings", "--visuals", "--visual-template", BOX, "--dry-run"]
     import reskate_mapbuilder.materials as materials
-    monkeypatch.setattr(materials, "AUTO_MIN_USABLE", 3)
+    monkeypatch.setattr(materials, "AUTO_MIN_BYTES", 0)
     main(args + ["--material-bundle", f"auto:{FTUE}"])
     out = capsys.readouterr().out
     assert "visual classes (each drawn with its --material-donor): building <- buildings (1); " \
@@ -531,3 +533,43 @@ def test_auto_donors_give_ground_and_concrete_different_materials():
     assert picks["concrete"] == picks["building"] == "a_mesh:0" and "ground" not in picks
     two = {"sections": only["sections"] + [section("e_mesh", 3, "Concrete_Poured_01_M")]}
     assert auto_donors(two)["ground"] == "e_mesh:3"                       # same material, another section
+
+
+def test_the_known_good_tile_qualifies(monkeypatch):
+    """The PC's M3: the trial tile (ground granite, poured concrete, Wood_Accent; worked in game)
+    was refused. Its exact names must qualify, and give those three donors."""
+    import reskate_mapbuilder.materials as materials
+    from reskate_mapbuilder.materials import auto_donors, auto_rejection, section_problem
+    bundle = "win32/levels/game/bam_levelroot/wproot/wp/s9600_x0z0/s200_x900z1700/s100_x850z1650/s50_x825z1675_sublevel"
+    pillar = "levels/game/bam_levelroot/wproot/wp/props/dtn_plt_23_base_e_pillar_base_01_mesh"
+    menu = "common/props/cmn_prp_menuboard_01_mesh"
+    names = [(pillar, 0, "Stone_Granite_02_2x2m_M_SgGrdSlabs01_mat"), (pillar, 1, "Metal_Dark_01_mat"),
+             (pillar, 2, "Concrete_Poured_01_2x2m_M_Grey_mat"), (menu, 4, "Wood_Accent"),
+             (menu, 0, "Shadow_mat"), ("levels/game/x/blod_mesh", 0, "Plastic_Red_mat")]
+    for mesh, _, material in names[:4] + names[5:]:
+        assert section_problem(bundle, mesh, material, True, True) == ""     # no proxy word inside a word
+    assert section_problem(bundle, menu, "Shadow_mat", True, True) == "material name has the proxy word 'shadow'"
+    assert section_problem(bundle, "x/rock_lod1_mesh", "Stone_mat", True, True) == "mesh name has the proxy word 'lod1'"
+    sections = [(mesh, n, material, materials.classes_of(material) or ["metal"], material != "Shadow_mat", [8])
+                for mesh, n, material in names]
+    row = {"bundle": bundle, "bytes": 900 * 1024, "sublevel": True, "sections": sections}
+    assert auto_rejection(row) == ""
+    picks = auto_donors(row)
+    assert picks["ground"] == f"{pillar}:0" and picks["concrete"] == f"{pillar}:2" and picks["wood"] == f"{menu}:4"
+    assert materials.auto_score(row) == (1, 1, 1, 1)
+
+
+def test_scan_materials_explain_prints_every_section_and_the_verdict(tmp_path, capsys, monkeypatch):
+    import reskate_mapbuilder.materials as materials
+    from test_level import FTUE, PARK_BUNDLE, PARK_STEP, VISTA_BUNDLE
+    monkeypatch.setattr(materials, "AUTO_MIN_BYTES", 0)
+    game_dir = fake_game(tmp_path / "game")
+    main(["scan-materials", "--game", str(game_dir), "--explain", f"{FTUE}:{PARK_BUNDLE}"])
+    out = capsys.readouterr().out
+    assert f"  {PARK_STEP}:0  'Concrete_Poured_01_2x2m_M_Grey_mat'" in out
+    assert "words ['01', '2x2m', 'concrete', 'grey', 'm', 'mat', 'poured']" in out and "auto roles ['concrete'" in out
+    assert "NOT usable: no TexCoord0" in out and "auto pick: qualifies, score (1, 1, 1, 0)" in out
+    assert f"  concrete = {PARK_STEP}:0 ('Concrete_Poured_01_2x2m_M_Grey_mat')" in out
+    main(["scan-materials", "--game", str(game_dir), "--explain", f"{FTUE}:{VISTA_BUNDLE}"])
+    out = capsys.readouterr().out
+    assert "bundle name has the proxy word 'vista'" in out and "auto pick: rejected: " in out
