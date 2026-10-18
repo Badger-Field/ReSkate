@@ -1056,9 +1056,10 @@ the dry run says so (it printed "given" before).
 **Looking at objects.** The trainer's `tp x y z` and `ground x z` take no heading, and the camera
 after a teleport faces wherever it did; `trainer where` prints the heading (0 = +z, north; 90 =
 +x, east: `atan2(forward.x, forward.z)` in `Extension/Trainer/trainer.cpp`). `place-info --views`
-prints, per visual object, a `trainer ground` spot outside it on the side with ground (its west
-side first: after a teleport the camera seemed to face +x on the PC, observed once, not confirmed)
-and the heading to face. A V2 run teleported 3 to 4 m west of the spot_2 bench showed the textured
+prints, per visual object, a `trainer ground` spot outside it and the heading to face. The
+camera faces heading 0 (+z, north) after `tp` and `ground`: `trainer where` read 0 after every
+teleport (e3ed5ee; an earlier "+x" guess was wrong), so spots are on each object's south side
+looking north where there is ground, else north, west or east with the heading to turn to. A V2 run teleported 3 to 4 m west of the spot_2 bench showed the textured
 plaza with raised textured objects (a long ledge or step edge, a raised slab): the non-ground
 visuals draw. Proposal (not in this branch): an optional heading argument, `trainer ground <x>
 <z> [heading]` and `tp <x> <y> <z> [heading]`, setting the skater's yaw (forward = (sin h, 0,
@@ -1070,6 +1071,21 @@ triangles, strides, whether its key is in the root depot, and a class (concrete,
 ground) guessed from the words of its names; then a proposed `--material-donor CLASS=MESH:N` per
 class (the first usable section). A donor of another mesh lends its section's declaration, key,
 model vertex, and its own TexCoord0/TexCoord1 densities and colour value.
+
+Tested in game (e3ed5ee): with ground = the skatepark ramp wedge's section 0 (Skatepark_Surface_M,
+six streams, strides 8, 4, 4, 4, 12, 4), concrete = the box's section 1 (Sides_M), metal = the
+flat rectangular rail's section 0 (Skatepark_Rail_M, strides 8, 4, 4) and wood the default, all 13
+objects drew in their materials (stairs as a lighter plank strip), no crash. Under `skatepark`
+only the kit's own materials exist (Surface_M, Sides_M, Trim_Edges_M, Threshold_M, Coping_M,
+Rail_M, Decal_Prop_Trim_01_2x2m_M, Graphic_Pump_01_M_DM). `material-donors` now reads every
+MeshSet of the root bundle by default, prints only classed sections (all with `--every`) and the
+count per class; its words now include bollard, hydrant and bikerack (metal) and sidewalk,
+pavement, stone and brick (concrete). Without `--material-donor`, new-place-level now picks:
+ground = the ramp wedge's section 0, metal = the rail's section 0, concrete = the first usable
+section of a mesh named concrete, curb, sidewalk or pavement, else the template's section 1; wood
+the template's section 0 (`--no-auto-materials` keeps the template's section 0 for all). The
+writer fills each stream of any layout: position, TexCoord0, TexCoord1, 51 and 52 as above, any
+other element (such as the ramp wedge's 12-byte usage 42 stream) from the template vertex.
 
 **Visuals** (`--visuals`, written, not yet run in game): each visual object of each tile (13 in
 the Embarcadero export) gets its own blueprint, mesh and placement (at `--at`, like the
