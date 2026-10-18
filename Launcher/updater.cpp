@@ -54,6 +54,12 @@ std::wstring widen(std::string_view value) {
 
 [[noreturn]] void fail(const std::string& message) { throw std::runtime_error(message); }
 
+// A WinHTTP call that failed, with its Windows error code.
+struct WinHttpError : std::runtime_error {
+    DWORD code;
+    WinHttpError(const std::string& message, DWORD error) : std::runtime_error(message), code(error) {}
+};
+
 void info(std::string_view message) {
     logging::write(logging::Level::info, logging::Channel::launcher, message);
 }
@@ -84,7 +90,8 @@ std::wstring quote_argument(std::wstring_view value) {
 void http_get(const std::wstring& url, std::uint64_t limit, int timeout_ms,
               const std::function<void(const char*, DWORD)>& sink) {
     const auto win32 = [](std::string_view action) {
-        fail(std::format("{} failed (Windows error {})", action, GetLastError()));
+        const auto error = GetLastError();
+        throw WinHttpError(std::format("{} failed (Windows error {})", action, error), error);
     };
     Internet session{WinHttpOpen(L"ReSkate-Launcher/1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, nullptr, nullptr, 0)};
     if (!session.value) win32("WinHttpOpen");
@@ -326,6 +333,31 @@ Config parse_config(std::string_view text) {
 }
 
 namespace {
+// The release check's requests (GitHub's API and the release's launcher.json). 8 s timed out on
+// slower connections (Windows error 12002); 20 s, as the other launcher lookups.
+constexpr int release_check_timeout_ms = 20000;
+// A request that timed out or could not connect is tried once more; any failure is logged with
+// its URL.
+std::string release_check_get(const std::wstring& url, std::uint64_t limit) {
+    for (int attempt = 1;; ++attempt) {
+        std::string text;
+        try {
+            http_get(url, limit, release_check_timeout_ms, [&](const char* data, DWORD count) { text.append(data, count); });
+            return text;
+        } catch (const WinHttpError& error) {
+            const bool retry = attempt == 1 && (error.code == ERROR_WINHTTP_TIMEOUT ||
+                error.code == ERROR_WINHTTP_CANNOT_CONNECT || error.code == ERROR_WINHTTP_CONNECTION_ERROR);
+            logging::log(logging::Level::warning, logging::Channel::launcher, "Release check: {} failed ({}){}",
+                utf8(url), error.what(), retry ? "; trying once more." : ".");
+            if (!retry) throw;
+        } catch (const std::exception& error) {
+            logging::log(logging::Level::warning, logging::Channel::launcher, "Release check: {} failed ({}).",
+                utf8(url), error.what());
+            throw;
+        }
+    }
+}
+
 // The release the launcher updates from: GitHub's latest full release, or with `prereleases`
 // the newest one that is not a draft and carries a launcher.json, pre-release or not (GitHub
 // lists them newest first). Either way the one list is read, which also says whether a
@@ -337,9 +369,7 @@ struct Chosen {
 };
 Chosen release_to_use(bool prereleases) {
     const auto repo = std::wstring(L"https://api.github.com/repos/") + launcher_release_repo;
-    std::string text;
-    http_get(repo + L"/releases?per_page=10", 4 * 1024 * 1024, 8000, [&](const char* data, DWORD count) { text.append(data, count); });
-    auto releases = Json::parse(text);
+    auto releases = Json::parse(release_check_get(repo + L"/releases?per_page=10", 4 * 1024 * 1024));
     if (!releases.is_array()) fail("GitHub's list of releases is not a list");
     const auto usable = [](const Json& release) {
         if (!release.is_object() || release.value("draft", false) || !release.contains("assets")) return false;
@@ -367,9 +397,7 @@ Chosen release_to_use(bool prereleases) {
     }
     if (full) return {*full, prerelease_first};
     // No full release among the newest ten: GitHub's latest, as before.
-    text.clear();
-    http_get(repo + L"/releases/latest", 4 * 1024 * 1024, 8000, [&](const char* data, DWORD count) { text.append(data, count); });
-    return {Json::parse(text), prerelease_first};
+    return {Json::parse(release_check_get(repo + L"/releases/latest", 4 * 1024 * 1024)), prerelease_first};
 }
 } // namespace
 
@@ -404,9 +432,7 @@ std::optional<Config> fetch_config(bool prereleases) {
                 assets[asset.value("name", "")] = widen(asset.value("browser_download_url", ""));
         const auto manifest = assets.find("launcher.json");
         if (manifest == assets.end()) fail("The release has no launcher.json asset");
-        std::string json;
-        http_get(manifest->second, max_config_bytes, 8000, [&](const char* data, DWORD count) { json.append(data, count); });
-        auto config = parse_config(json);
+        auto config = parse_config(release_check_get(manifest->second, max_config_bytes));
         for (auto* file : {&config.launcher, &config.runtime, &config.depot_downloader, &config.server}) {
             if (!file->url.starts_with(L"asset:")) continue;
             const auto found = assets.find(utf8(std::wstring_view(file->url).substr(6)));
