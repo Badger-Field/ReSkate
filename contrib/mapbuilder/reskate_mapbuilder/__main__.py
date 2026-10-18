@@ -156,7 +156,9 @@ def new_ground_level_command(args, place=None):
                          args.blueprint_bundle, grid if grid is not None else 1, log, args.blueprint_superbundle,
                          args.visual, args.mesh, args.asset_bundle, collision if place is not None else None,
                          getattr(args, "shader_from", None), _props(args), getattr(args, "keep_section", None),
-                         getattr(args, "mesh_shape", "plane"), getattr(args, "collision", "own"))
+                         getattr(args, "mesh_shape", "plane"), getattr(args, "collision", "own"),
+                         None if getattr(args, "other_sections", "degenerate") == "geometry"
+                         else getattr(args, "geometry_section", 0))
     finally:
         for line in log:
             print(line)
@@ -366,9 +368,12 @@ def main(argv=None):
                         "bam_coregameassets, or the level's root bundle (bam root's copy, with its shader depot)")
     p.add_argument("--mesh", choices=MESH_MODES, default="template",
                    help="own: draw a MeshSet of our own (a copy of the template's with our plane); untested")
-    p.add_argument("--keep-section", type=int, metavar="N",
-                   help="with --mesh own: each LOD of our MeshSet lists only its section N (default: all, each "
-                        "drawing our geometry)")
+    p.add_argument("--keep-section", type=int, metavar="N", help="refused: it crashed the game (FORMAT-NOTES 6.3)")
+    p.add_argument("--geometry-section", type=int, default=0, metavar="N",
+                   help="with --mesh own: the section (of each LOD) that draws our geometry; the others keep their "
+                        "material and draw one zero-area triangle")
+    p.add_argument("--other-sections", choices=("degenerate", "geometry"), default="degenerate",
+                   help="geometry: every section draws our geometry instead")
     p.add_argument("--mesh-shape", choices=MESH_SHAPES, default="plane",
                    help="with --mesh own: our square, a box the size of the template mesh, or the template's own "
                         "geometry copied (plumbing test)")

@@ -401,7 +401,8 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                      visual: str = "none", mesh: str = "template", asset_bundle: str = "ground",
                      collision=None, shader_from: str | None = None,
                      props: list[tuple[str, tuple[float, float, float]]] = (), keep_section: int | None = None,
-                     mesh_shape: str = "plane", collision_mode: str = "own") -> list[str]:
+                     mesh_shape: str = "plane", collision_mode: str = "own",
+                     geometry_section: int | None = 0) -> list[str]:
     """Adds a level whose content is our own ground to `mod` (see the module's text). Appends a
     report to `log` (also when it refuses) and returns it.
 
@@ -412,6 +413,9 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         raise ValueError(f"--mesh-shape is one of {MESH_SHAPES}, --collision one of {COLLISION_MODES}")
     if collision is not None and collision_mode != "own":
         raise ValueError("a place brings its own collision; --collision template is for new-ground-level")
+    if keep_section is not None:
+        raise ValueError("--keep-section crashed the game (cd6d149: code walking the template's section count "
+                         "read past our one section); every section is kept, our geometry in --geometry-section")
     if shader_from and mesh != "own":
         raise ValueError("--shader-from gives our own mesh (--mesh own) a stock shader; add --mesh own")
     if collision is not None and mesh == "own":
@@ -562,7 +566,7 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         else:
             geometry = (grid_mesh.vertices, grid_mesh.triangles)
         new_ms, new_chunks, lines = write_mesh(ms_data, chunk_data, geometry[0], geometry[1], chunk_guids, donor,
-                                               keep_section, mesh_shape == "donor-copy")
+                                               None, mesh_shape == "donor-copy", geometry_section)
         mesh_new = clone_document(mesh_old, derived_guid(level, "ground_mesh", mesh_old.file_guid.string()),
                                   level + ":ground_mesh")
         refresh_flags(mesh_old, mesh_new)

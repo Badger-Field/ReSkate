@@ -221,6 +221,7 @@ def _align(value: int, to: int) -> int:
 # frame; 52: UV or colour): taken from the model vertex, which faces up when the section has an
 # up-facing triangle.
 UV_USAGE, UV_FORMAT = 51, 12
+AREA_OFFSET = 332                     # section: surface area (float), by the PC's diff
 UV_METRES = 6.0                       # our UVs: one texture repeat every 6 m of x and z
 FORMATS = {3: "float32 x3", 8: "float16 x4", 12: "float16 x2", 6: "4 bytes, not decoded",
            13: "4 bytes, not decoded"}
@@ -319,8 +320,8 @@ def box_geometry(lo, hi):
 
 def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangles,
                chunk_guids: list[Guid], donor: tuple[bytes, list[bytes]] | None = None,
-               keep_section: int | None = None, copy_template: bool = False
-               ) -> tuple[bytes, list[bytes], list[str]]:
+               keep_section: int | None = None, copy_template: bool = False,
+               geometry_section: int | None = 0) -> tuple[bytes, list[bytes], list[str]]:
     """A MeshSet and its geometry chunks (one per LOD, under `chunk_guids`), patched into a copy of
     `template` (the drawn mesh whose fields we keep). Returns (meshset, chunks, report).
 
@@ -331,7 +332,12 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
     Changed fields: the header box; each LOD's index and vertex byte counts, chunk GUID and any
     box found in it; each section's triangle count, first index, vertex start, vertex count and
     any box found in it (a box: three floats equal to the template's minimum and, 12 or 16 bytes
-    on, its maximum). `keep_section` N lists only section N in each LOD. `copy_template` writes the
+    on, its maximum), and the section's surface area at +332 when the template's own matches its
+    geometry. `geometry_section` N: only section N of each LOD (its last if it has fewer) gets our
+    geometry; every other section keeps its struct, material and layout and draws one zero-area
+    triangle on one vertex of its own (so every per-section count and table stays the template's).
+    None: every section gets our geometry. `keep_section` N lists only section N in each LOD (this
+    crashed the game: sections are counted elsewhere too). `copy_template` writes the
     template's own vertex and index bytes into the new chunks instead (the plumbing test).
 
     `donor` = (a section struct of another mesh, its model vertex per stream): every section
@@ -367,6 +373,20 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
             for at, gap in _find_box(template, lod.at, lod.at + LOD_SIZE, lo, hi):
                 boxes.append((at, gap, f"LOD +{at - lod.at}"))
     report.append("boxes found in the structs: " + (", ".join(sorted({label for _, _, label in boxes})) or "none"))
+    # Section +332: the section's surface area (PC: 2500 for the 50 m plane, 36.96 for the box's
+    # section 0). Written only if the template's own sections say so.
+    area_ok = all(abs(struct.unpack_from("<f", template, s.at + AREA_OFFSET)[0] - _area(section_positions(s, c),
+                                                                                         section_triangles(lod, s, c)))
+                  <= 0.01 * max(1.0, _area(section_positions(s, c), section_triangles(lod, s, c)))
+                  for lod, c in zip(lods, template_chunks) for s in lod.sections)
+    report.append(f"section +{AREA_OFFSET} " + ("is each template section's surface area: ours written" if area_ok else
+                                                 "is not the template sections' surface area: left as it was"))
+    for k, lod in enumerate(lods):
+        flags = struct.unpack_from("<I", template, lod.at + 80)[0]
+        if flags & 1:
+            report.append(f"WARNING: LOD {k} flags {flags:#x} have bit 0 set (util_groundplane, which is not drawn, has "
+                          f"0x41; the drawn box 0x40): likely a don't-draw flag")
+    report += ["template sections:"] + section_list(template)
 
     if keep_section is not None:
         report += keep_one_section(meshset, keep_section)
@@ -402,8 +422,11 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
     described = set()
     for lod, old_lod, template_chunk, guid in zip(lods_now, lods, template_chunks, chunk_guids):
         vertex_data = bytearray()
+        index_parts = []
         first_index = 0
-        for s in lod.sections:
+        for n_section, s in enumerate(lod.sections):
+            ours = geometry_section is None or n_section == min(geometry_section, len(lod.sections) - 1)
+            verts, tris = (vertices, triangles) if ours else (vertices[:1], [(0, 0, 0)])
             if donor is not None:
                 model = donor[1]
             else:
@@ -421,7 +444,7 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
             start = _align(len(vertex_data), 16)
             vertex_data += bytes(start - len(vertex_data))
             for t, stride in enumerate(s.strides):
-                for x, y, z in vertices:
+                for x, y, z in verts:
                     vertex = bytearray(model[t])
                     for usage, f, o, st in s.elements:
                         if st != t:
@@ -431,10 +454,13 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
                         elif usage == UV_USAGE and f == UV_FORMAT:
                             struct.pack_into("<2e", vertex, o, x / UV_METRES, z / UV_METRES)
                     vertex_data += vertex
-            struct.pack_into("<4I", meshset, s.at + 32, len(triangles), first_index, start, len(vertices))
-            first_index += 3 * len(triangles)
+            struct.pack_into("<4I", meshset, s.at + 32, len(tris), first_index, start, len(verts))
+            if area_ok:
+                struct.pack_into("<f", meshset, s.at + AREA_OFFSET, _area(verts, tris))
+            first_index += 3 * len(tris)
+            index_parts.append(struct.pack(f"<{3 * len(tris)}H", *(i for t in tris for i in t)))
         vertex_bytes = _align(len(vertex_data), 16)
-        indices = struct.pack(f"<{3 * len(triangles)}H", *(i for t in triangles for i in t)) * len(lod.sections)
+        indices = b"".join(index_parts)
         chunk = bytes(vertex_data) + bytes(vertex_bytes - len(vertex_data)) + indices
         chunk += bytes(-len(chunk) % 16)
         struct.pack_into("<II", meshset, lod.at + 88, len(indices), vertex_bytes)
@@ -453,13 +479,47 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
     for back, chunk in zip(read_layout(bytes(meshset)), chunks):
         if rebuild_chunk(back, chunk) != chunk:
             raise ValueError("the written chunk does not rebuild from the written layout")
-        for s in back.sections:
+        for n_section, s in enumerate(back.sections):
+            ours = geometry_section is None or n_section == min(geometry_section, len(back.sections) - 1)
+            verts, tris = (vertices, triangles) if ours else (vertices[:1], [(0, 0, 0)])
             tolerance = 1e-4 if _position(s)[0] == 3 else 0.05
             read = section_positions(s, chunk)
-            if section_triangles(back, s, chunk) != list(triangles) or any(
-                    abs(a - b) > tolerance * max(1.0, abs(b)) for p, v in zip(read, vertices) for a, b in zip(p, v)):
+            if section_triangles(back, s, chunk) != list(tris) or len(read) != len(verts) or any(
+                    abs(a - b) > tolerance * max(1.0, abs(b)) for p, v in zip(read, verts) for a, b in zip(p, v)):
                 raise ValueError("the written mesh does not read back")
+    report += ["our sections:"] + section_list(bytes(meshset))
     return bytes(meshset), chunks, report
+
+
+def _area(points, triangles) -> float:
+    total = 0.0
+    for a, b, c in triangles:
+        pa, pb, pc = points[a], points[b], points[c]
+        u = [pb[i] - pa[i] for i in range(3)]
+        v = [pc[i] - pa[i] for i in range(3)]
+        n = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+        total += 0.5 * (n[0] ** 2 + n[1] ** 2 + n[2] ** 2) ** 0.5
+    return total
+
+
+def section_list(data: bytes) -> list[str]:
+    """Per LOD: its flags and the six floats at +140; per section its triangles, vertices,
+    material name, the words at +324 and +328 (a hash and a small number, perhaps the material
+    index), the area at +332, the key and the layout."""
+    out = []
+    for k, lod in enumerate(read_layout(data)):
+        flags = struct.unpack_from("<I", data, lod.at + 80)[0]
+        out.append(f"  LOD {k}: flags {flags:#x}, {len(lod.sections)} sections, +140..+164 "
+                   f"{[round(v, 3) for v in struct.unpack_from('<6f', data, lod.at + 140)]}")
+        for n, s in enumerate(lod.sections):
+            (pointer,) = struct.unpack_from("<Q", data, s.at + 8)
+            end = data.find(b"\0", pointer + 16) if pointer else -1
+            name = data[pointer + 16:end].decode("latin-1") if pointer and 0 < pointer + 16 < len(data) and end > 0 else ""
+            word324, word328 = struct.unpack_from("<II", data, s.at + 324)
+            out.append(f"    section {n}: {s.triangle_count} triangles, {s.vertex_count} vertices, material {name!r}, "
+                       f"+324 {word324:#010x}, +328 {word328}, +332 {struct.unpack_from('<f', data, s.at + AREA_OFFSET)[0]:.4g}, "
+                       f"key {section_key(data, s):#018x}, strides {s.strides}")
+    return out
 
 
 def first_vertex(section: Section, chunk: bytes) -> list[bytes]:
