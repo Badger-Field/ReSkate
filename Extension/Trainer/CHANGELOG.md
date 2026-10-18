@@ -13,6 +13,10 @@ Built on ReSkate 2.1.0, like 0.8.0.
   grind exit triggers and Board Break show at the top of QUICK SETTINGS with what they are set to (Go to, Reset), are
   named on the MODIFIED line at the top of SANDBOX instead of STOCK, and RESET EVERYTHING turns them back. Road Rash
   and Hall of Meat only show bails and still never count.
+- **Landings on time with another gravity.** The game plans each flight's landing with its own gravity and the
+  skater's air pose reaches for the ground as that countdown runs out. Above x1 the skater came down before the
+  countdown ended, so the body sank into the ground before the wheels touched, and the landing came late and
+  stuttered (at x3 a flat ollie bailed). The countdown now follows the gravity that is set.
 
 ## v0.8.0 - 2026-10-18
 

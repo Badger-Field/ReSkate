@@ -468,10 +468,62 @@ struct AirGravity {
     std::array<std::atomic<std::uintptr_t>, 8> records{};
     std::atomic<std::uint32_t> noted{};
     std::uintptr_t held{}; // physics thread: the record whose gravity is the trainer's now
+    // The landing countdown (below), physics thread: the flight's time at this gravity, when it started, what was written last.
+    float planned{-1}, written{-1};
+    LONGLONG started{};
 };
 AirGravity& air_gravity() {
     static auto* value = new AirGravity;
     return *value;
+}
+// The landing countdown. At the start of a flight the game plans when it will land with its own gravity and counts that
+// down (the animation graph's output block [[core+0x3b8]+0x10]+0xd8, copied each tick to context +0x18c0); the skater's
+// air pose follows it, reaching for the ground as it runs out. Measured on flat ground (2026-10-18, scripted ollie): the
+// game plans 0.576 s at every gravity; at x2 the wheels touched at 0.38 s with 0.21 s still on it, the body about 34 cm
+// into the ground first; at x3 0.26 s left and a bail: the late, stuttering landing players see. So with another gravity
+// the countdown is set to the time this flight takes to come down to the height the game planned for:
+// d = v t - 9.8 t^2 / 2 at the game's planned time, solved again with the trainer's gravity.
+constexpr std::uintptr_t core_animation_offset = 0x3b8, animation_output_offset = 0x10, output_landing_countdown = 0xd8;
+constexpr std::uintptr_t context_landing_countdown = 0x18c0, flight_record_velocity = 0x1890;
+void air_gravity_countdown(AirGravity& g, std::uintptr_t core, std::uintptr_t context, std::uintptr_t record, float factor) {
+    SourceReader reader;
+    const auto animation = reader.pointer(core, core_animation_offset);
+    reader.verify();
+    if (!animation) return;
+    const auto output = reader.pointer(animation, animation_output_offset);
+    reader.verify();
+    if (!output) return;
+    const float game = reader.value<float>(output, output_landing_countdown);
+    const float up = reader.value<float>(record, flight_record_velocity + 4);
+    reader.verify();
+    if (!std::isfinite(game) || !std::isfinite(up)) return;
+    LARGE_INTEGER clock{}, rate{};
+    QueryPerformanceCounter(&clock);
+    QueryPerformanceFrequency(&rate);
+    // A new plan: the game set the countdown again (higher than what was written last, or nothing written yet).
+    if (game > 0.02f && game < 10.0f && (g.written < 0 || game > g.written + 0.05f)) {
+        const float gravity = -game_gravity * factor, drop = up * game + 0.5f * game_gravity * game * game;
+        const float root = up * up - 2.0f * gravity * drop;
+        g.planned = root >= 0 ? (up + std::sqrt(root)) / gravity : -1.0f;
+        if (!(g.planned > 0) || g.planned > 10.0f) g.planned = -1.0f;
+        g.started = clock.QuadPart;
+        g.written = -1;
+    }
+    if (!(g.planned > 0)) return;
+    // Changed by the game since (a landing, another state): this flight's plan is over.
+    if (g.written >= 0 && std::abs(game - g.written) > 0.05f) {
+        g.planned = -1.0f;
+        g.written = -1;
+        return;
+    }
+    const float left = std::max(0.0f, g.planned - static_cast<float>(clock.QuadPart - g.started) / static_cast<float>(rate.QuadPart));
+    body_write(output + output_landing_countdown, left);
+    body_write(context + context_landing_countdown, left);
+    g.written = left;
+    if (left <= 0) {
+        g.planned = -1.0f;
+        g.written = -1;
+    }
 }
 void trainer_air_gravity(std::uintptr_t core) noexcept {
     auto& g = air_gravity();
@@ -497,7 +549,10 @@ void trainer_air_gravity(std::uintptr_t core) noexcept {
             const float wanted = game_gravity * factor;
             if (now[1] != wanted) body_write(record + flight_record_gravity + 4, wanted);
             g.held = factor == 1 ? 0 : record;
-            if (factor != 1) g.steps.fetch_add(1, std::memory_order_relaxed);
+            if (factor != 1) {
+                g.steps.fetch_add(1, std::memory_order_relaxed);
+                air_gravity_countdown(g, core, bodies.context, record, factor);
+            }
             return;
         }
         g.held = 0;
