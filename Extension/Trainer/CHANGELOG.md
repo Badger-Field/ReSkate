@@ -7,7 +7,9 @@ Built on ReSkate 2.1.0, like 0.8.0.
 - **Boosts past the sliders.** On SKATER > CHEATS the forward, up and off-board up boosts take any typed number up to
   10000 (the sliders still end at 300 and 25), and Revert Boost strength up to x100 (the slider ends at x5). The
   `forwardvelocity` and `upvelocity` commands take the same.
-- **Cheats and addons count.** Noclip, No Bail, Dark Pop, a boost speed that is not the stock +20, Revert Boost, the
+- **Boosts start at 0 (off).** The forward, up and off-board up boosts started at +20, so RESET EVERYTHING could not read
+  STOCK. They now start at 0, which adds nothing until you set a speed, and RESET EVERYTHING puts them back to 0.
+- **Cheats and addons count.** Noclip, No Bail, Dark Pop, a boost with a speed above 0, Revert Boost, the
   grind exit triggers and Board Break show at the top of QUICK SETTINGS with what they are set to (Go to, Reset), are
   named on the MODIFIED line at the top of SANDBOX instead of STOCK, and RESET EVERYTHING turns them back. Road Rash
   and Hall of Meat only show bails and still never count.

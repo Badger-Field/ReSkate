@@ -716,11 +716,11 @@ void load_saved_debug(InteractiveDebug& debug) noexcept {
         if (const auto speed = saved::number(saved::flight_speed);
             speed && valid_debug_speed(*speed))
             debug.flight_speed = *speed;
-        if (const auto speed = saved::number(saved::forward_velocity); speed && *speed >= 1.0f && *speed <= velocity_boost_speed_max)
+        if (const auto speed = saved::number(saved::forward_velocity); speed && *speed >= 0.0f && *speed <= velocity_boost_speed_max)
             debug.forward_velocity_speed = *speed;
-        if (const auto speed = saved::number(saved::up_velocity); speed && *speed >= 1.0f && *speed <= velocity_boost_speed_max)
+        if (const auto speed = saved::number(saved::up_velocity); speed && *speed >= 0.0f && *speed <= velocity_boost_speed_max)
             debug.up_velocity_speed = *speed;
-        if (const auto speed = saved::number(saved::offboard_up_velocity); speed && *speed >= 1.0f && *speed <= velocity_boost_speed_max)
+        if (const auto speed = saved::number(saved::offboard_up_velocity); speed && *speed >= 0.0f && *speed <= velocity_boost_speed_max)
             debug.offboard_up_velocity_speed = *speed;
         if (const auto enabled = profile_runtime::local_preference(saved::revert_boost)) debug.revert_boost = *enabled;
         if (const auto enabled = profile_runtime::local_preference(saved::dark_pop)) debug.dark_pop = *enabled;
@@ -900,14 +900,14 @@ void debug_action(SourceTrial& trial, std::uintptr_t client, bool can_control, b
         request.action == overlay::DebugAction::set_up_velocity_speed ||
         request.action == overlay::DebugAction::set_offboard_up_velocity_speed) {
         if (request.action == overlay::DebugAction::set_offboard_up_velocity_speed) {
-            source_require(std::isfinite(request.value) && request.value >= 1.0f && request.value <= velocity_boost_speed_max,
-                "Off-board Up Boost speed must be between 1 and 10000.");
+            source_require(std::isfinite(request.value) && request.value >= 0.0f && request.value <= velocity_boost_speed_max,
+                "Off-board Up Boost speed must be between 0 (off) and 10000.");
             debug.offboard_up_velocity_speed = request.value;
             debug.status = "Off-board Up Boost speed updated.";
         } else {
             const bool up = request.action == overlay::DebugAction::set_up_velocity_speed;
-            source_require(std::isfinite(request.value) && request.value >= 1.0f && request.value <= velocity_boost_speed_max,
-                up ? "Up Boost speed must be between 1 and 10000." : "Forward Boost speed must be between 1 and 10000.");
+            source_require(std::isfinite(request.value) && request.value >= 0.0f && request.value <= velocity_boost_speed_max,
+                up ? "Up Boost speed must be between 0 (off) and 10000." : "Forward Boost speed must be between 0 (off) and 10000.");
             (up ? debug.up_velocity_speed : debug.forward_velocity_speed) = request.value;
             debug.status = up ? "Up Boost speed updated." : "Forward Boost speed updated.";
         }
@@ -1072,10 +1072,10 @@ void debug_action(SourceTrial& trial, std::uintptr_t client, bool can_control, b
         first_person_disarm();
         debug.park_editor = false;
         debug.flight_speed = 15.0f;
-        debug.forward_velocity_speed = 20.0f;
+        debug.forward_velocity_speed = 0.0f;
         debug.forward_velocity.valid = false;
-        debug.up_velocity_speed = 20.0f;
-        debug.offboard_up_velocity_speed = 20.0f;
+        debug.up_velocity_speed = 0.0f;
+        debug.offboard_up_velocity_speed = 0.0f;
         debug.up_velocity.valid = false;
         debug.offboard_up_velocity.valid = false;
         debug.no_bail = false;
@@ -1133,6 +1133,7 @@ void debug_action(SourceTrial& trial, std::uintptr_t client, bool can_control, b
             reader.value<std::array<float, 3>>(bodies.parts[0], 0x70);
         reader.verify();
         const float speed = offboard_boost ? debug.offboard_up_velocity_speed : (up ? debug.up_velocity_speed : debug.forward_velocity_speed);
+        source_require(speed > 0.0f, "This boost is 0 (off): set its speed in Skater > Cheats.");
         const auto velocity = velocity_boost_delta(transform, speed,
             up ? VelocityBoostDirection::up : VelocityBoostDirection::forward, board_velocity);
         source_require(velocity.has_value(), "Velocity boost direction or speed is invalid.");

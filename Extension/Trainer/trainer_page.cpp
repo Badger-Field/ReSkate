@@ -688,9 +688,9 @@ std::vector<CheatLine> cheat_lines(const Model &model) {
     if (debug.noclip) lines.push_back({"Noclip", {}, -1, {DebugAction::set_noclip, false}});
     if (debug.no_bail) lines.push_back({"No Bail", {}, -1, {DebugAction::set_no_bail, false}});
     if (debug.dark_pop) lines.push_back({"Dark Pop", {}, -1, {DebugAction::set_dark_pop_enabled, false}});
-    // The boosts' stock speed is 20 (InteractiveDebug).
+    // A boost's stock speed is 0: off (InteractiveDebug).
     const auto boost = [&](const char *name, float speed, DebugAction action) {
-        if (std::abs(speed - 20.0f) > 1e-3f) lines.push_back({name, std::format("+{:.1f}", speed), -1, {action, false, 20.0f}});
+        if (speed > 1e-3f) lines.push_back({name, std::format("+{:.1f}", speed), -1, {action, false, 0.0f}});
     };
     boost("Forward boost", debug.forward_velocity_speed, DebugAction::set_forward_velocity_speed);
     boost("Up boost", debug.up_velocity_speed, DebugAction::set_up_velocity_speed);
@@ -737,7 +737,7 @@ void cheat_rows(SkateMenu &menu, const CallbacksV3 &callbacks, const std::vector
         ImGui::EndDisabled();
         tip(line.off.action == DebugAction::set_forward_velocity_speed || line.off.action == DebugAction::set_up_velocity_speed ||
                     line.off.action == DebugAction::set_offboard_up_velocity_speed
-                ? "Back to the stock +20."
+                ? "Back to 0: off, as the game shipped."
                 : "Turns it off.");
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
@@ -2137,7 +2137,7 @@ void trainer_page(SkateMenu &menu, const Model &model, const CallbacksV3 &callba
         if (std::abs(speed - 1.0) > 1e-3) send_console(menu, callbacks, "reset SimulationTime.TimeScale");
     }
     tip("Puts back every value, lock, preset, dial, trick, grind, transition and bending setting, turns No Bail, Noclip, Dark Pop, Revert Boost, "
-        "grind exit triggers and Board Break off, puts the boosts back to +20, sets the "
+        "grind exit triggers and Board Break off, puts the boosts back to 0 (off), sets the "
         "game speed to normal and stops loading a preset on this map: the game exactly as it shipped. Your saved presets are kept, and so are your "
         "game's own settings.");
     ImGui::EndDisabled();

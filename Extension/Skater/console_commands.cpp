@@ -364,7 +364,7 @@ void register_movement_commands(Commands &registry) {
     dark_probe.reset = [](const Model &, const Output &) { request_debug(Debug::set_probe_enabled, false); };
     registry.add(std::move(dark_probe));
     auto boost_speed_argument = argument("speed", Type::number);
-    boost_speed_argument.minimum = 1;
+    boost_speed_argument.minimum = 0; // 0: off, the stock setting
     boost_speed_argument.maximum = dingosdk::velocity_boost_speed_max; // the menu slider ends at 300
     auto boost_speed = variable("forwardvelocity", "Velocity added along the skater's forward direction", Group::movement, boost_speed_argument);
     boost_speed.aliases = {"debug.forward_velocity_speed"};
@@ -379,7 +379,7 @@ void register_movement_commands(Commands &registry) {
         request_debug(Debug::set_forward_velocity_speed, false, static_cast<float>(std::get<double>(args[0])));
     };
     boost_speed.reset = [](const Model &, const Output &) {
-        request_debug(Debug::set_forward_velocity_speed, false, 20.0f);
+        request_debug(Debug::set_forward_velocity_speed, false, 0.0f);
     };
     registry.add(std::move(boost_speed));
     auto up_speed_argument = boost_speed_argument;
@@ -396,7 +396,7 @@ void register_movement_commands(Commands &registry) {
         request_debug(Debug::set_up_velocity_speed, false, static_cast<float>(std::get<double>(args[0])));
     };
     up_speed.reset = [](const Model &, const Output &) {
-        request_debug(Debug::set_up_velocity_speed, false, 20.0f);
+        request_debug(Debug::set_up_velocity_speed, false, 0.0f);
     };
     registry.add(std::move(up_speed));
     auto boost = action("forwardboost", "Add the configured velocity along the skater's forward direction", Group::movement);

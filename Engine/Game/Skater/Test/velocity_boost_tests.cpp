@@ -51,6 +51,7 @@ int main() {
         check(!velocity_boost_delta(transform, speed, forward), "Invalid forward speed accepted");
     check(!velocity_boost_delta(transform, 10001, up), "Invalid up speed accepted");
     check(velocity_boost_delta(transform, 500, up) && velocity_boost_delta(transform, 5000, forward), "A boost past the slider ends was refused");
+    check(!velocity_boost_delta(transform, 0, up), "A boost set to 0 (off) added velocity");
     check(!velocity_boost_delta({}, 75, forward), "Degenerate facing accepted");
     check(!velocity_boost_delta(transform, 75, forward, {0, 0, std::numeric_limits<float>::infinity()}),
         "Invalid travel velocity accepted");

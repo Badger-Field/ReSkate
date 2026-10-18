@@ -161,9 +161,10 @@ struct DebugModel {
     bool settings_owned = false;
     // ReSkate free-flight speed in world units per second.
     float camera_speed = 15.0f;
-    float forward_velocity_speed = 20.0f;
-    float up_velocity_speed = 20.0f;
-    float offboard_up_velocity_speed = 20.0f;
+    // Boost speeds; 0 is off (the stock setting).
+    float forward_velocity_speed = 0.0f;
+    float up_velocity_speed = 0.0f;
+    float offboard_up_velocity_speed = 0.0f;
     // Revert Boost: a forward speed added when the game auto reverts a landing.
     bool revert_boost = false;
     float revert_boost_speed = 1.0f; // strength multiplier

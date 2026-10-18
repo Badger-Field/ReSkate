@@ -147,11 +147,11 @@ struct InteractiveDebug {
     VelocityRequest offboard_up_velocity;
     std::uint64_t noclip_velocity_updates{}, noclip_motion_updates{};
     std::uint64_t forward_velocity_updates{};
-    float forward_velocity_speed = 20.0f;
+    float forward_velocity_speed = 0.0f; // 0: the boost is off, as the game shipped
     std::uint64_t up_velocity_updates{};
     std::uint64_t offboard_up_velocity_updates{};
-    float up_velocity_speed = 20.0f;
-    float offboard_up_velocity_speed = 20.0f;
+    float up_velocity_speed = 0.0f;
+    float offboard_up_velocity_speed = 0.0f;
     // Revert Boost (see revert_boost_tick in client_debug.cpp). Both are saved in the local profile.
     bool revert_boost{};
     float revert_boost_speed = 1.0f; // strength multiplier, revert_boost_strength_min..max
