@@ -42,11 +42,12 @@ from .ebxcheck import semantically_equal
 from .ebxedit import (add_import, after_last_of_type, clone_document, clone_instance, derived_guid, find_objects, guid_flags,
                       field_referrers, path_to, pointer_arrays, prune_imports, prune_unreachable, refresh_flags, remove_instances,
                       set_fields, type_name, used_imports)
-from .meshset import (DEPOT_TYPE, depot_keys, describe_meshset, first_vertex, read_layout as read_mesh_layout,
+from .meshset import (DEPOT_TYPE, box_geometry, depot_keys, describe_meshset, model_vertex, read_layout as read_mesh_layout,
                       section_key, write_mesh)
 from .level import (BASE_ROOT_BUNDLE, BASE_SUPERBUNDLE, LEVEL_NAME, SUBWORLD_REFERENCE_TYPE, _clone_found, _identity, _read,
                     new_level)
-from .physics import KIND_TRIANGLE_MESH, RESOURCE_TYPE as PHYSICS_TYPE, Part, compute_edge_data, flat_grid, read_physics, write_physics
+from .physics import (KIND_TRIANGLE_MESH, RESOURCE_TYPE as PHYSICS_TYPE, Part, Shape, compute_edge_data, flat_grid,
+                      read_physics, write_physics)
 
 # Names of what the level adds (EBX names; the bundle is "win32/" + the sublevel's name).
 GROUND_SUBLEVEL = "levels/game/{level}/ground_sublevel"
@@ -59,6 +60,14 @@ VISUAL_MODES = ("none", "template")
 VISUAL_OFFSET = (10.0, 0.0, 10.0)
 # --mesh own: the blueprint's mesh is replaced by a MeshSet of our own (meshset.write_mesh).
 MESH_MODES = ("template", "own")
+# --mesh-shape (with --mesh own): our plane (the collision's square); a closed box the size of the
+# template mesh's own box; or the template's own geometry and vertex bytes copied into new chunks
+# (tells a geometry problem from a plumbing one).
+MESH_SHAPES = ("plane", "box", "donor-copy")
+# --collision: "own" writes our flat square, split into as many parts as the template's .physics
+# has (each copying its part's material and words); "template" carries the template blueprint's
+# .physics unchanged under our blueprint's name.
+COLLISION_MODES = ("own", "template")
 # --asset-bundle: where the blueprint, its collision and (--mesh own) our mesh go. "ground": the new
 # ground bundle. "coregameassets": the level's copy of bam's bam_coregameassets, which keeps its
 # name (GUESS: data such as shaders is found per bundle name; the 333 map adds 1,251 of its own
@@ -261,6 +270,26 @@ def _closure(source: _Source, roots: list[Guid], skip: set[str], log: list[str])
     return copied
 
 
+def _strips(size: float, n: int) -> list:
+    """The flat square of `size` metres split into n strips along z (one shape each), GRID_CELL cells."""
+    if n == 1:
+        return [flat_grid(size, GRID_CELL)]
+    cells = max(n, round(size / GRID_CELL))
+    rows = [round(cells * k / n) for k in range(n + 1)]
+    step, half = size / cells, size / 2
+    out = []
+    for a, b in zip(rows, rows[1:]):
+        across = max(1, round(size / GRID_CELL))
+        vertices = [(i * size / across - half, 0.0, (a + j) * step - half) for j in range(b - a + 1) for i in range(across + 1)]
+        triangles = []
+        for j in range(b - a):
+            for i in range(across):
+                p = j * (across + 1) + i
+                triangles += [(p, p + across + 1, p + 1), (p + 1, p + across + 1, p + across + 2)]
+        out.append(Shape(vertices, triangles))
+    return out
+
+
 def _meshset_keys(data: bytes) -> list[int]:
     """Each section's shader-block key, LOD by LOD (empty when the MeshSet is not a rigid one)."""
     try:
@@ -371,13 +400,18 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                      tiles: int = 1, log: list[str] | None = None, blueprint_superbundle: str = BASE_SUPERBUNDLE,
                      visual: str = "none", mesh: str = "template", asset_bundle: str = "ground",
                      collision=None, shader_from: str | None = None,
-                     props: list[tuple[str, tuple[float, float, float]]] = ()) -> list[str]:
+                     props: list[tuple[str, tuple[float, float, float]]] = (), keep_section: int | None = None,
+                     mesh_shape: str = "plane", collision_mode: str = "own") -> list[str]:
     """Adds a level whose content is our own ground to `mod` (see the module's text). Appends a
     report to `log` (also when it refuses) and returns it.
 
     `collision(template_part) -> (shapes, parts, label)`, when given, replaces the flat square
     (new-place-level: a real place's collision chunks, place.py); the shapes are in the
     placement's frame, as the square is."""
+    if mesh_shape not in MESH_SHAPES or collision_mode not in COLLISION_MODES:
+        raise ValueError(f"--mesh-shape is one of {MESH_SHAPES}, --collision one of {COLLISION_MODES}")
+    if collision is not None and collision_mode != "own":
+        raise ValueError("a place brings its own collision; --collision template is for new-ground-level")
     if shader_from and mesh != "own":
         raise ValueError("--shader-from gives our own mesh (--mesh own) a stock shader; add --mesh own")
     if collision is not None and mesh == "own":
@@ -515,13 +549,20 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                 raise ValueError(f"--shader-from: {donor_mesh} LOD 0 has {len(donor_lod.sections)} sections")
             section = donor_lod.sections[index]
             donor_chunk = _chunk_payload(game, root_source, donor_lod.chunk)
-            donor = (donor_data[section.at:section.at + 384], first_vertex(section, donor_chunk))
+            donor = (donor_data[section.at:section.at + 384], model_vertex(donor_lod, section, donor_chunk)[0])
             log.append(f"  --shader-from {donor_mesh} section {index} (of {len(donor_lod.sections)}): key "
                        f"{struct.unpack_from('<Q', donor_data, section.at + 0x138)[0]:#018x}, "
                        f"{'in' if struct.unpack_from('<Q', donor_data, section.at + 0x138)[0] in target_keys else 'NOT in'}"
                        f" the depots our mesh's bundle has")
-        new_ms, new_chunks, lines = write_mesh(ms_data, chunk_data, grid_mesh.vertices, grid_mesh.triangles, chunk_guids,
-                                               donor)
+        if mesh_shape == "box":
+            box_lo = struct.unpack_from("<3f", ms_data, 0x10)
+            box_hi = struct.unpack_from("<3f", ms_data, 0x20)
+            geometry = box_geometry(box_lo, box_hi)
+            log.append(f"  --mesh-shape box: a closed box {[round(v, 2) for v in box_lo]}..{[round(v, 2) for v in box_hi]}")
+        else:
+            geometry = (grid_mesh.vertices, grid_mesh.triangles)
+        new_ms, new_chunks, lines = write_mesh(ms_data, chunk_data, geometry[0], geometry[1], chunk_guids, donor,
+                                               keep_section, mesh_shape == "donor-copy")
         mesh_new = clone_document(mesh_old, derived_guid(level, "ground_mesh", mesh_old.file_guid.string()),
                                   level + ":ground_mesh")
         refresh_flags(mesh_old, mesh_new)
@@ -560,21 +601,28 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
     shapes, parts, version = read_physics(bp_source.payload("res", physics_index))
     template_part = next((p for p in parts if p.shape >= 0 and p.kind == KIND_TRIANGLE_MESH),
                          next((p for p in parts if p.shape >= 0), parts[0] if parts else Part(0)))
-    if collision is None:
-        grid = flat_grid(size, GRID_CELL)
-        new_shapes = [grid]
-        new_parts = [Part(0, (0.0, 0.0, 0.0) if PHYSICS_IN_OBJECT_SPACE else tuple(at), (0.0, 0.0, 0.0, 1.0), 1.0,
-                          template_part.material, KIND_TRIANGLE_MESH, template_part.hashes, 0, template_part.float_30,
-                          0, template_part.word_3c, template_part.word_44)]
-        what = "one part"
+    if collision_mode == "template":
+        physics = bp_source.payload("res", physics_index)
+        new_shapes, new_parts = shapes, parts
+        what = "the template's own .physics, unchanged"
     else:
-        new_shapes, new_parts, what = collision(template_part)
-    compute_edge_data(new_shapes, new_parts)
-    physics = write_physics(new_shapes, new_parts, 2)
-    back_shapes, back_parts, back_version = read_physics(physics)
-    if (back_version != 2 or len(back_shapes) != len(new_shapes) or len(back_parts) != len(new_parts)
-            or any(a.triangles != b.triangles for a, b in zip(back_shapes, new_shapes))):
-        raise ValueError("the collision written does not read back")
+        if collision is None:
+            shaped = [p for p in parts if p.shape >= 0] or [template_part]
+            new_shapes = _strips(size, len(shaped))
+            new_parts = [Part(i, (0.0, 0.0, 0.0) if PHYSICS_IN_OBJECT_SPACE else tuple(at), (0.0, 0.0, 0.0, 1.0), 1.0,
+                              p.material, KIND_TRIANGLE_MESH, p.hashes, 0, p.float_30,
+                              p.word_34 if len(shaped) > 1 else 0, p.word_3c, p.word_44) for i, p in enumerate(shaped)]
+            what = ("one part" if len(shaped) == 1 else
+                    f"{len(shaped)} parts as the template has (strips of the square, materials "
+                    f"{[f'{p.material:#x}' for p in shaped]})")
+        else:
+            new_shapes, new_parts, what = collision(template_part)
+        compute_edge_data(new_shapes, new_parts)
+        physics = write_physics(new_shapes, new_parts, 2)
+        back_shapes, back_parts, back_version = read_physics(physics)
+        if (back_version != 2 or len(back_shapes) != len(new_shapes) or len(back_parts) != len(new_parts)
+                or any(a.triangles != b.triangles for a, b in zip(back_shapes, new_shapes))):
+            raise ValueError("the collision written does not read back")
     template_box = ""
     if shapes:
         world = [template_part.to_world(v) for v in shapes[max(template_part.shape, 0)].vertices]

@@ -19,6 +19,7 @@
         [--at X Y Z] [--mirror] [--bam 333|no-world|all] [--asset-bundle ...] [--dry-run]
   python -m reskate_mapbuilder mesh-refs --game <dir> [--mod <mod dir>] --superbundle S --bundle B --mesh EBX \\
         [--scan SUPERBUNDLE:BUNDLE ...] [--level <name>]
+  python -m reskate_mapbuilder meshset-diff --game <dir> [--mod-a M] --a S:BUNDLE:RES [--mod-b M] --b S:BUNDLE:RES
   python -m reskate_mapbuilder list-assets --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] [--contains TEXT]
   python -m reskate_mapbuilder ebx-roundtrip --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME [--detail [N]]
   python -m reskate_mapbuilder ebx-arrayhash --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME
@@ -31,17 +32,18 @@ FORMAT-NOTES 2.3, zeroes their tree nodes, and writes a one-resource override mo
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 
 from .ebx import read_document
 from .ebxcheck import array_hash_report, roundtrip
 from .ebxedit import describe
 from .game import Game
-from .ground import ASSET_BUNDLES, BAM_MODES, MESH_MODES, VISUAL_MODES, BLUEPRINT_BUNDLE, BLUEPRINT_TEMPLATE, DEFAULT_AT, DEFAULT_SIZE, TILE_TEMPLATE, new_ground_level
+from .ground import ASSET_BUNDLES, BAM_MODES, COLLISION_MODES, MESH_MODES, MESH_SHAPES, VISUAL_MODES, BLUEPRINT_BUNDLE, BLUEPRINT_TEMPLATE, DEFAULT_AT, DEFAULT_SIZE, TILE_TEMPLATE, new_ground_level
 from .level import BASE_SUPERBUNDLE, new_level
 from .meshrefs import mesh_refs
 from .place import PlaceError, check_spots, collision as place_collision, read_place, summary as place_summary
-from .meshset import describe_meshset
+from .meshset import describe_meshset, diff_meshsets
 from .mod import ModBuilder
 from .physics import (KIND_TRIANGLE_MESH, Shape, compute_edge_data, physics_tail, read_physics, replace_shape,
                       write_physics)
@@ -153,7 +155,8 @@ def new_ground_level_command(args, place=None):
                          args.tile_template, args.layer_template, args.layer_bundle, args.blueprint_template,
                          args.blueprint_bundle, grid if grid is not None else 1, log, args.blueprint_superbundle,
                          args.visual, args.mesh, args.asset_bundle, collision if place is not None else None,
-                         getattr(args, "shader_from", None), _props(args))
+                         getattr(args, "shader_from", None), _props(args), getattr(args, "keep_section", None),
+                         getattr(args, "mesh_shape", "plane"), getattr(args, "collision", "own"))
     finally:
         for line in log:
             print(line)
@@ -173,18 +176,22 @@ def new_ground_level_command(args, place=None):
     print(f"wrote {mod.write(args.mods)}")
 
 
+def _xyz(tokens, label: str) -> tuple[float, float, float]:
+    """Three numbers from argv tokens: "X,Y,Z", "X;Y;Z", "X Y Z" in one token, or three tokens
+    (PowerShell passes 1,2,3 as three)."""
+    parts = [t for t in re.split(r"[\s,;]+", " ".join(tokens if isinstance(tokens, list) else [tokens])) if t]
+    try:
+        x, y, z = (float(t) for t in parts)
+    except ValueError:
+        sys.exit(f"{label} {' '.join(tokens) if isinstance(tokens, list) else tokens!r}: give three numbers X Y Z")
+    return x, y, z
+
+
 def _props(args) -> list:
-    names, places = args.prop or [], args.prop_at or []
+    names, places = getattr(args, "prop", None) or [], getattr(args, "prop_at", None) or []
     if len(names) != len(places):
         sys.exit("give one --prop-at X,Y,Z for each --prop")
-    out = []
-    for name, where in zip(names, places):
-        try:
-            x, y, z = (float(c) for c in where.split(","))
-        except ValueError:
-            sys.exit(f"--prop-at {where!r}: give X,Y,Z")
-        out.append((name, (x, y, z)))
-    return out
+    return [(name, _xyz(where, "--prop-at")) for name, where in zip(names, places)]
 
 
 def new_place_level_command(args):
@@ -239,6 +246,27 @@ def inspect_meshset(args):
     sys.exit(f"resource {args.resource} not in {args.bundle}")
 
 
+def _resource_bytes(game, spec: str) -> bytes:
+    superbundle, bundle, resource = (spec.split(":", 2) + ["", ""])[:3]
+    if not resource:
+        sys.exit(f"{spec!r}: give SUPERBUNDLE:BUNDLE:RESOURCE")
+    _, region, manifest = game.bundle(game.superbundle(superbundle), bundle)
+    for i, asset in enumerate(manifest.resources):
+        if asset.name.lower() == resource.lower():
+            return game.payload(region, (0 if region.inline_manifest else 1) + len(manifest.ebx) + i)
+    sys.exit(f"resource {resource} not in {bundle}")
+
+
+def meshset_diff(args):
+    """Field-by-field differences of two MeshSets (read-only)."""
+    a = _resource_bytes(Game(args.game, args.mod_a), args.a)
+    b = _resource_bytes(Game(args.game, args.mod_b), args.b)
+    print(f"A {args.a}" + (f" (mod {args.mod_a})" if args.mod_a else ""))
+    print(f"B {args.b}" + (f" (mod {args.mod_b})" if args.mod_b else ""))
+    for line in diff_meshsets(a, b):
+        print(line)
+
+
 def mesh_refs_command(args):
     """What a RigidMeshAsset and its MeshSet refer to and where it resolves (read-only)."""
     game = Game(args.game, args.mod)
@@ -290,7 +318,8 @@ def _template_options(p):
                    help="template: also keep the layer's own placement of its own blueprint, beside ours")
     p.add_argument("--prop", action="append", metavar="BLUEPRINT",
                    help="a stock blueprint of bam's root bundle placed as it is (repeatable; pair with --prop-at)")
-    p.add_argument("--prop-at", action="append", metavar="X,Y,Z", help="where the matching --prop goes, in the game")
+    p.add_argument("--prop-at", action="append", nargs="+", metavar="X,Y,Z",
+                   help="where the matching --prop goes, in the game: X,Y,Z or X;Y;Z or X Y Z (PowerShell splits commas)")
 
 
 def main(argv=None):
@@ -326,8 +355,8 @@ def main(argv=None):
     p.add_argument("--size", type=float, default=DEFAULT_SIZE,
                    help="side of each placement's square collision, and their spacing, metres")
     p.add_argument("--tiles", type=int, default=1, dest="grid", help="N: an N x N grid of placements")
-    p.add_argument("--at", type=float, nargs=3, default=list(DEFAULT_AT), metavar=("X", "Y", "Z"),
-                   help="where the ground's centre is placed")
+    p.add_argument("--at", nargs="+", metavar="X Y Z", help="where the ground's centre is placed: X Y Z, X,Y,Z "
+                   f"or X;Y;Z (default {' '.join(str(c) for c in DEFAULT_AT)})")
     p.add_argument("--bam", choices=sorted(BAM_MODES), default="all",
                    help="which of bam's bundles the level lists: all (as new-level), no-world (without bam's "
                         "world-partition tiles), 333 (the 42 the 333 map carries)")
@@ -337,6 +366,14 @@ def main(argv=None):
                         "bam_coregameassets, or the level's root bundle (bam root's copy, with its shader depot)")
     p.add_argument("--mesh", choices=MESH_MODES, default="template",
                    help="own: draw a MeshSet of our own (a copy of the template's with our plane); untested")
+    p.add_argument("--keep-section", type=int, metavar="N",
+                   help="with --mesh own: each LOD of our MeshSet lists only its section N (default: all, each "
+                        "drawing our geometry)")
+    p.add_argument("--mesh-shape", choices=MESH_SHAPES, default="plane",
+                   help="with --mesh own: our square, a box the size of the template mesh, or the template's own "
+                        "geometry copied (plumbing test)")
+    p.add_argument("--collision", choices=COLLISION_MODES, default="own",
+                   help="own: our square, in as many parts as the template's .physics; template: its .physics unchanged")
     p.add_argument("--shader-from", metavar="MESH[:SECTION]",
                    help="with --mesh own: give our sections this stock mesh's (bam root bundle) shader-block key, vertex "
                         "declaration and vertex, so a stock material draws our geometry; use --asset-bundle root")
@@ -348,8 +385,9 @@ def main(argv=None):
     p.add_argument("--level", required=True, help="the level's name, e.g. dingolevel_reskate_place")
     p.add_argument("--display-name")
     p.add_argument("--tiles", required=True, help="the directory `city --level DIR` wrote (reskate-level-tiles v2)")
-    p.add_argument("--at", type=float, nargs=3, default=list(DEFAULT_AT), metavar=("X", "Y", "Z"),
-                   help="where the place's origin (its centre, at its origin elevation) goes in the game")
+    p.add_argument("--at", nargs="+", metavar="X Y Z",
+                   help="where the place's origin (its centre, at its origin elevation) goes in the game: X Y Z, X,Y,Z "
+                        f"or X;Y;Z (default {' '.join(str(c) for c in DEFAULT_AT)})")
     p.add_argument("--mirror", action="store_true", help="flip north and south (if the game shows the place mirrored)")
     p.add_argument("--bam", choices=sorted(BAM_MODES), default="333",
                    help="which of bam's bundles the level lists (default 333: an empty world)")
@@ -364,6 +402,12 @@ def main(argv=None):
     p.add_argument("--superbundle", required=True, help="path under Data/Win32 without .toc")
     p.add_argument("--bundle", required=True)
     p.add_argument("--resource", required=True)
+    p = sub.add_parser("meshset-diff", help="field-by-field differences of two MeshSets (read-only)")
+    p.add_argument("--game", required=True)
+    p.add_argument("--a", required=True, metavar="SUPERBUNDLE:BUNDLE:RESOURCE")
+    p.add_argument("--b", required=True, metavar="SUPERBUNDLE:BUNDLE:RESOURCE")
+    p.add_argument("--mod-a", help="a mod folder laid over the game when reading A")
+    p.add_argument("--mod-b", help="a mod folder laid over the game when reading B")
     p = sub.add_parser("mesh-refs", help="what a mesh refers to and where each reference resolves (read-only)")
     p.add_argument("--game", required=True)
     p.add_argument("--mod", help="a mod folder laid over the game (the 333 map, or ours with --level)")
@@ -398,10 +442,12 @@ def main(argv=None):
             p.add_argument("--detail", type=int, nargs="?", const=20, default=0, metavar="N",
                            help="also say where differing arrays (the first N, default 20) and strings are reached from")
     args = ap.parse_args(argv)
+    if hasattr(args, "at"):
+        args.at = list(_xyz(args.at, "--at")) if args.at else list(DEFAULT_AT)
     {"inspect": inspect, "raise-ground": raise_ground, "rebuild": rebuild, "new-level": new_level_command,
      "new-ground-level": new_ground_level_command, "new-place-level": new_place_level_command,
      "list-assets": list_assets, "inspect-meshset": inspect_meshset,
-     "mesh-refs": mesh_refs_command,
+     "mesh-refs": mesh_refs_command, "meshset-diff": meshset_diff,
      "dump-ebx": dump_ebx, "ebx-roundtrip": ebx_roundtrip, "ebx-arrayhash": ebx_arrayhash}[args.command](args)
 
 
