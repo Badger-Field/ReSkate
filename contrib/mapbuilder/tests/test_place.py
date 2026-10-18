@@ -624,3 +624,25 @@ def test_scan_materials_explain_prints_every_section_and_the_verdict(tmp_path, c
     main(["scan-materials", "--game", str(game_dir), "--explain", f"{FTUE}:{VISTA_BUNDLE}"])
     out = capsys.readouterr().out
     assert "bundle name has the proxy word 'vista'" in out and "auto pick: rejected: " in out
+
+
+def test_auto_building_prefers_walls_over_a_stair_mesh():
+    from reskate_mapbuilder.materials import auto_donors, building_quality
+    def section(mesh, n, material):
+        return (mesh, n, material, ["concrete"], True, [8])
+    stair = "dtn_plt_canal_04_base_a_stairselevated_02_mesh"
+    # The PC's Freedom pick: the building took a stair mesh's concrete and drew streaks up a 9 m wall.
+    assert building_quality(stair, "Concrete_Smooth_M")[0] == 0
+    assert building_quality("bld_mesh", "Brick_Wall_Red_M") == (2, "wall (brick, wall)")
+    row = {"sections": [section("a_mesh", 0, "Concrete_Poured_01_M"), section("b_mesh", 1, "Pavers_Grey_M"),
+                        section(stair, 1, "Concrete_Smooth_M"), section("bld_mesh", 0, "Concrete_Panel_M"),
+                        section("d_mesh", 0, "Wood_Accent")]}
+    assert auto_donors(row)["building"] == "bld_mesh:0"                  # plain concrete beats the stair's
+    row["sections"].append(section("w_mesh", 2, "Plaster_Wall_M"))
+    assert auto_donors(row)["building"] == "w_mesh:2"                    # a wall word beats both
+    only = {"sections": [section("a_mesh", 0, "Concrete_Poured_01_M"), section(stair, 1, "Concrete_Smooth_M"),
+                         section("d_mesh", 0, "Wood_Accent")]}
+    assert auto_donors(only)["building"] == "a_mesh:0"     # sharing concrete's section beats the stair's
+    alone = {"sections": [section(stair, 1, "Concrete_Smooth_M"), section("b_mesh", 1, "Pavers_Grey_M"),
+                          section("d_mesh", 0, "Wood_Accent")]}
+    assert auto_donors(alone)["building"] == f"{stair}:1"                # still used when nothing else is

@@ -287,6 +287,25 @@ def ground_quality(material: str) -> tuple[int, str] | None:
     return 1, f"terrain ({', '.join(terrain)})"
 
 
+# The building's walls, ranked the same way (the PC, Freedom: a concrete section of a stair mesh,
+# dtn_plt_canal_04_base_a_stairselevated_02_mesh:1, drew horizontal streaks over a 9 m wall: its
+# texture is laid out for treads): 2 a wall word in the material, 1 only stone or concrete, 0 the
+# section's mesh is a step, kerb, ledge or other small feature (used only when nothing else is).
+BUILDING_WALL = ("brick", "wall", "wll", "cladding", "facade", "plaster", "stucco")
+BUILDING_FEATURE_MESH = ("stair", "step", "tread", "ramp", "kerb", "curb", "ledge", "bench", "planter", "rail",
+                         "bank", "manualpad")
+
+
+def building_quality(mesh: str, material: str) -> tuple[int, str]:
+    """(rank, reason) of a section as the building's walls (BUILDING_WALL, BUILDING_FEATURE_MESH)."""
+    base = mesh.lower().rsplit("/", 1)[-1]           # mesh names run words together (stairselevated)
+    feature = sorted(w for w in BUILDING_FEATURE_MESH if w in base)
+    if feature:
+        return 0, f"its mesh is a feature ({', '.join(feature)})"
+    wall = [w for w in BUILDING_WALL if w in material_words(material)]
+    return (2, f"wall ({', '.join(wall)})") if wall else (1, "plain stone or concrete")
+
+
 def ground_candidates(row: dict, taken: set | None = None) -> list[tuple[int, str, tuple]]:
     """The usable sections that could be the ground, best first: (rank, reason, section)."""
     out = []
@@ -316,6 +335,9 @@ def auto_donors(row: dict) -> dict[str, str]:
                 taken_materials.add(pick[2].lower())
             continue
         matches = [s for word in words for s in usable if word in material_words(s[2])]
+        if label == "building" and matches:                      # walls first, a stair's tread texture last
+            best = max(building_quality(s[0], s[2])[0] for s in matches)
+            matches = [s for s in matches if building_quality(s[0], s[2])[0] == best]
         if distinct:
             matches = [s for s in matches if (s[0], s[1]) not in taken_sections]
         if not matches:
