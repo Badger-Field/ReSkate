@@ -995,17 +995,23 @@ before 4d23295 our util_groundplane-based runs used util_groundplane's own colli
 still imported the original `.physics` EBX, or found the original by name), so they never tested
 a physics file of ours; the 4d23295 slab (box template, 3 parts, import moved) is the first.
 
-Since then every build checks our physics part count against the blueprint's `PhysicsPartInfos`
-and refuses a mismatch; the dry run lists every array of the blueprint with "Part" in its name.
-`--parts merge` (the default for new-place-level) merges the chunks into as many parts as the
-blueprint declares, one shape each (a part names one shape; a shape holds up to 21,845 triangles
+Since then every build checks our physics part count against the template's own `.physics` part
+count and refuses a mismatch; the dry run lists every array of the blueprint with "Part" in its
+name and `PhysicsPartInfos`' entries. (A first version compared against the length of
+`PhysicsPartInfos` and refused the visuals at 89109ff: the real skatepark box declares one entry
+over its 3-part file, and our 3-part file under its copy worked, so that length is not the part
+count; util_groundplane declares one over a 1-part file, and 38 parts there gave no collision.
+What an entry holds is printed to find out what it counts.) `--parts merge` (the default for
+new-place-level) merges the chunks into as many parts as the template's `.physics` has, one shape
+each (a part names one shape; a shape holds up to 21,845 triangles
 in 16-bit counts, shapes of 466 faces with zeroed trees held the skater, 2.5): by part kind when
 there are exactly that many kinds (ground, bench, steps for the box's 3), otherwise in strips along
 x; vertices equal to the last bit are shared. With util_groundplane: one shape of 5,284 triangles
 and 2,803 vertices for the Embarcadero (223,152 bytes). Materials stay per part (the part record's
 packed material; no per-triangle material is known). `--parts grow` keeps one part per chunk and
 grows `PhysicsPartInfos` and `PartBoundingBoxes` to that many entries (entry 0 copied, each box
-set to its part's); other per-part tables are only reported.
+set to its part's; untested, and not what the box's file shows); other per-part tables are only
+reported.
 
 **Tested in game** (976f955, merged into util_groundplane's one part): the Embarcadero collision
 works, every reading within 0.1 m of the printed table (299.4, 299.4, 300.2, 301.0, 300.2, 300.4,
@@ -1022,7 +1028,7 @@ layout, key and vertex), others drawing one zero-area triangle; per-vertex plana
 `--uv-per-metre` (default 1) and the closest-normal template vertex for the undecoded 4-byte
 elements; header, LOD and section boxes from the object's own vertices, padded; the blueprint's
 mesh and collision EBX imports moved to its own copies. Its collision is harmless: one 0.1 m
-triangle per template part (3 for the box, so PhysicsPartInfos matches), 500 m below the object,
+triangle per template part (3 for the box, as its own `.physics` has), 500 m below the object,
 in a `.physics` of its own; a template's own collision (`--collision template`) would put a box's
 collision at every placement, and a blueprint without physics has not been tried. `--visuals-only
 OBJECT` (name, part or name prefix) adds objects one at a time. Sizes in the Embarcadero export:
