@@ -393,6 +393,12 @@ if(DINGOSDK_BUILD_TESTS)
     target_include_directories(dingosdk_thunderstore_listing_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     target_link_libraries(dingosdk_thunderstore_listing_tests PRIVATE dingosdk_json dingosdk_miniz)
     add_test(NAME thunderstore_listing COMMAND dingosdk_thunderstore_listing_tests)
+    # One installer at a time in the Mods folder: a map download and the MODS page's installs.
+    add_executable(dingosdk_mods_writer_tests Extension/Assets/Test/mods_writer_tests.cpp)
+    target_include_directories(dingosdk_mods_writer_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    find_package(Threads REQUIRED)
+    target_link_libraries(dingosdk_mods_writer_tests PRIVATE Threads::Threads)
+    add_test(NAME mods_writer COMMAND dingosdk_mods_writer_tests)
     # The package a map comes from (Windows builds run it with the launcher's tests).
     if(NOT WIN32)
         add_executable(dingosdk_thunderstore_package_tests Engine/Vfs/Test/thunderstore_package_tests.cpp

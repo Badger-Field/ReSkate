@@ -1,6 +1,7 @@
 #include "mod_browser.h"
 #include "live_mods.h"
 #include "map_download.h"
+#include "mods_writer.h"
 #include "package_install.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Vfs/https_download.h"
@@ -255,12 +256,16 @@ bool kept(std::string_view folder, std::span<const mods::BuiltinPack> officials)
 std::string blocked() {
     if (busy()) return "Another mod is being installed.";
     if (map_download::view().stage != map_download::Stage::idle) return "A map is being downloaded for a session.";
+    if (mods_writer::claim().held()) return "Another install is finishing.";
     if (live_mods::busy()) return "Mods are being applied.";
     return {};
 }
 
 void install(const listing_::Package& package) {
     if (!blocked().empty()) return;
+    // Mods and mods.json are this install's until it ends (mods_writer.h); a map download waits.
+    if (!mods_writer::claim().try_take()) return;
+    mods_writer::Hold hold(mods_writer::claim());
     {
         std::lock_guard lock(mutex);
         if (working(stage.load())) return;
@@ -276,7 +281,7 @@ void install(const listing_::Package& package) {
     }
     try {
         // Detached, as the live merge's thread is: the game may close while a mod downloads.
-        std::thread([] {
+        std::thread([hold = std::move(hold)] {
             try { run(); } catch (...) { finish(Stage::failed, "The install could not be finished."); }
         }).detach();
     } catch (...) {
