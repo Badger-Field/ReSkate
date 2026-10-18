@@ -385,6 +385,46 @@ void install(const fs::path& mods_root, const std::string& full_name) {
     }).detach();
 }
 
+void uninstall(const fs::path& mods_root, const std::string& full_name) {
+    auto& s = shared();
+    {
+        std::lock_guard lock(s.mutex);
+        const auto found = std::find_if(s.state.mods.begin(), s.state.mods.end(), [&](const Mod& m) { return m.full_name == full_name; });
+        if (found == s.state.mods.end() || found->working || found->installed.empty() || s.state.syncing) return;
+        found->working = true;
+        found->status = "Removing";
+        ++s.installs;
+    }
+    std::thread([mods_root, full_name] {
+        auto& s = shared();
+        const auto folder = official_root(mods_root) / wide(full_name);
+        std::error_code error;
+        // The stamp first: a folder without it is no mod to the game, whatever is left of it.
+        fs::remove(folder / std::string(mods::official_stamp), error);
+        const bool gone = !error;
+        if (gone) {
+            fs::remove_all(folder, error);
+            if (error)
+                log(logging::Level::warning, std::format("Official mods: some of {} could not be deleted ({}); it is uninstalled all the same",
+                                                         full_name, error.message()));
+            (void)mods::set_official_off(mods_root, full_name, false);
+            log(logging::Level::info, "Official mods: " + full_name + " uninstalled");
+        } else {
+            log(logging::Level::warning, std::format("Official mods: {} could not be uninstalled: {}", full_name, error.message()));
+        }
+        update(full_name, [&](Mod& shown) {
+            if (gone) shown.installed.clear();
+            shown.status = gone ? status_of(shown) : "Uninstall failed: " + error.message() + " (is Skate still running?)";
+            shown.working = false;
+        });
+        {
+            std::lock_guard lock(s.mutex);
+            --s.installs;
+        }
+        s.done.notify_all();
+    }).detach();
+}
+
 State snapshot() {
     auto& s = shared();
     std::lock_guard lock(s.mutex);

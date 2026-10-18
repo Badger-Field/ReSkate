@@ -467,11 +467,12 @@ struct Standing {
     bool trouble;
 };
 Standing standing_of(const official_mods::Mod& mod) {
-    if (mod.working) return {mod.installed.empty() ? "DOWNLOADING" : "UPDATING", color::blue, false};
+    if (mod.working) return {mod.status == "Removing" ? "UNINSTALLING" : mod.installed.empty() ? "DOWNLOADING" : "UPDATING", color::blue, false};
     if (mod.status.empty()) return {"CHECKING", color::tile_grey, false};
     if (mod.status == "Up to date") return {"INSTALLED", color::good, false};
     if (mod.status == "Not installed") return {"NOT INSTALLED", color::tile_grey, false};
     if (mod.status == "Update available") return {"UPDATE AVAILABLE", color::blue, false};
+    if (mod.status.starts_with("Uninstall failed")) return {"UNINSTALL FAILED", color::warning, true};
     return {mod.installed.empty() ? "INSTALL FAILED" : "UPDATE FAILED", mod.installed.empty() ? color::danger : color::warning, true};
 }
 std::string source_text(const official_mods::State& state) {
@@ -556,7 +557,14 @@ void official_page(const Fonts& fonts, ModsPanel& panel, float height) {
         if (!facts.empty()) y += fonts.caption->FontSize + S(6);
         const float problem_y = y;
         if (const float tall = text_height(fonts.caption, wrap, problem)) y += tall + S(6);
-        const float tall = std::max(y - start.y + pad - S(6), icon + pad * 2);
+        // As tall as its text, its icon, or the buttons at its right (install or update, Thunderstore,
+        // and once installed, its folder and uninstall).
+        const bool installed = !mod.installed.empty();
+        const bool update = installed && !mod.version.empty() && mod.installed != mod.version;
+        const bool removing = mod.working && mod.status == "Removing";
+        const bool action = (!installed || update || mod.working) && !removing;
+        const int buttons = (action ? 1 : 0) + 1 + (installed ? 2 : 0);
+        const float tall = std::max({y - start.y + pad - S(6), icon + pad * 2, pad * 2 + buttons * S(40) - S(8)});
 
         card(draw, start, ImVec2(across, tall));
         mod_icon(panel, package, ImVec2(start.x + pad, start.y + pad), icon);
@@ -565,7 +573,6 @@ void official_page(const Fonts& fonts, ModsPanel& panel, float height) {
         const float title_width = fonts.bold->CalcTextSizeA(fonts.bold->FontSize, FLT_MAX, 0, mod.title.c_str()).x;
         draw->AddText(fonts.body, fonts.body->FontSize, ImVec2(text_x + title_width + S(8), title_y + S(2)), color::muted,
             ("by " + author).c_str());
-        const bool installed = !mod.installed.empty();
         float pill_x = text_x;
         if (installed && !on) {
             badge(draw, fonts, ImVec2(pill_x, pills_y), "OFF", color::tile_grey, color::text);
@@ -605,8 +612,7 @@ void official_page(const Fonts& fonts, ModsPanel& panel, float height) {
 
         // ------------------------------------------- at the right: install or update, then its page and folder
         float button_y = start.y + pad;
-        const bool update = installed && !mod.version.empty() && mod.installed != mod.version;
-        if (!installed || update || mod.working) {
+        if (action) {
             ImGui::SetCursorScreenPos(ImVec2(buttons_x, button_y));
             ImGui::BeginDisabled(mod.working || state.syncing);
             push_primary_button();
@@ -633,6 +639,13 @@ void official_page(const Fonts& fonts, ModsPanel& panel, float height) {
             ImGui::SetCursorScreenPos(ImVec2(buttons_x, button_y + S(40)));
             if (ImGui::Button("OPEN FOLDER", ImVec2(button, S(32)))) open_path(folder);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Where ReSkate keeps it");
+            ImGui::SetCursorScreenPos(ImVec2(buttons_x, button_y + S(80)));
+            ImGui::BeginDisabled(mod.working || state.syncing);
+            if (ImGui::Button(removing ? "UNINSTALLING..." : "UNINSTALL", ImVec2(button, S(32))))
+                official_mods::uninstall(panel.root, mod.full_name);
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Delete it. Its feature is gone from the game from the next time you play; Install brings it back.");
         }
 
         ImGui::SetCursorScreenPos(ImVec2(start.x, start.y + tall + S(12)));

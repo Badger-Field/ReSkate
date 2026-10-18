@@ -43,6 +43,9 @@ bool wait(std::chrono::milliseconds timeout);
 // `mods_root`, on a thread of its own; snapshot() shows how it goes. Does nothing while the list is
 // still being read or the mod is already being downloaded.
 void install(const std::filesystem::path& mods_root, const std::string& full_name);
+// Takes the installed official mod `full_name` away (its folder, and whether it was turned off), on
+// a thread of its own; it can be installed again. Does nothing while it is being downloaded.
+void uninstall(const std::filesystem::path& mods_root, const std::string& full_name);
 State snapshot();
 // Whether the Thunderstore package `full_name` is official (or retired with one): the browser
 // neither lists nor installs it.
