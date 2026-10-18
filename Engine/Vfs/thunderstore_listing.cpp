@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <optional>
 #include <stdexcept>
 
@@ -342,6 +343,39 @@ std::string one_line(std::string_view text, std::size_t most) {
     while (!out.empty() && (static_cast<unsigned char>(out.back()) & 0xc0) == 0x80) out.pop_back();
     if (!out.empty() && (static_cast<unsigned char>(out.back()) & 0x80)) out.pop_back();
     return out + "...";
+}
+
+const Package* find(std::span<const Package> packages, std::string_view full_name) {
+    const auto wanted = lower(full_name);
+    for (const auto& package : packages)
+        if (lower(package.full_name) == wanted) return &package;
+    return nullptr;
+}
+
+std::string size_text(std::uint64_t bytes) {
+    const auto text = [](double value, int decimals) {
+        char out[32]{};
+        std::snprintf(out, sizeof(out), "%.*f", decimals, value);
+        return std::string(out);
+    };
+    const auto mb = static_cast<double>(bytes) / (1024.0 * 1024.0);
+    if (mb >= 1024.0) return text(mb / 1024.0, 2) + " GB";
+    if (mb >= 1.0) return text(mb, 0) + " MB";
+    return std::to_string(std::max<std::uint64_t>(1, bytes / 1024)) + " KB";
+}
+
+std::uint64_t progress_step(std::uint64_t received, std::uint64_t total) {
+    constexpr std::uint64_t unknown_step = 16ull << 20;
+    if (!total) return received / unknown_step;
+    // (Tenths, without overflowing on a large download; at most 10.)
+    return std::min<std::uint64_t>(10, received >= total ? 10 : received / (total / 10 ? total / 10 : 1));
+}
+
+std::string row_text(const Package& package, Action action, std::string_view refused) {
+    std::string out = package.full_name + "  v" + package.version + "  " + (package.file_size ? size_text(package.file_size) : "size unknown") + "  ";
+    if (action == Action::installed) return out + "installed";
+    if (!refused.empty()) return out + "refused: " + std::string(refused);
+    return out + (action == Action::update ? "update" : "installable");
 }
 
 } // namespace dingosdk::thunderstore_listing

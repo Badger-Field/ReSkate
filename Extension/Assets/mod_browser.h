@@ -1,10 +1,12 @@
 #pragma once
 #include "Engine/Vfs/builtin_packs.h"
+#include "Engine/Vfs/mod_list.h"
 #include "Engine/Vfs/thunderstore_listing.h"
 #include <cstdint>
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // The MODS page's GET MODS card: ReSkate's Thunderstore community, searched and installed from
@@ -48,6 +50,9 @@ struct View {
     std::uint64_t received{}, total{};    // downloading; total 0 when the size is not known
     float installed{};                    // installing: how much is written, 0 to 1
     std::string message;                  // done and failed: what happened, for the player
+    // The last install's outcome, kept until the next one ends the same way: "done: ...", and
+    // "refused: ...", "cancelled: ..." or "failed: ...".
+    std::string last_result, last_error;
 };
 View view();
 // Whether ReSkate keeps the mod folder itself (thunderstore_listing.h: Kept): one of the official
@@ -58,8 +63,38 @@ bool kept(std::string_view folder, std::span<const mods::BuiltinPack> officials)
 bool busy() noexcept;
 // Why an install cannot start now (another install, a map download or an apply under way), or empty.
 std::string blocked();
-// Starts installing the package (or its update); ignored while busy.
-void install(const thunderstore_listing::Package& package);
+// What the card lists and `mods browse` prints, so the two never differ: the packages matching
+// `query` (thunderstore_listing.h: search), with what installing each does and, when it needs a
+// mod that is not installed, why it cannot be. `installed` is the Mods folder as last read, and
+// `officials` the official mods in place, both read elsewhere (this reads nothing). The rows
+// point into `listing`.
+struct Row {
+    const thunderstore_listing::Package* package{};
+    thunderstore_listing::Action action{};
+    std::string needs;
+};
+std::vector<Row> rows(const Listing& listing, std::string_view query, const mods::ModList& installed,
+                      std::span<const mods::BuiltinPack> officials);
+// Why the row's package cannot be installed now (its button is disabled with this), or empty.
+std::string refusal(const Row& row);
+// Starts installing the row's package (or its update): its button and `mods install`. Empty when
+// it has started, else why not.
+std::string install(const Row& row);
+
+// The Apply button's: applies every change to the mods waiting (live_mods.h), reloading the level
+// only when `installed` (the Mods folder as last read) changes what it shows. Not while a mod is
+// going into the Mods folder. What happened, for the player.
+std::string apply(const mods::ModList& installed);
+
+// The search, shared by the card's box and `mods browse`; the generation changes with it.
+std::string query();
+std::uint64_t query_generation() noexcept;
+void set_query(std::string text);
+// `mods browse`: the ReSkate menu opens on MODS (take_open, the menu's) with GET MODS in view
+// (take_reveal, the card's).
+void show() noexcept;
+bool take_open() noexcept;
+bool take_reveal() noexcept;
 // Stops an install that has not been written into Mods yet.
 void cancel() noexcept;
 // Forgets a done or failed install's message.

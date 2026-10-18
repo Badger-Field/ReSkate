@@ -123,6 +123,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Assets/map_download.cpp
     Extension/Assets/package_install.cpp
     Extension/Assets/mod_browser.cpp
+    Extension/Assets/mod_browser_commands.cpp
     Extension/Assets/map_icons.cpp
     Engine/Vfs/thunderstore_package.cpp
     Engine/Vfs/thunderstore_listing.cpp

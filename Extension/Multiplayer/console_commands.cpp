@@ -8,7 +8,6 @@
 #include "Extension/Throwdowns/throwdown_debug_text.h"
 #include "Extension/Throwdowns/throwdown_relay.h"
 #include "Extension/UI/NativeMenu/native_menu_dump.h"
-#include "Extension/Assets/live_mods.h"
 #include <algorithm>
 #include <array>
 
@@ -263,13 +262,5 @@ void register_multiplayer_commands(Commands &registry) {
         out(multiplayer::request_ui_dump(text, static_cast<unsigned>(seconds)));
     };
     registry.add(std::move(dump));
-    auto then = argument("reload", Type::text, true);
-    auto apply = action("mods apply", "Apply Mods/ and mods.json now; takes effect at the next level load, "
-                        "or straight away with 'reload'", Group::console, {std::move(then)});
-    apply.run = [](const Model &, const Values &values, const Output &out) {
-        const auto reload = !values.empty() && _stricmp(std::get<std::string>(values[0]).c_str(), "reload") == 0;
-        out(live_mods::apply(reload));
-    };
-    registry.add(std::move(apply));
 }
 } // namespace dingosdk::console

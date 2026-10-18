@@ -105,4 +105,16 @@ std::string refuse_contents(std::span<const std::string> files);
 // `text` as one line of printable text, cut to about `most` bytes (never inside a UTF-8 character).
 std::string one_line(std::string_view text, std::size_t most);
 
+// What the MODS page's card and the `mods` console commands share (Extension/Assets/mod_browser.h).
+// The package named Owner-Name, ignoring case, in `packages`; null when there is none.
+const Package* find(std::span<const Package> packages, std::string_view full_name);
+// A download's size as the card and the console say it: "300 KB", "12 MB", "1.50 GB".
+std::string size_text(std::uint64_t bytes);
+// How far a download is, for its log lines: the tenths of `total` received, or 16 MB steps when
+// the size is not known. A line is written each time this goes up.
+std::uint64_t progress_step(std::uint64_t received, std::uint64_t total);
+// One package as `mods browse` lists it: "Owner-Name  v1.2.3  12 MB  installable", its state one of
+// installable, update, installed, or refused: and why (`refused`, when it cannot be installed now).
+std::string row_text(const Package& package, Action action, std::string_view refused);
+
 } // namespace dingosdk::thunderstore_listing

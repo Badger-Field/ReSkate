@@ -195,6 +195,36 @@ int main() {
           "the reason names the file");
     check(!may({".png"}) && !may({"layout.toc", "Win32/.toc"}), "an ending is not a name");
 
+    // ------------------------------------------------ what the card and the `mods` commands share
+    check(ts::find(packages, "zee-desert_springs") == desert && ts::find(packages, "ZEE-DESERT_SPRINGS") == desert,
+          "`mods install` finds a package by Owner-Name, ignoring case");
+    check(!ts::find(packages, "Zee-Desert_Springs-1.10.0") && !ts::find(packages, "Desert_Springs") && !ts::find(packages, ""),
+          "and nothing by a versioned, partial or empty name");
+    check(ts::size_text(300 * 1024) == "300 KB" && ts::size_text(10) == "1 KB", "kilobytes, never zero");
+    check(ts::size_text(12ull << 20) == "12 MB" && ts::size_text(5368709120ull) == "5.00 GB" && ts::size_text(3ull << 29) == "1.50 GB",
+          "megabytes and gigabytes");
+    check(ts::progress_step(0, 1000) == 0 && ts::progress_step(99, 1000) == 0 && ts::progress_step(100, 1000) == 1 &&
+              ts::progress_step(999, 1000) == 9 && ts::progress_step(1000, 1000) == 10 && ts::progress_step(5000, 1000) == 10,
+          "a download's log steps are its tenths, at most ten");
+    check(ts::progress_step(5, 7) == 5 && ts::progress_step(7, 7) == 10, "even of a tiny one");
+    check(ts::progress_step(20ull << 30, 40ull << 30) == 5, "and of a large one, without overflowing");
+    check(ts::progress_step((16ull << 20) - 1, 0) == 0 && ts::progress_step(40ull << 20, 0) == 2, "16 MB steps when the size is not known");
+    {
+        std::uint64_t logged{}, lines{};
+        for (std::uint64_t received = 0; received <= 1000; received += 7)
+            if (const auto step = ts::progress_step(received, 1000); step > logged) logged = step, ++lines;
+        check(lines == 9, "one line each tenth as a download comes in (the tenth is the install's)");
+    }
+    if (desert) {
+        check(ts::row_text(*desert, ts::Action::install, "") == "Zee-Desert_Springs  v1.10.0  5.00 GB  installable", "a row to install");
+        check(ts::row_text(*desert, ts::Action::update, "") == "Zee-Desert_Springs  v1.10.0  5.00 GB  update", "a row to update");
+        check(ts::row_text(*desert, ts::Action::installed, "It is installed.") == "Zee-Desert_Springs  v1.10.0  5.00 GB  installed",
+              "a row installed, whatever would refuse it");
+        check(ts::row_text(*desert, ts::Action::install, "It needs X first.") == "Zee-Desert_Springs  v1.10.0  5.00 GB  refused: It needs X first.",
+              "a row refused, and why");
+    }
+    check(ts::row_text(*find("Kay-Gold_Deck"), ts::Action::install, "").find("size unknown") != std::string::npos, "a size not given");
+
     // ------------------------------------------------ one line
     check(ts::one_line("  a\n\tb  c ", 40) == "a b c", "controls and runs of spaces become one space");
     check(ts::one_line("abcdefgh", 4) == "abcd...", "cut with an ellipsis");

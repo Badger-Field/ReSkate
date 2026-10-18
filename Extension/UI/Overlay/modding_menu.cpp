@@ -399,18 +399,22 @@ void draw_installed_mods(SkateMenu& menu) {
                "other changes to game settings or the UI take effect after a restart.");
     menu::end_card();
 }
-std::string megabytes(std::uint64_t bytes) {
-    const auto mb = static_cast<double>(bytes) / (1024.0 * 1024.0);
-    return mb >= 1024.0 ? std::format("{:.2f} GB", mb / 1024.0) : mb >= 1.0 ? std::format("{:.0f} MB", mb)
-                                                                          : std::format("{} KB", std::max<std::uint64_t>(1, bytes / 1024));
-}
 // ReSkate's Thunderstore community (Extension/Assets/mod_browser.h): a search box, the packages that
 // match, and Install or Update on each. The listing is read in the background the first time the
 // card shows and kept; an install runs on a thread of its own and shows here how far it is. Once it
 // is in, the mod is switched on, and the Apply button here (the same one INSTALLED MODS has) loads it;
-// the level is never reloaded without the player asking.
+// the level is never reloaded without the player asking. The `mods` console commands drive the same
+// (Extension/Assets/mod_browser_commands.cpp).
 void draw_get_mods(SkateMenu& menu) {
+    // The search box shows the shared search, which `mods browse` sets too.
     static std::array<char, 96> query{};
+    static std::uint64_t query_seen = ~0ull;
+    if (const auto generation = mod_browser::query_generation(); generation != query_seen) {
+        query_seen = generation;
+        const auto text = mod_browser::query();
+        query.fill('\0');
+        text.copy(query.data(), std::min(text.size(), query.size() - 1));
+    }
     const auto listing = mod_browser::listing();
     const auto scanned = installed_list();
     const auto job = mod_browser::view();
@@ -422,6 +426,8 @@ void draw_get_mods(SkateMenu& menu) {
 
     const auto subtitle = !listing ? std::string("reading Thunderstore...")
                                    : std::to_string(listing->packages.size()) + " on Thunderstore";
+    // (`mods browse` opens the menu here: the card is scrolled into view.)
+    if (mod_browser::take_reveal()) ImGui::SetScrollHereY(0.f);
     menu::begin_card(menu, "get-mods", "GET MODS", subtitle.c_str());
 
     // What is being installed, or what came of it.
@@ -433,7 +439,7 @@ void draw_get_mods(SkateMenu& menu) {
         switch (job.stage) {
         case Stage::checking: status = "Looking at " + name + " on Thunderstore..."; break;
         case Stage::downloading:
-            status = "Downloading " + name + "  -  " + (job.total ? megabytes(job.received) + " of " + megabytes(job.total) : megabytes(job.received));
+            status = "Downloading " + name + "  -  " + (job.total ? thunderstore_listing::size_text(job.received) + " of " + thunderstore_listing::size_text(job.total) : thunderstore_listing::size_text(job.received));
             if (job.total) share = static_cast<float>(static_cast<double>(job.received) / static_cast<double>(job.total));
             break;
         case Stage::installing:
@@ -464,10 +470,8 @@ void draw_get_mods(SkateMenu& menu) {
             });
             if (!listed) {
                 menu::note("Reading the Mods folder...");
-            } else {
-                const auto effect = live_mods::preview(*scanned);
-                if (ImGui::Button(live_mods::apply_label(effect), ImVec2(-FLT_MIN, 0)))
-                    menu::feedback(menu, live_mods::apply(effect == live_mods::ApplyEffect::reload_level).c_str());
+            } else if (ImGui::Button(live_mods::apply_label(live_mods::preview(*scanned)), ImVec2(-FLT_MIN, 0))) {
+                menu::feedback(menu, mod_browser::apply(*scanned).c_str());
             }
         } else if (job.stage == Stage::done) {
             menu::note("It is loaded. Maps show in the map list; other changes show at the next level load.");
@@ -479,7 +483,10 @@ void draw_get_mods(SkateMenu& menu) {
     const auto& style = ImGui::GetStyle();
     const float refresh_width = ImGui::CalcTextSize("Refreshing...").x + style.FramePadding.x * 2;
     ImGui::SetNextItemWidth(std::max(menu::px(120), ImGui::GetContentRegionAvail().x - refresh_width - style.ItemSpacing.x));
-    ImGui::InputTextWithHint("##get-mods-search", "Search mods by name, author or category", query.data(), query.size());
+    if (ImGui::InputTextWithHint("##get-mods-search", "Search mods by name, author or category", query.data(), query.size())) {
+        mod_browser::set_query(query.data());
+        query_seen = mod_browser::query_generation();
+    }
     ImGui::SameLine();
     ImGui::BeginDisabled(mod_browser::reading());
     if (ImGui::Button(mod_browser::reading() ? "Refreshing...###get-mods-refresh" : "Refresh###get-mods-refresh", ImVec2(refresh_width, 0)))
@@ -495,26 +502,25 @@ void draw_get_mods(SkateMenu& menu) {
     // What matches, worked out again only when the query, the listing or what is installed changes.
     // (Official mods are the launcher's OFFICIAL tab's, as in its own browser.)
     const auto officials = scanned ? official_list(scanned->root) : nullptr;
-    const auto keeps = [officials](std::string_view folder) {
-        return mod_browser::kept(folder, officials ? std::span<const mods::BuiltinPack>(*officials) : std::span<const mods::BuiltinPack>());
-    };
-    thunderstore_listing::InstalledMods installed;
-    if (scanned)
-        for (const auto& entry : scanned->entries)
-            installed[thunderstore_listing::folder_key(entry.mod.name)] = {entry.mod.version, entry.enabled};
     static struct {
         std::shared_ptr<const mod_browser::Listing> listing;
         std::shared_ptr<const mods::ModList> scanned;
         std::shared_ptr<const std::vector<mods::BuiltinPack>> officials;
         std::string query;
-        std::vector<const thunderstore_listing::Package*> rows;
+        std::vector<mod_browser::Row> rows;
     } shown;
+    if (!scanned) {
+        menu::note("Reading the Mods folder...");
+        menu::end_card();
+        return;
+    }
     if (shown.listing != listing || shown.scanned != scanned || shown.officials != officials || shown.query != query.data()) {
         shown.listing = listing;
         shown.scanned = scanned;
         shown.officials = officials;
         shown.query = query.data();
-        shown.rows = thunderstore_listing::search(listing->packages, shown.query, installed, keeps);
+        shown.rows = mod_browser::rows(*listing, shown.query, *scanned,
+                                       officials ? std::span<const mods::BuiltinPack>(*officials) : std::span<const mods::BuiltinPack>());
     }
     const auto& rows = shown.rows;
     if (rows.empty()) {
@@ -523,7 +529,6 @@ void draw_get_mods(SkateMenu& menu) {
         return;
     }
 
-    const auto blocked = mod_browser::blocked();
     const float row_height = menu::px(66), button_width = menu::px(132), pad = menu::px(12);
     // (Each row is its height and the spacing after it, which the clipper skips rows by.)
     const float row_step = row_height + style.ItemSpacing.y;
@@ -533,7 +538,8 @@ void draw_get_mods(SkateMenu& menu) {
     clipper.Begin(static_cast<int>(rows.size()), row_step);
     while (clipper.Step())
         for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-            const auto& package = *rows[static_cast<std::size_t>(i)];
+            const auto& row = rows[static_cast<std::size_t>(i)];
+            const auto& package = *row.package;
             ImGui::PushID(package.full_name.c_str());
             const auto top = ImGui::GetCursorScreenPos();
             const float width = ImGui::GetContentRegionAvail().x;
@@ -548,7 +554,7 @@ void draw_get_mods(SkateMenu& menu) {
             ImGui::PopFont();
             std::string byline = "by " + package.owner + "  -  v" + package.version;
             for (std::size_t c = 0; c < package.categories.size() && c < 3; ++c) byline += (c ? ", " : "  -  ") + package.categories[c];
-            if (package.file_size) byline += "  -  " + megabytes(package.file_size);
+            if (package.file_size) byline += "  -  " + thunderstore_listing::size_text(package.file_size);
             ImGui::PushStyleColor(ImGuiCol_Text, skate_theme::grey_text);
             ImGui::TextUnformatted(byline.c_str());
             ImGui::TextUnformatted(package.description.c_str());
@@ -565,18 +571,16 @@ void draw_get_mods(SkateMenu& menu) {
                 ImGui::EndTooltip();
             }
             // Its action on the right.
-            const auto action = thunderstore_listing::action(package, installed);
+            const auto action = row.action;
             ImGui::SetCursorScreenPos(ImVec2(top.x + width - button_width - pad, top.y + (row_height - menu::px(4) - ImGui::GetFrameHeight()) * .5f));
             if (action == thunderstore_listing::Action::installed) {
                 menu::tag(menu, "INSTALLED", skate_theme::good);
             } else {
-                const auto missing = thunderstore_listing::missing_dependencies(package, installed, keeps);
-                const auto why = !blocked.empty() ? blocked
-                               : !missing.empty() ? "It needs " + missing.front() + " first: install it from the launcher, which brings what a mod needs."
-                                                  : std::string();
+                const auto why = mod_browser::refusal(row);
                 ImGui::BeginDisabled(!why.empty());
                 const auto label = action == thunderstore_listing::Action::update ? "Update to v" + package.version : std::string("Install");
-                if (ImGui::Button(label.c_str(), ImVec2(button_width, 0))) mod_browser::install(package);
+                if (ImGui::Button(label.c_str(), ImVec2(button_width, 0)))
+                    if (const auto refused = mod_browser::install(row); !refused.empty()) menu::feedback(menu, refused.c_str());
                 ImGui::EndDisabled();
                 if (!why.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", why.c_str());
             }
@@ -659,6 +663,10 @@ void draw_custom_scripts(SkateMenu& menu) {
     }
     menu::end_card();
 }
+}
+std::shared_ptr<const mods::ModList> mods_folder() { return installed_list(); }
+std::shared_ptr<const std::vector<mods::BuiltinPack>> official_mods(const std::filesystem::path& mods_root) {
+    return official_list(mods_root);
 }
 void draw_modding_menu(SkateMenu& menu, int tab, const Model&, const CallbacksV3&) {
     // Loose files are switched in the launcher; custom scripts only need to know
