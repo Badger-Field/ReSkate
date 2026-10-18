@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from test_level import (FTUE, LIGHTHOUSE_LOD1_CHUNK, ISLAND_BUNDLE, LIGHTHOUSE, LIGHTHOUSE_CHUNK,  # noqa: E402
                         LIGHTHOUSE_TEXTURE_CHUNK, meshset)
-from test_level import BOX, BOX_GUID, section_keys  # noqa: E402
+from test_level import BOX, BOX_CHUNK, BOX_GUID, section_keys  # noqa: E402
 from test_level import (BAM, BP_GUID, BP_ROOT_GUID, CHUNK, CORE_BUNDLE, CORE_LAYER, GROUNDPLANE, LAYER_GUID,  # noqa: E402
                         LAYER_REFERENCE_GUID, LEVEL, MESH_CHUNK, MESH_GUID, NEW, PLACEMENT_GUID, TEMPLATE_MATERIAL, TILE,
                         TILE_GUID, fake_game, genprefab, guid, ptr)
@@ -333,8 +333,10 @@ def test_mesh_own_writes_a_meshset_rigidmesh_and_chunk(tmp_path):
         assert (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]) < 0     # the template's winding
     # The other elements are the template's first vertex's.
     first = lod.sections[0]
+    # Stream 1 of vertex 0: the template's normal bytes, then our UV (x / 6, z / 6) at (-10, -10).
     assert chunk[first.vertex_start + 25 * 12:first.vertex_start + 25 * 12 + 8] == bytes([0x7F, 0xFF, 0x80, 0]) + \
-        __import__("struct").pack("<2e", 0.5, 0.25)
+        __import__("struct").pack("<2e", -10 / 6, -10 / 6)
+    assert "usage 51 format 12 (float16 x2) at +4 of stream 1" in text
 
 
 def test_write_mesh_refuses_a_chunk_it_does_not_understand():
@@ -433,7 +435,7 @@ def test_shader_from_gives_our_mesh_a_stock_material_in_the_root_bundle(tmp_path
     text = "\n".join(report)
     key = section_keys(BOX + "_mesh")[0]
     assert f"--shader-from {BOX}_mesh section 0 (of 2): key {key:#018x}, in the depots" in text
-    assert "donor section: key" in text and "elements (usage, format, offset, stream) [(1, 3, 0, 0)" in text
+    assert "donor section: key" in text and "section layout: usage 1 format 3 (float32 x3) at +0 of stream 0" in text
     assert "NOT DRAWN" not in text
     toc = read_toc((root / "Win32" / (NEW + ".toc")).read_bytes())
     _, region, manifest = view.bundle(toc, "win32/" + NEW)
@@ -465,3 +467,82 @@ def test_cli_props_on_a_place(tmp_path, capsys):
     with pytest.raises(SystemExit, match="one --prop-at"):
         main(["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles",
               str(tiles), "--prop", BOX, "--dry-run"])
+
+
+def test_coordinates_take_any_separator(tmp_path, capsys):
+    game_dir = fake_game(tmp_path / "game")
+    for at in (["1", "300", "2"], ["1,300,2"], ["1;300;2"], ["1 300 2"]):
+        main(["new-ground-level", "--game", str(game_dir), "--name", "zz-g", "--level", LEVEL, "--dry-run", "--at", *at,
+              "--prop", BOX, "--prop-at", *at])
+        out = capsys.readouterr().out
+        assert "placements of 50.0 m at [1.0, 300.0, 2.0]" in out and f"--prop {BOX} at [1.0, 300.0, 2.0]" in out
+    with pytest.raises(SystemExit, match="three numbers"):
+        main(["new-ground-level", "--game", str(game_dir), "--name", "zz-g", "--level", LEVEL, "--dry-run", "--at", "1,2"])
+
+
+def test_own_mesh_on_a_stock_blueprint_clone(tmp_path):
+    _, _, report, root, view = build(tmp_path, bam="333", mesh="own", blueprint_template=BOX, asset_bundle="root",
+                                     keep_section=0, collision_mode="template", size=20.0)
+    text = "\n".join(report)
+    assert "boxes found in the structs: section +332" in text and "LOD 0: keeps section 0 of 2" in text
+    assert "the template's own .physics, unchanged" in text and "NOT DRAWN" not in text
+    toc = read_toc((root / "Win32" / (NEW + ".toc")).read_bytes())
+    _, region, manifest = view.bundle(toc, "win32/" + NEW)
+    mesh_name = f"levels/game/{LEVEL}/ground_mesh"
+    resources = {a.name: 1 + len(manifest.ebx) + i for i, a in enumerate(manifest.resources)}
+    ms = view.payload(region, resources[mesh_name])
+    lod = read_layout(ms)[0]
+    assert len(lod.sections) == 1 and int.from_bytes(ms[182:184], "little") == 1
+    section = lod.sections[0]
+    assert int.from_bytes(ms[section.at + 0x138:section.at + 0x140], "little") == section_keys(BOX + "_mesh")[0]
+    unpack = __import__("struct").unpack_from
+    assert unpack("<3f", ms, section.at + 332) == (-10.0, 0.0, -10.0)       # the section's box, ours now
+    assert unpack("<3f", ms, section.at + 348) == (10.0, 0.0, 10.0)
+    assert unpack("<3f", ms, 0x10) == (-10.0, 0.0, -10.0)
+    box_physics = Game(view.root).bundle(Game(view.root).superbundle(BAM), "win32/" + BAM)
+    physics = view.payload(region, resources[PHYSICS])
+    _, base_region, base_manifest = box_physics
+    base = next(1 + len(base_manifest.ebx) + i for i, a in enumerate(base_manifest.resources) if a.name == BOX + ".physics")
+    assert physics == Game(view.root).payload(base_region, base)           # the template's own collision
+    bp = read_document(view.ebx(region, manifest, BLUEPRINT))
+    assert bp.imports[0].file_guid != guid(121)                              # its mesh import moved to ours
+
+
+def test_own_collision_takes_the_templates_part_count(tmp_path):
+    _, _, report, root, view = build(tmp_path, bam="333", blueprint_template=BOX, asset_bundle="root")
+    assert any("3 parts as the template has (strips of the square, materials ['0x10e0', '0x10e0', '0x10e0'])" in line
+               for line in report)
+    toc = read_toc((root / "Win32" / (NEW + ".toc")).read_bytes())
+    _, region, manifest = view.bundle(toc, "win32/" + NEW)
+    index = next(1 + len(manifest.ebx) + i for i, a in enumerate(manifest.resources) if a.name == PHYSICS)
+    shapes, parts, _ = read_physics(view.payload(region, index))
+    assert len(shapes) == 3 and [p.word_34 for p in parts] == [0, 1, 2]
+    zs = sorted({v[2] for s in shapes for v in s.vertices})
+    assert zs[0] == -25 and zs[-1] == 25
+
+
+def test_mesh_shapes_box_and_donor_copy(tmp_path):
+    _, _, report, _, _ = build(tmp_path / "a", mesh="own", blueprint_template=BOX, asset_bundle="root",
+                               mesh_shape="box", keep_section=0)
+    assert any("--mesh-shape box: a closed box [-25.0, 0.0, -25.0]..[25.0, 0.0, 25.0]" in line for line in report)
+    assert any("ours: 24 vertices, 12 triangles per section" in line for line in report)
+    _, _, report, root, view = build(tmp_path / "b", mesh="own", blueprint_template=BOX, asset_bundle="root",
+                                     mesh_shape="donor-copy")
+    assert any("copy of the template's own geometry" in line for line in report)
+    toc = read_toc((root / "Win32" / (NEW + ".toc")).read_bytes())
+    _, region, manifest = view.bundle(toc, "win32/" + NEW)
+    ours = manifest.chunks[-1]
+    assert ours.guid != BOX_CHUNK
+    from test_level import meshset as fixture_meshset
+    chunk_index = 1 + len(manifest.ebx) + len(manifest.resources) + len(manifest.chunks) - 1
+    assert view.payload(region, chunk_index) == fixture_meshset(BOX_CHUNK, BOX + "_mesh")[1]
+
+
+def test_meshset_diff_prints_the_fields_that_differ(tmp_path, capsys):
+    _, _, _, root, _ = build(tmp_path, bam="333", mesh="own", blueprint_template=BOX, asset_bundle="root",
+                             keep_section=0, size=20.0)
+    main(["meshset-diff", "--game", str(tmp_path / "game"), "--mod-a", str(root),
+          "--a", f"{NEW}:win32/{NEW}:levels/game/{LEVEL}/ground_mesh", "--b", f"{BAM}:win32/{BAM}:{BOX}_mesh"])
+    out = capsys.readouterr().out
+    assert "header +16 box min" in out and "LOD 0 +116 chunk GUID" in out and "LOD 0 +8 section count" in out
+    assert "LOD 0: sections 1 vs 2" in out and "LOD 0 section 0 +32 triangle count" in out
