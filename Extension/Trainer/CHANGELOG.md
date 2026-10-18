@@ -8,6 +8,14 @@ Built on ReSkate 2.1.0.
   and MAP & HUD, and works in the full screen menu made for a controller. Its own MOVEMENT tab is gone: Noclip, No
   Bail, the boosts and Revert Boost are on SKATER > CHEATS, Hall of Meat, Road Rash, Board Break and the grind exits on
   ADDONS. `trainer open movement` opens SKATER > CHEATS.
+- **Type any number, past any slider.** Every value has a box beside its slider, in the window and in the full screen
+  menu: type a number and press Enter. A slider's ends are no longer a limit for a typed number (game speed, return
+  delay, gravity 0.001 to 1000, flip speed to 1000, pump power and the bending boost to a million, the transition and
+  grind numbers, the bending rules).
+- **Slide or step in the full screen menu.** A click on a value still steps it (left half down, right half up); press
+  and move left or right to slide it. The controller works as before and skips the number boxes.
+- **Every value says what it is.** The 74 named values that had no explanation have one; hover a name (or select it
+  with the controller, in the bottom bar) to read it. Values under EVERY VALUE without one say what they belong to.
 - **Hardcore** (ReSkate's own preset, from 2.1.0) is beside Realistic under WHOLE GAME. Skate 3 on Hardcore keeps its
   name, "Skate 3 Hardcore".
 - **Board Break's wear and the trainer leave each other alone.** A worn board steers and rolls softer through four of
