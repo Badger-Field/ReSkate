@@ -1,4 +1,5 @@
 #include "session_internal.h"
+#include "Engine/Core/Platform/path_text.h"
 #include "Extension/Multiplayer/Steam/steam_social.h"
 #include "Extension/Multiplayer/Hud/native_indicators.h"
 #include "Extension/Multiplayer/Hud/native_player_ui.h"
@@ -31,6 +32,11 @@ void apply_distances(Session &s, const MultiplayerDistances &distances) {
 void apply_object_limit(Session &s, unsigned limit) {
     s.object_limit = limit;
     set_lobby_object_limit(s.mode == Mode::host || (s.role_permissions & role_objects) ? 0 : limit);
+}
+void apply_object_scaling(Session &s, bool allowed) {
+    s.object_scaling = allowed;
+    // As the menus see it (session_view.cpp): the host, and a role that may always build, are exempt.
+    set_lobby_object_scaling_allowed(allowed || s.mode != Mode::join || (s.role_permissions & role_objects));
 }
 void apply_object_placement(Session &s, ObjectPlacement policy) {
     s.object_placement = policy;
@@ -436,11 +442,11 @@ std::string start_pose_dump(Session &s, std::string_view argument) {
     s.pose_dump.close();
     s.pose_dump.clear();
     s.pose_dump.open(file, std::ios::binary | std::ios::trunc);
-    if (!s.pose_dump) return "Could not write " + file.string() + ".";
+    if (!s.pose_dump) return "Could not write " + path_utf8(file) + ".";
     s.pose_dump.write("RSPD1\n", 6);
     s.pose_dump_until = now_us() + static_cast<std::uint64_t>(seconds) * 1000000;
     s.pose_dump_count = 0;
-    return "Recording your poses for " + std::to_string(seconds) + " s to " + file.string() + ". Skate as you normally would.";
+    return "Recording your poses for " + std::to_string(seconds) + " s to " + path_utf8(file) + ". Skate as you normally would.";
 }
 std::string edit_direct_connections(Session &s, std::string_view argument) {
     const auto enabled = parse_switch(argument, s.prefer_direct);

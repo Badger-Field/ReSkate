@@ -59,6 +59,8 @@ void read_model(void*, dingosdk::overlay::Model& output) {
     output.engine_settings = std::move(settings);
     output.console_log.clear();
     output.menu_scale = dingosdk::profile_runtime::local_menu_scale();
+    output.menu_scale_fullscreen = dingosdk::profile_runtime::local_menu_scale(true);
+    output.menu_fullscreen = dingosdk::profile_runtime::local_menu_fullscreen();
     // Offline with the networking library, players host and join by code without Steam.
     output.steam_offline = dingosdk::launcher::offline_mode() && !dingosdk::multiplayer::direct_play_installed();
     output.multiplayer=dingosdk::multiplayer::model();
