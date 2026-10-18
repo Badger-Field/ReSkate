@@ -320,3 +320,10 @@ def test_material_donors_lists_sections_and_proposes_defaults(tmp_path, capsys):
     assert f"{GROUNDPLANE}_mesh:0  material '{GROUNDPLANE}_mesh'" in out and "class ['ground']" in out
     assert "(not usable" in out                                     # the shadow-like section without TexCoord0
     assert f"  --material-donor ground={GROUNDPLANE}_mesh:0" in out and "wood: no candidate" in out
+
+
+def test_a_merge_too_big_for_one_shape_is_refused_with_a_way_out():
+    from reskate_mapbuilder.place import Piece, merge
+    vertices, triangles = grid(0, 0, 150, 105)                     # 22,050 triangles
+    with pytest.raises(PlaceError, match="22050 triangles and 11236 vertices do not fit one shape.*more collision parts"):
+        merge([Piece((0, 0), "ground", "collision", "ground", "ground", vertices, triangles)])
