@@ -1,5 +1,6 @@
 #include "map_download.h"
 #include "live_mods.h"
+#include "package_install.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Vfs/https_download.h"
 #include "Engine/Vfs/mod_catalog.h"
@@ -262,29 +263,12 @@ void fetch() {
     try {
         if (!continuing()) return;
         if (!off) {
-            wchar_t temp[MAX_PATH + 1]{};
-            const auto length = GetTempPathW(MAX_PATH, temp);
-            const auto archive = fs::path(length ? std::wstring(temp, length) : L".") /
-                (L"ReSkate-map-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::wstring(folder.begin(), folder.end()) + L".zip");
-            std::error_code error;
-            fs::remove(archive, error);
-            watch.received.store(0);
-            watch.total.store(0);
-            // (The session's deadline is not the download's: only its own time limit stops it.)
-            const auto download = [&](const std::string& selected) {
-                watch.deadline_us.store(0);
-                return https::get(package::download_url(name, selected), archive, largest_download, download_seconds, agent, &watch);
-            };
-            auto result = download(get);
-            // The host's version can be gone from Thunderstore: the newest is the same map.
-            if (!update && !result.ok && result.http_status == 404 && get != fallback && !watch.cancel.load()) {
-                fs::remove(archive, error);
-                logging::log(logging::Level::info, logging::Channel::assets,
-                    "Map download: {} {} is not on Thunderstore any more; getting {}.", folder, get, fallback);
-                result = download(fallback);
-            }
+            const package_install::Archive archive(folder);
+            // (The host's version can be gone from Thunderstore: the newest is the same map. Not
+            // so for an update, which is wanted at the host's version only.)
+            const auto result = package_install::download(name, get, update ? std::string() : fallback, archive,
+                                                          largest_download, download_seconds, watch).result;
             if (!result.ok) {
-                fs::remove(archive, error);
                 if (!continuing()) return;
                 if (result.error == ERROR_TIMEOUT || result.error == ERROR_WINHTTP_TIMEOUT)
                     return fail("The download timed out. Please try joining the server again.", true);
@@ -292,23 +276,18 @@ void fetch() {
                     ? "The download failed (Thunderstore answered " + std::to_string(result.http_status) + ")."
                     : "The download failed (Windows error " + std::to_string(result.error) + ").");
             }
-            if (!advance(Stage::downloading, Stage::installing)) {
-                fs::remove(archive, error);
-                return;
-            }
+            if (!advance(Stage::downloading, Stage::installing)) return;
             try {
                 // (In the installed one's place when it is the same map at another version. The
                 // game may hold the old one's files open when it was skated this run: then it
                 // cannot be replaced until the game is closed.)
-                launcher_mods::install(root, archive, update, [](float) { continuing(); }, stop_install, {folder, name.owner, true});
+                package_install::install(archive, name, update, [](float) { continuing(); }, stop_install);
             } catch (const std::exception& failure) {
-                fs::remove(archive, error);
                 if (!continuing()) return;
                 return fail(update ? std::string("It could not be replaced while the game runs (") + failure.what() +
                                          "). Close the game, update it from the launcher and join again."
                                    : std::string("It could not be installed: ") + failure.what());
             }
-            fs::remove(archive, error);
             if (!continuing()) return;
             {
                 std::lock_guard known(known_mutex);

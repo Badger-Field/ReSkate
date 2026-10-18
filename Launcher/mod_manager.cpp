@@ -146,6 +146,15 @@ std::string mod_name(const Root& root, const std::string& source_name, const Ins
     return folder_name(root.folder.empty() ? without_version(source_name) : last_folder(root.folder));
 }
 
+// What the caller is asked about before anything is written: every file that would be installed.
+void check_accepted(const Root& root, const std::vector<std::string>& files, const InstallOptions& options) {
+    if (!options.accept) return;
+    std::vector<std::string> installed;
+    for (const auto& file : files)
+        if (auto relative = relative_in_mod(root, files, file)) installed.push_back(std::move(*relative));
+    if (auto refused = options.accept(installed); !refused.empty()) fail(refused);
+}
+
 // Last steps in staging: a source that gives the game nothing to load is
 // refused when asked, and the author goes into manifest.json.
 void finish(const fs::path& staging, const Root& root, const std::string& source_name, const InstallOptions& options) {
@@ -306,6 +315,7 @@ std::string install_zip(const fs::path& mods, const fs::path& source, bool repla
     const auto name = mod_name(*root, utf8(source.stem().wstring()), options);
     std::error_code error;
     if (!replace && fs::exists(mods / from_utf8(name), error)) throw AlreadyInstalled(name);
+    check_accepted(*root, files, options);
 
     std::uint64_t total = 0, written = 0;
     for (const auto& entry : entries)
@@ -352,6 +362,7 @@ std::string install_folder(const fs::path& mods, const fs::path& source, bool re
     const auto name = mod_name(*root, utf8(source.filename().wstring()), options);
     std::error_code error;
     if (!replace && fs::exists(mods / from_utf8(name), error)) throw AlreadyInstalled(name);
+    check_accepted(*root, files, options);
 
     std::uint64_t total = 0, written = 0;
     for (std::size_t i = 0; i < files.size(); ++i)

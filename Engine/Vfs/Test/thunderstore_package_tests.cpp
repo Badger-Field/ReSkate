@@ -81,6 +81,20 @@ int main() {
         refused("not json", "an answer that is not JSON is refused");
         refused("[]", "an answer that is not an object is refused");
     }
+    {
+        // Any category, as the MODS page asks (Extension/Assets/mod_browser.h): the rest still holds.
+        const package::Name cosmetic{"Zee", "Gold_Deck", ""};
+        const auto any = [&](std::string_view category, std::string_view review, bool deprecated = false, std::string_view community = "reskate") {
+            return package::choose(answer("Zee", "Gold_Deck", "1.0.0", community, category, review, deprecated), cosmetic, "reskate", "");
+        };
+        check(any("Cosmetics", "approved").ok && any("Maps", "unreviewed").ok, "with no category asked for, any is taken");
+        check(!any("Cosmetics", "rejected").ok, "but not one the moderators rejected");
+        check(!any("Cosmetics", "approved", true).ok, "nor a deprecated one");
+        check(!any("Cosmetics", "approved", false, "othergame").ok, "nor one of another community");
+        check(!any("NSFW", "approved").ok, "nor one in the NSFW category");
+        const auto other = package::choose(answer("Zee", "Gold_Deck", "1.0.0", "reskate", "Maps", "approved"), cosmetic, "reskate", "Cosmetics");
+        check(!other.ok && other.reason.find("Cosmetics") != std::string::npos, "another category asked for is named when refused");
+    }
     if (failures) {
         std::cerr << failures << " failure(s)\n";
         return 1;
