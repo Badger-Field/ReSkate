@@ -728,6 +728,38 @@ Changes made on the strength of the crash, both guesses:
   GUESS: the words between the declaration and the key belong to the shader's vertex layout too;
   the per-section box after the key stays the template's.
 
+**Tested in game** (6239cf7, `--bam 333`): a stock prop is drawn. `--prop
+world/props/common/skatepark/cmn_prp_skatepark_01/kit/cmn_prp_skatepark_01_box_100x600x600cm_hxwxd`
+(mesh `…_mesh`: res id 0x72f42653b1abadcd, 5,040 bytes, 3 LODs, box [0, 0, -6]..[6, 1, 0], 9 of 9
+section keys in bam root's depot; `.physics` version 2, 3 shapes, 3 parts, materials 0x10e0 and
+0xee0) at (10, 300, 10): the wooden box is drawn, the first visible object in our own level;
+`trainer ground` reads 301 on it (13, 7), the skater lands on it, and 300 beside it (6, 2) and at
+(0, 0). Our own plane with `--shader-from` that box's section 0 (key 0xd6314085b7e6bf9a, 24 bytes
+per vertex, elements (1,8,0,0), (33,6,0,1), (34,6,0,2), (51,12,0,3), (52,13,0,4), strides 8, 4,
+4, 4, 4; section 0 of 4) or section 1 (key 0x097a8959cdcccd55) in the root bundle: collision
+fine, not drawn. (PowerShell passes `10,300,10` as three arguments; `--at` and `--prop-at` now take
+X Y Z, X,Y,Z or X;Y;Z, in one argument or three.)
+
+**Own mesh on a drawn blueprint** (since then): `--mesh own --blueprint-template <stock blueprint>`
+copies that blueprint (MeshVTComponentData, PhysicsPartInfos and all) and starts our MeshSet from
+its mesh's own bytes, so every header, LOD and section field is the drawn mesh's except: the
+header box; per LOD the index and vertex byte counts and the chunk GUID (a new chunk per LOD, in
+the bundle and the level's TOC); per section the triangle count, first index, vertex start and
+vertex count; and the boxes found in the LOD and section structs (three floats equal to the
+template's own bounds and three equal to their maximum 12 or 16 bytes on; the dry run says where).
+`--keep-section N` makes each LOD list only its section N (the LOD's count set to 1 and its table
+pointer moved to that struct; the header's total set to the LOD count). Vertices are written in
+each section's own layout: positions ours (format 3 float32 x3, or format 8 float16 x4 with the
+fourth half kept), UVs ours (usage 51, format 12: float16 x2, x / 6 and z / 6), everything else
+(usage 33 and 34, format 6, and usage 52, format 13: 4 bytes each, not decoded) from the section's
+most up-facing vertex. `--mesh-shape box` writes a closed box the size of the template mesh's
+box; `--mesh-shape donor-copy` writes the template's own geometry and vertex bytes into the new
+chunks (if that is not drawn, the plumbing is at fault, not our geometry). `--collision template`
+carries the template's `.physics` unchanged under our blueprint's name; `--collision own` (the
+default) writes our square split into as many strips as the template has parts, each part copying
+its template part's material and words. `meshset-diff` prints every 4-byte word that differs
+between two MeshSets' headers, LOD and section structs, with field names where known.
+
 **What the base game does (checked on files, the PC's read-only scans).**
 
 - bam's world-partition tiles place their geometry through merged `StaticModelGroup`s. The first
