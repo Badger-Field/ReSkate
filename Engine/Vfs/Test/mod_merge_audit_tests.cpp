@@ -20,8 +20,8 @@
 // change where the patch has one mod's copy whole.
 //
 // Arguments: <data root> [<listing file>], the root being a folder holding the game's Data/ and
-// a Mods/ folder; skipped when none is given. The merge runs there as the game would run it and
-// writes Mods/.reskate. With a second argument, every asset the patch itself stores is written
+// a Mods/ folder; skipped when none is given, or when it is inside a Steam library. The merge runs
+// there as the game would run it and writes Mods/.reskate. With a second argument, every asset the patch itself stores is written
 // to that file, one line each, to compare two merges of the same mods.
 #include "Engine/Resource/binary_bundle.h"
 #include "Engine/Resource/cas_codec.h"
@@ -1049,6 +1049,13 @@ int main(int argc, char** argv) try {
         std::cout << "No data root with Data and Mods given; skipped.\n";
         return 0;
     }
+    // The merge writes Mods/.reskate into the root: never into a store's own install.
+    for (const auto& part : fs::path(argv[1]))
+        if (lower(part.string()) == "steamapps") {
+            std::cout << "The data root is inside a Steam library; the audit writes Mods/.reskate there, so it only "
+                         "runs on a copy (ReSkate's own game folder or a scratch copy). Skipped.\n";
+            return 0;
+        }
     Audit audit;
     audit.root = argv[1];
     if (!audit.merge()) return audit.summary();
