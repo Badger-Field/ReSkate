@@ -1,6 +1,6 @@
 # ReSkate Trainer
 
-The PHYSICS page in the ReSkate menu (Insert): live physics tuning, tricklining, Skate 3 presets, practice markers and a
+The SANDBOX page in the ReSkate menu (Insert): live physics tuning, tricklining, Skate 3 presets, practice markers and a
 telemetry HUD. It ships no game data: the list of values is built at run time from the player's own
 `Gameplay/SkatePhysicsTuning`.
 
@@ -15,7 +15,9 @@ telemetry HUD. It ships no game data: the list of values is built at run time fr
 | **TUNE** | One page of sections, each folding open and shut: PRESETS AND QUICK SETTINGS (every kind of preset in one card: Skate 3 on one of its difficulties, the grind and transition feels, the built-in styles, your own; and under it a list of everything that is changed right now, to change in place, hide, or jump to where it lives), POP AND TRICKS (gravity, ollie and trick heights, flip trick speed for all tricks or one by one, body flips and spins), SPEED AND PUSHING, BAILS AND LANDINGS, GRINDS (feel like skate. or Skate 3, exits and transfers, pops off a grind), TRICKLINING (the board bending boost with its rules, revert friction, Dark Pop, manuals), TRANSITION (coping grinds, coming back in, handplants, lip tricks, vert airs), PUMPING (pump power and the game's own pump settings), ON FOOT, and EVERY VALUE (the whole tuning table). A section that holds a change says so on its bar and has a reset of its own. One search box looks through all of it. |
 | **PRACTICE** | Game speed and pause, five marker slots per map (save / go / clear), return to the marker after a bail, teleport to coordinates or to the waypoint you placed on the pause map (onto the surface there), copy your position (game or Blender axes). |
 | **MAP & HUD** | Speed and air-time HUD, a read-out after every jump (takeoff speed and angle, height, distance, drop, landing speed, spin and flip), telemetry recording to CSV, and whatever the map's author ships for the trainer. |
-| **MOVEMENT** | ReSkate's Noclip, No Bail, Hall of Meat and the boost sliders. |
+
+ReSkate's Noclip, No Bail and boosts are on SKATER > CHEATS, with Revert Boost (Sivaes); Hall of Meat, Road Rash, Board Break and the
+grind exits are on ADDONS.
 
 The HUD, the jump read-out and the controller shortcuts are off until you switch them on (MAP & HUD,
 PRACTICE): a player who never opens the trainer sees and feels nothing of it.

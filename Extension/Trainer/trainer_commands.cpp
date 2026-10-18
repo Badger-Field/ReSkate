@@ -12,7 +12,7 @@ void register_trainer_commands(Commands &registry) {
     };
     const Verb verbs[]{
         {"status", "What the trainer is doing", nullptr, false},
-        {"open", "Open the menu on the trainer page", "[tune|practice|map|movement|presets|game|pop|speed|bails|grinds|tricklining|transition|pumping|foot|everything]", false},
+        {"open", "Open the menu on the Sandbox page (movement: Skater > Cheats)", "[tune|practice|map|movement|presets|game|pop|speed|bails|grinds|tricklining|transition|pumping|foot|everything]", false},
         {"fold", "Open or close a section or card of the trainer menu", "<section or card> 0|1", true},
         {"set", "Set a physics tuning value live", "<value id> <number>", true},
         {"freeze", "Keep a value through presets and resets", "<value id> 0|1", true},

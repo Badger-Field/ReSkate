@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.8.0 - 2026-10-18 (not released yet)
+
+Built on ReSkate 2.1.0.
+
+- **In ReSkate 2.1.0's menu.** The trainer is the SANDBOX page, as ReSkate now calls it, with its tabs TUNE, PRACTICE
+  and MAP & HUD, and works in the full screen menu made for a controller. Its own MOVEMENT tab is gone: Noclip, No
+  Bail, the boosts and Revert Boost are on SKATER > CHEATS, Hall of Meat, Road Rash, Board Break and the grind exits on
+  ADDONS. `trainer open movement` opens SKATER > CHEATS.
+- **Hardcore** (ReSkate's own preset, from 2.1.0) is beside Realistic under WHOLE GAME. Skate 3 on Hardcore keeps its
+  name, "Skate 3 Hardcore".
+- **Board Break's wear and the trainer leave each other alone.** A worn board steers and rolls softer through four of
+  the game's tuning values (steering, the trucks' spring, damping and twist), which Board Break sets itself. Any change
+  in the trainer used to put those four back to how they were when the level loaded, so a worn board handled like a
+  new one again, and a level loaded on a worn board counted the worn numbers as the game's own. Now they stay Board
+  Break's until you change one yourself (then yours counts, and Board Break leaves it alone, as it always did), and
+  their stock is the game's own.
+
 ## v0.7.1 - 2026-10-15
 
 Built on ReSkate 2.0.9, like 0.7.0.
