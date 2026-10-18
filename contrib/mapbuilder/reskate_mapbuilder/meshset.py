@@ -381,11 +381,6 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
                   for lod, c in zip(lods, template_chunks) for s in lod.sections)
     report.append(f"section +{AREA_OFFSET} " + ("is each template section's surface area: ours written" if area_ok else
                                                  "is not the template sections' surface area: left as it was"))
-    for k, lod in enumerate(lods):
-        flags = struct.unpack_from("<I", template, lod.at + 80)[0]
-        if flags & 1:
-            report.append(f"WARNING: LOD {k} flags {flags:#x} have bit 0 set (util_groundplane, which is not drawn, has "
-                          f"0x41; the drawn box 0x40): likely a don't-draw flag")
     report += ["template sections:"] + section_list(template)
 
     if keep_section is not None:
@@ -410,6 +405,7 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
 
     if len(vertices) > 0xFFFF:
         raise ValueError("at most 65535 vertices")
+    normals = vertex_normals(vertices, triangles)          # ours, outward
     first, first_chunk = lods[0].sections[0], template_chunks[0]
     theirs = _outward(section_positions(first, first_chunk), section_triangles(lods[0], first, first_chunk))
     flip = theirs is False
@@ -418,9 +414,18 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
     report.append(f"winding {'flipped to match' if flip else 'as the template'}"
                   + ("" if theirs is not None else " (the template's could not be told)"))
 
+    # Per-vertex data: each of our vertices takes the template vertex (of any section with the
+    # same layout in its LOD) whose face normal is closest to ours, so the undecoded normal and
+    # tangent bytes face the right way; UVs are planar per face at the template's texel density.
+    sign = -1.0 if flip else 1.0                     # the template's normals, made outward
+    density = uv_density(lods[0], lods[0].sections[min(geometry_section or 0, len(lods[0].sections) - 1)],
+                         template_chunks[0]) or 1.0 / UV_METRES
+    report.append(f"UVs: planar per face, {density:.4g} per metre (the template section's texel density)")
+    report += normal_formats(lods[0], template_chunks[0], sign)
     chunks = []
     described = set()
     for lod, old_lod, template_chunk, guid in zip(lods_now, lods, template_chunks, chunk_guids):
+        pools = {}
         vertex_data = bytearray()
         index_parts = []
         first_index = 0
@@ -429,9 +434,16 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
             verts, tris = (vertices, triangles) if ours else (vertices[:1], [(0, 0, 0)])
             if donor is not None:
                 model = donor[1]
+                models = [model] * len(verts)
             else:
                 old = next(o for o in old_lod.sections if o.at == s.at)
                 model, _ = model_vertex(old_lod, old, template_chunk)
+                key = (tuple(s.elements), tuple(s.strides))
+                if key not in pools:
+                    pools[key] = _normal_pool(old_lod, [o for o in old_lod.sections
+                                                        if (tuple(o.elements), tuple(o.strides)) == key],
+                                              template_chunk, sign)
+                models = ([_closest(pools[key], n, model) for n in normals] if ours else [model])
             if len(model) != len(s.strides) or any(len(m) != w for m, w in zip(model, s.strides)):
                 raise ValueError(f"section at {s.at}: the model vertex does not match its streams")
             key = (tuple(s.elements), tuple(s.strides))
@@ -444,15 +456,15 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
             start = _align(len(vertex_data), 16)
             vertex_data += bytes(start - len(vertex_data))
             for t, stride in enumerate(s.strides):
-                for x, y, z in verts:
-                    vertex = bytearray(model[t])
+                for v_i, (x, y, z) in enumerate(verts):
+                    vertex = bytearray(models[v_i][t])
                     for usage, f, o, st in s.elements:
                         if st != t:
                             continue
                         if usage == POSITION_USAGE:
                             struct.pack_into("<3f" if f == 3 else "<3e", vertex, o, x, y, z)
                         elif usage == UV_USAGE and f == UV_FORMAT:
-                            struct.pack_into("<2e", vertex, o, x / UV_METRES, z / UV_METRES)
+                            struct.pack_into("<2e", vertex, o, *planar_uv((x, y, z), normals[v_i], density))
                     vertex_data += vertex
             struct.pack_into("<4I", meshset, s.at + 32, len(tris), first_index, start, len(verts))
             if area_ok:
@@ -466,8 +478,7 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
         struct.pack_into("<II", meshset, lod.at + 88, len(indices), vertex_bytes)
         meshset[lod.at + 116:lod.at + 132] = guid.bytes
         chunks.append(chunk)
-    lo = [min(v[i] for v in vertices) for i in range(3)]
-    hi = [max(v[i] for v in vertices) for i in range(3)]
+    lo, hi = padded_bounds(vertices)
     struct.pack_into("<3f", meshset, 0x10, *lo)
     struct.pack_into("<3f", meshset, 0x20, *hi)
     for at, gap, _ in boxes:
@@ -568,4 +579,124 @@ def diff_meshsets(a: bytes, b: bytes) -> list[str]:
             out += _word_diff(a, b, sx.at, sy.at, SECTION_SIZE, SECTION_FIELDS, f"LOD {k} section {n}")
             if (sx.elements, sx.strides) != (sy.elements, sy.strides):
                 out.append(f"  LOD {k} section {n} layout: {sx.elements} {sx.strides} vs {sy.elements} {sy.strides}")
+    return out
+
+
+BOUNDS_PAD = 0.05     # metres: a box is never written flat (a 0-high box made the 50 m plane not spawn)
+
+
+def padded_bounds(vertices):
+    lo = [min(v[i] for v in vertices) for i in range(3)]
+    hi = [max(v[i] for v in vertices) for i in range(3)]
+    for i in range(3):
+        if hi[i] - lo[i] < 2 * BOUNDS_PAD:
+            middle = (hi[i] + lo[i]) / 2
+            lo[i], hi[i] = middle - BOUNDS_PAD, middle + BOUNDS_PAD
+    return lo, hi
+
+
+def _face_normal(pa, pb, pc):
+    u = [pb[i] - pa[i] for i in range(3)]
+    v = [pc[i] - pa[i] for i in range(3)]
+    return (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+
+
+def _unit(n):
+    length = (n[0] ** 2 + n[1] ** 2 + n[2] ** 2) ** 0.5
+    return (n[0] / length, n[1] / length, n[2] / length) if length else (0.0, 1.0, 0.0)
+
+
+def vertex_normals(vertices, triangles):
+    """Per vertex, the sum of its triangles' (b - a) x (c - a), normalised."""
+    sums = [[0.0, 0.0, 0.0] for _ in vertices]
+    for a, b, c in triangles:
+        n = _face_normal(vertices[a], vertices[b], vertices[c])
+        for i in (a, b, c):
+            for k in range(3):
+                sums[i][k] += n[k]
+    return [_unit(n) for n in sums]
+
+
+def planar_uv(p, n, density):
+    """UV by the face's main axis: x, z for top and bottom; z, y facing x; x, y facing z."""
+    axis = max(range(3), key=lambda i: abs(n[i]))
+    u, v = {1: (p[0], p[2]), 0: (p[2], p[1]), 2: (p[0], p[1])}[axis]
+    return u * density, v * density
+
+
+def _uv_element(section):
+    return next(((o, t) for u, f, o, t in section.elements if u == UV_USAGE and f == UV_FORMAT), None)
+
+
+def uv_density(lod, section, chunk) -> float | None:
+    """The section's UV units per metre: over its triangles' edges, |delta UV| / |delta position|."""
+    found = _uv_element(section)
+    if found is None:
+        return None
+    o, t = found
+    base, stride = _stream_base(section, t), section.strides[t]
+    points = section_positions(section, chunk)
+    uvs = [struct.unpack_from("<2e", chunk, base + i * stride + o) for i in range(section.vertex_count)]
+    world = uv = 0.0
+    for a, b, c in section_triangles(lod, section, chunk):
+        for p, q in ((a, b), (b, c), (c, a)):
+            world += sum((points[p][k] - points[q][k]) ** 2 for k in range(3)) ** 0.5
+            uv += sum((uvs[p][k] - uvs[q][k]) ** 2 for k in range(2)) ** 0.5
+    return uv / world if world and uv else None
+
+
+def _normal_pool(lod, sections, chunk, sign):
+    """(outward face normal, bytes per stream) for every vertex of the given sections."""
+    pool = []
+    for s in sections:
+        points = section_positions(s, chunk)
+        seen = set()
+        for a, b, c in section_triangles(lod, s, chunk):
+            n = _unit(_face_normal(points[a], points[b], points[c]))
+            n = (sign * n[0], sign * n[1], sign * n[2])
+            for i in (a, b, c):
+                if i in seen:
+                    continue
+                seen.add(i)
+                pool.append((n, [chunk[_stream_base(s, t) + i * w:_stream_base(s, t) + (i + 1) * w]
+                                 for t, w in enumerate(s.strides)]))
+    return pool
+
+
+def _closest(pool, normal, fallback):
+    if not pool:
+        return fallback
+    return max(pool, key=lambda entry: sum(entry[0][k] * normal[k] for k in range(3)))[1]
+
+
+def normal_formats(lod, chunk, sign) -> list[str]:
+    """Scores ways of reading the 4-byte elements (format 6 and 13) as a normal against the
+    template's face normals: unsigned or signed 8-bit xyz. Report only; writing copies matched
+    template vertices (_closest)."""
+    out = []
+    for s in lod.sections:
+        points = section_positions(s, chunk)
+        faces = {}
+        for a, b, c in section_triangles(lod, s, chunk):
+            n = _unit(_face_normal(points[a], points[b], points[c]))
+            for i in (a, b, c):
+                faces.setdefault(i, (sign * n[0], sign * n[1], sign * n[2]))
+        for usage, f, o, t in s.elements:
+            if f not in (6, 13) or not faces:
+                continue
+            base, stride = _stream_base(s, t), s.strides[t]
+            scores = {}
+            for label, decode in (("unorm8 xyz", lambda b: [c / 127.5 - 1.0 for c in b[:3]]),
+                                  ("snorm8 xyz", lambda b: [max(-1.0, (c - 256 if c > 127 else c) / 127.0) for c in b[:3]]),
+                                  ("unorm8 zyx", lambda b: [c / 127.5 - 1.0 for c in b[2::-1]])):
+                total = 0.0
+                for i, n in faces.items():
+                    d = _unit(decode(chunk[base + i * stride + o:base + i * stride + o + 4]))
+                    total += sum(d[k] * n[k] for k in range(3))
+                scores[label] = total / len(faces)
+            best = max(scores, key=scores.get)
+            out.append(f"usage {usage} format {f} in section at {s.at}: as a normal, mean agreement with the face "
+                       f"normals " + ", ".join(f"{k} {v:.3f}" for k, v in scores.items())
+                       + (f" (best {best})" if scores[best] > 0.9 else " (none fits: copied from matching vertices)"))
+        break
     return out

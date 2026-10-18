@@ -42,11 +42,11 @@ from .ebxcheck import semantically_equal
 from .ebxedit import (add_import, after_last_of_type, clone_document, clone_instance, derived_guid, find_objects, guid_flags,
                       field_referrers, path_to, pointer_arrays, prune_imports, prune_unreachable, refresh_flags, remove_instances,
                       set_fields, type_name, used_imports)
-from .meshset import (DEPOT_TYPE, box_geometry, depot_keys, describe_meshset, model_vertex, read_layout as read_mesh_layout,
+from .meshset import (DEPOT_TYPE, box_geometry, padded_bounds, depot_keys, describe_meshset, model_vertex, read_layout as read_mesh_layout,
                       section_key, write_mesh)
 from .level import (BASE_ROOT_BUNDLE, BASE_SUPERBUNDLE, LEVEL_NAME, SUBWORLD_REFERENCE_TYPE, _clone_found, _identity, _read,
                     new_level)
-from .physics import (KIND_TRIANGLE_MESH, RESOURCE_TYPE as PHYSICS_TYPE, Part, Shape, compute_edge_data, flat_grid,
+from .physics import (KIND_TRIANGLE_MESH, RESOURCE_TYPE as PHYSICS_TYPE, Part, Shape, compute_edge_data,
                       read_physics, write_physics)
 
 # Names of what the level adds (EBX names; the bundle is "win32/" + the sublevel's name).
@@ -60,10 +60,13 @@ VISUAL_MODES = ("none", "template")
 VISUAL_OFFSET = (10.0, 0.0, 10.0)
 # --mesh own: the blueprint's mesh is replaced by a MeshSet of our own (meshset.write_mesh).
 MESH_MODES = ("template", "own")
-# --mesh-shape (with --mesh own): our plane (the collision's square); a closed box the size of the
+# --mesh-shape (with --mesh own): a closed slab of --size W,H,D (default 50 x 0.2 x 50) whose top
+# is at the ground's height (a 50 m flat plane, with a flat box, did not spawn); our plane (the
+# collision's square); a closed box the size of the
 # template mesh's own box; or the template's own geometry and vertex bytes copied into new chunks
 # (tells a geometry problem from a plumbing one).
-MESH_SHAPES = ("plane", "box", "donor-copy")
+MESH_SHAPES = ("slab", "plane", "box", "donor-copy")
+SLAB_HEIGHT = 0.2      # metres: the default ground slab's thickness, its top at the ground's height
 # --collision: "own" writes our flat square, split into as many parts as the template's .physics
 # has (each copying its part's material and words); "template" carries the template blueprint's
 # .physics unchanged under our blueprint's name.
@@ -270,17 +273,17 @@ def _closure(source: _Source, roots: list[Guid], skip: set[str], log: list[str])
     return copied
 
 
-def _strips(size: float, n: int) -> list:
-    """The flat square of `size` metres split into n strips along z (one shape each), GRID_CELL cells."""
-    if n == 1:
-        return [flat_grid(size, GRID_CELL)]
-    cells = max(n, round(size / GRID_CELL))
+def _strips(width: float, depth: float, n: int) -> list:
+    """A flat width x depth rectangle centred on the origin at height 0, split into n strips along
+    z (one shape each), in cells of about GRID_CELL, normals up."""
+    across = max(1, round(width / GRID_CELL))
+    cells = max(n, round(depth / GRID_CELL))
     rows = [round(cells * k / n) for k in range(n + 1)]
-    step, half = size / cells, size / 2
+    step = depth / cells
     out = []
     for a, b in zip(rows, rows[1:]):
-        across = max(1, round(size / GRID_CELL))
-        vertices = [(i * size / across - half, 0.0, (a + j) * step - half) for j in range(b - a + 1) for i in range(across + 1)]
+        vertices = [(i * width / across - width / 2, 0.0, (a + j) * step - depth / 2)
+                    for j in range(b - a + 1) for i in range(across + 1)]
         triangles = []
         for j in range(b - a):
             for i in range(across):
@@ -288,6 +291,63 @@ def _strips(size: float, n: int) -> list:
                 triangles += [(p, p + across + 1, p + 1), (p + 1, p + across + 1, p + across + 2)]
         out.append(Shape(vertices, triangles))
     return out
+
+
+# Fields of a blueprint or mesh document worth printing when an object does not spawn: bounds,
+# distances, sizes. AxisAlignedBox-like structs (Min and Max vectors) are set to our bounds.
+BOUND_WORDS = ("bound", "box", "aabb", "radius", "distance", "cull", "extent", "lod", "size", "scale", "range")
+
+
+def _bounds_fields(doc: Document, label: str) -> list[str]:
+    out = []
+
+    def text(v):
+        if isinstance(v, Object) and all(v.find(a) is not None for a in "xyz"):
+            return str([round(float(v.get(a)), 3) for a in "xyz"])
+        if isinstance(v, Object):
+            return "{" + ", ".join(f"{f.name}={text(f.value)}" for f in v.fields) + "}"
+        return repr(v) if not isinstance(v, float) else f"{v:.4g}"
+
+    def walk(value, path):
+        if isinstance(value, Object):
+            for f in value.fields:
+                if any(w in f.name.lower() for w in BOUND_WORDS) and not isinstance(f.value, (list, PointerReference)):
+                    out.append(f"  {label} {path}.{f.name} = {text(f.value)}")
+                elif isinstance(f.value, (Object, list)):
+                    walk(f.value, f"{path}.{f.name}")
+        elif isinstance(value, list):
+            for i, v in enumerate(value[:16]):
+                walk(v, f"{path}[{i}]")
+
+    for i, instance in enumerate(doc.instances):
+        if instance.object is not None:
+            walk(instance.object, f"#{i} {type_name(doc, instance.object)}")
+    return out
+
+
+def _set_aabbs(doc: Document, lo, hi) -> list[str]:
+    """Sets every struct with Min and Max x/y/z vectors to (lo, hi); returns their paths."""
+    done = []
+
+    def walk(value, path):
+        if isinstance(value, Object):
+            mn, mx = value.get("Min"), value.get("Max")
+            if all(isinstance(v, Object) and all(v.find(a) is not None for a in "xyz") for v in (mn, mx)):
+                for vec, values in ((mn, lo), (mx, hi)):
+                    for a, c in zip("xyz", values):
+                        vec.set(a, float(c))
+                done.append(path)
+                return
+            for f in value.fields:
+                walk(f.value, f"{path}.{f.name}")
+        elif isinstance(value, list):
+            for i, v in enumerate(value):
+                walk(v, f"{path}[{i}]")
+
+    for i, instance in enumerate(doc.instances):
+        if instance.object is not None:
+            walk(instance.object, f"#{i}")
+    return done
 
 
 def _meshset_keys(data: bytes) -> list[int]:
@@ -393,7 +453,7 @@ def _place(placement: Object, at: tuple[float, float, float]) -> None:
         transform.get("trans").set(axis, float(value))
 
 
-def new_ground_level(game, mod, level: str, display_name: str | None = None, size: float = DEFAULT_SIZE,
+def new_ground_level(game, mod, level: str, display_name: str | None = None, size=DEFAULT_SIZE,
                      at: tuple[float, float, float] = DEFAULT_AT, bam: str = "all", tile_template: str = TILE_TEMPLATE,
                      layer_template: str | None = LAYER_TEMPLATE, layer_bundle: str | None = None,
                      blueprint_template: str = BLUEPRINT_TEMPLATE, blueprint_bundle: str | None = BLUEPRINT_BUNDLE,
@@ -401,7 +461,7 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                      visual: str = "none", mesh: str = "template", asset_bundle: str = "ground",
                      collision=None, shader_from: str | None = None,
                      props: list[tuple[str, tuple[float, float, float]]] = (), keep_section: int | None = None,
-                     mesh_shape: str = "plane", collision_mode: str = "own",
+                     mesh_shape: str = "slab", collision_mode: str = "own",
                      geometry_section: int | None = 0) -> list[str]:
     """Adds a level whose content is our own ground to `mod` (see the module's text). Appends a
     report to `log` (also when it refuses) and returns it.
@@ -425,8 +485,11 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         raise ValueError("level names use lower-case letters, digits and _, starting with a letter")
     if bam not in BAM_MODES:
         raise ValueError(f"--bam is one of {', '.join(BAM_MODES)}")
-    if not 0 < size <= 1024:
+    width, height, depth = (float(size), SLAB_HEIGHT, float(size)) if isinstance(size, (int, float)) else \
+        tuple(float(c) for c in size)
+    if not (0 < width <= 1024 and 0 < depth <= 1024 and 0 < height <= 1024):
         raise ValueError("--size is between 0 and 1024 metres")
+    size = width
     if not 1 <= tiles <= MAX_TILES:
         raise ValueError(f"--tiles is between 1 and {MAX_TILES}")
     if visual not in VISUAL_MODES or mesh not in MESH_MODES or asset_bundle not in ASSET_BUNDLES:
@@ -439,7 +502,8 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
     physics_name = bp_name + PHYSICS_SUFFIX
     mesh_name = GROUND_MESH.format(level=level)
     ground_bundle = "win32/" + sublevel_name
-    log.append(f"Ground for {path}: {tiles} x {tiles} placements of {size} m at {list(at)}, bam bundles: {bam}")
+    log.append(f"Ground for {path}: {tiles} x {tiles} placements of {size} m"
+               + ("" if depth == width else f" x {depth} m") + f" at {list(at)}, bam bundles: {bam}")
 
     # 1. The tile, and the layer its LayerReferenceObjectData imports.
     tile_source = _source(game, None, tile_template)
@@ -537,7 +601,7 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         ms_data = bp_source.payload("res", ms_index)
         layout = read_mesh_layout(ms_data)
         chunk_data = [_chunk_payload(game, bp_source, lod.chunk) for lod in layout]
-        grid_mesh = flat_grid(size, GRID_CELL)
+        grid_mesh = _strips(width, depth, 1)[0]
         chunk_guids = [derived_guid(level, "ground_mesh_chunk", *([str(k)] if k else [])) for k in range(len(layout))]
         donor = None
         if shader_from:
@@ -558,7 +622,10 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                        f"{struct.unpack_from('<Q', donor_data, section.at + 0x138)[0]:#018x}, "
                        f"{'in' if struct.unpack_from('<Q', donor_data, section.at + 0x138)[0] in target_keys else 'NOT in'}"
                        f" the depots our mesh's bundle has")
-        if mesh_shape == "box":
+        if mesh_shape == "slab":
+            geometry = box_geometry((-width / 2, -height, -depth / 2), (width / 2, 0.0, depth / 2))
+            log.append(f"  --mesh-shape slab: {width} x {height} x {depth} m, its top at the ground's height")
+        elif mesh_shape == "box":
             box_lo = struct.unpack_from("<3f", ms_data, 0x10)
             box_hi = struct.unpack_from("<3f", ms_data, 0x20)
             geometry = box_geometry(box_lo, box_hi)
@@ -595,6 +662,14 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                    f"{retargeted} blueprint imports moved to it")
         for line in describe_meshset(new_ms)[:2]:
             log.append("    " + line)
+        mesh_lo, mesh_hi = padded_bounds(geometry[0]) if mesh_shape != "donor-copy" else (
+            list(struct.unpack_from("<3f", ms_data, 0x10)), list(struct.unpack_from("<3f", ms_data, 0x20)))
+        for doc, label in ((bp, "blueprint"), (mesh_new, "mesh")):
+            log.extend(_bounds_fields(doc, label))
+            changed = _set_aabbs(doc, mesh_lo, mesh_hi)
+            if changed:
+                log.append(f"  {label}: Min/Max boxes set to our bounds {[round(v, 2) for v in mesh_lo]}.."
+                           f"{[round(v, 2) for v in mesh_hi]}: {changed}")
         own = (mesh_new, new_ms, new_chunks, chunk_guids, ms_asset)
         missing = [k for k in _meshset_keys(new_ms) if k not in target_keys]
         if missing:
@@ -612,7 +687,7 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
     else:
         if collision is None:
             shaped = [p for p in parts if p.shape >= 0] or [template_part]
-            new_shapes = _strips(size, len(shaped))
+            new_shapes = _strips(width, depth, len(shaped))
             new_parts = [Part(i, (0.0, 0.0, 0.0) if PHYSICS_IN_OBJECT_SPACE else tuple(at), (0.0, 0.0, 0.0, 1.0), 1.0,
                               p.material, KIND_TRIANGLE_MESH, p.hashes, 0, p.float_30,
                               p.word_34 if len(shaped) > 1 else 0, p.word_3c, p.word_44) for i, p in enumerate(shaped)]
@@ -632,6 +707,15 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         world = [template_part.to_world(v) for v in shapes[max(template_part.shape, 0)].vertices]
         template_box = (f", box {[round(min(p[i] for p in world), 2) for i in range(3)]}.."
                         f"{[round(max(p[i] for p in world), 2) for i in range(3)]}")
+    for i, (shape, part) in enumerate(zip(new_shapes, new_parts)):
+        if i >= 8 and collision is not None:
+            log.append(f"  ... {len(new_parts) - i} more parts")
+            break
+        if part.shape >= 0 and new_shapes[part.shape].vertices:
+            world = [part.to_world(v) for v in new_shapes[part.shape].vertices]
+            log.append(f"  collision part {i}: material {part.material:#x}, box "
+                       f"{[round(min(p[k] for p in world), 2) for k in range(3)]}.."
+                       f"{[round(max(p[k] for p in world), 2) for k in range(3)]}")
     log.append(f"  collision: template is version {version} with {len(shapes)} shapes, {len(parts)} parts (material "
                f"{template_part.material:#010x}, kind {template_part.kind}{template_box}); ours: version 2, {what}, "
                f"{sum(len(g.vertices) for g in new_shapes)} vertices, {sum(len(g.triangles) for g in new_shapes)} "

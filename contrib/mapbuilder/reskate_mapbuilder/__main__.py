@@ -156,7 +156,7 @@ def new_ground_level_command(args, place=None):
                          args.blueprint_bundle, grid if grid is not None else 1, log, args.blueprint_superbundle,
                          args.visual, args.mesh, args.asset_bundle, collision if place is not None else None,
                          getattr(args, "shader_from", None), _props(args), getattr(args, "keep_section", None),
-                         getattr(args, "mesh_shape", "plane"), getattr(args, "collision", "own"),
+                         getattr(args, "mesh_shape", "slab"), getattr(args, "collision", "own"),
                          None if getattr(args, "other_sections", "degenerate") == "geometry"
                          else getattr(args, "geometry_section", 0))
     finally:
@@ -187,6 +187,21 @@ def _xyz(tokens, label: str) -> tuple[float, float, float]:
     except ValueError:
         sys.exit(f"{label} {' '.join(tokens) if isinstance(tokens, list) else tokens!r}: give three numbers X Y Z")
     return x, y, z
+
+
+def _size(tokens):
+    if not tokens:
+        return DEFAULT_SIZE
+    parts = [t for t in re.split(r"[\s,;]+", " ".join(tokens)) if t]
+    try:
+        values = [float(t) for t in parts]
+    except ValueError:
+        values = []
+    if len(values) == 1:
+        return values[0]
+    if len(values) == 3:
+        return tuple(values)
+    sys.exit(f"--size {' '.join(tokens)}: give W, or W,H,D")
 
 
 def _props(args) -> list:
@@ -354,8 +369,9 @@ def main(argv=None):
     p.add_argument("--name", required=True, help="the mod's folder name, e.g. zz-ground-level")
     p.add_argument("--level", required=True, help="the level's name, e.g. dingolevel_reskate_ground")
     p.add_argument("--display-name")
-    p.add_argument("--size", type=float, default=DEFAULT_SIZE,
-                   help="side of each placement's square collision, and their spacing, metres")
+    p.add_argument("--size", nargs="+", metavar="W[,H,D]",
+                   help="the ground's size in metres: W (a W x W square, with --mesh own a W x 0.2 x W slab) or W,H,D "
+                        f"(also W H D or W;H;D); also the placements' spacing (default {DEFAULT_SIZE})")
     p.add_argument("--tiles", type=int, default=1, dest="grid", help="N: an N x N grid of placements")
     p.add_argument("--at", nargs="+", metavar="X Y Z", help="where the ground's centre is placed: X Y Z, X,Y,Z "
                    f"or X;Y;Z (default {' '.join(str(c) for c in DEFAULT_AT)})")
@@ -374,7 +390,7 @@ def main(argv=None):
                         "material and draw one zero-area triangle")
     p.add_argument("--other-sections", choices=("degenerate", "geometry"), default="degenerate",
                    help="geometry: every section draws our geometry instead")
-    p.add_argument("--mesh-shape", choices=MESH_SHAPES, default="plane",
+    p.add_argument("--mesh-shape", choices=MESH_SHAPES, default="slab",
                    help="with --mesh own: our square, a box the size of the template mesh, or the template's own "
                         "geometry copied (plumbing test)")
     p.add_argument("--collision", choices=COLLISION_MODES, default="own",
@@ -449,6 +465,8 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if hasattr(args, "at"):
         args.at = list(_xyz(args.at, "--at")) if args.at else list(DEFAULT_AT)
+    if args.command == "new-ground-level":
+        args.size = _size(args.size)
     {"inspect": inspect, "raise-ground": raise_ground, "rebuild": rebuild, "new-level": new_level_command,
      "new-ground-level": new_ground_level_command, "new-place-level": new_place_level_command,
      "list-assets": list_assets, "inspect-meshset": inspect_meshset,
