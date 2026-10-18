@@ -356,10 +356,11 @@ def place_info(args):
     for label, x, z, y in check_spots(place, tuple(args.at)):
         print(f"  trainer ground {x} {z}    -> {'-' if y is None else y}    ({label})")
     if args.views:
-        print("Where to look at each visual object from (after `trainer ground` the camera faces heading 0, +z, "
-              "north; where the heading below is not 0, turn until `trainer where` shows it; 90 = east, +x):")
+        print("Where to look at each visual object from: `trainer ground X Z H` lands there facing heading H "
+              "(0 = north, +z; 90 = east, +x; a trainer with the heading argument). Without H the skater faces "
+              "heading 0: turn until `trainer where` shows H:")
         for label, x, z, y, heading, note in view_spots(place, tuple(args.at)):
-            print(f"  {label}: trainer ground {x} {z}    -> {'-' if y is None else y}, face heading {heading:g}  ({note})")
+            print(f"  {label}: trainer ground {x} {z} {heading:g}    -> {'-' if y is None else y}  ({note})")
 
 
 def list_assets(args):

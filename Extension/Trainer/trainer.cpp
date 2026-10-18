@@ -13,6 +13,7 @@
 #include "Engine/Game/Build/20260929/physics_tuning.h"
 #include "Engine/Game/Multiplayer/session_physics.h"
 #include "Engine/Game/Multiplayer/session_tools.h"
+#include "Extension/Objects/teleport_pose.h"
 #include "Extension/Profile/local_profile_runtime.h"
 #include "Extension/Skater/client_source_spawn.h"
 #include "Extension/Skater/client_source_spawn_internal.h"
@@ -158,6 +159,7 @@ struct State {
     std::uint64_t waypoint_wanted_until{}, waypoint_next_read{};
     // A ground-snapped arrival being watched (trainer_landing.h).
     landing::Watch landing;
+    std::optional<float> landing_heading; // the heading the landing was asked for: kept on a resend or put-back
     Motion motion;
     Telemetry telemetry;
     std::ofstream log;
@@ -1018,12 +1020,27 @@ bool teleport_allowed(std::string &why) {
     }
     return true;
 }
-std::string go_to(const Vec3 &position, const std::string &what) {
+// With a heading (degrees, 0 = +z, 90 = +x, as `where` prints it) the teleport's transform
+// carries that yaw (Extension/Objects/teleport_pose.h); without one it is the identity, as
+// always (the skater then faces +z, heading 0).
+std::string go_to(const Vec3 &position, const std::string &what, std::optional<float> heading = std::nullopt) {
     std::string why;
     if (!teleport_allowed(why)) return "error: " + why;
-    if (!teleport_local_skater(position)) return "error: teleporting is unavailable right now.";
+    if (!(heading ? teleport_local_skater(position, *heading) : teleport_local_skater(position)))
+        return "error: teleporting is unavailable right now.";
     state().motion.valid = false;
-    return "Teleporting to " + what + ".";
+    return "Teleporting to " + what + (heading ? std::format(", facing heading {:.0f}", *heading) : std::string{}) + ".";
+}
+
+// The optional heading argument of `tp` and `ground`: empty text is no heading; anything else
+// must be a number (wrapped to 0..360).
+std::optional<std::optional<float>> heading_argument(const std::string &text) {
+    if (text.empty()) return std::optional<float>{};
+    const auto value = number(text);
+    if (!value) return std::nullopt;
+    const auto heading = teleport::heading_degrees(*value);
+    if (!heading) return std::nullopt;
+    return std::optional<float>{*heading};
 }
 
 // ---- ground-safe arrivals -------------------------------------------------------------
@@ -1038,15 +1055,16 @@ std::optional<float> topmost_ground(float x, float z, float hint_y) {
 
 // Teleports onto the surface at x, z rather than to a raw height: a map waypoint's height is
 // not the ground, and arriving under it drops the skater through the map.
-std::string land_at(float x, float z, float hint_y, const std::string &what) {
+std::string land_at(float x, float z, float hint_y, const std::string &what, std::optional<float> heading = std::nullopt) {
     auto &s = state();
     const auto ground = topmost_ground(x, z, hint_y);
     // Collision far away may not be loaded yet: go to the hint's height, and the landing
     // watch puts the skater on the surface once it streams in.
     const Vec3 to{x, ground ? *ground + landing::stand_height : hint_y + 2.0f, z};
-    const auto answer = go_to(to, what);
+    const auto answer = go_to(to, what, heading);
     if (answer.starts_with("error")) return answer;
     s.landing = landing::start(x, z, to[1], GetTickCount64());
+    s.landing_heading = heading;
     say(logging::Level::info, ground ? std::format("Trainer: landing on the surface at {:.1f}, {:.1f}, {:.1f}.", to[0], to[1], to[2])
                                      : std::format("Trainer: no collision at {:.1f}, {:.1f} yet; going to height {:.1f} and waiting for the ground.", x, z, to[1]));
     const auto stem = answer.substr(0, answer.size() - 1);
@@ -1065,12 +1083,12 @@ void update_landing(std::uint64_t now) {
     switch (landing::step(w, sample)) {
     case landing::Step::resend: {
         const auto ground = topmost_ground(w.x, w.z, w.y);
-        (void)go_to({w.x, ground ? *ground + landing::stand_height : w.y, w.z}, "the same spot");
+        (void)go_to({w.x, ground ? *ground + landing::stand_height : w.y, w.z}, "the same spot", s.landing_heading);
         say(logging::Level::info, "Trainer: the teleport hadn't arrived; sent it again.");
         break;
     }
     case landing::Step::put_back:
-        (void)go_to({p[0], *sample.ground + landing::stand_height, p[2]}, "the surface");
+        (void)go_to({p[0], *sample.ground + landing::stand_height, p[2]}, "the surface", s.landing_heading);
         say(logging::Level::info, std::format("Trainer: sank to {:.1f} under the surface at {:.1f}; put back on it.", p[1], *sample.ground));
         break;
     case landing::Step::landed:
@@ -1749,8 +1767,10 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
     }
     if (v == "ground") {
         const auto x = number(arg(0)), z = number(arg(1));
-        if (!x || !z) return "error: usage: trainer ground <x> <z>  (teleport to the topmost surface there)";
-        return land_at(static_cast<float>(*x), static_cast<float>(*z), s.telemetry.position[1], "the ground there");
+        const auto heading = heading_argument(arg(2));
+        if (!x || !z || !heading)
+            return "error: usage: trainer ground <x> <z> [heading]  (teleport to the topmost surface there; heading in degrees, 0 = +z, 90 = +x)";
+        return land_at(static_cast<float>(*x), static_cast<float>(*z), s.telemetry.position[1], "the ground there", *heading);
     }
     if (v == "waypoint") {
         refresh_waypoint();
@@ -1758,12 +1778,13 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
             return "Map waypoint: " + (s.waypoint ? std::format("{:.1f}, {:.1f}, {:.1f}", (*s.waypoint)[0], (*s.waypoint)[1], (*s.waypoint)[2]) : std::string("none")) +
                    " (" + s.waypoint_detail + ").";
         if (!s.waypoint) return "error: no waypoint on the map. Open the pause map and place one first.";
-        return land_at((*s.waypoint)[0], (*s.waypoint)[2], (*s.waypoint)[1], "your map waypoint");
+        return land_at((*s.waypoint)[0], (*s.waypoint)[2], (*s.waypoint)[1], "your map waypoint");  // no heading: as before
     }
     if (v == "tp") {
         const auto x = number(arg(0)), y = number(arg(1)), z = number(arg(2));
-        if (!x || !y || !z) return "error: usage: trainer tp <x> <y> <z>";
-        return go_to({static_cast<float>(*x), static_cast<float>(*y), static_cast<float>(*z)}, "that point");
+        const auto heading = heading_argument(arg(3));
+        if (!x || !y || !z || !heading) return "error: usage: trainer tp <x> <y> <z> [heading]  (heading in degrees, 0 = +z, 90 = +x)";
+        return go_to({static_cast<float>(*x), static_cast<float>(*y), static_cast<float>(*z)}, "that point", *heading);
     }
     if (v == "spot") {
         const auto index = number(arg(0));

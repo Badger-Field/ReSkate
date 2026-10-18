@@ -25,6 +25,9 @@ Changes made when the trainer moved into ReSkate itself.
   through the map. If collision there is still loading, a short watch puts you back on the
   surface once it arrives. `trainer ground <x> <z>` does the same for any spot.
   The map's registry is only read while the TELEPORT card is on screen or the command runs.
+- **Teleport facing a heading.** `trainer tp <x> <y> <z> [heading]` and `trainer ground <x> <z>
+  [heading]` take an optional heading in degrees (0 = +z, 90 = +x, as `trainer where` prints
+  it), so a test can face an object without turning by hand. Without it nothing changes.
 
 ## v0.3.0 - 2026-10-04
 

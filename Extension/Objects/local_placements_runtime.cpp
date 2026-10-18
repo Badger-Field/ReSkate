@@ -4,6 +4,7 @@
 #include "Engine/Game/Build/20260929/local_placements.h"
 #include "Extension/Customization/local_customization_runtime.h"
 #include "local_placements_runtime.h"
+#include "Extension/Objects/teleport_pose.h"
 #include "Extension/Objects/ParkEditor/park_editor_runtime.h"
 #include "network_object_runtime.h"
 #include "Extension/Profile/runtime_internal.h"
@@ -583,6 +584,7 @@ void update_position_teleport() {
     if (!r.position_teleport) return;
     if (GetTickCount64() > r.position_teleport_at + 5000) {
         r.position_teleport.reset();
+        r.position_teleport_heading.reset();
         dingosdk::logging::write(dingosdk::logging::Level::warning, dingosdk::logging::Channel::objects,
                                  "Teleport dropped: the skater was busy for 5 s (a bail, a menu or an activity).");
         return;
@@ -592,15 +594,20 @@ void update_position_teleport() {
         !read(local_runtime().base + addr::local_placements::teleport_manager, manager) || !manager ||
         !read(manager, state) || state != 0) return;
     const auto at = *r.position_teleport;
+    const auto heading = r.position_teleport_heading;
     r.position_teleport.reset();
-    // Upright at the spot. The native teleport manager handles streaming, ground checks and physics reset.
-    alignas(16) const std::array<float, 16> transform{1,0,0,0, 0,1,0,0, 0,0,1,0, at[0], at[1], at[2], 1};
+    r.position_teleport_heading.reset();
+    // Upright at the spot, facing the heading asked for (identity rotation without one, as
+    // always: the skater then faces +z). The native teleport manager handles streaming,
+    // ground checks and physics reset.
+    alignas(16) const std::array<float, 16> transform = teleport::transform(at, heading);
     alignas(16) std::array<std::uint64_t, 2> transition{};
     r.transition_ctor(transition.data());
     struct Destroy { decltype(r.transition_destroy) call; void* value; ~Destroy() { call(value); } } destroy{r.transition_destroy, transition.data()};
     const auto request = r.teleport(manager, transform.data(), 1, transition.data());
     dingosdk::logging::event(dingosdk::logging::Channel::objects, dingosdk::Json{{"event", "position_teleport_requested"},
-        {"x", at[0]}, {"y", at[1]}, {"z", at[2]}, {"request", request}}.dump().c_str());
+        {"x", at[0]}, {"y", at[1]}, {"z", at[2]}, {"heading", heading ? dingosdk::Json(*heading) : dingosdk::Json(nullptr)},
+        {"request", request}}.dump().c_str());
 }
 
 void update_placement_teleport() {

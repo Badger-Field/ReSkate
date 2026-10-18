@@ -21,7 +21,7 @@ Controller, once switched on: hold **LB + RB**, then D-pad **up** saves the mark
 Everything is also a console command (`~`): `trainer open [tune|practice|map|realistic|fun|everything]`, `trainer status`, `trainer set <id> <value>`,
 `trainer find <words>`, `trainer preset apply|remove <name>`, `trainer dial <multiplier> <preset name>`,
 `trainer reset <id>|all|tricks|presets|everything`, `trainer marker save|go|clear [slot]`,
-`trainer tp <x> <y> <z>`, `trainer waypoint [info]`, `trainer ground <x> <z>`, `trainer where`, `trainer jumps`, `trainer dump`, `trainer selftest`.
+`trainer tp <x> <y> <z> [heading]`, `trainer waypoint [info]`, `trainer ground <x> <z> [heading]`, `trainer where`, `trainer jumps`, `trainer dump`, `trainer selftest`.
 
 ## For map makers: `trainer.json`
 
@@ -58,6 +58,11 @@ The trainer goes through ReSkate's own session rules instead of around them:
 - With that switched off, everyone's physics are their own, and the trick multipliers and auto push
   follow the host's boosts permission like ReSkate's other boosts.
 - Teleports and markers follow the host's noclip / teleport permission.
+- The heading of `tp` and `ground` is in degrees as `trainer where` prints it: 0 faces +z
+  (north), 90 faces +x (east), clockwise seen from above. It goes into the rotation of the
+  transform the game's teleport is handed (yaw about +y); without it the rotation is the
+  identity, as before, and the skater faces heading 0. Not yet tried in game: whether the
+  camera turns with the skater is the thing to check.
 - Game speed is ReSkate's `SimulationTime.TimeScale` setting, which ReSkate locks in a session.
 - Servers' `score_check` / `enforce_tuning` see a player's tuning changes like any other tuning mod.
 
