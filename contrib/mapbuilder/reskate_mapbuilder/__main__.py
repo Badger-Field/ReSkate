@@ -11,8 +11,11 @@
   python -m reskate_mapbuilder new-ground-level --game <dir> --mods <dir> --name zz-... --level <name> \\
         [--size 50] [--tiles N] [--at X Y Z] [--bam all|no-world|333] [--tile-template EBX] \\
         [--layer-template EBX [--layer-bundle B]] [--blueprint-template EBX [--blueprint-bundle B]] \\
-        [--blueprint-superbundle S] [--visual none|template] [--mesh template|own] [--dry-run]
+        [--blueprint-superbundle S] [--visual none|template] [--mesh template|own] \\
+        [--asset-bundle ground|coregameassets] [--dry-run]
   python -m reskate_mapbuilder inspect-meshset --game <dir> [--mod <mod dir>] --superbundle S --bundle B --resource R
+  python -m reskate_mapbuilder mesh-refs --game <dir> [--mod <mod dir>] --superbundle S --bundle B --mesh EBX \\
+        [--scan SUPERBUNDLE:BUNDLE ...] [--level <name>]
   python -m reskate_mapbuilder list-assets --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] [--contains TEXT]
   python -m reskate_mapbuilder ebx-roundtrip --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME [--detail [N]]
   python -m reskate_mapbuilder ebx-arrayhash --game <dir> [--mod <mod dir>] --superbundle S [--bundle B] --ebx NAME
@@ -31,8 +34,9 @@ from .ebx import read_document
 from .ebxcheck import array_hash_report, roundtrip
 from .ebxedit import describe
 from .game import Game
-from .ground import BAM_MODES, MESH_MODES, VISUAL_MODES, BLUEPRINT_BUNDLE, BLUEPRINT_TEMPLATE, DEFAULT_AT, DEFAULT_SIZE, TILE_TEMPLATE, new_ground_level
+from .ground import ASSET_BUNDLES, BAM_MODES, MESH_MODES, VISUAL_MODES, BLUEPRINT_BUNDLE, BLUEPRINT_TEMPLATE, DEFAULT_AT, DEFAULT_SIZE, TILE_TEMPLATE, new_ground_level
 from .level import BASE_SUPERBUNDLE, new_level
+from .meshrefs import mesh_refs
 from .meshset import describe_meshset
 from .mod import ModBuilder
 from .physics import (KIND_TRIANGLE_MESH, Shape, compute_edge_data, physics_tail, read_physics, replace_shape,
@@ -137,7 +141,8 @@ def new_ground_level_command(args):
     try:
         new_ground_level(game, mod, args.level, args.display_name, args.size, tuple(args.at), args.bam,
                          args.tile_template, args.layer_template, args.layer_bundle, args.blueprint_template,
-                         args.blueprint_bundle, args.tiles, log, args.blueprint_superbundle, args.visual, args.mesh)
+                         args.blueprint_bundle, args.tiles, log, args.blueprint_superbundle, args.visual, args.mesh,
+                         args.asset_bundle)
     finally:
         for line in log:
             print(line)
@@ -191,6 +196,19 @@ def inspect_meshset(args):
                 print(line)
             return
     sys.exit(f"resource {args.resource} not in {args.bundle}")
+
+
+def mesh_refs_command(args):
+    """What a RigidMeshAsset and its MeshSet refer to and where it resolves (read-only)."""
+    game = Game(args.game, args.mod)
+    scan = []
+    for item in args.scan or []:
+        superbundle, _, bundle = item.partition(":")
+        if not bundle:
+            sys.exit("--scan takes SUPERBUNDLE:BUNDLE")
+        scan.append((superbundle, bundle))
+    for line in mesh_refs(game, args.superbundle, args.bundle, args.mesh, scan, args.level):
+        print(line)
 
 
 def _read_ebx(args) -> bytes:
@@ -266,6 +284,9 @@ def main(argv=None):
     p.add_argument("--blueprint-superbundle", default=BASE_SUPERBUNDLE, help="the superbundle holding that bundle")
     p.add_argument("--visual", choices=VISUAL_MODES, default="none",
                    help="template: also keep the layer's own placement of its own blueprint, beside ours")
+    p.add_argument("--asset-bundle", choices=tuple(ASSET_BUNDLES), default="ground",
+                   help="where the blueprint, collision and our mesh go: the ground bundle, or the level's copy of "
+                        "bam_coregameassets")
     p.add_argument("--mesh", choices=MESH_MODES, default="template",
                    help="own: draw a MeshSet of our own (a copy of the template's with our plane); untested")
     p.add_argument("--dry-run", action="store_true", help="read and report only")
@@ -275,6 +296,15 @@ def main(argv=None):
     p.add_argument("--superbundle", required=True, help="path under Data/Win32 without .toc")
     p.add_argument("--bundle", required=True)
     p.add_argument("--resource", required=True)
+    p = sub.add_parser("mesh-refs", help="what a mesh refers to and where each reference resolves (read-only)")
+    p.add_argument("--game", required=True)
+    p.add_argument("--mod", help="a mod folder laid over the game (the 333 map, or ours with --level)")
+    p.add_argument("--superbundle", required=True, help="path under Data/Win32 without .toc")
+    p.add_argument("--bundle", required=True)
+    p.add_argument("--mesh", required=True, help="the RigidMeshAsset's EBX name")
+    p.add_argument("--scan", action="append", metavar="SUPERBUNDLE:BUNDLE",
+                   help="another bundle whose EBX resolve imports (repeatable)")
+    p.add_argument("--level", help="a level of the --mod: say whether its TOC and bundles list what was found")
     p = sub.add_parser("list-assets", help="list a superbundle's EBX, res and chunks by name (read-only)")
     p.add_argument("--game", required=True)
     p.add_argument("--mod", help="a mod folder laid over the game, to read its TOCs and archives")
@@ -302,6 +332,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     {"inspect": inspect, "raise-ground": raise_ground, "rebuild": rebuild, "new-level": new_level_command,
      "new-ground-level": new_ground_level_command, "list-assets": list_assets, "inspect-meshset": inspect_meshset,
+     "mesh-refs": mesh_refs_command,
      "dump-ebx": dump_ebx, "ebx-roundtrip": ebx_roundtrip, "ebx-arrayhash": ebx_arrayhash}[args.command](args)
 
 

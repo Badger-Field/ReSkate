@@ -58,6 +58,11 @@ VISUAL_MODES = ("none", "template")
 VISUAL_OFFSET = (10.0, 0.0, 10.0)
 # --mesh own: the blueprint's mesh is replaced by a MeshSet of our own (meshset.write_mesh).
 MESH_MODES = ("template", "own")
+# --asset-bundle: where the blueprint, its collision and (--mesh own) our mesh go. "ground": the new
+# ground bundle. "coregameassets": the level's copy of bam's bam_coregameassets, which keeps its
+# name (GUESS: data such as shaders is found per bundle name; the 333 map adds 1,251 of its own
+# files to that bundle, and bam's own game_coremeshes layer placing util_groundplane is in it).
+ASSET_BUNDLES = {"ground": None, "coregameassets": "win32/levels/game/bam_levelroot/bam_coregameassets"}
 # Templates, all in bam's superbundle (found by the PC's scan of the base game, FORMAT-NOTES 6.3).
 TILE_TEMPLATE = ("levels/game/bam_levelroot/wproot/wp/s9600_x0z0/s200_x500z900/s100_x450z850/s50_x425z825/"
                  "s50_x425z825_sublevel")
@@ -231,7 +236,9 @@ def _closure(source: _Source, roots: list[Guid], skip: set[str], log: list[str])
             log.append(f"  {name} does not read ({e}); its own imports are not followed")
     lower = {n.lower() for n in names}
     copied = {EBX: [i for i, a in enumerate(source.manifest.ebx) if a.name.lower() in lower]}
-    copied["res"] = [i for i, r in enumerate(source.manifest.resources) if r.name.lower() in lower]
+    # Resources named like a listed EBX, or under it ("<name>/..."), e.g. per-mesh shader data.
+    copied["res"] = [i for i, r in enumerate(source.manifest.resources) if r.name.lower() in lower
+                     or r.name.lower().split("/")[0] in lower or any(r.name.lower().startswith(n + "/") for n in lower)]
     payloads = [source.payload("res", i) for i in copied["res"]]
     bundle_guids = {c.guid.bytes for c in source.manifest.chunks}
     toc = source.toc_chunks()
@@ -242,7 +249,7 @@ def _closure(source: _Source, roots: list[Guid], skip: set[str], log: list[str])
     # Chunks the superbundle's TOC lists are listed in the level's TOC too (as the 333 map's own
     # TOC lists 80,006): the source superbundle's TOC is not read when the level loads.
     copied["toc"] = [c for g, c in toc.items() if g.bytes in found]
-    log.append(f"  listed from {source.name} in the ground bundle: {len(copied[EBX])} EBX {sorted(names)}, "
+    log.append(f"  listed from {source.name} with the blueprint: {len(copied[EBX])} EBX {sorted(names)}, "
                f"{len(copied['res'])} res, {len(copied[CHUNK])} chunks (and {len(copied['toc'])} chunks of "
                f"{source.superbundle}'s TOC for the level's TOC); {len(outside)} imported files are not in that "
                f"bundle and must come from another bundle the level loads")
@@ -337,7 +344,7 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                      layer_template: str | None = LAYER_TEMPLATE, layer_bundle: str | None = None,
                      blueprint_template: str = BLUEPRINT_TEMPLATE, blueprint_bundle: str | None = BLUEPRINT_BUNDLE,
                      tiles: int = 1, log: list[str] | None = None, blueprint_superbundle: str = BASE_SUPERBUNDLE,
-                     visual: str = "none", mesh: str = "template") -> list[str]:
+                     visual: str = "none", mesh: str = "template", asset_bundle: str = "ground") -> list[str]:
     """Adds a level whose content is our own ground to `mod` (see the module's text). Appends a
     report to `log` (also when it refuses) and returns it."""
     log = [] if log is None else log
@@ -349,8 +356,9 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         raise ValueError("--size is between 0 and 1024 metres")
     if not 1 <= tiles <= MAX_TILES:
         raise ValueError(f"--tiles is between 1 and {MAX_TILES}")
-    if visual not in VISUAL_MODES or mesh not in MESH_MODES:
-        raise ValueError(f"--visual is one of {VISUAL_MODES}, --mesh one of {MESH_MODES}")
+    if visual not in VISUAL_MODES or mesh not in MESH_MODES or asset_bundle not in ASSET_BUNDLES:
+        raise ValueError(f"--visual is one of {VISUAL_MODES}, --mesh one of {MESH_MODES}, "
+                         f"--asset-bundle one of {tuple(ASSET_BUNDLES)}")
     path = f"levels/game/{level}/{level}"
     sublevel_name = GROUND_SUBLEVEL.format(level=level)
     layer_name = GROUND_LAYER.format(level=level)
@@ -645,37 +653,49 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
     mod.new_bundle(path, ground_bundle, chunk)
     mod.add_ebx(path, ground_bundle, sublevel_name, _checked_bytes(sub, sublevel_name))
     mod.add_ebx(path, ground_bundle, layer_name, _checked_bytes(layer, layer_name))
-    mod.add_ebx(path, ground_bundle, bp_name, _checked_bytes(bp, bp_name))
-    mod.add_resource(path, ground_bundle, physics_name, physics_asset.resource_type, physics, physics_id,
+    assets_bundle = ground_bundle
+    if ASSET_BUNDLES[asset_bundle] is not None:
+        assets_bundle = ASSET_BUNDLES[asset_bundle]
+        if mod._find(path, assets_bundle) is None:
+            raise KeyError(f"the level's TOC does not list {assets_bundle} with --bam {bam}")
+        mod.edit_bundle(path, assets_bundle, source=(BASE_SUPERBUNDLE, assets_bundle))
+        log.append(f"--asset-bundle {asset_bundle}: the blueprint, its collision"
+                   + (", our mesh" if own else "") + f" and what they need go into the level's copy of {assets_bundle}")
+    mod.add_ebx(path, assets_bundle, bp_name, _checked_bytes(bp, bp_name))
+    mod.add_resource(path, assets_bundle, physics_name, physics_asset.resource_type, physics, physics_id,
                      copy.copy(physics_asset.resource_meta))
-    new_counts = [3, 1, 0]
+    new_counts = [1, 1, 0]
     if own is not None:
         mesh_new, new_ms, new_chunks, chunk_guids, ms_asset = own
-        mod.add_ebx(path, ground_bundle, mesh_name, _checked_bytes(mesh_new, mesh_name))
-        mod.add_resource(path, ground_bundle, mesh_name, ms_asset.resource_type, new_ms, resource_id(mesh_name),
+        mod.add_ebx(path, assets_bundle, mesh_name, _checked_bytes(mesh_new, mesh_name))
+        mod.add_resource(path, assets_bundle, mesh_name, ms_asset.resource_type, new_ms, resource_id(mesh_name),
                          copy.copy(ms_asset.resource_meta))
         # GUESS: a geometry chunk is looked up in the level's TOC chunk list as well as the bundle's
         # entries; ours are in both (the lighthouse crashed with its chunks in neither).
         for guid, data in zip(chunk_guids, new_chunks):
-            mod.add_chunk(path, ground_bundle, guid, data)
+            mod.add_chunk(path, assets_bundle, guid, data)
             mod.add_toc_chunk_payload(path, guid, data, chunk)
-        new_counts = [4, 2, len(new_chunks)]
+        new_counts = [2, 2, len(new_chunks)]
     for kind, assets in ((EBX, bp_source.manifest.ebx), ("res", bp_source.manifest.resources),
                          (CHUNK, bp_source.manifest.chunks)):
         for i in copied[kind]:
-            mod.add_copied(path, ground_bundle, assets[i], bp_source.region.files[bp_source.file_index(kind, i)])
+            try:
+                mod.add_copied(path, assets_bundle, assets[i], bp_source.region.files[bp_source.file_index(kind, i)])
+            except ValueError as e:
+                log.append(f"  not listed again: {e}")
     added = sum(mod.add_toc_chunk(path, c) for c in copied["toc"])
-    log.append(f"{ground_bundle}: {new_counts[0]} new EBX, {new_counts[1]} new res, {new_counts[2]} new chunks, "
+    log.append(f"{ground_bundle}: our tile and layer; {assets_bundle}: {new_counts[0]} new EBX, {new_counts[1]} new res, "
+               f"{new_counts[2]} new chunks, "
                f"{sum(len(copied[k]) for k in (EBX, 'res', CHUNK))} entries listed from {bp_source.name}; "
                f"{added} of {len(copied['toc'])} chunks of {bp_source.superbundle}'s TOC added to the level's TOC "
                f"(the others it already lists); new payloads in install chunk {chunk:#x}")
-    log.extend(_mesh_chunk_report(mod, path, ground_bundle, bp_source, template_mesh, own))
+    log.extend(_mesh_chunk_report(mod, path, assets_bundle, bp_source, template_mesh, own))
     return log
 
 
 def _mesh_chunk_report(mod, path: str, ground_bundle: str, source: _Source, template_mesh, own) -> list[str]:
     """Per mesh the ground draws: each LOD's chunk, where the base game keeps it and whether the
-    level's TOC chunk list, the ground bundle or the level's root bundle now list it."""
+    level's TOC chunk list, the bundle holding our blueprint or the level's root bundle now list it."""
     toc = {c.guid for c in mod.new_superbundles[path]} | set(mod.toc_chunk_payloads.get(path, {}))
     bundles = {}
     for name in (ground_bundle, "win32/" + path):
@@ -693,7 +713,7 @@ def _mesh_chunk_report(mod, path: str, ground_bundle: str, source: _Source, temp
         for k, lod in enumerate(layout):
             where = source.where_chunk(lod.chunk) if base else "the mod's archive"
             listed = [n for n, ok in (("the level's TOC", lod.chunk in toc),
-                                      ("the ground bundle", lod.chunk in bundles[ground_bundle]),
+                                      (ground_bundle, lod.chunk in bundles[ground_bundle]),
                                       ("the level's root bundle", lod.chunk in bundles["win32/" + path])) if ok]
             out.append(f"  mesh {label} LOD {k} chunk {lod.chunk.string()}: in {where}; listed by "
                        + (", ".join(listed) if listed else "NOTHING the level loads"))

@@ -66,15 +66,19 @@ class ModBuilder:
         """A bundle the mod rewrites. With `source` (superbundle, bundle) it starts as a copy of that
         base bundle, under `bundle_name` in `superbundle`; otherwise as the base bundle itself."""
         found = self._find(superbundle, bundle_name)
-        if found is not None:
-            if found.manifest is None:
-                raise ValueError(f"{bundle_name} was added as a plain copy")
+        if found is not None and found.manifest is not None:
             return found
+        if found is not None and source is None:
+            raise ValueError(f"{bundle_name} was added as a plain copy; name its source to edit it")
         src_superbundle, src_bundle = source or (superbundle, bundle_name)
         toc = self.game.superbundle(src_superbundle)
         toc_bundle, region, manifest = self.game.bundle(toc, src_bundle)
         entry = _Bundle(superbundle, TocBundle(bundle_name, toc_bundle.region, toc_bundle.load_flag), region, manifest)
-        self.bundles.append(entry)
+        if found is not None:
+            # A plain copy becomes an edited one, in the same place of its TOC.
+            self.bundles[next(i for i, b in enumerate(self.bundles) if b is found)] = entry
+        else:
+            self.bundles.append(entry)
         return entry
 
     def add_superbundle(self, path: str, chunk_name: str = nativedb.DEFAULT_INSTALL_CHUNK,
