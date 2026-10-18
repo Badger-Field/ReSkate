@@ -1087,6 +1087,17 @@ the template's section 0 (`--no-auto-materials` keeps the template's section 0 f
 writer fills each stream of any layout: position, TexCoord0, TexCoord1, 51 and 52 as above, any
 other element (such as the ramp wedge's 12-byte usage 42 stream) from the template vertex.
 
+**The second real export** (Freedom Plaza, Washington DC, 150 x 60 m, `level-exports` branch,
+sha256 3a5110a1…770375f2011; not in this repository) reads and builds without a change: 8 tiles,
+113 collision chunks (largest 250 triangles), 18,416 collision triangles, 47 visual objects
+(73,016 triangles; the largest a ground object of 3,111 vertices and 6,000 triangles; one bank of
+a single triangle); collision by part ground 84, bank in the ground 11, kerb 9, steps 8, buildings
+1. Merged into util_groundplane's one part it is one shape of 9,469 vertices, 18,416 triangles and
+55,248 half-edges (the limits are 65,535 vertices and half-edges, 21,845 triangles), 772,816
+bytes. A merge over those limits is refused with the ways out (a template with more parts, fewer
+chunks, a smaller export). Its full `--visuals` build against the synthetic game writes all 47
+objects (3.7 MB of archive) in under 2 s.
+
 **Visuals** (`--visuals`, written, not yet run in game): each visual object of each tile (13 in
 the Embarcadero export) gets its own blueprint, mesh and placement (at `--at`, like the
 collision's), all in the level's root bundle (bam root's copy, whose depot holds the template's
