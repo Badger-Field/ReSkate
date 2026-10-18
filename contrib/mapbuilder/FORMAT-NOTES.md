@@ -988,6 +988,25 @@ include each of the first three grinds' midpoints with the grind's top. `--max-h
 collision chunks whose top is above M (whole chunks: a chunk is one welded shape), `--skip-part
 P` drops a part's or object's chunks; collision above 20 m is noted.
 
+**Tested in game** (3e0afd2): the Embarcadero level loads without a crash but has no collision at
+all ("still loading" everywhere): 38 parts under util_groundplane's copy, whose blueprint declares
+one (`PhysicsPartInfos`). The skatepark box declares 3 and our 3-part file worked (4d23295). Note:
+before 4d23295 our util_groundplane-based runs used util_groundplane's own collision (its copy
+still imported the original `.physics` EBX, or found the original by name), so they never tested
+a physics file of ours; the 4d23295 slab (box template, 3 parts, import moved) is the first.
+
+Since then every build checks our physics part count against the blueprint's `PhysicsPartInfos`
+and refuses a mismatch; the dry run lists every array of the blueprint with "Part" in its name.
+`--parts merge` (the default for new-place-level) merges the chunks into as many parts as the
+blueprint declares, one shape each (a part names one shape; a shape holds up to 21,845 triangles
+in 16-bit counts, shapes of 466 faces with zeroed trees held the skater, 2.5): by part kind when
+there are exactly that many kinds (ground, bench, steps for the box's 3), otherwise in strips along
+x; vertices equal to the last bit are shared. With util_groundplane: one shape of 5,284 triangles
+and 2,803 vertices for the Embarcadero (223,152 bytes). Materials stay per part (the part record's
+packed material; no per-triangle material is known). `--parts grow` keeps one part per chunk and
+grows `PhysicsPartInfos` and `PartBoundingBoxes` to that many entries (entry 0 copied, each box
+set to its part's); other per-part tables are only reported.
+
 **Visuals** are read (role `visual`) and counted, not written: drawing is open (6.3). `Place.visual`
 keeps them for the MeshSet writer; `--mesh own` is refused with a place for now. `--bam` defaults
 to `333` (the empty world of 6.3).
