@@ -651,6 +651,36 @@ where the base game keeps its chunk (bundle entries, TOC chunk list) and what of
 (the level's TOC, the ground bundle, the level's root bundle, or NOTHING). util_groundplane_mesh's
 chunk: the line says; when it is in bam's TOC chunk list it is already in ours (`COPY_BASE_CHUNKS`).
 
+**Tested in game** (3251539, `--bam 333`): util_groundplane with `--mesh own` loads, no crash,
+the skater stands at 301 on our collision (three runs); nothing is drawn, not even a shadow. The
+lighthouse with every chunk its resources name in the level's TOC crashes as before, after "Level
+content loaded": a read at 0x20 through a null pointer (`mov rcx,[r15+0x20]`, r15 = 0) in a loop
+that walks 12-byte records and then section structs (index x 384). The PC's reading: a per-section
+object (material, shader, VT) resolves to nothing because our level does not load its data. The
+lighthouse has a `MeshVTComponentData`, util_groundplane none.
+
+**Looking for that object.** `mesh-refs` (read-only) prints, for one RigidMeshAsset: its document
+and imports, each resolved to an EBX name in the bundles scanned (`--scan`); its MeshSet's structs
+and every value in the MeshSet's bytes that matches a known GUID (chunk entry, TOC chunk, EBX
+file, import, instance), a resource id of a scanned bundle, or a 32-bit hash (djb2 both ways,
+FNV-1, FNV-1a, as written and lower-case) of a material name or of a name in the mesh's bundle,
+each with the struct and offset it sits at; the bundle's resources by type; the entries named like
+the mesh or like shader, block, depot, material, VT or surface data; and with `--mod <ours>
+--level <name>`, whether our level lists each of them. Nothing of the section struct beyond
+FORMAT-NOTES 1 is decoded yet: this output, on util_groundplane_mesh, the lighthouse's mesh and
+one 333 `…_col_N_0`, is what will decode it.
+
+Changes made on the strength of the crash, both guesses:
+
+- Resources named under a listed EBX (`<name>/…`) are now listed with it (per-mesh data such as
+  shader blocks, if named that way).
+- `--asset-bundle coregameassets` puts the blueprint, its collision and our mesh into the level's
+  copy of bam's `bam_coregameassets` (which keeps its name; the copy turns into an edited one),
+  leaving only tile and layer in the ground bundle. If shader or material data is found per
+  bundle name, our renamed root bundle and our new bundle have none, while bam's own
+  `game_coremeshes` layer placing util_groundplane lives in `bam_coregameassets`, and the 333 map
+  adds 1,251 of its own files to that bundle.
+
 **What the base game does (checked on files, the PC's read-only scans).**
 
 - bam's world-partition tiles place their geometry through merged `StaticModelGroup`s. The first

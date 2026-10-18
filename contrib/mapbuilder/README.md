@@ -44,6 +44,7 @@ can be stood on.
         --level dingolevel_reskate_ground --bam all --dry-run
     python -m reskate_mapbuilder list-assets --game "<Skate>" --superbundle <path> [--bundle B] [--contains TEXT]
     python -m reskate_mapbuilder inspect-meshset --game "<Skate>" --superbundle S --bundle B --resource R
+    python -m reskate_mapbuilder mesh-refs --game "<Skate>" [--mod <mod>] --superbundle S --bundle B --mesh EBX
     python -m reskate_mapbuilder ebx-roundtrip --game "<Skate>" --superbundle globals \
         --ebx levels/game/dingolevel_root/dingolevel_root/description
     python -m reskate_mapbuilder ebx-arrayhash --game "<Skate>" --superbundle ... --ebx ...
