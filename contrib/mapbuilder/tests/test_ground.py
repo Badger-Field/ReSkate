@@ -635,3 +635,78 @@ def test_a_blueprint_importing_its_collision_ebx_gets_ours(tmp_path, capsys):
 
 def struct_pack_half4():
     return __import__("struct").pack("<4e", 0.0, 0.0, 0.0, 1.0)
+
+
+def six_stream_meshset():
+    """A one-LOD, one-section MeshSet in the ramp wedge's layout: six streams, strides 8, 4, 4, 4,
+    12, 4 (Half4 position; Half2 TexCoord0 and TexCoord1; UByte4N colour; a Float3 of usage 42;
+    UByte4 usage 51)."""
+    import struct
+    quad = [(0.0, 0.0, 0.0), (0.0, 0.0, 2.0), (2.0, 0.0, 0.0), (2.0, 0.0, 2.0)]
+    tris = [(0, 1, 2), (2, 1, 3)]
+    streams = [b"".join(struct.pack("<4e", *p, 1.0) for p in quad),
+               b"".join(struct.pack("<2e", 0.25 + p[0] / 8, 0.5 + p[2] / 8) for p in quad),
+               b"".join(struct.pack("<2e", p[0] / 2, p[2] / 2) for p in quad),
+               bytes([10, 20, 30, 40]) * 3 + bytes([1, 2, 3, 4]),
+               b"".join(struct.pack("<3f", 0.0, 1.0, 0.0) for _ in quad),
+               bytes([1, 0, 0, 0]) * 4]
+    chunk = b"".join(streams)
+    vertex_bytes = len(chunk)
+    chunk += struct.pack("<6H", *(i for t in tris for i in t))
+    chunk += bytes(-len(chunk) % 16)
+    data = bytearray(1024)
+    struct.pack_into("<III", data, 0, 192, 176, 384)
+    struct.pack_into("<3f", data, 0x10, 0.0, 0.0, 0.0)
+    struct.pack_into("<3f", data, 0x20, 2.0, 0.0, 2.0)
+    struct.pack_into("<Q", data, 0x30, 208 - 16)
+    struct.pack_into("<HH", data, 180, 1, 1)
+    struct.pack_into("<IQ", data, 208 + 8, 1, 384 - 16)
+    struct.pack_into("<4I", data, 208 + 80, 0x40, 33, 12, vertex_bytes)
+    data[208 + 116:208 + 132] = guid(9).bytes
+    at = 384
+    data[at + 30], data[at + 31] = 36, 3
+    struct.pack_into("<4I", data, at + 32, 2, 0, 0, 4)
+    elements = [(1, 8, 0, 0), (33, 6, 0, 1), (34, 6, 0, 2), (52, 13, 0, 3), (42, 3, 0, 4), (51, 12, 0, 5)]
+    for e, element in enumerate(elements):
+        data[at + 112 + 4 * e:at + 116 + 4 * e] = bytes(element)
+    for e, stride in enumerate([8, 4, 4, 4, 12, 4]):
+        data[at + 112 + 64 + 2 * e] = stride
+    data[at + 112 + 96], data[at + 112 + 97] = 6, 6
+    return bytes(data), chunk
+
+
+def test_a_six_stream_layout_is_filled_stream_by_stream():
+    from reskate_mapbuilder.meshset import section_element
+    ms, chunk = six_stream_meshset()
+    verts = [(0.0, 0.0, 0.0), (0.0, 0.0, 4.0), (4.0, 0.0, 0.0), (4.0, 0.0, 4.0)]
+    out, chunks, report = write_mesh(ms, [chunk], verts, [(0, 1, 2), (2, 1, 3)], [guid(10)])
+    text = "\n".join(report)
+    assert "TexCoord0 (usage 33): planar per face at 0.125 per metre (the template section's) from [0.25, 0.5]" in text
+    assert "TexCoord1 (usage 34): planar at 0.5 per metre" in text and "usage 52 0a141e28s" in text
+    lod = read_layout(out)[0]
+    s = lod.sections[0]
+    assert s.strides == [8, 4, 4, 4, 12, 4] and rebuild_chunk(lod, chunks[0]) == chunks[0]
+    assert section_positions(s, chunks[0])[3] == (4.0, 0.0, 4.0)
+    assert section_element(s, chunks[0], 33)[3] == [0.75, 1.0]           # 0.25 + 4 / 8, 0.5 + 4 / 8
+    assert section_element(s, chunks[0], 34)[3] == [2.0, 2.0]
+    assert section_element(s, chunks[0], 52)[1] == [10 / 255, 20 / 255, 30 / 255, 40 / 255]
+    assert section_element(s, chunks[0], 42)[2] == [0.0, 1.0, 0.0]        # copied from the template vertex
+    assert section_element(s, chunks[0], 51)[0] == [0.0, 0.0, 0.0, 0.0]   # zeros
+
+
+def test_auto_material_donors(tmp_path, monkeypatch):
+    import reskate_mapbuilder.ground as ground_module
+    from test_place import write_tiles
+    from reskate_mapbuilder.place import read_place
+    monkeypatch.setattr(ground_module, "AUTO_DONORS", {"ground": ("util_groundplane", 0), "metal": ("no_such", 0)})
+    game = Game(fake_game(tmp_path / "game"))
+    place = read_place(write_tiles(tmp_path / "tiles"))
+    visuals = [("v", place.visual[0].vertices, place.visual[0].triangles, "ground")]
+    log = []
+    new_ground_level(game, ModBuilder(game, "zz"), LEVEL, visuals=visuals, visual_template=BOX, auto_material=True,
+                     log=log)
+    text = "\n".join(log)
+    assert f"auto material donor: ground = {GROUNDPLANE}_mesh:0" in text
+    assert "auto material donor: metal: no mesh named like 'no_such'; the default" in text
+    assert f"auto material donor: concrete = {BOX}_mesh:1" in text
+    assert f"material {GROUNDPLANE}_mesh:0 ->" in text

@@ -308,6 +308,9 @@ def test_place_info_views_give_a_spot_and_heading_per_visual_object(tmp_path, ca
     # The visual ground (0..50 x 0..50): ground south of it? none there (z < 0), so north at z 50 + 30.
     line = next(line for line in out.splitlines() if line.strip().startswith("ground_t0_0:"))
     assert "trainer ground" in line and "face heading" in line and "it spans y 300.0..300.0" in line
+    # No ground south or north of it in this export: west of it, facing east.
+    assert "face heading 90" in line and "west of it" in line
+    assert "after `trainer ground` the camera faces heading 0" in out
 
 
 def test_material_donors_lists_sections_and_proposes_defaults(tmp_path, capsys):
