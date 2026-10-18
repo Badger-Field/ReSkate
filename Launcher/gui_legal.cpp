@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <format>
+#include <string_view>
 
 // The LEGAL panel: this edition's terms of use and privacy policy, built into the launcher from
 // legal/*.md (cmake/Apps.cmake), so what a player agrees to is what the release they run ships.
@@ -24,7 +25,13 @@ Legal::Document built_in(int kind) {
 void load(Legal& legal, int kind) {
     auto& slot = legal.slots[static_cast<std::size_t>(kind)];
     slot.document = built_in(kind);
-    slot.text = thunderstore::readme_lines(slot.document.markdown, 2000);
+    // The panel shows the title and version above the text: the body starts after the file's own
+    // "# Title" and "Version N, YYYY-MM-DD" lines (cmake/Apps.cmake checks they are there).
+    std::string_view body = slot.document.markdown;
+    if (const auto version = body.find("\nVersion "); version != std::string_view::npos)
+        if (const auto end = body.find('\n', version + 1); end != std::string_view::npos) body.remove_prefix(end + 1);
+    while (body.starts_with('\n')) body.remove_prefix(1);
+    slot.text = thunderstore::readme_lines(body, 2000);
     slot.loaded = true;
 }
 } // namespace
