@@ -408,6 +408,17 @@ void Host::answer_poll(Guest &guest, std::size_t answer) {
     check_vote(false);
 }
 
+bool Host::answers_vote(const Guest &guest, std::string_view line) const {
+    if (!vote_) return false;
+    // "/2", "/yes", or the same after "/vote", as chat_command takes them.
+    const auto [first, rest] = split(line);
+    auto verb = lower(first);
+    if (verb == "vote") verb = lower(split(rest).first);
+    if (vote_->kind == VoteKind::poll)
+        return verb.size() == 1 && verb[0] >= '1' && static_cast<std::size_t>(verb[0] - '0') <= vote_->answers.size();
+    return guest.member.id != vote_->target && (verb == "yes" || verb == "y" || verb == "no" || verb == "n");
+}
+
 // `by` nullptr: the server console, which may always end it.
 std::string Host::end_poll(Guest *by) {
     if (!vote_ || vote_->kind != VoteKind::poll) return "No poll is running.";
