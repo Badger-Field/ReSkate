@@ -231,10 +231,11 @@ def groundplane_mesh():
                                                MeshSetResource=ResourceReference(MESHSET_ID)), guid(96))])
 
 
-def meshset(chunk_guid, name=GROUNDPLANE + "_mesh"):
-    """(MeshSet, chunk): a rigid MeshSet with one LOD of two sections, a 50 m quad each, laid out
-    as FORMAT-NOTES 1 says: section 0 with float positions in stream 0 and a normal and UV in
-    stream 1, section 1 (a shadow) with half-float positions only."""
+def meshset(chunk_guid, name=GROUNDPLANE + "_mesh", lods=1):
+    """(MeshSet, chunk): a rigid MeshSet with `lods` LODs (LOD k names chunk_guid, then guid(200 +
+    k)) of two sections, a 50 m quad each, laid out as FORMAT-NOTES 1 says: section 0 with float
+    positions in stream 0 and a normal and UV in stream 1, section 1 (a shadow) with half-float
+    positions only. Every LOD has the same geometry, so one chunk serves them all."""
     quad = [(-25.0, 0.0, -25.0), (25.0, 0.0, -25.0), (-25.0, 0.0, 25.0), (25.0, 0.0, 25.0)]
     tris = [(0, 1, 2), (1, 3, 2)]      # clockwise seen from above
     chunk = bytearray()
@@ -248,44 +249,52 @@ def meshset(chunk_guid, name=GROUNDPLANE + "_mesh"):
     for _ in range(2):
         chunk += struct.pack("<6H", *(i for t in tris for i in t))
     chunk += bytes(-len(chunk) % 16)
-    data = bytearray(1376)
+    tables = 208 + 176 * lods
+    names = tables + 2 * 384 * lods
+    data = bytearray(max(1376, names + 64))
     struct.pack_into("<III", data, 0, 192, 176, 384)
     struct.pack_into("<4f", data, 0x10, -25.0, 0.0, -25.0, 0.0)
     struct.pack_into("<4f", data, 0x20, 25.0, 0.0, 25.0, 0.0)
-    struct.pack_into("<Q", data, 0x30, 208 - 16)
-    struct.pack_into("<HH", data, 180, 1, 2)
-    names = 1152
+    struct.pack_into("<HH", data, 180, lods, 2 * lods)
     data[names:names + len(name) + 1] = name.encode() + b"\0"
     struct.pack_into("<Q", data, 0x68, names - 16)
-    lod = 208
-    struct.pack_into("<I", data, lod + 8, 2)
-    struct.pack_into("<Q", data, lod + 12, 384 - 16)
-    struct.pack_into("<4I", data, lod + 80, 0x40, 33, 24, vertex_bytes)
-    data[lod + 116:lod + 132] = chunk_guid.bytes
-    for s, (per_vertex, start, first, elements, strides) in enumerate((
-            (20, 0, 0, [(1, 3, 0, 0), (33, 6, 0, 1), (51, 12, 4, 1)], [12, 8]),
-            (8, 80, 6, [(1, 8, 0, 0)], [8]))):
-        at = 384 + 384 * s
-        struct.pack_into("<Q", data, at + 8, names - 16)
-        data[at + 30], data[at + 31] = per_vertex, 3
-        struct.pack_into("<4I", data, at + 32, 2, first, start, 4)
-        for e, element in enumerate(elements):
-            data[at + 112 + 4 * e:at + 116 + 4 * e] = bytes(element)
-        for e, stride in enumerate(strides):
-            data[at + 112 + 64 + 2 * e] = stride
-        data[at + 112 + 96], data[at + 112 + 97] = len(elements), len(strides)
+    for k in range(lods):
+        lod = 208 + 176 * k
+        table = tables + 2 * 384 * k
+        struct.pack_into("<Q", data, 0x30 + 8 * k, lod - 16)
+        struct.pack_into("<I", data, lod + 8, 2)
+        struct.pack_into("<Q", data, lod + 12, table - 16)
+        struct.pack_into("<4I", data, lod + 80, 0x40, 33, 24, vertex_bytes)
+        data[lod + 116:lod + 132] = (chunk_guid if k == 0 else guid(200 + k)).bytes
+        for s, (per_vertex, start, first, elements, strides) in enumerate((
+                (20, 0, 0, [(1, 3, 0, 0), (33, 6, 0, 1), (51, 12, 4, 1)], [12, 8]),
+                (8, 80, 6, [(1, 8, 0, 0)], [8]))):
+            at = table + 384 * s
+            struct.pack_into("<Q", data, at + 8, names - 16)
+            data[at + 30], data[at + 31] = per_vertex, 3
+            struct.pack_into("<4I", data, at + 32, 2, first, start, 4)
+            for e, element in enumerate(elements):
+                data[at + 112 + 4 * e:at + 116 + 4 * e] = bytes(element)
+            for e, stride in enumerate(strides):
+                data[at + 112 + 64 + 2 * e] = stride
+            data[at + 112 + 96], data[at + 112 + 97] = len(elements), len(strides)
     return bytes(data), bytes(chunk)
 
 
-# An ordinary visible world object in its own world-partition bundle (like the lighthouse the PC
-# found): blueprint, mesh, texture, their resources and chunks, and <blueprint>.physics.
-ISLAND_BUNDLE = "win32/levels/game/bam_levelroot/wp_dst_ftue_island"
+# An ordinary visible world object in its own superbundle and bundle (like the lighthouse the PC
+# found): blueprint, mesh, texture, their resources, and <blueprint>.physics. Its MeshSet has two
+# LODs: LOD 0's chunk is in the bundle and the superbundle's TOC, LOD 1's in the TOC only; the
+# texture's chunk is in the TOC only.
+FTUE = "levels/game/dingolevel_ftue_island/dingolevel_ftue_island"
+ISLAND_BUNDLE = "win32/levels/game/dingolevel_ftue_island/wp_dst_ftue_island"
 LIGHTHOUSE = "world/plots/iog_island/iog_lighthouse_island_02"
 LIGHTHOUSE_GUID, LIGHTHOUSE_MESH_GUID, LIGHTHOUSE_TEXTURE_GUID = guid(100), guid(101), guid(102)
 LIGHTHOUSE_CHUNK, LIGHTHOUSE_TEXTURE_CHUNK = guid(103), guid(104)
+LIGHTHOUSE_LOD1_CHUNK = guid(201)
 
 
-def lighthouse_bundle(bundle):
+def lighthouse(bundle, toc_chunk):
+    """(the bundle, the superbundle's TOC chunks)."""
     bp = document(LIGHTHOUSE_GUID, [
         (lambda d: obj(d, "ObjectBlueprint", Name=LIGHTHOUSE, Object=ptr(1)), guid(105)),
         (lambda d: obj(d, "StaticModelEntityData", Mesh=PointerReference(PointerKind.external, 0)), guid(106))],
@@ -294,13 +303,15 @@ def lighthouse_bundle(bundle):
                                                           MeshSetResource=ResourceReference(0x7777)), guid(107))],
                     imports=[(LIGHTHOUSE_TEXTURE_GUID, guid(108))])
     texture = document(LIGHTHOUSE_TEXTURE_GUID, [(lambda d: obj(d, "Asset", Name=LIGHTHOUSE + "_d"), guid(108))])
-    ms, chunk = meshset(LIGHTHOUSE_CHUNK, LIGHTHOUSE + "_mesh")
-    return bundle(ISLAND_BUNDLE, {"world/plots/iog_island/other": b"zz", LIGHTHOUSE: write_document(bp),
-                                  LIGHTHOUSE + "_mesh": write_document(mesh), LIGHTHOUSE + "_d": write_document(texture)},
-                  {LIGHTHOUSE + ".physics": (0x41759364, 0x8888, template_physics()),
-                   LIGHTHOUSE + "_mesh": (0x49B156D4, 0x7777, ms),
-                   LIGHTHOUSE + "_d": (0x6BDE20BA, 0x9999, b"texture" + LIGHTHOUSE_TEXTURE_CHUNK.bytes)},
-                  [(guid(109), b"unrelated"), (LIGHTHOUSE_CHUNK, chunk), (LIGHTHOUSE_TEXTURE_CHUNK, b"texels")])
+    ms, chunk = meshset(LIGHTHOUSE_CHUNK, LIGHTHOUSE + "_mesh", lods=2)
+    b = bundle(ISLAND_BUNDLE, {"world/plots/iog_island/other": b"zz", LIGHTHOUSE: write_document(bp),
+                               LIGHTHOUSE + "_mesh": write_document(mesh), LIGHTHOUSE + "_d": write_document(texture)},
+               {LIGHTHOUSE + ".physics": (0x41759364, 0x8888, template_physics()),
+                LIGHTHOUSE + "_mesh": (0x49B156D4, 0x7777, ms),
+                LIGHTHOUSE + "_d": (0x6BDE20BA, 0x9999, b"texture" + LIGHTHOUSE_TEXTURE_CHUNK.bytes)},
+               [(guid(109), b"unrelated"), (LIGHTHOUSE_CHUNK, chunk)])
+    return b, [toc_chunk(LIGHTHOUSE_CHUNK, chunk), toc_chunk(LIGHTHOUSE_LOD1_CHUNK, chunk),
+               toc_chunk(LIGHTHOUSE_TEXTURE_CHUNK, b"texels"), toc_chunk(guid(110), b"unrelated")]
 
 
 def template_physics():
@@ -405,7 +416,6 @@ def fake_game(tmp_path):
                      {GROUNDPLANE + ".physics": (0x41759364, PHYSICS_ID, template_physics()),
                       GROUNDPLANE + "_mesh": (0x49B156D4, MESHSET_ID, meshset(MESH_CHUNK)[0])},
                      [(MESH_CHUNK, meshset(MESH_CHUNK)[1])]),
-              lighthouse_bundle(bundle),
               bundle("win32/levels/game/bam_levelroot/tod_2_noon", {"levels/game/bam_levelroot/tod_2_noon": b"tod"}),
               bundle("win32/levels/game/bam_levelroot/startpoint_sublevels", {"sp": b"sp"}),
               bundle(CORE_BUNDLE, {"levels/game/bam_levelroot/other": b"zz",
@@ -415,7 +425,15 @@ def fake_game(tmp_path):
                      {TILE[:-len("_sublevel")] + "/staticmodelgroup.physics": (0x41759364, 0x77, template_physics())})],
         ROOT: [bundle("win32/" + ROOT, {ROOT + "_dsublevelmanager_genprefab": write_document(genprefab())})],
     }
-    chunks = {BAM: [TocChunk(guid(50), CasIdentifier(False, CHUNK, 2), 0, 4)]}
+    def toc_chunk(g, payload):
+        stored = encode_raw(payload)
+        cas.extend(stored)
+        return TocChunk(g, CasIdentifier(False, CHUNK, 2), len(cas) - len(stored), len(stored))
+
+    island, island_chunks = lighthouse(bundle, toc_chunk)
+    tocs[FTUE] = [island]
+    chunks = {BAM: [TocChunk(guid(50), CasIdentifier(False, CHUNK, 2), 0, 4), toc_chunk(MESH_CHUNK, meshset(MESH_CHUNK)[1])],
+              FTUE: island_chunks}
     for path, bundles in tocs.items():
         target = data / "Win32" / (path + ".toc")
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -518,7 +536,7 @@ def test_new_level_writes_the_registration(tmp_path):
     for b in toc.bundles:
         if b.name in base:
             assert b.region == base[b.name]
-    assert [c.guid for c in toc.chunks] == [guid(50)]
+    assert sorted(c.guid.bytes for c in toc.chunks) == sorted([guid(50).bytes, MESH_CHUNK.bytes])
     _, region, manifest = view.bundle(toc, "win32/" + NEW)
     assert [a.name for a in manifest.ebx] == [BAM, "levels/game/bam_levelroot/pool", GROUNDPLANE, GROUNDPLANE + "_mesh", NEW]
     assert [f.location.patch for f in region.files] == [True, False, False, False, False, True, False, False, False]

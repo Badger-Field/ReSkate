@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from test_level import (ISLAND_BUNDLE, LIGHTHOUSE, LIGHTHOUSE_CHUNK, LIGHTHOUSE_MESH_GUID,  # noqa: E402
+from test_level import (FTUE, LIGHTHOUSE_LOD1_CHUNK, ISLAND_BUNDLE, LIGHTHOUSE, LIGHTHOUSE_CHUNK, LIGHTHOUSE_MESH_GUID,  # noqa: E402
                         LIGHTHOUSE_TEXTURE_CHUNK, meshset)
 from test_level import (BAM, BP_GUID, BP_ROOT_GUID, CHUNK, CORE_BUNDLE, CORE_LAYER, GROUNDPLANE, LAYER_GUID,  # noqa: E402
                         LAYER_REFERENCE_GUID, LEVEL, MESH_CHUNK, MESH_GUID, NEW, PLACEMENT_GUID, TEMPLATE_MATERIAL, TILE,
@@ -18,6 +18,7 @@ from reskate_mapbuilder.ebx import PointerKind, PointerReference, read_document,
 from reskate_mapbuilder.meshset import read_layout, rebuild_chunk, section_positions, section_triangles, write_mesh  # noqa: E402
 from reskate_mapbuilder.ebxedit import (add_import, clone_instance, derived_guid, field_referrers, guid_flags, path_to,  # noqa: E402
                                         prune_imports, prune_unreachable, remove_instances)
+from reskate_mapbuilder.cas import decode_raw  # noqa: E402
 from reskate_mapbuilder.game import Game  # noqa: E402
 from reskate_mapbuilder.ground import new_ground_level, resource_id  # noqa: E402
 from reskate_mapbuilder.mod import ModBuilder  # noqa: E402
@@ -284,16 +285,30 @@ def test_visual_template_keeps_the_layers_own_placement(tmp_path):
 
 
 def test_blueprint_from_another_bundle_lists_what_it_needs(tmp_path):
-    _, _, report, _, view = build(tmp_path, blueprint_template=LIGHTHOUSE, blueprint_bundle=ISLAND_BUNDLE)
+    _, _, report, _, view = build(tmp_path, blueprint_template=LIGHTHOUSE, blueprint_bundle=ISLAND_BUNDLE,
+                                     blueprint_superbundle=FTUE)
     text = "\n".join(report)
     assert f"listed from {ISLAND_BUNDLE} in the ground bundle: 2 EBX" in text
     assert "flags #1 StaticModelEntityData" in text
     _, region, manifest, (_, _, bp) = ground(view)
     assert [a.name for a in manifest.ebx] == [SUBLEVEL, LAYER, BLUEPRINT, LIGHTHOUSE + "_mesh", LIGHTHOUSE + "_d"]
     assert [a.name for a in manifest.resources] == [PHYSICS, LIGHTHOUSE + "_mesh", LIGHTHOUSE + "_d"]
-    assert [c.guid for c in manifest.chunks] == [LIGHTHOUSE_CHUNK, LIGHTHOUSE_TEXTURE_CHUNK]
-    assert [f.location.patch for f in region.files] == [True] * 4 + [False] * 2 + [True] + [False] * 4
+    assert [c.guid for c in manifest.chunks] == [LIGHTHOUSE_CHUNK]
+    assert [f.location.patch for f in region.files] == [True] * 4 + [False] * 2 + [True] + [False] * 3
     assert bp.imports[0].file_guid == LIGHTHOUSE_MESH_GUID
+    # The chunks the ftue superbundle's TOC lists for them are in the level's TOC too.
+    toc = read_toc(Path(view.mod, "Win32", NEW + ".toc").read_bytes())
+    listed = {c.guid: c for c in toc.chunks}
+    source = {c.guid: c for c in Game(view.root).superbundle(FTUE).chunks}
+    for g in (LIGHTHOUSE_CHUNK, LIGHTHOUSE_LOD1_CHUNK, LIGHTHOUSE_TEXTURE_CHUNK):
+        assert (listed[g].location, listed[g].offset, listed[g].size) == (source[g].location, source[g].offset,
+                                                                          source[g].size)
+    assert guid(110) not in listed
+    assert "3 of 3 chunks of " + FTUE in text
+    assert f"mesh {LIGHTHOUSE}_mesh LOD 1 chunk {LIGHTHOUSE_LOD1_CHUNK.string()}: in {FTUE}'s TOC chunk list; " \
+           "listed by the level's TOC" in text
+    assert f"LOD 0 chunk {LIGHTHOUSE_CHUNK.string()}: in {ISLAND_BUNDLE}'s chunk entries and {FTUE}'s TOC chunk " \
+           "list; listed by the level's TOC, the ground bundle" in text
     assert read_document(view.ebx(region, manifest, LIGHTHOUSE + "_mesh")).file_guid == LIGHTHOUSE_MESH_GUID
 
 
@@ -301,6 +316,9 @@ def test_mesh_own_writes_a_meshset_rigidmesh_and_chunk(tmp_path):
     _, _, report, _, view = build(tmp_path, mesh="own", size=20.0)
     text = "\n".join(report)
     assert "chunk 144 bytes rebuilds identically" in text and "winding flipped to match" in text
+    assert f"mesh {GROUNDPLANE}_mesh (replaced by ours) LOD 0 chunk {MESH_CHUNK.string()}: in win32/{BAM}'s chunk " \
+           f"entries and {BAM}'s TOC chunk list; listed by the level's TOC, the level's root bundle" in text
+    assert "mesh ours (" in text and "in the mod's archive; listed by the level's TOC, the ground bundle" in text
     assert "1 resource references named the template's id" in text and "1 blueprint imports moved to it" in text
     _, region, manifest, (_, _, bp) = ground(view)
     mesh_name = f"levels/game/{LEVEL}/ground_mesh"
@@ -315,6 +333,9 @@ def test_mesh_own_writes_a_meshset_rigidmesh_and_chunk(tmp_path):
     chunk_asset = manifest.chunks[0]
     chunk = view.payload(region, 1 + 4 + 2)
     assert len(ms) == 1376 and chunk_asset.logical_size == len(chunk) and chunk_asset.logical_offset == 0
+    toc_chunk = next(c for c in read_toc(Path(view.mod, "Win32", NEW + ".toc").read_bytes()).chunks
+                     if c.guid == chunk_asset.guid)                    # also in the level's TOC, same bytes
+    assert toc_chunk.location.patch and decode_raw(view.read(toc_chunk.location, toc_chunk.offset, toc_chunk.size)) == chunk
     lod = read_layout(ms)[0]
     assert lod.chunk == chunk_asset.guid and rebuild_chunk(lod, chunk) == chunk
     for s in lod.sections:
@@ -333,17 +354,27 @@ def test_write_mesh_refuses_a_chunk_it_does_not_understand():
     ms, chunk = meshset(guid(1))
     broken = bytearray(chunk)
     broken[112 - 1] = 0 if broken[111] else 1        # inside section 1's positions: still rebuilds
-    write_mesh(ms, bytes(broken), [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)], [(0, 2, 1)], guid(2))
+    write_mesh(ms, [bytes(broken)], [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)], [(0, 2, 1)], [guid(2)])
     broken = chunk[:-1] + b"\1"                        # a non-zero byte in the end padding
     with pytest.raises(ValueError, match="does not rebuild"):
-        write_mesh(ms, broken, [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)], [(0, 2, 1)], guid(2))
+        write_mesh(ms, [broken], [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)], [(0, 2, 1)], [guid(2)])
 
 
 def test_mesh_own_on_a_blueprint_from_another_bundle_keeps_its_texture(tmp_path):
-    _, _, _, _, view = build(tmp_path, mesh="own", blueprint_template=LIGHTHOUSE, blueprint_bundle=ISLAND_BUNDLE)
+    _, _, _, _, view = build(tmp_path, mesh="own", blueprint_template=LIGHTHOUSE, blueprint_bundle=ISLAND_BUNDLE,
+                                     blueprint_superbundle=FTUE)
     _, _, manifest, _ = ground(view)
     mesh_name = f"levels/game/{LEVEL}/ground_mesh"
     assert [a.name for a in manifest.ebx] == [SUBLEVEL, LAYER, BLUEPRINT, mesh_name, LIGHTHOUSE + "_d"]
     assert [a.name for a in manifest.resources] == [PHYSICS, mesh_name, LIGHTHOUSE + "_d"]
-    assert [c.guid for c in manifest.chunks][1:] == [LIGHTHOUSE_TEXTURE_CHUNK] and LIGHTHOUSE_CHUNK not in [
-        c.guid for c in manifest.chunks]
+    ours = [c.guid for c in manifest.chunks]
+    assert len(ours) == 2 and LIGHTHOUSE_CHUNK not in ours            # one chunk per LOD of ours
+    toc = {c.guid for c in read_toc(Path(view.mod, "Win32", NEW + ".toc").read_bytes()).chunks}
+    assert set(ours) <= toc and LIGHTHOUSE_TEXTURE_CHUNK in toc and LIGHTHOUSE_LOD1_CHUNK not in toc
+    _, region, manifest, _ = ground(view)
+    ms = view.payload(region, 1 + 5 + 1)
+    layout = read_layout(ms)
+    assert [lod.chunk for lod in layout] == ours
+    for k, lod in enumerate(layout):
+        chunk = view.payload(region, 1 + 5 + 3 + k)
+        assert rebuild_chunk(lod, chunk) == chunk and len(section_positions(lod.sections[0], chunk)) == 121
