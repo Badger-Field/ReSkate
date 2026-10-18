@@ -368,9 +368,8 @@ struct Changelog {
     }
 };
 
-// The privacy policy and terms of service, from the ReSkate backend (GET /api/v1/legal/<kind>):
-// each fetched on a worker the first time it is shown and kept while the launcher runs.
-// Everything but the worker's hand-over belongs to the UI thread.
+// The privacy policy and terms of use, built into the launcher from legal/*.md (gui_legal.cpp).
+// Each is laid out the first time it is shown and kept while the launcher runs.
 struct Legal {
     enum Kind { privacy, terms, count };
     struct Document {
@@ -393,8 +392,8 @@ struct Legal {
     std::array<Slot, count> slots;
     int open{-1};                               // the Kind shown, or -1 when the window is closed
 
-    // The versions the backend has now (GET /api/v1/legal), looked up once a launch. One newer
-    // than the player agreed to (Settings::accepted_*) puts up the agreement before anything else.
+    // The built-in versions. One newer than the player agreed to (Settings::accepted_*) puts up
+    // the agreement before anything else.
     std::thread versions_worker;
     bool versions_started{}, versions_arrived{};   // arrived: worker -> UI, under the mutex
     std::array<std::uint64_t, count> current{};
