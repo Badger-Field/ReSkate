@@ -34,7 +34,7 @@ import hashlib
 import struct
 from collections import Counter
 
-from . import nativedb
+from . import level as level_module, nativedb
 from .bundle import CHUNK, EBX, Guid
 from .cas import decode_cas
 from .ebx import Document, Object, PointerKind, PointerReference, ResourceReference, read_document, read_file_guid, write_document
@@ -121,12 +121,23 @@ BAM_MODES = {
 }
 
 
-def resource_id(name: str) -> int:
-    """A new resource's id: from its name, with the low two bits clear. The game keeps tag bits
-    there while it fixes up references: a mesh id ending in binary 10 crashed the level load
-    (89109ff, 5924574: the crash read our MeshSet's id as a tagged pointer), ids ending in 00 (the
-    d1b slab's mesh and collision) and 01 (Embarcadero's collision) worked."""
-    return int.from_bytes(hashlib.md5(("resource|" + name.lower()).encode()).digest()[:8], "little") & ~3
+# How new resource ids are made from their names (MD5). "odd": low bit set, never 0, as every one
+# of the 147,564 distinct stock ids is (REA's static survey; the reference fix-up's slot walk treats
+# bit 0 as an unresolved handle to skip). "clear": low two bits clear, the form that worked in game
+# (d1b, Embarcadero, Freedom Plaza builds before the survey). An id ending in binary 10 crashed the
+# level load (89109ff, 5924574: read as a tagged pointer). Set by --resource-ids.
+RESOURCE_ID_STYLES = ("odd", "clear")
+RESOURCE_ID_STYLE = "odd"
+
+
+def resource_id(name: str, style: str | None = None) -> int:
+    value = int.from_bytes(hashlib.md5(("resource|" + name.lower()).encode()).digest()[:8], "little")
+    style = style or RESOURCE_ID_STYLE
+    if style == "odd":
+        return value | 1
+    if style == "clear":
+        return (value & ~3) or 4
+    raise ValueError(f"resource id style is one of {RESOURCE_ID_STYLES}")
 
 
 class _Source:
@@ -359,8 +370,11 @@ def _set_aabbs(doc: Document, lo, hi) -> list[str]:
 # Per-part tables of a blueprint (PC: util_groundplane declares 1 entry, the skatepark box 3, and a
 # 38-part collision under util_groundplane's copy gave no collision at all). PhysicsPartInfos must
 # have one entry per physics part; those listed in GROWABLE are grown (entry 0 copied) by --parts grow.
+# REA's static survey: PhysicsPartInfos' sibling arrays share its length in stock blueprints (or are
+# empty), so each non-empty sibling must match it, before and after growing.
 PART_COUNT_TABLE = "PhysicsPartInfos"
-GROWABLE = ("PhysicsPartInfos", "PartBoundingBoxes")
+PART_SIBLINGS = ("PartBoundingBoxes", "PartLinks", "PartNetworkIdRanges", "PartStates", "PartMaterials")
+GROWABLE = (PART_COUNT_TABLE,) + PART_SIBLINGS
 
 
 def _part_tables(doc: Document) -> dict[str, list[tuple[str, list]]]:
@@ -384,20 +398,41 @@ def _part_tables(doc: Document) -> dict[str, list[tuple[str, list]]]:
     return out
 
 
+def _check_part_siblings(tables: dict) -> list[str]:
+    """Each non-empty sibling of PhysicsPartInfos (same object) must have its length; ValueError if not."""
+    out = []
+    for path, infos in tables.get(PART_COUNT_TABLE, []):
+        parent = path.rsplit(".", 1)[0]
+        lengths = []
+        for name in PART_SIBLINGS:
+            for sibling_path, values in tables.get(name, []):
+                if sibling_path.rsplit(".", 1)[0] != parent:
+                    continue
+                if values and len(values) != len(infos):
+                    raise ValueError(f"{sibling_path} has {len(values)} entries but {path} has {len(infos)}: the "
+                                     f"per-part arrays must share one length (REA's survey); not written")
+                lengths.append(f"{name} {len(values)}" + ("" if values else " (empty)"))
+        out.append(f"  {path} [{len(infos)}] and its siblings: " + (", ".join(lengths) or "none") + ": consistent")
+    return out
+
+
 def _check_part_tables(bp: Document, shapes, parts, collision_mode: str, grow: bool, template_parts: int) -> list[str]:
     """Our physics part count against the template's own `.physics` part count (the rule the game
     results fit: the skatepark box declares one PhysicsPartInfos entry over a 3-part file, and our
     3-part file under its copy worked; util_groundplane's 1-part file replaced by 38 parts gave no
     collision). A mismatch is refused, or with `grow` the blueprint's PhysicsPartInfos and
-    PartBoundingBoxes are grown to one entry per part (untested). The blueprint's per-part tables
-    and PhysicsPartInfos' entries are printed, to find what the game counts."""
+    its non-empty siblings (PART_SIBLINGS) are grown to one entry per part (untested). The
+    sibling arrays must share PhysicsPartInfos' length (or be empty) before and after. The
+    blueprint's per-part tables and PhysicsPartInfos' entries are printed."""
     tables = _part_tables(bp)
+    siblings = _check_part_siblings(tables)
     out = ["  blueprint per-part tables: " + (", ".join(f"{path} [{len(values)}]" for name in sorted(tables)
                                                          for path, values in tables[name]) or "none")]
     for path, values in tables.get(PART_COUNT_TABLE, []):
         for i, value in enumerate(values[:4]):
             fields = ", ".join(f"{f.name}={f.value!r}" for f in value.fields) if isinstance(value, Object) else repr(value)
             out.append(f"    {path}[{i}]: {fields}")
+    out += siblings
     if collision_mode == "template":
         return out
     if len(parts) == template_parts:
@@ -408,6 +443,9 @@ def _check_part_tables(bp: Document, shapes, parts, collision_mode: str, grow: b
                          f"(--parts merge) or try --parts grow")
     for name in GROWABLE:
         for path, values in tables.get(name, []):
+            if not values and name != PART_COUNT_TABLE:
+                out.append(f"  {path} is empty: left empty")
+                continue
             if not values or any(isinstance(v, PointerReference) for v in values):
                 raise ValueError(f"{path} holds pointers or nothing; growing it is not supported")
             have = len(values)
@@ -418,6 +456,7 @@ def _check_part_tables(bp: Document, shapes, parts, collision_mode: str, grow: b
                     lo, hi = padded_bounds(world)
                     _set_aabbs_in(value, lo, hi)
             out.append(f"  grew {path} from {have} to {len(parts)} entries (entry 0 copied)")
+    out += _check_part_siblings(_part_tables(bp))
     return out + [f"  physics parts: ours {len(parts)}, the template's {template_parts}: grown (untested)"]
 
 
@@ -596,6 +635,9 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                    f"{len(host.manifest.chunks)} chunks, {len(_source_depot_keys(host))} depot keys; it becomes our "
                    f"sublevel {sublevel_name}" + (" (its own sublevel EBX replaced by our tile)" if host.has_ebx(sublevel_name)
                                                    else ""))
+    log.append(f"New resource ids: {RESOURCE_ID_STYLE} (" + ("low bit set, as every stock id" if RESOURCE_ID_STYLE == "odd"
+                                                           else "low two bits clear, as the earlier working builds")
+               + "; --resource-ids odd|clear)")
     log.append(f"Ground for {path}: {tiles} x {tiles} placements of {size} m"
                + ("" if depth == width else f" x {depth} m") + f" at {list(at)}, bam bundles: {bam}")
 
@@ -1099,9 +1141,13 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         for i, r in enumerate(host.manifest.resources):
             if r.original_size and r.original_size <= 0x10000:
                 found |= _guids_in(host.payload("res", i), wanted)
-        added = sum(mod.add_toc_chunk(path, c) for g, c in toc_chunks.items() if g.bytes in found)
+        named = [c for g, c in toc_chunks.items() if g.bytes in found]
+        added = sum(mod.add_toc_chunk(path, c) for c in named)
         log.append(f"{host.name}: copied into the level's TOC under its own name; our tile replaces/joins its "
-                   f"sublevel EBX; {added} chunks of {host.superbundle}'s TOC added to ours")
+                   f"sublevel EBX; its small resources name {len(named)} chunks of {host.superbundle}'s TOC: "
+                   f"{added} added to ours, {len(named) - added} already in it"
+                   + (" (our TOC starts as a copy of bam's chunk list, so a bam bundle's are all there)"
+                      if host.superbundle.lower() == BASE_SUPERBUNDLE.lower() and level_module.COPY_BASE_CHUNKS else ""))
     mod.add_ebx(path, ground_bundle, layer_name, _checked_bytes(layer, layer_name))
     assets_bundle = ground_bundle
     if asset_bundle == "root":
