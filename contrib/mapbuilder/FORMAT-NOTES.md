@@ -626,6 +626,31 @@ root #0 holds direct pointer fields to some of the references they remove (`#0 s
 `KEPT …`) and only references held by nothing but pointer arrays are removed.
 
 
+**Tested in game** (d102c07): `--bam no-world` builds (12 references removed, one kept: #6
+`Debug_RenderTest`, held by `#0.EventConnections[0/1].Target`) and loads; our collision reads 300,
+bam's terrain and water are still there (40, 0 reads 191). `--bam 333` builds (18 removed, 8
+kept through event and property connections) and loads with no crash into an **empty world** (sky
+and haze only); the skater stands at 301 on our invisible collision, and outside the square the
+game says the ground is still loading. So our collision works in a level holding nothing of
+bam's world. Not drawn in any run. `--visual template` was inconclusive: the worklight's blueprint
+and mesh live in the template tile's own bundle, which the level never loads. util_groundplane's
+`StaticModelEntityData` has `Visible` and `Enabled` true; it has no `MeshVTComponentData`, which
+the lighthouse `world/plots/iog_island/iog_lighthouse_island_02` (superbundle
+`levels/game/dingolevel_ftue_island/dingolevel_ftue_island`) has. The lighthouse as template with
+`--bam 333` crashed right after "Level content loaded": access violation reading 0x20 in a loop over
+384-byte records (MeshSet sections) with a null pointer, most likely its geometry chunks, which
+that superbundle's TOC chunk list holds and ours did not.
+
+**Chunks since then.** For a blueprint from another bundle, every chunk GUID that occurs in the
+bytes of the resources listed with it (MeshSet LOD chunks, textures) is listed as it is in the
+ground bundle when its bundle has it and in the level's TOC chunk list when the source
+superbundle's TOC has it (the source superbundle's TOC is not read when our level loads; the 333
+map's level TOC lists 80,006 chunks). `--mesh own` chunks go into both, the TOC entry pointing at
+its own copy in the mod's archive. The dry run ends with one line per LOD of each mesh drawn:
+where the base game keeps its chunk (bundle entries, TOC chunk list) and what of ours lists it
+(the level's TOC, the ground bundle, the level's root bundle, or NOTHING). util_groundplane_mesh's
+chunk: the line says; when it is in bam's TOC chunk list it is already in ours (`COPY_BASE_CHUNKS`).
+
 **What the base game does (checked on files, the PC's read-only scans).**
 
 - bam's world-partition tiles place their geometry through merged `StaticModelGroup`s. The first
@@ -707,16 +732,17 @@ Guesses, each a constant at the top of `ground.py` and reported by `--dry-run`:
 the blueprint's mesh (the first import whose EBX has a MeshSet of the same name in the blueprint's
 bundle). `meshset.write_mesh`:
 
-- refuses unless the template is the rigid layout (192/176/384), mesh type 0, one LOD, 16-bit
-  indices, triangle lists, a position element of format 3 or 8, and its chunk rebuilds byte for
+- refuses unless the template is the rigid layout (192/176/384), mesh type 0, 16-bit indices, triangle lists, a position element of format 3 or 8, and its chunk rebuilds byte for
   byte from the layout (each section's streams at its vertex start, the index buffer at the LOD's
   vertex bytes, every gap zero);
-- writes our plane (the collision's grid, `--size`, 5 m cells) into every section: per section,
+- writes our plane (the collision's grid, `--size`, 5 m cells) into every section of every LOD,
+  one new chunk per LOD (the PC's dry run: util_groundplane_mesh, 2 sections of 9 vertices and 8
+  triangles, its 352-byte chunk rebuilds identically; the lighthouse has 2 LODs): per section,
   aligned to 16, each stream's vertices, each vertex a copy of the template section's first
   vertex with the position replaced; then zero padding to 16 (the LOD's vertex bytes), the index
   buffer (each section's indices relative to its first vertex, `first index` cumulative), and zero
   padding of the chunk to 16. Triangles take the template's winding (seen from +y);
-- patches only: the header box, the LOD's index and vertex byte counts and chunk GUID, and each
+- patches only: the header box, each LOD's index and vertex byte counts and chunk GUID, and each
   section's triangle count, first index, vertex start and vertex count. Everything else (names,
   declarations, material references, the undecoded per-section box, unknown words) and the size
   stay the template's, so the template's resource meta is reused as is. The dry run says when our
@@ -724,8 +750,11 @@ bundle). `meshset.write_mesh`:
 
 With it come a copy of the RigidMeshAsset (`levels/game/<new>/ground_mesh`, `Name` renamed, any
 `ResourceReference` equal to the template MeshSet's id set to ours), the MeshSet resource of the
-same name (template meta), a new chunk row (`logicalOffset` 0, `logicalSize` its size, sha1 of
-it) and the blueprint's import of the template mesh moved to the copy. Guesses: the MeshSet's
+same name (template meta), per LOD a new chunk row (`logicalOffset` 0, `logicalSize` its size, sha1
+of it) and the same chunk in the level's TOC, and the blueprint's import of the template mesh moved
+to the copy. Not offered: copying the lighthouse's `MeshVTComponentData` into util_groundplane's
+copy, since an EBX document carries only the reflection of the types it uses and the writer cannot
+add a type; the lighthouse itself with `--mesh own` gives a blueprint that has the component. Guesses: the MeshSet's
 inner name strings need not change; the RigidMeshAsset names its MeshSet by id or else by name;
 normals and UVs of the template's first vertex suit a flat plane; a chunk in the bundle's
 manifest is found as the template's is.
