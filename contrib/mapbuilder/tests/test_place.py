@@ -196,6 +196,8 @@ def test_grow_makes_the_blueprint_declare_every_chunk(tmp_path, capsys):
     entity = bp.instances[1].object
     boxes = entity.get("PartBoundingBoxes")
     assert len(entity.get("PhysicsPartInfos")) == 4 and len(boxes) == 4
+    assert entity.get("PartStates") == [0, 0, 0, 0] and entity.get("PartLinks") == []      # siblings grown; empty stays
+    assert "PartLinks is empty: left empty" in out and "PartStates 4, PartLinks 0 (empty)" not in out
     assert [boxes[2].get("Min").get(a) for a in "xyz"][0] == 10.0                  # the ledge chunk's box
     assert round(boxes[2].get("Max").get("y"), 2) == 0.55
 
@@ -285,12 +287,19 @@ def test_visuals_get_a_blueprint_mesh_and_harmless_collision_each(tmp_path, caps
               "--visuals", "--visuals-only", "nothing", "--dry-run"])
 
 
-def test_resource_ids_keep_the_tag_bits_clear_and_filters_take_printed_names(tmp_path, capsys):
+def test_resource_ids_are_odd_or_clear_and_filters_take_printed_names(tmp_path, capsys):
     from reskate_mapbuilder.ground import resource_id
     from test_level import BOX
-    # The crash value of 5924574 was this name's id with tag bits 10.
-    assert resource_id("levels/game/dingolevel_reskate_place/visual_ground_0_0_tm2_m1_mesh") == 0x14e9899ef8f39c30
-    assert all(resource_id(f"levels/game/x/visual_{i}_mesh") & 3 == 0 for i in range(64))
+    name = "levels/game/dingolevel_reskate_place/visual_ground_0_0_tm2_m1_mesh"
+    # The crash value of 5924574 was this name's id with tag bits 10; "clear" is the 00 fallback.
+    assert resource_id(name, style="clear") == 0x14e9899ef8f39c30
+    assert resource_id(name, style="odd") == 0x14e9899ef8f39c33  # raw hash ...32 | 1
+    assert resource_id(name) == resource_id(name, style="odd")  # stock ids are all odd, so that is the default
+    names = [f"levels/game/x/visual_{i}_mesh" for i in range(64)]
+    assert all(resource_id(n, style="clear") & 3 == 0 and resource_id(n, style="clear") for n in names)
+    assert all(resource_id(n) & 1 == 1 for n in names)
+    with pytest.raises(ValueError):
+        resource_id(name, style="even")
     game_dir = fake_game(tmp_path / "game")
     tiles = write_tiles(tmp_path / "tiles")
     main(["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles", str(tiles),
@@ -299,6 +308,13 @@ def test_resource_ids_keep_the_tag_bits_clear_and_filters_take_printed_names(tmp
     out = capsys.readouterr().out
     assert "visual objects: 1 of 1 plus the slab: ground_t0_0 (ground, 9 vertices, 8 triangles), slab (ground, 24 vertices" in out
     assert "visual slab: 24 vertices, 12 triangles" in out
+    assert "New resource ids: odd (low bit set" in out
+    main(["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles", str(tiles),
+          "--resource-ids", "clear", "--dry-run"])
+    assert "New resource ids: clear (low two bits clear" in capsys.readouterr().out
+    main(["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles", str(tiles),
+          "--dry-run"])
+    assert "New resource ids: odd" in capsys.readouterr().out  # each run sets the style again
 
 
 def test_place_info_views_give_a_spot_and_heading_per_visual_object(tmp_path, capsys):
@@ -323,15 +339,63 @@ def test_material_donors_lists_sections_and_proposes_defaults(tmp_path, capsys):
 
 
 def test_scan_materials_ranks_bundles_with_usable_materials(tmp_path, capsys):
-    from test_level import FTUE, PLAZA_BUNDLE, PLAZA_MESH
-    game_dir = str(fake_game(tmp_path / "game"))
-    main(["scan-materials", "--game", game_dir])                       # layout.toc's superbundles: no FTUE here
+    from reskate_mapbuilder import nativedb
+    from test_level import BIG_PARK_BUNDLE, FTUE, PARK_BENCH, PARK_BUNDLE, PLAZA_BUNDLE, PLAZA_MESH
+    game_dir = fake_game(tmp_path / "game")
+    main(["scan-materials", "--game", str(game_dir)])                  # layout.toc's superbundles: no FTUE here
     assert "0 bundles with classed sections" in capsys.readouterr().out
-    main(["scan-materials", "--game", game_dir, "--superbundle", FTUE, "--superbundle", "levels/game/nothing"])
+    # A superbundle layout.toc lists but that is not on disk (a locale's, e.g. loc/wc) is skipped silently.
+    layout = game_dir / "Data" / "layout.toc"
+    layout.write_bytes(nativedb.add_superbundle(nativedb.add_superbundle(layout.read_bytes(), "Win32/loc/wc"),
+                                                "Win32/" + FTUE))
+    main(["scan-materials", "--game", str(game_dir)])
     out = capsys.readouterr().out
-    assert "levels/game/nothing: not read" in out and "usable sections per class: concrete 1" in out
+    assert "loc/wc" not in out and "not read" not in out and "3 bundles with classed sections" in out
+    main(["scan-materials", "--game", str(game_dir), "--superbundle", FTUE, "--superbundle", "levels/game/nothing"])
+    out = capsys.readouterr().out
+    assert "levels/game/nothing: not read" in out                     # asked for by name: said
+    assert "usable sections per class: concrete 3, stone 0, wood 2, metal 0" in out
     assert f"{FTUE}:{PLAZA_BUNDLE}" in out and "1 depot(s), 1 usable" in out and "a sublevel bundle" in out
     assert f"    {PLAZA_MESH}:0  '{PLAZA_MESH}' ['concrete']" in out
+    main(["scan-materials", "--game", str(game_dir), "--superbundle", FTUE, "--class", "wood"])
+    out = capsys.readouterr().out
+    assert "2 bundles with classed sections; usable sections per class: wood 2" in out
+    assert PLAZA_BUNDLE not in out and f"    {PARK_BENCH}:0" in out and "pavement" not in out
+    main(["scan-materials", "--game", str(game_dir), "--superbundle", FTUE, "--both", "--top", "1"])
+    out = capsys.readouterr().out
+    assert "2 bundles with classed sections (usable concrete or stone and usable wood)" in out
+    assert PLAZA_BUNDLE not in out and f"{FTUE}:{PARK_BUNDLE}" in out and BIG_PARK_BUNDLE not in out
+
+
+def test_scan_materials_every_lists_past_twelve(monkeypatch):
+    from reskate_mapbuilder.materials import report
+    row = {"superbundle": "s", "bundle": "b", "bytes": 2 ** 20, "depots": 1, "ebx": 1, "res": 1, "sublevel": True,
+           "sections": [(f"m{i}", 0, "Wood_Accent", ["wood"], True, [8]) for i in range(15)]}
+    assert "    ... 3 more (--every lists them all)" in report([row])
+    lines = report([row], every=True)
+    assert "    m14:0  'Wood_Accent' ['wood'] strides [8]" in lines and not any("more" in line for line in lines)
+
+
+def test_material_bundle_auto_picks_the_smallest_with_concrete_and_wood(tmp_path, capsys):
+    from test_level import BOX, FTUE, PARK_BENCH, PARK_BUNDLE, PARK_PAVEMENT
+    game_dir = fake_game(tmp_path / "game")
+    tiles = write_tiles(tmp_path / "tiles")
+    args = ["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles", str(tiles),
+            "--at", "0", "300", "0", "--skip-part", "buildings", "--visuals", "--visual-template", BOX,
+            "--material-bundle", f"auto:{FTUE}", "--dry-run"]
+    main(args)
+    out = capsys.readouterr().out
+    assert f"--material-bundle auto: 3 sublevel bundles in {FTUE}, tried smallest first" in out
+    assert f"--material-bundle auto: {FTUE}:{PARK_BUNDLE} (" in out and "the smallest of 2 tried" in out
+    assert f"--material-bundle auto: --material-donor ground={PARK_PAVEMENT}:0" in out
+    assert f"--material-bundle auto: --material-donor wood={PARK_BENCH}:0" in out
+    assert f"--material-bundle {FTUE}:{PARK_BUNDLE} --material-donor concrete={PARK_PAVEMENT}:0" in out
+    assert f"it becomes our sublevel {PARK_BUNDLE[len('win32/'):]}" in out
+    # A given donor wins; nothing with both in bam's superbundle: refused, saying where to look.
+    main(args + ["--material-donor", f"ground={PARK_BENCH}:0"])
+    assert f"--material-donor ground={PARK_BENCH}:0 (given)" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="no sublevel bundle of levels/game/bam_levelroot/bam_levelroot has usable"):
+        main(args[:-2] + ["auto", "--dry-run"])
 
 
 def test_material_bundle_hosts_our_sublevel_and_its_material_objects(tmp_path, capsys):
@@ -348,6 +412,7 @@ def test_material_bundle_hosts_our_sublevel_and_its_material_objects(tmp_path, c
     host_sub = PLAZA_BUNDLE[len("win32/"):]
     assert f"it becomes our sublevel {host_sub} (its own sublevel EBX replaced by our tile)" in out
     assert "(in the material bundle: objects of this material go there)" in out
+    assert f"its small resources name 1 chunks of {FTUE}'s TOC: 1 added to ours, 0 already in it" in out
     assert f"{PLAZA_BUNDLE}: 1 visual objects drawn with its materials, their keys in its depot" in out
     root = tmp_path / "Mods" / "zz-place"
     view = Game(game_dir, mod=root)
@@ -370,3 +435,17 @@ def test_material_bundle_hosts_our_sublevel_and_its_material_objects(tmp_path, c
     _, region, manifest = view.bundle(toc, "win32/" + NEW)
     doc = read_document(view.ebx(region, manifest, NEW))
     assert host_sub in [i.object.get("BundleName") for i in doc.instances if i.object.get("BundleName")]
+
+
+def test_part_arrays_must_share_physicspartinfos_length():
+    from reskate_mapbuilder.ground import _check_part_tables
+    from test_level import document, guid, obj, ptr, groundplane
+    lines = _check_part_tables(groundplane(), [], [object()], "own", False, 1)
+    assert any("PhysicsPartInfos [1] and its siblings: PartBoundingBoxes 1, PartLinks 0 (empty), PartStates 1: "
+               "consistent" in line for line in lines)
+    bad = document(guid(250), [
+        (lambda d: obj(d, "ObjectBlueprint", Name="x", Object=ptr(1)), None),
+        (lambda d: obj(d, "StaticModelEntityData", PhysicsPartInfos=[obj(d, "PhysicsPartInfo", PartIndex=0)],
+                       PartStates=[0, 0]), None)])
+    with pytest.raises(ValueError, match="PartStates has 2 entries but .*PhysicsPartInfos has 1"):
+        _check_part_tables(bad, [], [object()], "own", False, 1)
