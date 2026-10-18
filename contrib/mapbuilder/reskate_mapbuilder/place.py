@@ -328,3 +328,36 @@ def check_spots(place: Place, at: tuple[float, float, float]) -> list[tuple[str,
         y = place.ground(x, z)
         out.append((label, round(x + at[0], 2), round(z + at[2], 2), None if y is None else round(y + at[1], 2)))
     return out
+
+
+def visual_label(piece: Piece) -> str:
+    """The name new-place-level --visuals gives a visual object (and --visuals-only takes)."""
+    return f"{piece.name}_t{piece.tile[0]}_{piece.tile[1]}".replace("-", "m")
+
+
+def view_spots(place: Place, at: tuple[float, float, float]) -> list[tuple[str, float, float, float | None, float, str]]:
+    """Per visual object: (label, game x, game z, expected ground there, heading to face, note).
+    The spot is outside the object's footprint, on the side with ground (south first, then north,
+    west, east), at a distance that fits its size (4 m, more for big objects, at most 40 m); the
+    heading follows `trainer where`'s convention (0 = +z, north; 90 = +x, east)."""
+    out = []
+    for piece in place.visual:
+        lo, hi = place.bounds([piece])
+        cx, cz = (lo[0] + hi[0]) / 2, (lo[2] + hi[2]) / 2
+        size = max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2])
+        gap = min(40.0, max(4.0, 0.6 * size if size > 10 else 4.0))
+        best = None
+        for side, x, z in (("south", cx, lo[2] - gap), ("north", cx, hi[2] + gap),
+                           ("west", lo[0] - gap, cz), ("east", hi[0] + gap, cz)):
+            y = place.ground(x, z)
+            if y is not None:
+                best = (side, x, z, y)
+                break
+        if best is None:
+            best = ("south, no ground found there", cx, lo[2] - gap, None)
+        side, x, z, y = best
+        heading = math.degrees(math.atan2(cx - x, cz - z)) % 360.0
+        out.append((visual_label(piece), round(x + at[0], 2), round(z + at[2], 2),
+                    None if y is None else round(y + at[1], 2), round(heading),
+                    f"{side} of it, {gap:.0f} m off; it spans y {lo[1] + at[1]:.1f}..{hi[1] + at[1]:.1f}"))
+    return out

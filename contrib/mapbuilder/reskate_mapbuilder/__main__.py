@@ -18,6 +18,7 @@
   python -m reskate_mapbuilder new-place-level --game <dir> --mods <dir> --name zz-... --level <name> --tiles <DIR> \\
         [--at X Y Z] [--mirror] [--bam 333|no-world|all] [--asset-bundle ...] [--dry-run]
   python -m reskate_mapbuilder place-info --tiles <DIR> [--at X Y Z] [--max-height M] [--skip-part P]
+  python -m reskate_mapbuilder material-donors --game <dir> [--contains TEXT]
   python -m reskate_mapbuilder mesh-refs --game <dir> [--mod <mod dir>] --superbundle S --bundle B --mesh EBX \\
         [--scan SUPERBUNDLE:BUNDLE ...] [--level <name>]
   python -m reskate_mapbuilder meshset-diff --game <dir> [--mod-a M] --a S:BUNDLE:RES [--mod-b M] --b S:BUNDLE:RES
@@ -40,10 +41,11 @@ from .ebx import read_document
 from .ebxcheck import array_hash_report, roundtrip
 from .ebxedit import describe
 from .game import Game
+from .ground import material_donors
 from .ground import ASSET_BUNDLES, BAM_MODES, COLLISION_MODES, MESH_MODES, MESH_SHAPES, VISUAL_MODES, BLUEPRINT_BUNDLE, BLUEPRINT_TEMPLATE, DEFAULT_AT, DEFAULT_SIZE, TILE_TEMPLATE, new_ground_level
 from .level import BASE_SUPERBUNDLE, new_level
 from .meshrefs import mesh_refs
-from .place import (PlaceError, check_spots, collision as place_collision, filter_collision, read_place, spawn_at,
+from .place import (PlaceError, check_spots, view_spots, collision as place_collision, filter_collision, read_place, spawn_at,
                     summary as place_summary)
 from .meshset import describe_meshset, diff_meshsets
 from .mod import ModBuilder
@@ -276,12 +278,23 @@ def new_place_level_command(args):
     new_ground_level_command(args, place)
 
 
+def material_donors_command(args):
+    """Stock meshes of bam's root bundle whose sections could lend their material (read-only)."""
+    for line in material_donors(Game(args.game), args.contains, args.limit):
+        print(line)
+
+
 def place_info(args):
     """The tile export's summary and the trainer spots, read-only and without the game."""
     place = _read_place_args(args, "place-info")
     print("Expected `trainer ground` readings in the level (- means no ground there):")
     for label, x, z, y in check_spots(place, tuple(args.at)):
         print(f"  trainer ground {x} {z}    -> {'-' if y is None else y}    ({label})")
+    if args.views:
+        print("Where to look at each visual object from (the trainer cannot set the heading: turn until "
+              "`trainer where` shows it; 0 = north, +z; 90 = east, +x):")
+        for label, x, z, y, heading, note in view_spots(place, tuple(args.at)):
+            print(f"  {label}: trainer ground {x} {z}    -> {'-' if y is None else y}, face heading {heading:g}  ({note})")
 
 
 def list_assets(args):
@@ -504,8 +517,13 @@ def main(argv=None):
                    help="where the blueprint and collision go: the ground bundle, the level's copy of "
                         "bam_coregameassets, or the level's root bundle")
     p.add_argument("--dry-run", action="store_true", help="read and report only")
+    p = sub.add_parser("material-donors", help="stock mesh sections that could lend a material (read-only)")
+    p.add_argument("--game", required=True)
+    p.add_argument("--contains", default="skatepark", help="only MeshSets whose names hold this text")
+    p.add_argument("--limit", type=int, default=200)
     p = sub.add_parser("place-info", help="a tile export's summary and trainer spots (read-only, no game needed)")
     p.add_argument("--tiles", required=True, help="the directory `city --level DIR` wrote (reskate-level-tiles v2)")
+    p.add_argument("--views", action="store_true", help="also a spot and heading to look at each visual object from")
     _place_options(p)
     p = sub.add_parser("inspect-meshset", help="print a MeshSet resource's header, LODs and sections (read-only)")
     p.add_argument("--game", required=True)
@@ -560,7 +578,7 @@ def main(argv=None):
         args.size = _size(args.size)
     {"inspect": inspect, "raise-ground": raise_ground, "rebuild": rebuild, "new-level": new_level_command,
      "new-ground-level": new_ground_level_command, "new-place-level": new_place_level_command,
-     "place-info": place_info,
+     "place-info": place_info, "material-donors": material_donors_command,
      "list-assets": list_assets, "inspect-meshset": inspect_meshset,
      "mesh-refs": mesh_refs_command, "meshset-diff": meshset_diff,
      "dump-ebx": dump_ebx, "ebx-roundtrip": ebx_roundtrip, "ebx-arrayhash": ebx_arrayhash}[args.command](args)

@@ -42,7 +42,8 @@ from .ebxcheck import semantically_equal
 from .ebxedit import (add_import, after_last_of_type, clone_document, clone_instance, derived_guid, find_objects, guid_flags,
                       field_referrers, path_to, pointer_arrays, prune_imports, prune_unreachable, refresh_flags, remove_instances,
                       set_fields, type_name, used_imports)
-from .meshset import (DEPOT_TYPE, box_geometry, padded_bounds, depot_keys, describe_meshset, model_vertex, read_layout as read_mesh_layout,
+from .meshset import (COLOUR_USAGE, DEPOT_TYPE, UV0_USAGE, UV1_USAGE, box_geometry, common_value, padded_bounds,
+                      uv_measure, depot_keys, describe_meshset, model_vertex, read_layout as read_mesh_layout,
                       section_key, write_mesh)
 from .level import (BASE_ROOT_BUNDLE, BASE_SUPERBUNDLE, LEVEL_NAME, SUBWORLD_REFERENCE_TYPE, _clone_found, _identity, _read,
                     new_level)
@@ -67,6 +68,7 @@ MESH_MODES = ("template", "own")
 # (tells a geometry problem from a plumbing one).
 MESH_SHAPES = ("slab", "plane", "box", "donor-copy")
 SLAB_HEIGHT = 0.2      # metres: the default ground slab's thickness, its top at the ground's height
+GROUND_UV_PER_METRE = 1.0   # TexCoord0 repeats per metre on our ground (the textured slab of 3bc3aa5)
 # --collision: "own" writes our flat square, split into as many parts as the template's .physics
 # has (each copying its part's material and words); "template" carries the template blueprint's
 # .physics unchanged under our blueprint's name.
@@ -744,9 +746,12 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
             log.append(f"  --mesh-shape box: a closed box {[round(v, 2) for v in box_lo]}..{[round(v, 2) for v in box_hi]}")
         else:
             geometry = (grid_mesh.vertices, grid_mesh.triangles)
-        density = uv_per_metre if uv_per_metre is not None else (1.0 if mesh_shape in ("slab", "plane") else None)
+        flat = mesh_shape in ("slab", "plane")
+        density = uv_per_metre if uv_per_metre is not None else (GROUND_UV_PER_METRE if flat else None)
+        label = ("given" if uv_per_metre is not None else
+                 f"the ground's default, {GROUND_UV_PER_METRE:g} per metre" if flat else "the template section's")
         new_ms, new_chunks, lines = write_mesh(ms_data, chunk_data, geometry[0], geometry[1], chunk_guids, donor,
-                                               None, mesh_shape == "donor-copy", geometry_section, density)
+                                               None, mesh_shape == "donor-copy", geometry_section, density, label)
         mesh_new = clone_document(mesh_old, derived_guid(level, "ground_mesh", mesh_old.file_guid.string()),
                                   level + ":ground_mesh")
         refresh_flags(mesh_old, mesh_new)
@@ -893,7 +898,7 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         donors = _visual_donors(game, prepared, material_donors or {}, log)
         for name, vertices, triangles, material in visuals:
             asset = _visual_asset(game, level, name, vertices, triangles, prepared, donors.get(material, donors[None]),
-                                  uv_per_metre or 1.0, log)
+                                  uv_per_metre, log)
             visual_assets.append(asset)
             stock.append((asset["bp_name"], tuple(at), asset["bp"].file_guid, asset["bp"].instances[0].instance_guid))
 
@@ -1181,13 +1186,13 @@ def _visual_donors(game, prepared: dict, wanted: dict, log: list[str]) -> dict:
     """material (None: the default) -> (geometry section of the template, donor section or None).
     The default and any donor naming the template's own mesh use that section of the clone; a
     donor of another mesh (in bam's root bundle) lends its section's layout, key and vertex."""
-    out = {None: (0, None)}
+    out = {None: (0, None, None, f"{prepared['mesh_name']}:0")}
     log.append(f"  material donors: default {prepared['mesh_name']}:0")
     for material, spec in wanted.items():
         mesh_name, _, section = spec.partition(":")
         index = int(section or 0)
         if mesh_name.lower() == prepared["mesh_name"].lower():
-            out[material] = (index, None)
+            out[material] = (index, None, None, f"{mesh_name}:{index}")
         else:
             source = _source(game, BASE_ROOT_BUNDLE, mesh_name)
             found = source.resource(mesh_name, MESHSET_TYPE)
@@ -1199,7 +1204,10 @@ def _visual_donors(game, prepared: dict, wanted: dict, log: list[str]) -> dict:
                 raise ValueError(f"--material-donor {material}: {mesh_name} LOD 0 has {len(lod.sections)} sections")
             sec = lod.sections[index]
             chunk_data = _chunk_payload(game, source, lod.chunk)
-            out[material] = (0, (data[sec.at:sec.at + 384], model_vertex(lod, sec, chunk_data)[0]))
+            measures = (uv_measure(lod, sec, chunk_data, UV0_USAGE), uv_measure(lod, sec, chunk_data, UV1_USAGE),
+                        common_value(sec, chunk_data, COLOUR_USAGE))
+            out[material] = (0, (data[sec.at:sec.at + 384], model_vertex(lod, sec, chunk_data)[0]), measures,
+                             f"{mesh_name}:{index}")
         log.append(f"  material donors: {material} = {mesh_name}:{index}")
     return out
 
@@ -1252,16 +1260,18 @@ def _visual_asset(game, level: str, name: str, vertices, triangles, prepared: di
         raise ValueError(f"visual {name}: its blueprint still imports the template's mesh or collision")
     lines = _check_part_tables(bp, shapes, parts, "own", False, len(prepared["parts"]))
 
-    geometry_section, donor_section = donor
+    geometry_section, donor_section, measures, donor_label = donor
     chunk_guids = [derived_guid(level, name, "chunk", str(k)) for k in range(len(prepared["chunks"]))]
-    meshset, chunks, report = write_mesh(prepared["ms_data"], prepared["chunks"], vertices, triangles, chunk_guids,
-                                         donor_section, None, False, geometry_section, uv_per_metre)
+    meshset, chunks, report = write_mesh(
+        prepared["ms_data"], prepared["chunks"], vertices, triangles, chunk_guids, donor_section, None, False,
+        geometry_section, uv_per_metre if uv_per_metre is not None else GROUND_UV_PER_METRE,
+        "given" if uv_per_metre is not None else f"the default, {GROUND_UV_PER_METRE:g} per metre", measures)
     lo, hi = padded_bounds(vertices)
     _set_aabbs(bp, lo, hi)
     _set_aabbs(mesh, lo, hi)
     log.append(f"  visual {name}: {len(vertices)} vertices, {len(triangles)} triangles (limits 65,535 and 16-bit "
-               f"indices), box {[round(v, 2) for v in lo]}..{[round(v, 2) for v in hi]}, section {geometry_section}"
-               + (" with a donor section" if donor_section else "") + f" -> {bp_name}; "
+               f"indices), box {[round(v, 2) for v in lo]}..{[round(v, 2) for v in hi]}, material {donor_label}"
+               + f" -> {bp_name}; "
                + "; ".join(line.strip() for line in lines if "physics parts:" in line))
     return {"bp_name": bp_name, "bp": bp, "mesh_name": mesh_name, "mesh": mesh, "physics_name": physics_name,
             "physics": physics, "physics_doc": physics_doc, "physics_type": prepared["physics_asset"].resource_type,
@@ -1293,4 +1303,57 @@ def _mesh_chunk_report(mod, path: str, ground_bundle: str, source: _Source, temp
                                       ("the level's root bundle", lod.chunk in bundles["win32/" + path])) if ok]
             out.append(f"  mesh {label} LOD {k} chunk {lod.chunk.string()}: in {where}; listed by "
                        + (", ".join(listed) if listed else "NOTHING the level loads"))
+    return out
+
+
+# ---- Material donors (material-donors, read-only) ------------------------------------------------
+
+MATERIAL_WORDS = {
+    "concrete": ("concrete", "cement", "curb", "kerb", "ledge", "stone", "plaza", "pavement", "slab", "cnc"),
+    "wood": ("wood", "plank", "timber", "bench", "deck", "ply"),
+    "metal": ("metal", "steel", "iron", "rail", "pipe", "coping", "alum", "chrome"),
+    "ground": ("asphalt", "ground", "road", "tarmac", "surface", "terrain", "dirt"),
+}
+
+
+def material_donors(game, contains: str = "skatepark", limit: int = 200) -> list[str]:
+    """The MeshSets of bam's root bundle whose names contain `contains`: per LOD 0 section its
+    material name, layout and whether its key is in the bundle's depot, each section classed as
+    concrete, wood, metal or ground by its name's words; then a proposed default per class (the
+    first section of that class with TexCoord0 and its key in the depot)."""
+    source = _Source(game, BASE_SUPERBUNDLE, BASE_ROOT_BUNDLE)
+    keys = _source_depot_keys(source)
+    out, first = [], {}
+    shown = 0
+    for i, r in enumerate(source.manifest.resources):
+        if r.resource_type != MESHSET_TYPE or contains.lower() not in r.name.lower():
+            continue
+        if shown >= limit:
+            out.append(f"... stopped at --limit {limit}")
+            break
+        shown += 1
+        try:
+            data = source.payload("res", i)
+            lod = read_mesh_layout(data)[0]
+        except (ValueError, struct.error) as e:
+            out.append(f"{r.name}: not read ({e})")
+            continue
+        out.append(f"{r.name}: {len(lod.sections)} sections in LOD 0")
+        for n, s in enumerate(lod.sections):
+            (pointer,) = struct.unpack_from("<Q", data, s.at + 8)
+            end = data.find(b"\0", pointer + 16) if pointer else -1
+            material = data[pointer + 16:end].decode("latin-1") if pointer and end > 0 else ""
+            key = section_key(data, s)
+            words = (r.name + " " + material).lower()
+            kinds = [k for k, ws in MATERIAL_WORDS.items() if any(w in words for w in ws)]
+            usable = any(u == UV0_USAGE for u, _, _, _ in s.elements) and key in keys and "shadow" not in material.lower()
+            out.append(f"  {r.name}:{n}  material {material!r}, {s.triangle_count} triangles, strides {s.strides}, "
+                       f"key {'in' if key in keys else 'NOT in'} the depot, class {kinds or '-'}"
+                       + ("" if usable else " (not usable: no TexCoord0, a shadow, or no depot key)"))
+            for k in kinds:
+                if usable and k not in first:
+                    first[k] = f"{r.name}:{n}"
+    out.append("Proposed --material-donor defaults (try them; the classes are guesses from names):")
+    for k in ("ground", "concrete", "wood", "metal"):
+        out.append(f"  --material-donor {k}={first[k]}" if k in first else f"  {k}: no candidate under {contains!r}")
     return out

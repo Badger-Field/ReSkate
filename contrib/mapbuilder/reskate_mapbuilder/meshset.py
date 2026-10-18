@@ -371,8 +371,8 @@ def box_geometry(lo, hi):
 def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangles,
                chunk_guids: list[Guid], donor: tuple[bytes, list[bytes]] | None = None,
                keep_section: int | None = None, copy_template: bool = False,
-               geometry_section: int | None = 0, uv_per_metre: float | None = None
-               ) -> tuple[bytes, list[bytes], list[str]]:
+               geometry_section: int | None = 0, uv_per_metre: float | None = None, uv_label: str | None = None,
+               measures: tuple | None = None) -> tuple[bytes, list[bytes], list[str]]:
     """A MeshSet and its geometry chunks (one per LOD, under `chunk_guids`), patched into a copy of
     `template` (the drawn mesh whose fields we keep). Returns (meshset, chunks, report).
 
@@ -471,14 +471,17 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
     # anything else the section's most up-facing template vertex's.
     geometry_index = min(geometry_section or 0, len(lods[0].sections) - 1)
     measure_section = lods[0].sections[geometry_index]
-    uv0 = uv_measure(lods[0], measure_section, template_chunks[0], UV0_USAGE)
-    uv1 = uv_measure(lods[0], measure_section, template_chunks[0], UV1_USAGE)
+    if measures is not None:                   # a donor section's own (another mesh's), as measured by the caller
+        uv0, uv1, colour = measures
+    else:
+        uv0 = uv_measure(lods[0], measure_section, template_chunks[0], UV0_USAGE)
+        uv1 = uv_measure(lods[0], measure_section, template_chunks[0], UV1_USAGE)
+        colour = common_value(measure_section, template_chunks[0], COLOUR_USAGE)
     density0 = uv_per_metre or (uv0[0] if uv0 and uv0[0] else 1.0 / UV_METRES)
     origin0 = uv0[1] if uv0 else [0.0, 0.0]
     density1 = uv1[0] if uv1 and uv1[0] else UV1_DEFAULT
-    colour = common_value(measure_section, template_chunks[0], COLOUR_USAGE)
     report.append(f"TexCoord0 (usage 33): planar per face at {density0:.4g} per metre ("
-                  + ("given" if uv_per_metre else "the template section's") + ") from "
+                  + (uv_label or ("given" if uv_per_metre else "the template section's")) + ") from "
                   f"{[round(c, 3) for c in origin0]}"
                   + (f"; the template's: {uv0[0]:.4g} per metre over {[round(c, 3) for c in uv0[1]]}.."
                      f"{[round(c, 3) for c in uv0[2]]}" if uv0 else "; the template has none"))
