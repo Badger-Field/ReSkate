@@ -621,7 +621,8 @@ def test_a_blueprint_importing_its_collision_ebx_gets_ours(tmp_path, capsys):
     assert {i.file_guid for i in bp.imports} == {physics_ebx.file_guid, read_document(
         view.ebx(region, manifest, f"levels/game/{LEVEL}/ground_mesh")).file_guid}
     assert BOX_PHYSICS_GUID not in {i.file_guid for i in bp.imports}
-    assert any("TexCoord0 (usage 33): planar per face at 1 per metre (given)" in line for line in report)
+    assert any("TexCoord0 (usage 33): planar per face at 1 per metre (the ground's default, 1 per metre)" in line
+               for line in report)
     # --collision template keeps the box's collision EBX.
     _, _, report, root, view = build(tmp_path / "t", bam="333", mesh="own", blueprint_template=BOX, asset_bundle="root",
                                      collision_mode="template")

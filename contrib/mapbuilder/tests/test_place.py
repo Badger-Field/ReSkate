@@ -279,7 +279,7 @@ def test_visuals_get_a_blueprint_mesh_and_harmless_collision_each(tmp_path, caps
     main(["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles", str(tiles),
           "--visuals", "--visual-template", BOX, "--material-donor", f"ground={GROUNDPLANE}_mesh:1", "--dry-run"])
     out = capsys.readouterr().out
-    assert f"material donors: ground = {GROUNDPLANE}_mesh:1" in out and "with a donor section" in out
+    assert f"material donors: ground = {GROUNDPLANE}_mesh:1" in out and f"material {GROUNDPLANE}_mesh:1 ->" in out
     with pytest.raises(SystemExit, match="no visual object matches"):
         main(["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles", str(tiles),
               "--visuals", "--visuals-only", "nothing", "--dry-run"])
@@ -299,3 +299,21 @@ def test_resource_ids_keep_the_tag_bits_clear_and_filters_take_printed_names(tmp
     out = capsys.readouterr().out
     assert "visual objects: 1 of 1 plus the slab: ground_t0_0 (ground, 9 vertices, 8 triangles), slab (ground, 24 vertices" in out
     assert "visual slab: 24 vertices, 12 triangles" in out
+
+
+def test_place_info_views_give_a_spot_and_heading_per_visual_object(tmp_path, capsys):
+    tiles = write_tiles(tmp_path / "t")
+    main(["place-info", "--tiles", str(tiles), "--at", "0", "300", "0", "--views"])
+    out = capsys.readouterr().out
+    # The visual ground (0..50 x 0..50): ground south of it? none there (z < 0), so north at z 50 + 30.
+    line = next(line for line in out.splitlines() if line.strip().startswith("ground_t0_0:"))
+    assert "trainer ground" in line and "face heading" in line and "it spans y 300.0..300.0" in line
+
+
+def test_material_donors_lists_sections_and_proposes_defaults(tmp_path, capsys):
+    from test_level import GROUNDPLANE
+    main(["material-donors", "--game", str(fake_game(tmp_path / "game")), "--contains", "mesh"])
+    out = capsys.readouterr().out
+    assert f"{GROUNDPLANE}_mesh:0  material '{GROUNDPLANE}_mesh'" in out and "class ['ground']" in out
+    assert "(not usable" in out                                     # the shadow-like section without TexCoord0
+    assert f"  --material-donor ground={GROUNDPLANE}_mesh:0" in out and "wood: no candidate" in out
