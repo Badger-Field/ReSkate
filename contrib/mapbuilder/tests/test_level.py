@@ -353,11 +353,12 @@ BOX_PHYSICS_GUID = guid(126)
 
 
 def box():
-    """The box imports its collision EBX (<blueprint>.physics) besides its mesh, as the real one does."""
+    """The box imports its collision EBX (<blueprint>.physics) besides its mesh, and declares one
+    PhysicsPartInfos entry over a 3-part .physics, as the real one does (PC, 89109ff)."""
     return document(BOX_GUID, [
         (lambda d: obj(d, "ObjectBlueprint", Name=BOX, Object=ptr(1)), guid(123)),
         (lambda d: obj(d, "StaticModelEntityData", Mesh=PointerReference(PointerKind.external, 0),
-                       PhysicsPartInfos=[obj(d, "PhysicsPartInfo", PartIndex=i) for i in range(3)], PartBoundingBoxes=[obj(d, "AxisAlignedBox", Min=obj(d, "Vec3", x=0.0, y=0.0, z=0.0), Max=obj(d, "Vec3", x=1.0, y=1.0, z=1.0)) for _ in range(3)]), guid(124))],
+                       PhysicsPartInfos=[obj(d, "PhysicsPartInfo", PartIndex=i) for i in range(1)], PartBoundingBoxes=[obj(d, "AxisAlignedBox", Min=obj(d, "Vec3", x=0.0, y=0.0, z=0.0), Max=obj(d, "Vec3", x=1.0, y=1.0, z=1.0)) for _ in range(1)]), guid(124))],
         imports=[(BOX_MESH_GUID, guid(125)), (BOX_PHYSICS_GUID, guid(127))])
 
 

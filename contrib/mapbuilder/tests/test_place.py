@@ -160,9 +160,9 @@ def test_new_place_level_builds_the_collision(tmp_path, capsys):
     assert "2 tiles (tile size 50.0 m), 4 collision chunks, 26 collision triangles" in out
     assert "dropped 1 collision chunk(s) of buildings (skipped part buildings)" in out
     assert "bounds in the game: [-50.0, 300.0, 0.0]..[50.0, 300.5, 50.0]" in out
-    assert "ours: version 2, 1 part(s) as the blueprint declares, each one shape merging its chunks (4 chunks of " \
-           "['ground', 'ledge'])" in out
-    assert "PhysicsPartInfos: 1, our physics parts: 1: consistent" in out
+    assert "ours: version 2, 1 part(s) as the template's .physics has, each one shape merging its chunks (4 chunks " \
+           "of ['ground', 'ledge'])" in out
+    assert "physics parts: ours 1, the template's 1: consistent" in out
     assert "trainer ground 5.0 5.0    -> 300.0    (spawn)" in out
     assert "(outside, 20 m east of the bounds)" in out
     root = tmp_path / "Mods" / "zz-place"
@@ -205,7 +205,7 @@ def test_a_part_count_mismatch_is_refused(tmp_path):
     from reskate_mapbuilder.mod import ModBuilder
     game = Game(fake_game(tmp_path / "game"))
     place = read_place(write_tiles(tmp_path / "t"))
-    with pytest.raises(ValueError, match="PhysicsPartInfos has 1"):
+    with pytest.raises(ValueError, match="our collision has 5 parts but the template's own .physics has 1"):
         new_ground_level(game, ModBuilder(game, "zz"), LEVEL, collision=lambda t, ts, n: collision(place, t))
 
 
@@ -251,7 +251,11 @@ def test_visuals_get_a_blueprint_mesh_and_harmless_collision_each(tmp_path, caps
     out = capsys.readouterr().out
     assert "visual objects: 1 of 1: ground_t0_0 (ground, 9 vertices, 8 triangles)" in out
     assert f"Visual template {BOX}" in out and "3 collision parts" in out
-    assert "visual ground_t0_0: 9 vertices, 8 triangles" in out and "PhysicsPartInfos: 3, our physics parts: 3" in out
+    # The real combination: the ground's template (util_groundplane) has 1 part, the visual template
+    # (the box) 3 parts under one PhysicsPartInfos entry; each is checked against its own template.
+    assert "physics parts: ours 1, the template's 1: consistent" in out
+    assert "visual ground_t0_0: 9 vertices, 8 triangles" in out and "physics parts: ours 3, the template's 3" in out
+    assert "PhysicsPartInfos[0]: PartIndex=0" in out
     root = tmp_path / "Mods" / "zz-place"
     view = Game(game_dir, mod=root)
     toc = read_toc((root / "Win32" / (NEW + ".toc")).read_bytes())
