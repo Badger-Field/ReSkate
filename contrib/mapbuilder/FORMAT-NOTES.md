@@ -1087,6 +1087,33 @@ the template's section 0 (`--no-auto-materials` keeps the template's section 0 f
 writer fills each stream of any layout: position, TexCoord0, TexCoord1, 51 and 52 as above, any
 other element (such as the ramp wedge's 12-byte usage 42 stream) from the template vertex.
 
+**Materials from other levels** (written, not yet run in game). The PC's scan of bam's root bundle
+(ef109c6): 41 MeshSets, all usable materials the skatepark kit's (concrete 2 sections, neither
+usable; wood 0; metal 25, 17 usable; ground 41, 21 usable). Real concrete, stone and wood must
+come from other levels' bundles, and a section's key resolves only in the depot of the bundle
+holding the MeshSet; a foreign depot copied into our ground bundle under our name hung, with its
+shader data crashed (6.3). Approaches weighed:
+
+- (a) `--material-bundle SUPERBUNDLE:BUNDLE` (implemented): the donor bundle is listed in our
+  level's TOC under its own name (as bam_coregameassets keeps its name), its payloads staying in
+  the game's archives, so its depot comes with its own name and contents. It becomes our sublevel:
+  its sublevel EBX (the one named like the bundle) is replaced by our tile (or added), our layer
+  joins it, and the root's sub-world reference names it, so the game loads it as it loads our
+  ground bundle. Visual objects whose `--material-donor` is one of its meshes go into it whole
+  (blueprint, collision, mesh, MeshSet, chunks), every section taking that donor section's key; the
+  build refuses any object whose keys are not in its target bundle's depot. Chunks of the donor
+  superbundle's TOC named by the bundle's small resources (texture and mesh headers) are added to
+  our TOC. Risks: shader data the depot needs outside the bundle (in the donor superbundle's
+  shared bundles) is not listed; the bundle's own other documents stay in it unreferenced.
+- (b) basing the level root on another level's root bundle: its depot covers only that root's
+  own pool, as bam's does (the skatepark kit); not pursued until the scan shows a root bundle rich
+  in materials.
+- `scan-materials --game G [--superbundle S ...] [--bundle-contains T]` (read-only) walks the
+  superbundles layout.toc lists (or those given), and per bundle with MeshSets reads its depots and
+  its sections whose material or mesh names say concrete, stone, wood or metal, marks those whose
+  key is in the bundle's own depot (and that have a TexCoord0) usable, and ranks the bundles by
+  usable sections per MB of stored size, noting sublevel bundles (holding an EBX of their own name).
+
 **Visuals** (`--visuals`, written, not yet run in game): each visual object of each tile (13 in
 the Embarcadero export) gets its own blueprint, mesh and placement (at `--at`, like the
 collision's), all in the level's root bundle (bam root's copy, whose depot holds the template's
