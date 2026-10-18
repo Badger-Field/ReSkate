@@ -55,14 +55,20 @@ jobs:
           -DDINGOSDK_LAUNCHER_AUTO_UPDATE=ON
           -DDINGOSDK_CRASH_REPORT_URL="$CRASH_REPORT_URL"
       - name: The Spotify device from earlier runs (cargo)
+        id: cargo
         uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             SpotifyHelper/target
-          key: cargo-windows-${{ hashFiles('SpotifyHelper/Cargo.lock', 'SpotifyHelper/Cargo.toml', 'SpotifyHelper/src/**') }}
+          key: cargo-windows-${{ hashFiles('SpotifyHelper/Cargo.lock', 'SpotifyHelper/Cargo.toml', 'SpotifyHelper/.cargo/config.toml', 'SpotifyHelper/src/**') }}
           restore-keys: cargo-windows-
+      - name: The cached Spotify device is this source's build
+        # As in the Build workflow: an exact hit was built from these sources.
+        if: steps.cargo.outputs.cache-hit == 'true'
+        shell: pwsh
+        run: Get-ChildItem SpotifyHelper/target/release/.fingerprint -Recurse -File | ForEach-Object { $_.LastWriteTime = Get-Date }
       - name: Build
         # Only what ships: the launcher and ReSkate.dll. The tests ran in the Build workflow on
         # this commit (release from main once its checks are green).
