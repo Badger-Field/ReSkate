@@ -1,5 +1,6 @@
 #include "runtime_internal.h"
 #include "Extension/Objects/local_placements_runtime.h"
+#include "Extension/Objects/teleport_pose.h"
 #include "Extension/Objects/ParkEditor/park_editor_runtime.h"
 #include "Extension/Objects/ParkEditor/park_editor_surface.h"
 #include <cmath>
@@ -49,15 +50,23 @@ bool delete_local_placed_object(std::string_view map, std::uint64_t token) {
         std::none_of(r.rows.begin(), r.rows.end(), [&](const auto& row) { return row.token == token; })) return false;
     return begin_placement_delete({token});
 }
-bool teleport_local_skater(const std::array<float, 3>& position) {
+namespace {
+bool queue_position_teleport(const std::array<float, 3>& position, std::optional<float> heading) {
     std::lock_guard lock(local_runtime().native_mutex);
     auto& r = placements_runtime();
     if (!local_runtime().active || !r.teleport || !r.transition_ctor || !r.transition_destroy) return false;
     for (const auto v : position)
         if (!std::isfinite(v) || std::abs(v) > 1e6f) return false;
     r.position_teleport = position;
+    r.position_teleport_heading = heading;
     r.position_teleport_at = GetTickCount64();
     return true;
+}
+}
+bool teleport_local_skater(const std::array<float, 3>& position) { return queue_position_teleport(position, std::nullopt); }
+bool teleport_local_skater(const std::array<float, 3>& position, float heading_degrees) {
+    const auto heading = teleport::heading_degrees(heading_degrees);
+    return heading && queue_position_teleport(position, heading);
 }
 std::optional<float> local_ground_height(float x, float z, float top, float bottom) {
     std::lock_guard lock(local_runtime().native_mutex);

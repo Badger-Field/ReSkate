@@ -12,7 +12,7 @@ void register_trainer_commands(Commands &registry) {
     };
     const Verb verbs[]{
         {"status", "What the trainer is doing", nullptr, false},
-        {"open", "Open the menu on the trainer page", "[tune|presets|practice|map|realistic|fun|everything]", false},
+        {"open", "Open the menu on the Sandbox page", "[tune|presets|practice|map|realistic|fun|everything]", false},
         {"set", "Set a physics tuning value live", "<value id> <number>", true},
         {"freeze", "Keep a value through presets and resets", "<value id> 0|1", true},
         {"reset", "Put a value (or all) back to stock", "<value id>|all", false},
@@ -21,9 +21,9 @@ void register_trainer_commands(Commands &registry) {
         {"dial", "Turn a built-in preset up or down: 1 is the game's own", "<multiplier> <preset name>", false},
         {"slot", "Select a marker slot", "<1-5>", false},
         {"marker", "Save, go to or clear a marker", "save|go|clear [slot]", false},
-        {"tp", "Teleport the skater", "<x> <y> <z>", false},
+        {"tp", "Teleport the skater, optionally facing a heading (0 = +z, 90 = +x)", "<x> <y> <z> [heading]", false},
         {"waypoint", "Teleport to the waypoint placed on the pause map, onto the surface there", "[info]", false},
-        {"ground", "Teleport to the topmost surface at a map position", "<x> <z>", false},
+        {"ground", "Teleport to the topmost surface at a map position, optionally facing a heading", "<x> <z> [heading]", false},
         {"spot", "Go to one of the map author's spots", "<number>", false},
         {"option", "Trainer options", "hud|hud_jump|auto_return|pad|log 0|1, return_delay <seconds>, hippy_height|nocomply_height|boneless_height|offboard_height|flip_speed <x>", true},
         {"profile", "The preset this map applies on load", "set <preset>|clear", false},

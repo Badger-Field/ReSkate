@@ -8,7 +8,7 @@ telemetry HUD. It ships no game data: the list of values is built at run time fr
 
 | Tab | What you get |
 |---|---|
-| **TUNE** | Three lists: REALISTIC, FUN and EVERYTHING. Each opens on the dials: every built-in preset as one slider (Ollie height, Push speed, Body flip and spin speed, Bail resistance, Grind lock-on and friction, on-foot jump and sprint, glide, torpedo), where 1 is the game's own and the preset's button jumps to the preset; then the switches (Auto Push, No Speed Wobble, Smooth Surfaces, Long Wheelbase, Never bail), the trick sliders (flip trick speed, no comply, boneless, hippy and off-board jump height) and the values themselves: a short plainly named list, or under EVERYTHING the whole table (the physics tuning's values, one multiplier per curve and graph, and the 314 values of the game's other tuning classes) with search, groups, "only what I changed", locks, your own saved presets and a preset a map applies every time it loads. Changes apply while you skate. Values the game was never found or seen reading are hidden unless you ask for them. **Reset everything**, above the tabs, puts the game back as it shipped. |
+| **TUNE** | Three lists: REALISTIC, FUN and EVERYTHING. Each opens on the dials: every built-in preset as one slider (Ollie height, Push speed, Body flip and spin speed, Bail resistance, Grind lock-on and friction, on-foot jump and sprint, glide, torpedo), where 1 is the game's own and the preset's button jumps to the preset; then the switches (Realistic and Hardcore, Auto Push, No Speed Wobble, Smooth Surfaces, Long Wheelbase, Never bail), the trick sliders (flip trick speed, no comply, boneless, hippy and off-board jump height) and the values themselves: a short plainly named list, or under EVERYTHING the whole table (the physics tuning's values, one multiplier per curve and graph, and the 314 values of the game's other tuning classes) with search, groups, "only what I changed", locks, your own saved presets and a preset a map applies every time it loads. Changes apply while you skate. Values the game was never found or seen reading are hidden unless you ask for them. **Reset everything**, above the tabs, puts the game back as it shipped. |
 | **PRACTICE** | Game speed and pause, five marker slots per map (save / go / clear), return to the marker after a bail, teleport to coordinates or to the waypoint you placed on the pause map (onto the surface there), copy your position (game or Blender axes). |
 | **MAP & HUD** | Speed and air-time HUD, a read-out after every jump (takeoff speed and angle, height, distance, drop, landing speed, spin and flip), telemetry recording to CSV, and whatever the map's author ships for the trainer. |
 
@@ -21,7 +21,7 @@ Controller, once switched on: hold **LB + RB**, then D-pad **up** saves the mark
 Everything is also a console command (`~`): `trainer open [tune|practice|map|realistic|fun|everything]`, `trainer status`, `trainer set <id> <value>`,
 `trainer find <words>`, `trainer preset apply|remove <name>`, `trainer dial <multiplier> <preset name>`,
 `trainer reset <id>|all|tricks|presets|everything`, `trainer marker save|go|clear [slot]`,
-`trainer tp <x> <y> <z>`, `trainer waypoint [info]`, `trainer ground <x> <z>`, `trainer where`, `trainer jumps`, `trainer dump`, `trainer selftest`.
+`trainer tp <x> <y> <z> [heading]`, `trainer waypoint [info]`, `trainer ground <x> <z> [heading]`, `trainer where`, `trainer jumps`, `trainer dump`, `trainer selftest`.
 
 ## For map makers: `trainer.json`
 
@@ -58,6 +58,11 @@ The trainer goes through ReSkate's own session rules instead of around them:
 - With that switched off, everyone's physics are their own, and the trick multipliers and auto push
   follow the host's boosts permission like ReSkate's other boosts.
 - Teleports and markers follow the host's noclip / teleport permission.
+- The heading of `tp` and `ground` is in degrees as `trainer where` prints it: 0 faces +z
+  (north), 90 faces +x (east), clockwise seen from above. It goes into the rotation of the
+  transform the game's teleport is handed (yaw about +y); without it the rotation is the
+  identity, as before, and the skater faces heading 0. Not yet tried in game: whether the
+  camera turns with the skater is the thing to check.
 - Game speed is ReSkate's `SimulationTime.TimeScale` setting, which ReSkate locks in a session.
 - Servers' `score_check` / `enforce_tuning` see a player's tuning changes like any other tuning mod.
 
@@ -91,7 +96,7 @@ ReSkateLauncher.exe --no-gui --no-update
 
 then read the `trainer selftest:` lines in `logs\ReSkate.log`. `dingosdk_trainer_tuning_dump <Skate
 folder>` (CMake option `DINGOSDK_BUILD_TRAINER_TESTS`) lists the tuning values without the game;
-the same option builds the `trainer_session_extras` and `trainer_landing` tests (`ctest -R trainer`).
+the same option builds the `trainer_session_extras`, `trainer_landing` and `trainer_presets` tests (`ctest -R trainer`).
 
 ## Known limits
 

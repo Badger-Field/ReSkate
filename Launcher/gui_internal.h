@@ -120,12 +120,22 @@ bool nav_tile(const Fonts& fonts, float width, const char* label, bool selected,
 float badge_width(const Fonts& fonts, const std::string& text);
 void badge(ImDrawList* draw, const Fonts& fonts, ImVec2 position, const std::string& text,
            ImU32 fill = color::blue, ImU32 ink = color::ink);
+// How tall `text` is in `font`, wrapped at `wrap` (0: not wrapped); 0 for no text.
+float text_height(ImFont* font, float wrap, const std::string& text);
+// A page's banner, as wide as the page: its heading with a blue pill beside it (`pill` may be
+// empty), a line on what the page is for, and at the right how things stand: a pill in
+// `status_fill`, with `caption` under it (either may be empty). Leaves the cursor under it.
+void page_banner(const Fonts& fonts, const char* heading, const char* pill, const std::string& about,
+                 const std::string& status = {}, ImU32 status_fill = color::good, const std::string& caption = {});
+// A card behind what a page draws on it: lighter edged while hovered, with a blue edge when `marked`.
+void card(ImDrawList* draw, ImVec2 start, ImVec2 size, bool marked = false);
 // A caption over its value: the detail lines of an open list row.
 void field(const Fonts& fonts, const char* name, const std::string& value);
-// One row of a mod list: its background, a hover tint, a rule under it and a
-// blue edge when it is ticked. Returns true when the row itself was clicked,
+// One row of a mod list, `height` tall: a card, lighter edged while hovered, with a blue edge
+// when it is ticked. Leave a gap under it (row_gap). Returns true when the row itself was clicked,
 // which opens the mod's overview; the widgets drawn over it keep their clicks.
 bool list_row(const char* id, float width, float height, bool ticked);
+inline float row_gap() { return S(8); }
 // An on/off switch, blue while on. Returns true when it was flipped.
 bool toggle(const char* id, bool* on);
 // A square button with three dots, for a row's menu.
@@ -203,6 +213,8 @@ struct Settings {
     std::string steam_username;   // never the password
     bool steam_remember{true};
     bool steam_prefer_code{};
+    // The versions of the privacy policy and the terms of service the player agreed to (0: none).
+    std::uint64_t accepted_privacy{}, accepted_terms{};
 };
 
 inline constexpr std::array<const char*, 7> log_levels{"trace", "debug", "info", "warning", "error", "critical", "off"};
@@ -218,6 +230,7 @@ struct ModProblem {
     std::string name;      // folder under Mods/, so it can be switched off
     std::string title;
     std::string reason;
+    bool conflict{};       // left out for another mod above it that changes the same game files
 };
 
 struct State {
@@ -254,8 +267,11 @@ public:
     Settings& settings() { return settings_; }
     const launcher_app::Session& session() const { return session_; }
     void save();
-    // After settings are closed: the update check again, when an update choice changed.
+    // The update check again when an update choice changed since the last one: as either switch
+    // is flipped, and each frame after (a check already running holds the next one until it ends).
     void check_again_if_update_choices_changed();
+    // Whether the last update check found a pre-release newer than the latest release.
+    bool prerelease_available() const { return prerelease_available_; }
 
     void check();
     // The merge the game would do at startup, run here so its failures can be
@@ -292,6 +308,7 @@ private:
     // The update choices the last check was made with: one changed in settings is checked
     // again straight away (save()).
     std::atomic<bool> checked_updates_{true}, checked_prereleases_{};
+    std::atomic<bool> prerelease_available_{};
     bool binaries_{true};
     std::mutex mutex_;
     std::condition_variable answered_;
@@ -351,6 +368,44 @@ struct Changelog {
     }
 };
 
+// The privacy policy and terms of use, built into the launcher from legal/*.md (gui_legal.cpp).
+// Each is laid out the first time it is shown and kept while the launcher runs.
+struct Legal {
+    enum Kind { privacy, terms, count };
+    struct Document {
+        std::string title, updated, markdown;   // updated: YYYY-MM-DD
+        std::uint64_t version{};
+    };
+    struct Slot {
+        std::thread worker;
+        std::atomic<bool> loading{};
+        bool arrived{};                         // worker -> UI, under the mutex
+        Document incoming;
+        std::string incoming_error;
+
+        bool loaded{};
+        std::string error;                      // why the last fetch failed
+        Document document;
+        thunderstore::Readme text;
+    };
+    std::mutex mutex;
+    std::array<Slot, count> slots;
+    int open{-1};                               // the Kind shown, or -1 when the window is closed
+
+    // The built-in versions. One newer than the player agreed to (Settings::accepted_*) puts up
+    // the agreement before anything else.
+    std::thread versions_worker;
+    bool versions_started{}, versions_arrived{};   // arrived: worker -> UI, under the mutex
+    std::array<std::uint64_t, count> current{};
+    bool agreement{};                           // the agreement window is up
+
+    ~Legal() {
+        for (auto& slot : slots)
+            if (slot.worker.joinable()) slot.worker.join();
+        if (versions_worker.joinable()) versions_worker.join();
+    }
+};
+
 // Settings > GRAPHICS, AUDIO, CAMERA, CONTROLS, REPLAY: skate.'s own settings, read from its
 // save each time Settings opens (game_settings.h).
 struct GamePages {
@@ -367,6 +422,7 @@ struct Ui {
     GamePages game;
     bool changelog{};
     Changelog notes;
+    Legal legal;
     int settings_tab{};         // GAME, DISPLAY, KEYS, ADVANCED, then the game's own pages
     int binding{};              // 1 = menu key, 2 = console key, while waiting for a press
     std::string key_error;
@@ -396,6 +452,11 @@ struct Ui {
     // without Steam, which is fine: ReSkate does not need it.
     std::string steam_name;
     double steam_checked{-100};
+    // The account's Steam picture on the plate in place of the drawn logo; reloaded
+    // when Steam caches a new one or another account signs in.
+    ImTextureID steam_avatar{};
+    fs::path steam_avatar_path;
+    fs::file_time_type steam_avatar_time{};
 };
 
 // The Thunderstore listing, fetched in the background when the launcher
@@ -583,6 +644,8 @@ void mod_icon(ModsPanel& panel, const thunderstore::Package* package, ImVec2 pos
 void pump_icons(ModsPanel& panel);
 // The GET MODS page body, under the page header.
 void browse_page(Launcher& launcher, const Fonts& fonts, ModsPanel& panel, float height, bool installing);
+// The official mods (official_mods.h): each to install, update or turn off, and how it is doing.
+void official_page(const Fonts& fonts, ModsPanel& panel, float height);
 // Everything Thunderstore knows about one package, in a popup over the page.
 void package_overview(const Fonts& fonts, ModsPanel& panel, ImVec2 size, bool installing);
 // The README section of an overview: the installed mod's own README.md when it has one, else
@@ -608,6 +671,13 @@ void prompt_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, const up
 void qr_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, const std::vector<std::string>& rows);
 // What the newest release changed: its notes on GitHub.
 void changelog_window(const Fonts& fonts, ImVec2 size, Ui& ui);
+// The privacy policy or the terms of service (ui.legal.open), with a switch between them.
+void legal_window(const Fonts& fonts, ImVec2 size, Ui& ui);
+// Each frame: the backend's versions of both, looked up once; a newer one than the player
+// agreed to raises ui.legal.agreement.
+void check_legal_versions(Ui& ui, const Settings& settings);
+// "I agree" to the current versions, or quit.
+void legal_agreement_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, HWND window);
 void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, HWND window);
 void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, ModsPanel& panel, HWND window);
 // Shown instead of launching when the merge left mods out.

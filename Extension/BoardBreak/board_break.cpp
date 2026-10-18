@@ -3,6 +3,7 @@
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Core/Platform/memory.h"
 #include "Engine/Game/Build/20260929/no_bail.h"
+#include "Engine/Vfs/builtin_packs.h"
 #include "Engine/Vfs/mod_catalog.h"
 #include "Extension/Assets/live_mods.h"
 #include "Extension/Multiplayer/Remote/native_pose_layout.h"
@@ -18,6 +19,7 @@
 #include "Extension/Multiplayer/Session/session.h"
 #include "Extension/Progression/script_natives.h"
 #include "Extension/Skater/physics_tuning.h"
+#include "Extension/UI/Overlay/overlay.h"
 #include <Windows.h>
 #include <shlobj.h>
 #include <algorithm>
@@ -48,9 +50,9 @@
 namespace dingosdk::board_break {
 namespace {
 constexpr const char* enabled_preference = "BoardBreak";
-// A slam of `heavy` force or more always breaks the board; a lighter one with `light`, rising to
-// certain between 60% of `heavy` and `heavy` (break_chance). Half of all breaks stay joined by the
-// grip tape. Now and then a board gives way under the rider: per second of riding, the nose goes.
+// A slam of `heavy` force or more always breaks the board, one under 60% of it never, and the
+// chance rises smoothly in between (break_chance). Half of all breaks stay joined by the grip tape.
+// A board that is done gives way under the rider on a hard enough landing: the nose goes.
 // (board_break_feel.h holds the forces, the chances and what wear does.)
 namespace sstate = addr::skater_state;
 constexpr std::size_t cause_count = 35;   // the collector's cause bytes (+0x28) and forces (+0x4c)
@@ -93,7 +95,7 @@ struct Broken {
 };
 struct State {
     // Any thread.
-    std::atomic<bool> ready{}, on{true}, wanted_mend{};
+    std::atomic<bool> ready{}, on{true}, wanted_mend{}, turned_off{};
     std::atomic<std::uintptr_t> base{};
     std::atomic<bool> has_deck{}; // one of Board Break's decks is the one in the game
     std::atomic<int> wanted_snap{-1}; // asked for from another thread, done at the next tick
@@ -105,7 +107,7 @@ struct State {
     float angle{};          // how far a hanging end droops (radians), or how deep a fold sags (0 to 1)
     std::uint32_t flights{}; // counts the breaks, so each starts a flight of its own
     bool counted{}, hooked{};
-    std::uint64_t wipeouts{}, back_since{}, last_error{}, rode_at{}, board_seen{};
+    std::uint64_t wipeouts{}, back_since{}, last_error{}, board_seen{};
     // The ground under the board: its own height while it rolls on it, and what of that was fresh
     // when the board broke (else not a number).
     float ride_height{};
@@ -120,6 +122,8 @@ struct State {
     std::atomic<float> wear_now{}, wear_added{};
     // A board that came down too hard onto a rail, seen by the physics thread: the tick breaks it.
     std::atomic<bool> rail_snap{};
+    std::atomic<bool> landing_give{};  // the physics thread saw a done board land too hard
+    std::atomic<float> landing_speed{};
     std::atomic<int> rail_contact{};
     std::atomic<float> rail_speed{};
     // The board's long axis (towards the nose) and its up axis in the world, from the tick.
@@ -645,8 +649,16 @@ void take_wear(State& s, const std::string& deck, float extra = 0.0f) {
     s.wear_now.store(worn, std::memory_order_relaxed);
     if (worn - before >= 0.01f) say(logging::Level::debug, "a hard hit: the board is {:.1f}% worn now (+{:.1f}).", worn * 100.0f, (worn - before) * 100.0f);
     if (worn != before) f.dirty = true;
-    if (condition_name(before) != condition_name(worn))
+    if (condition_name(before) != condition_name(worn)) {
         say(logging::Level::info, "the {} board is {} now ({:.0f}% worn).", deck_label(deck), condition_name(worn), worn * 100.0f);
+        // Told as it gets close, so a break that follows is no surprise.
+        if (condition_name(worn) == "beat")
+            overlay::notify(overlay::NoticeLevel::info, "Your board is beat",
+                            "It breaks from smaller slams now. New board: ReSkate menu (Insert) > Addons > Board Break.");
+        else if (condition_name(worn) == "done")
+            overlay::notify(overlay::NoticeLevel::warning, "Your board is done",
+                            "The next big drop snaps it. New board: ReSkate menu (Insert) > Addons > Board Break.");
+    }
 }
 // A board that broke is a new one once it is whole again: no wear, no scratches.
 void new_board(State& s, const std::string& deck) {
@@ -786,6 +798,12 @@ void on_step(const NoBailSkater& skater, float seconds, bool wipeout) noexcept {
             const float down = w.air_down;
             if (wear_on) add_physics_wear(s, rolling ? landing_wear(down) : rail_wear(down, contact != Contact::grind));
             const bool can_break = s.has_deck.load(std::memory_order_relaxed) && !s.rail_snap.load(std::memory_order_acquire);
+            // A done board gives way on a landing hard enough for how worn it is.
+            if (can_break && rolling && wear_on && !s.landing_give.load(std::memory_order_acquire) &&
+                gives_way_on_landing(down, s.sensitivity.load(std::memory_order_relaxed), s.wear_now.load(std::memory_order_relaxed))) {
+                s.landing_speed.store(down, std::memory_order_relaxed);
+                s.landing_give.store(true, std::memory_order_release);
+            }
             if (can_break && grinding && contact != Contact::grind && s.rails.load(std::memory_order_relaxed)) {
                 const float chance = s.always.load(std::memory_order_relaxed) ? (down > 1.5f ? 1.0f : 0.0f)
                                                                               : rail_chance(down, contact, s.sensitivity.load(std::memory_order_relaxed),
@@ -839,7 +857,7 @@ bool snap(State& s, std::uintptr_t board, std::optional<Place> at, bool gave_way
     s.broken = Broken{board, now, gave_way, asked, deck_now(s)};
     s.back_since = 0;
     crack_sound(break_size(place, joined, s.angle));
-    say(logging::Level::debug, "the board broke at the {}{} ({}).", place_names[static_cast<std::size_t>(place)],
+    say(logging::Level::info, "the board broke at the {}{} ({}).", place_names[static_cast<std::size_t>(place)],
         joined ? ", held together by the grip tape" : "", why);
     return true;
 }
@@ -939,6 +957,15 @@ void publish(State& s, std::uintptr_t base, std::uintptr_t client, std::uintptr_
 bool start(std::uintptr_t base) noexcept {
     auto& s = state();
     if (s.ready.load(std::memory_order_acquire)) return true;
+    // Its official mod not installed, or turned off, in the launcher: no Board Break this launch, and
+    // nothing of it shows.
+    if (const auto mods_root = mods::engine_data_root() / mods::mods_folder; !mods::official_in_use(mods_root, mods::board_break_official)) {
+        s.turned_off.store(true, std::memory_order_release);
+        logging::write(logging::Level::info, logging::Channel::skater,
+            mods::official_off(mods_root, mods::board_break_official) ? "Board Break is off: its official mod is turned off in the launcher."
+                                                    : "Board Break is off: its official mod is not installed (launcher, Mods, OFFICIAL).");
+        return false;
+    }
     if (!no_bail_available()) {
         logging::write(logging::Level::warning, logging::Channel::skater,
             "Board Break cannot follow the skater: its slams come through No Bail's hooks, which did not start.");
@@ -1110,6 +1137,10 @@ void on_client_tick(std::uintptr_t client) noexcept {
             const auto what = std::format("a {} onto a rail at {:.1f} m/s", contact_names[(std::min)(contact, contact_names.size() - 1)], s.rail_speed.load());
             if (snap(s, board, Place::mid, false, false, what)) metal_sound(base, holder);
         }
+        // A done board that landed too hard (the physics thread saw it): the nose goes, and they ride on.
+        if (s.landing_give.exchange(false, std::memory_order_acq_rel) && s.on.load(std::memory_order_acquire) && !s.broken)
+            (void)snap(s, board, Place::nose, true, false,
+                       std::format("a landing at {:.1f} m/s on a board that was done", s.landing_speed.load(std::memory_order_relaxed)));
         watch_physics_state(client, skater.entity);
         const auto watch = watched_physics_state();
         if (s.wanted_mend.exchange(false, std::memory_order_acq_rel)) mend(s, "asked for");
@@ -1151,14 +1182,7 @@ void on_client_tick(std::uintptr_t client) noexcept {
                         metal_sound(base, holder);
                 }
             }
-            // Now and then a board simply gives way under the rider: the nose goes.
-            if (on && !s.broken && s.rode_at && riding(watch.state)) {
-                const auto seconds = (std::min<std::uint64_t>)(now - s.rode_at, 250) / 1000.0;
-                const float worn = s.wear_on.load(std::memory_order_relaxed) ? s.wear_now.load(std::memory_order_relaxed) : 0.0f;
-                if (std::uniform_real_distribution<double>(0.0, 1.0)(s.random) < gives_way_per_second(worn) * seconds)
-                    (void)snap(s, board, Place::nose, true, false, "it gave way while riding");
-            }
-            s.rode_at = now;
+
             if (s.broken) {
                 // Whole again once the skater rides it, or has picked it up after the fall. A board that
                 // gave way under the rider stays as it is while it is ridden; after a fall it is a
@@ -1189,6 +1213,7 @@ void on_client_tick(std::uintptr_t client) noexcept {
 }
 
 bool available() noexcept { return state().ready.load(std::memory_order_acquire); }
+bool turned_off() noexcept { return state().turned_off.load(std::memory_order_acquire); }
 bool enabled() noexcept { return available() && state().on.load(std::memory_order_acquire); }
 void set_enabled(bool enabled) noexcept {
     state().on.store(enabled, std::memory_order_release);

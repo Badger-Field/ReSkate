@@ -2,8 +2,9 @@ if(WIN32)
     add_executable(dingosdk_launcher WIN32 Launcher/main.cpp Launcher/launch.cpp
         Launcher/gui.cpp Launcher/gui_launcher.cpp Launcher/gui_renderer.cpp Launcher/gui_home.cpp
         Launcher/gui_settings.cpp Launcher/gui_sign_in.cpp Launcher/gui_mods.cpp Launcher/gui_mods_browse.cpp Launcher/gui_mods_profiles.cpp
-        Launcher/gui_gamepad.cpp Launcher/gamepad_input.cpp Launcher/gui_changelog.cpp Launcher/game_settings.cpp
-        Launcher/updater.cpp Launcher/mod_manager.cpp Launcher/mod_profiles.cpp Launcher/thunderstore.cpp Launcher/install_here.cpp Launcher/problem.h)
+        Launcher/gui_gamepad.cpp Launcher/gamepad_input.cpp Launcher/gui_changelog.cpp Launcher/gui_legal.cpp Launcher/game_settings.cpp
+        Launcher/updater.cpp Launcher/mod_manager.cpp Launcher/mod_profiles.cpp Launcher/thunderstore.cpp Launcher/official_mods.cpp
+        Launcher/install_here.cpp Launcher/problem.h)
     target_link_libraries(dingosdk_launcher PRIVATE dingosdk_logging dingosdk_content_cache_install dingosdk_world_layer_scan dingosdk_launcher_support dingosdk_initfs
         dingosdk_mod_list dingosdk_mods dingosdk_json dingosdk_miniz dingosdk_imgui dingosdk_playstation_input winhttp shell32 dwmapi windowscodecs ole32)
     set_target_properties(dingosdk_launcher PROPERTIES OUTPUT_NAME "ReSkateLauncher")
@@ -22,8 +23,10 @@ if(DINGOSDK_BUILD_LAUNCHER_TESTS AND WIN32)
     target_include_directories(dingosdk_oodle_path_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     add_dependencies(dingosdk_oodle_path_tests dingosdk_test_oodle_codec)
     add_test(NAME oodle_path COMMAND dingosdk_oodle_path_tests "$<TARGET_FILE_DIR:dingosdk_test_oodle_codec>")
-    add_executable(dingosdk_mod_manager_tests Launcher/Test/mod_manager_tests.cpp Launcher/mod_manager.cpp)
-    target_link_libraries(dingosdk_mod_manager_tests PRIVATE dingosdk_mod_list dingosdk_launcher_support dingosdk_miniz shell32)
+    add_executable(dingosdk_mod_manager_tests Launcher/Test/mod_manager_tests.cpp Launcher/mod_manager.cpp
+        Launcher/official_mods.cpp Launcher/updater.cpp Launcher/thunderstore.cpp Engine/Vfs/builtin_packs.cpp)
+    target_link_libraries(dingosdk_mod_manager_tests PRIVATE dingosdk_mod_list dingosdk_launcher_support dingosdk_logging dingosdk_json
+        dingosdk_miniz dingosdk_zstd winhttp shell32)
     add_test(NAME launcher_mod_manager COMMAND dingosdk_mod_manager_tests)
     # Finding skate. in Steam's own files (install_here.cpp).
     add_executable(dingosdk_steam_library_tests Launcher/Test/steam_library_tests.cpp)
@@ -73,6 +76,16 @@ if(DINGOSDK_BUILD_LAUNCHER_TESTS AND WIN32)
     add_executable(dingosdk_bundle_ref_table_tests Engine/Vfs/Test/bundle_ref_table_tests.cpp)
     target_link_libraries(dingosdk_bundle_ref_table_tests PRIVATE dingosdk_mods)
     add_test(NAME bundle_ref_table COMMAND dingosdk_bundle_ref_table_tests)
+    # The shader program lookup's merge: added rows combined, rows past the base's records left out.
+    add_executable(dingosdk_shader_lookup_tests Engine/Resource/Test/shader_lookup_tests.cpp)
+    target_link_libraries(dingosdk_shader_lookup_tests PRIVATE dingosdk_mods)
+    target_include_directories(dingosdk_shader_lookup_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    add_test(NAME shader_lookup COMMAND dingosdk_shader_lookup_tests)
+    # A type reference on another fixup's slot taken out of an EBX (Master Chief / TASM2 costume crash).
+    add_executable(dingosdk_ebx_fixup_repair_tests Engine/Resource/Test/ebx_fixup_repair_tests.cpp)
+    target_link_libraries(dingosdk_ebx_fixup_repair_tests PRIVATE dingosdk_mods)
+    target_include_directories(dingosdk_ebx_fixup_repair_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    add_test(NAME ebx_fixup_repair COMMAND dingosdk_ebx_fixup_repair_tests)
     add_executable(dingosdk_mod_scoring_tests Engine/Vfs/Test/mod_scoring_tests.cpp)
     target_link_libraries(dingosdk_mod_scoring_tests PRIVATE dingosdk_mods)
     add_test(NAME mod_scoring COMMAND dingosdk_mod_scoring_tests "${DINGOSDK_TEST_GAME_ROOT}")
@@ -105,7 +118,7 @@ if(DINGOSDK_BUILD_LAUNCHER_TESTS AND WIN32)
     target_include_directories(dingosdk_chunk_metadata_merge_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     add_test(NAME chunk_metadata_merge COMMAND dingosdk_chunk_metadata_merge_tests)
     add_executable(dingosdk_mod_merge_added_assets_tests Engine/Vfs/Test/mod_merge_added_assets_tests.cpp)
-    target_link_libraries(dingosdk_mod_merge_added_assets_tests PRIVATE dingosdk_mods)
+    target_link_libraries(dingosdk_mod_merge_added_assets_tests PRIVATE dingosdk_mods dingosdk_game_archives)
     target_include_directories(dingosdk_mod_merge_added_assets_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     add_test(NAME mod_merge_added_assets COMMAND dingosdk_mod_merge_added_assets_tests)
     add_executable(dingosdk_item_list_merge_tests Engine/Vfs/Test/item_list_merge_tests.cpp)
@@ -194,12 +207,56 @@ else()
 endif()
 configure_file(cmake/templates/launcher_update_config.h.in generated/launcher_update_config.h @ONLY)
 
+# The terms of use and privacy policy (legal/*.md), built into the launcher as it shows them
+# and asks players to agree to them. Each starts "# Title", then "Version N, YYYY-MM-DD".
+set(legal_header "// Generated from legal/*.md by cmake/Apps.cmake.\n#pragma once\n")
+foreach(legal_kind IN ITEMS terms privacy)
+    string(TOUPPER "${legal_kind}" legal_file)
+    set(legal_path "${PROJECT_SOURCE_DIR}/legal/${legal_file}.md")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${legal_path}")
+    file(READ "${legal_path}" legal_text)
+    if(NOT legal_text MATCHES "^# ([^\n]+)\n+Version ([0-9]+), ([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])\n")
+        message(FATAL_ERROR "${legal_path} must start with \"# Title\" and \"Version N, YYYY-MM-DD\"")
+    endif()
+    set(legal_title "${CMAKE_MATCH_1}")
+    set(legal_version "${CMAKE_MATCH_2}")
+    set(legal_date "${CMAKE_MATCH_3}")
+    # ASCII only: the launcher is compiled without /utf-8.
+    string(REGEX MATCH "[^\t\n\r -~]" legal_odd "${legal_text}")
+    if(legal_odd)
+        message(FATAL_ERROR "${legal_path} must be plain ASCII")
+    endif()
+    if(legal_text MATCHES "\\)LEGAL\"")
+        message(FATAL_ERROR "${legal_path} must not contain )LEGAL\"")
+    endif()
+    # MSVC takes at most 16380 bytes in one string literal: adjacent pieces of 8000.
+    set(legal_pieces "")
+    string(LENGTH "${legal_text}" legal_length)
+    set(legal_at 0)
+    while(legal_at LESS legal_length)
+        string(SUBSTRING "${legal_text}" ${legal_at} 8000 legal_piece)
+        string(APPEND legal_pieces "    R\"LEGAL(${legal_piece})LEGAL\"\n")
+        math(EXPR legal_at "${legal_at} + 8000")
+    endwhile()
+    string(APPEND legal_header "inline constexpr char legal_${legal_kind}_title[] = R\"LEGAL(${legal_title})LEGAL\";\n"
+        "inline constexpr unsigned legal_${legal_kind}_version = ${legal_version};\n"
+        "inline constexpr char legal_${legal_kind}_date[] = \"${legal_date}\";\n"
+        "inline constexpr char legal_${legal_kind}_markdown[] =\n${legal_pieces};\n")
+endforeach()
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/legal_documents.h" CONTENT "${legal_header}" @ONLY)
+
 if(WIN32)
     # ReSkateEmotePacker: a folder of pictures and GIFs -> the chat emote pack (emotes.json +
     # emotes.png) that ReSkate.dll bakes in from assets/emotes.
     add_executable(dingosdk_emote_packer EmotePacker/main.cpp)
     target_link_libraries(dingosdk_emote_packer PRIVATE dingosdk_json windowscodecs ole32)
     set_target_properties(dingosdk_emote_packer PROPERTIES OUTPUT_NAME "ReSkateEmotePacker")
+    # ReSkateBuiltinPacker: a built-in content pack's zip (assets/builtin) -> the zstd pack
+    # ReSkate.dll carries (Engine/Vfs/builtin_pack_format.h). Run by the build (cmake/Runtime.cmake).
+    add_executable(dingosdk_builtin_packer BuiltinPacker/main.cpp)
+    target_include_directories(dingosdk_builtin_packer PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_link_libraries(dingosdk_builtin_packer PRIVATE dingosdk_miniz dingosdk_zstd)
+    set_target_properties(dingosdk_builtin_packer PROPERTIES OUTPUT_NAME "ReSkateBuiltinPacker")
 endif()
 
 # ReSkate dedicated server: 1-1 native desktop GUI on Windows (with --headless support), headless on Linux.

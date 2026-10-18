@@ -456,15 +456,25 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
         setting_check("Keep the launcher open after launch",
                       "Hide while you play and return when Skate closes. Turn off to close after a successful launch.",
                       settings.keep_open_after_launch);
-        setting_check("Install ReSkate updates",
-                      "Turn off to keep the ReSkate.dll and launcher you have, such as a test build someone gave you. "
-                      "Skate's own Steam updates are not affected.",
-                      settings.updates);
-        setting_check("Test pre-releases",
-                      "Update to the newest pre-release on GitHub when there is one, to try what is coming before it "
-                      "is released. Pre-releases are less tested. Turn off to go back to the latest release. "
-                      "The launcher checks again as soon as these settings are closed.",
-                      settings.prereleases);
+        {
+            const bool updates_were = settings.updates, prereleases_were = settings.prereleases;
+            setting_check("Install ReSkate updates",
+                          "Turn off to keep the ReSkate.dll and launcher you have, such as a test build someone gave you. "
+                          "Skate's own Steam updates are not affected.",
+                          settings.updates);
+            // Only while there is a pre-release to test (one newer than the latest release), or while
+            // it is on, so it can always be turned off.
+            if (settings.prereleases || launcher.prerelease_available())
+                setting_check("Test pre-releases",
+                              "Update to the newest pre-release on GitHub, to try what is coming before it is released. "
+                              "Pre-releases are less tested. Turn off to go back to the latest release.",
+                              settings.prereleases);
+            // Either flipped: checked again now, so PLAY or the update button changes to match.
+            if (settings.updates != updates_were || settings.prereleases != prereleases_were) {
+                launcher.save();
+                launcher.check_again_if_update_choices_changed();
+            }
+        }
         ImGui::Spacing();
         section_caption(fonts, "TROUBLESHOOTING");
         ImGui::AlignTextToFramePadding();
@@ -478,17 +488,14 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
         ImGui::Spacing();
         setting_check("GPU crash diagnostics (DRED)", "Records extra detail when the graphics driver crashes. Slightly slower.",
                       settings.gpu_diagnostics);
-        setting_check("Send crash reports",
-                      "When the launcher or Skate crashes, upload a crash dump and that session's log so the ReSkate "
-                      "developers can fix it. Off unless you tick it. The launcher picks a change up when it next "
-                      "starts.",
-                      settings.crash_reports);
-        setting_check("Send performance timings",
-                      "Send how long downloads, mod installs, the mod merge, level loads and joining a "
-                      "session took, and each level's average frame rate, so slow spots can be found and fixed. Nothing "
-                      "about your account is included. Needs crash reports on; the launcher picks a change up when it "
-                      "next starts.",
-                      settings.performance_timings);
+        // No "Send crash reports" or "Send performance timings": this edition sends neither (legal/PRIVACY.md).
+        setting_note("ReSkate sends no crash reports or timings. To report a problem, open an issue on GitHub and "
+                     "attach ReSkate.log from Open logs if you want to.");
+        ImGui::Spacing();
+        if (ImGui::Button("Privacy Policy")) ui.legal.open = Legal::privacy;
+        ImGui::SameLine();
+        if (ImGui::Button("Terms of Use")) ui.legal.open = Legal::terms;
+        setting_note("What ReSkate sends (no telemetry, no crash uploads), and the rules for using it and the lobby service.");
         break;
     }
     ImGui::EndChild();
