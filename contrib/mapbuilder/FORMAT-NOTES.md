@@ -52,7 +52,7 @@ large as LOD 0's geometry; in 11 of 300 base-game meshes it is looser by 3 to 38
 | +0 | u32 | 0 (the skinned reader requires 1 here and so rejects rigid meshes) |
 | +8 | u32 | section count |
 | +12 | u64 | pointer to the section table |
-| +80 | u32 | flags; 0x40, 0x41, 0x51 seen. Bit 0: util_groundplane, which is never drawn, has 0x41; the drawn box 0x40: likely "don't draw" (a utility mesh). Not tested by flipping it |
+| +80 | u32 | flags; 0x40, 0x41, 0x51 seen. Bit 0 is not "don't draw": the drawn skatepark box's LOD 2 (its proxy LOD) has 0x41, LODs 0 and 1 0x40; util_groundplane's one LOD has 0x41. Perhaps a proxy or low-LOD marker |
 | +84 | u32 | index format; 33 (16-bit) in all 639 LODs seen |
 | +88 | u32 | index bytes |
 | +92 | u32 | vertex bytes |
@@ -778,8 +778,28 @@ and layout and draws one zero-area triangle on one vertex of its own, inside our
 (`--other-sections geometry` puts our geometry in every section instead). Section +332 gets our
 area (0 for those triangles) when every template section's +332 equals its own area. The dry run
 lists every LOD (flags, the six floats at +140) and section (triangles, vertices, material name,
-+324, +328, +332, key, strides) of the template and of ours, and warns when a LOD's flags have
-bit 0 set.
++324, +328, +332, key, strides) of the template and of ours.
+
+**Tested in game** (cf7e536, the skatepark box as template, all sections kept, `--bam 333`): our
+own geometry is drawn. The box's LOD 0 has 4 sections (Skatepark_Surface_M 44 triangles / 51
+vertices, Sides_M 76/99, Trim_Edges_M 48/96, Surface_M_Shadow 120/62 with stride 8), LOD 1 3, LOD 2
+2 (Surface_proxy 12/24, Surface_proxy_Shadow 12/8). `--mesh-shape donor-copy` (the box's own data
+in our chunks) spawns and is drawn with its wood and shadow, ground 301 at (3, -3), the skater
+lands on it; `--mesh-shape box` (our own generated box) spawns and is drawn, flat tan (constant
+UVs and frames), lit, with the skater's shadow, ground 301. The 50 m plane (box flat in y, 50 m
+across) does not spawn at all: no drawing, no collision ("still loading" everywhere), as an
+earlier box blueprint with our own collision did.
+
+Since then: the default `--mesh-shape slab` is a closed `--size W,H,D` box (default 50 x 0.2 x 50)
+whose top is at the ground's height; no bounds are written flat (any axis under 0.1 m is padded to
+±0.05 m); each vertex takes the normal, tangent and colour bytes of the template vertex (in any
+section of the same layout of its LOD) whose face normal is closest to its own, and planar UVs per
+face (x, z on top and bottom; z, y facing x; x, y facing z) at the template section's own texel
+density (UV length over edge length); the dry run scores reading formats 6 and 13 as 8-bit normals
+against the template's face normals (report only), prints the blueprint's and mesh's fields named
+like bounds, distances, sizes, and sets any Min/Max box struct to our bounds; our collision strips
+cover the same W x D and each part's box is printed. Ladder for the size limit: 6,1,6 (as the
+working box), 12,0.2,12, 50,0.2,50.
 
 **What the base game does (checked on files, the PC's read-only scans).**
 
