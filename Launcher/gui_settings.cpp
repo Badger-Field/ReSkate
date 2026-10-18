@@ -488,22 +488,14 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
         ImGui::Spacing();
         setting_check("GPU crash diagnostics (DRED)", "Records extra detail when the graphics driver crashes. Slightly slower.",
                       settings.gpu_diagnostics);
-        setting_check("Send crash reports",
-                      "When the launcher or Skate crashes, upload a crash dump and that session's log so the ReSkate "
-                      "developers can fix it. Off unless you tick it. The launcher picks a change up when it next "
-                      "starts.",
-                      settings.crash_reports);
-        setting_check("Send performance timings",
-                      "Send how long downloads, mod installs, the mod merge, level loads and joining a "
-                      "session took, and each level's average frame rate, so slow spots can be found and fixed. Nothing "
-                      "about your account is included. Needs crash reports on; the launcher picks a change up when it "
-                      "next starts.",
-                      settings.performance_timings);
+        // No "Send crash reports" or "Send performance timings": this edition sends neither (legal/PRIVACY.md).
+        setting_note("ReSkate sends no crash reports or timings. To report a problem, open an issue on GitHub and "
+                     "attach ReSkate.log from Open logs if you want to.");
         ImGui::Spacing();
         if (ImGui::Button("Privacy Policy")) ui.legal.open = Legal::privacy;
         ImGui::SameLine();
-        if (ImGui::Button("Terms of Service")) ui.legal.open = Legal::terms;
-        setting_note("What ReSkate collects and sends, and the rules for using it and its servers.");
+        if (ImGui::Button("Terms of Use")) ui.legal.open = Legal::terms;
+        setting_note("What ReSkate sends (no telemetry, no crash uploads), and the rules for using it and the lobby service.");
         break;
     }
     ImGui::EndChild();
