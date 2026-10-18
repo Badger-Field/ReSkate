@@ -18,6 +18,8 @@
   python -m reskate_mapbuilder new-place-level --game <dir> --mods <dir> --name zz-... --level <name> --tiles <DIR> \\
         [--at X Y Z] [--mirror] [--bam 333|no-world|all] [--asset-bundle ...] [--dry-run]
   python -m reskate_mapbuilder place-info --tiles <DIR> [--at X Y Z] [--max-height M] [--skip-part P]
+  python -m reskate_mapbuilder scan-materials --game <dir> [--superbundle S ...] [--bundle-contains TEXT] \\
+        [--class wood ...] [--both] [--every] [--explain SUPERBUNDLE:BUNDLE]
   python -m reskate_mapbuilder material-donors --game <dir> [--contains TEXT]
   python -m reskate_mapbuilder mesh-refs --game <dir> [--mod <mod dir>] --superbundle S --bundle B --mesh EBX \\
         [--scan SUPERBUNDLE:BUNDLE ...] [--level <name>]
@@ -36,6 +38,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from collections import Counter
 
 from .ebx import read_document
 from .ebxcheck import array_hash_report, roundtrip
@@ -44,9 +47,12 @@ from .game import Game
 from .ground import material_donors
 from .ground import ASSET_BUNDLES, BAM_MODES, COLLISION_MODES, MESH_MODES, MESH_SHAPES, VISUAL_MODES, BLUEPRINT_BUNDLE, BLUEPRINT_TEMPLATE, DEFAULT_AT, DEFAULT_SIZE, TILE_TEMPLATE, new_ground_level
 from .level import BASE_SUPERBUNDLE, new_level
+from .materials import CLASSES as MATERIAL_CLASSES, auto_bundle as auto_material_bundle
+from .materials import auto_donors as auto_material_donors, explain as explain_materials
+from .materials import report as materials_report, scan as scan_materials
 from .meshrefs import mesh_refs
 from .place import (PlaceError, check_spots, view_spots, collision as place_collision, filter_collision, read_place, spawn_at,
-                    summary as place_summary)
+                    summary as place_summary, visual_class, visual_label)
 from .meshset import describe_meshset, diff_meshsets
 from .mod import ModBuilder
 from .physics import (KIND_TRIANGLE_MESH, Shape, compute_edge_data, physics_tail, read_physics, replace_shape,
@@ -157,6 +163,7 @@ def new_ground_level_command(args, place=None):
         count = None if mode in ("chunks", "grow") else (declared or len(templates) or 1)
         return place_collision(place, template, count, templates)
     grid = getattr(args, "grid", None)
+    material_bundle, donors = _material_bundle(args, game, _donors(args))
     try:
         new_ground_level(game, mod, args.level, args.display_name, args.size, tuple(args.at), args.bam,
                          args.tile_template, args.layer_template, args.layer_bundle, args.blueprint_template,
@@ -167,8 +174,8 @@ def new_ground_level_command(args, place=None):
                          None if getattr(args, "other_sections", "degenerate") == "geometry"
                          else getattr(args, "geometry_section", 0), getattr(args, "uv_per_metre", None),
                          getattr(args, "parts", "merge") == "grow", _visuals(args, place),
-                         getattr(args, "visual_template", None), _donors(args),
-                         not getattr(args, "no_auto_materials", False))
+                         getattr(args, "visual_template", None), donors,
+                         not getattr(args, "no_auto_materials", False), material_bundle)
     finally:
         for line in log:
             print(line)
@@ -222,28 +229,68 @@ def _props(args) -> list:
 
 
 def _visuals(args, place) -> list:
-    """(name, vertices, triangles, material) of the place's visual objects with --visuals, filtered
-    by --visuals-only (an object's name, its part, or a name prefix)."""
+    """(name, vertices, triangles, class) of the place's visual objects with --visuals, filtered
+    by --visuals-only and --skip-visual (an object's name, its part, or a name prefix). The class
+    is the export's material, but `building` for the buildings part (place.visual_class)."""
     if place is None or not getattr(args, "visuals", False):
         return []
     only = getattr(args, "visuals_only", None) or []
+    skip = getattr(args, "skip_visual", None) or []
+
+    def matches(piece, label, names):
+        return any(o in (piece.name, piece.part, label) or piece.name.startswith(o) for o in names)
+
     out = []
+    classes: dict[str, Counter] = {}
     for piece in place.visual:
-        label = f"{piece.name}_t{piece.tile[0]}_{piece.tile[1]}".replace("-", "m")
-        if only and not any(o in (piece.name, piece.part, label) or piece.name.startswith(o) for o in only):
+        label = visual_label(piece)
+        if (only and not matches(piece, label, only)) or matches(piece, label, skip):
             continue
-        out.append((label, piece.vertices, piece.triangles, piece.material))
+        kind = visual_class(piece)
+        out.append((label, piece.vertices, piece.triangles, kind))
+        classes.setdefault(kind, Counter())[piece.part] += 1
     if getattr(args, "visual_slab", None):
         from .meshset import box_geometry
         w, h, d = _xyz(args.visual_slab, "--visual-slab")
         vertices, triangles = box_geometry((-w / 2, -h, -d / 2), (w / 2, 0.0, d / 2))
         out.append(("slab", vertices, triangles, "ground"))
     if not out:
-        sys.exit("--visuals: no visual object matches --visuals-only")
+        sys.exit("--visuals: no visual object matches --visuals-only / --skip-visual")
     extra = " plus the slab" if getattr(args, "visual_slab", None) else ""
     print(f"visual objects: {len(out) - bool(extra)} of {len(place.visual)}{extra}: " + ", ".join(
         f"{name} ({material}, {len(v)} vertices, {len(t)} triangles)" for name, v, t, material in out))
+    print("visual classes (each drawn with its --material-donor): " + "; ".join(
+        f"{kind} <- " + ", ".join(f"{part} ({n})" for part, n in sorted(parts.items()))
+        for kind, parts in sorted(classes.items())))
     return out
+
+
+def _material_bundle(args, game, donors: dict):
+    """(--material-bundle as (superbundle, bundle) or None, the material donors). `auto` (or
+    `auto:SUPERBUNDLE[,...]`, default bam's) picks a sublevel bundle (materials.auto_bundle) and
+    donors from it for the materials not given by --material-donor."""
+    spec = getattr(args, "material_bundle", None)
+    if not spec:
+        return None, donors
+    if spec == "auto" or spec.startswith("auto:"):
+        searched = [s for s in spec[len("auto:"):].split(",") if s] or [BASE_SUPERBUNDLE]
+        found = auto_material_bundle(game, searched, log=lambda line: print(line, flush=True))
+        if found is None:
+            sys.exit(f"--material-bundle {spec}: no sublevel bundle of {', '.join(searched)} has usable concrete "
+                     f"(or stone) and wood sections; scan-materials --both lists what there is")
+        superbundle, bundle, row = found
+        picked = auto_material_donors(row)
+        merged = {**picked, **donors}
+        for material, mesh in sorted(merged.items()):
+            print(f"--material-bundle auto: --material-donor {material}={mesh}"
+                  + (" (given)" if material in donors else ""))
+        print(f"  (the same build without auto: --material-bundle {superbundle}:{bundle} "
+              + " ".join(f"--material-donor {m}={d}" for m, d in sorted(merged.items())) + ")")
+        return (superbundle, bundle), merged
+    superbundle, _, bundle = spec.partition(":")
+    if not bundle:
+        sys.exit(f"--material-bundle {spec!r}: give SUPERBUNDLE:BUNDLE, or auto")
+    return (superbundle, bundle), donors
 
 
 def _donors(args) -> dict:
@@ -277,6 +324,23 @@ def new_place_level_command(args):
     place = _read_place_args(args, "new-place-level")
     args.size, args.mesh = DEFAULT_SIZE, "template"
     new_ground_level_command(args, place)
+
+
+def scan_materials_command(args):
+    """Bundles of the whole game (or chosen superbundles) holding usable concrete, stone, wood or
+    metal materials, ranked per MB (read-only)."""
+    game = Game(args.game)
+    if args.explain:
+        superbundle, _, bundle = args.explain.partition(":")
+        if not bundle:
+            sys.exit(f"--explain {args.explain!r}: give SUPERBUNDLE:BUNDLE")
+        for line in explain_materials(game, superbundle, bundle):
+            print(line)
+        return
+    rows = scan_materials(game, args.superbundle or None, args.bundle_contains or "", args.limit,
+                          log=lambda line: print(line, flush=True))
+    for line in materials_report(rows, args.top, args.every, args.material_class, args.both):
+        print(line)
 
 
 def material_donors_command(args):
@@ -410,6 +474,8 @@ def _place_options(p):
                    help="drop the collision chunks of this part or object name, e.g. buildings (repeatable)")
     p.add_argument("--visuals", action="store_true",
                    help="draw the place's visual objects: one blueprint and mesh each, cloned from --visual-template")
+    p.add_argument("--skip-visual", action="append", metavar="OBJECT",
+                   help="leave out visual objects by name, part (e.g. buildings) or name prefix (repeatable)")
     p.add_argument("--visuals-only", action="append", metavar="OBJECT",
                    help="only these visual objects (name, part or name prefix; repeatable)")
     p.add_argument("--visual-slab", nargs="+", metavar="W,H,D",
@@ -420,6 +486,12 @@ def _place_options(p):
     p.add_argument("--material-donor", action="append", metavar="MATERIAL=MESH[:SECTION]",
                    help="the mesh section whose material draws objects of MATERIAL (default the template's section 0)")
     p.add_argument("--uv-per-metre", type=float, metavar="U", help="visual objects' texture repeats per metre (default 1)")
+    p.add_argument("--material-bundle", metavar="SUPERBUNDLE:BUNDLE",
+                   help="another level's bundle (scan-materials finds them), copied under its own name: it becomes our "
+                        "sublevel, and objects whose --material-donor is one of its meshes go into it. auto (or "
+                        "auto:SUPERBUNDLE[,...], default bam's): a tile sublevel with distinct usable concrete, ground "
+                        "and wood (vistas and proxies left out), with donors from it for the materials "
+                        "--material-donor does not give")
     p.add_argument("--no-auto-materials", action="store_true",
                    help="without --material-donor, keep the template's section 0 for every material instead of the "
                         "auto picks (ramp wedge surface for ground, a rail for metal, a concrete section)")
@@ -429,6 +501,9 @@ def _place_options(p):
 
 
 def _template_options(p):
+    p.add_argument("--resource-ids", choices=("odd", "clear"), default="odd",
+                   help="new resource ids: odd (low bit set, as every stock id; confirmed in game) or clear (low "
+                        "two bits clear, the earlier form)")
     p.add_argument("--tile-template", default=TILE_TEMPLATE, help="the bam tile copied for the sublevel")
     p.add_argument("--layer-template", help="the LayerData copied (default: the one the tile references)")
     p.add_argument("--layer-bundle", help="its bundle (default: the tile's, or found by search)")
@@ -521,6 +596,21 @@ def main(argv=None):
                    help="where the blueprint and collision go: the ground bundle, the level's copy of "
                         "bam_coregameassets, or the level's root bundle")
     p.add_argument("--dry-run", action="store_true", help="read and report only")
+    p = sub.add_parser("scan-materials", help="bundles holding usable concrete, stone, wood, metal (read-only)")
+    p.add_argument("--game", required=True)
+    p.add_argument("--superbundle", action="append", help="only these superbundles (repeatable; default: all)")
+    p.add_argument("--bundle-contains", help="only bundles whose names hold this text")
+    p.add_argument("--limit", type=int, help="read at most this many bundles with meshes")
+    p.add_argument("--top", type=int, default=30, help="bundles listed")
+    p.add_argument("--every", action="store_true", help="list every usable section of each bundle, not the first 12")
+    p.add_argument("--explain", metavar="SUPERBUNDLE:BUNDLE",
+                   help="one bundle: every section's words, classes, auto roles, usable or why not, and the auto "
+                        "pick's verdict")
+    p.add_argument("--class", dest="material_class", action="append", choices=tuple(MATERIAL_CLASSES),
+                   help="only sections (and bundles) of this class (repeatable)")
+    p.add_argument("--both", action="store_true",
+                   help="only bundles with usable concrete (or stone) and usable wood sections (what "
+                        "--material-bundle auto looks for)")
     p = sub.add_parser("material-donors", help="stock mesh sections that could lend a material (read-only)")
     p.add_argument("--game", required=True)
     p.add_argument("--contains", default="", help="only MeshSets whose names hold this text (default: all)")
@@ -581,9 +671,12 @@ def main(argv=None):
         args.at = list(_xyz(args.at, "--at")) if args.at else (None if places else list(DEFAULT_AT))
     if args.command == "new-ground-level":
         args.size = _size(args.size)
+    if getattr(args, "resource_ids", None):
+        import reskate_mapbuilder.ground as ground_module
+        ground_module.RESOURCE_ID_STYLE = args.resource_ids
     {"inspect": inspect, "raise-ground": raise_ground, "rebuild": rebuild, "new-level": new_level_command,
      "new-ground-level": new_ground_level_command, "new-place-level": new_place_level_command,
-     "place-info": place_info, "material-donors": material_donors_command,
+     "place-info": place_info, "material-donors": material_donors_command, "scan-materials": scan_materials_command,
      "list-assets": list_assets, "inspect-meshset": inspect_meshset,
      "mesh-refs": mesh_refs_command, "meshset-diff": meshset_diff,
      "dump-ebx": dump_ebx, "ebx-roundtrip": ebx_roundtrip, "ebx-arrayhash": ebx_arrayhash}[args.command](args)

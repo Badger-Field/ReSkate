@@ -49,6 +49,8 @@ can be stood on.
         --level dingolevel_reskate_place --tiles <DIR from city --level> --dry-run
     python -m reskate_mapbuilder place-info --tiles <DIR> [--max-height 20]
     python -m reskate_mapbuilder material-donors --game "<Skate>" [--contains skatepark]
+    python -m reskate_mapbuilder scan-materials --game "<Skate>" [--superbundle S] [--bundle-contains T] \
+        [--class wood] [--both] [--every]
     python -m reskate_mapbuilder mesh-refs --game "<Skate>" [--mod <mod>] --superbundle S --bundle B --mesh EBX
     python -m reskate_mapbuilder ebx-roundtrip --game "<Skate>" --superbundle globals \
         --ebx levels/game/dingolevel_root/dingolevel_root/description
@@ -64,22 +66,42 @@ changes its bytes.
 
 ## A real place, end to end
 
-Tested in game with the Embarcadero Plaza 130 x 20 export (FORMAT-NOTES 6.4). Export the place
-with `contrib/lidar-parks` (`city --level DIR`), then, with `--game` the game folder and `T` that
-directory:
+Tested in game with the Embarcadero Plaza 130 x 20 and Freedom Plaza 150 x 60 exports
+(FORMAT-NOTES 6.4): collision within 0.1 m of the printed readings, every visual object drawn and
+textured in real materials. Export the place with `contrib/lidar-parks` (`city --level DIR`),
+then, with `--game` the game folder and `T` that directory:
 
     python -m reskate_mapbuilder place-info --tiles T --max-height 20 --views
     python -m reskate_mapbuilder new-place-level --game "<Skate>" --name zz-place-level \
-        --level dingolevel_reskate_place --tiles T --bam 333 --max-height 20 --visuals --dry-run
+        --level dingolevel_reskate_place --tiles T --bam 333 --max-height 20 --visuals \
+        --material-bundle auto --dry-run
     python -m reskate_mapbuilder new-place-level --game "<Skate>" --mods "<Skate>\Mods" --name zz-place-level \
-        --level dingolevel_reskate_place --tiles T --bam 333 --max-height 20 --visuals
+        --level dingolevel_reskate_place --tiles T --bam 333 --max-height 20 --visuals \
+        --material-bundle auto
 
 Keep one level mod in `Mods`. In game: `load levels/game/dingolevel_reskate_place/dingolevel_reskate_place`,
-then the `trainer ground X Z` spots `place-info` prints (the export's spawn is at 0 0). The
-collision is the place's collision chunks merged into util_groundplane's one part; each visual
-object is its own copy of the skatepark box with our geometry, textured with the box's surface.
-`--visuals-only NAME` adds objects one at a time; `material-donors --game "<Skate>"` lists stock
-sections for `--material-donor wood=MESH:N` and the like.
+then the `trainer ground X Z` spots `place-info` prints (the export's spawn is at 0 0); `--views`
+adds a spot and heading to look at each visual object from.
+
+What the build does:
+
+- **Collision**: the place's collision chunks merged into util_groundplane's one part.
+- **Visuals** (`--visuals`): each visual object is its own copy of the skatepark box with our
+  geometry, UVs projected per face. Classes come from the export: `ground`; `concrete` (steps,
+  kerbs, banks); `wood` (benches); `building` (the buildings part, drawn by default;
+  `--skip-visual buildings` leaves it out). `--visuals-only NAME` adds objects one at a time.
+- **Materials** (`--material-bundle auto`, recommended): picks one of bam's world-partition tile
+  sublevels with distinct usable poured concrete, paving ground (slabs, pavers; never a trim,
+  cladding or black stone) and wood, vistas and proxies left out, and draws each class with a
+  section of it; that bundle becomes the level's sublevel. The dry run prints the pick, the
+  ground candidates with their ranks, and the equivalent explicit `--material-bundle
+  SUPERBUNDLE:BUNDLE --material-donor CLASS=MESH:N` command; a `--material-donor` given wins.
+  `scan-materials --game "<Skate>" [--both] [--class wood]` ranks bundles holding real materials,
+  and `scan-materials --explain SUPERBUNDLE:BUNDLE` shows, for one bundle, every section's words,
+  whether it is usable and why not, and the auto pick's verdict. Without `--material-bundle`, the
+  donors come from bam's root bundle (the skatepark kit; `material-donors` lists them).
+- **Resource ids**: odd (low bit set, as every stock id; confirmed in game); `--resource-ids clear`
+  gives the earlier form.
 
 The format reference is `contrib/mapbuilder/FORMAT-NOTES.md`.
 

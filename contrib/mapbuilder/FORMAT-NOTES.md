@@ -71,11 +71,14 @@ large as LOD 0's geometry; in 11 of 300 base-game meshes it is looser by 3 to 38
 | +36 | u32 | first index |
 | +40 | u32 | vertex start: a byte offset into the chunk's vertex data |
 | +44 | u32 | vertex count |
+| +84 | u32 | a copy of the vertex start (+40) (REA's static survey); the writer keeps it equal to ours when the template's are copies |
 | +112 | | vertex declaration, below |
+| +212..+311 | | a second vertex declaration, the same layout (REA's static survey); a donor's is copied with its first (`DONOR_SPANS` cover +112..+319), and the build checks both are the donor's |
 | +0x138 (312) | u64 | shader-block key: an entry key of the ShaderBlockDepot of the bundle holding the MeshSet (below); LODs of one mesh share keys (checked on files, the PC, 2026-10-18) |
-| +324, +328 | u32, u32 | a hash-like word and a small number (box section 0: 0x722325fd, 4); not decoded |
+| +320 | u32 | a copy of the first index (+36) (REA's static survey); kept equal to ours as +84 is |
+| +324, +328 | u32, u32 | a material-derived hash (REA's static survey) and a small number (box section 0: 0x722325fd, 4) |
 | +332 | float | the section's surface area (the PC's diff: 2,500 for our 50 m plane; 36.96 for the box's section 0) |
-| +336 | 3 floats, then 3 floats 16 bytes on | the section's box (found on the box's sections by its own bounds) |
+| +336, +352 | 3 floats + u32 0, 3 floats + u32 0 | the section's box minimum and maximum, each followed by a zero pad word (REA's static survey; found on the box's sections by its own bounds); the writer writes the pads zero |
 
 Vertex declaration, at section +112:
 
@@ -92,6 +95,18 @@ order): 0 None, 1 Float, 2 Float2, 3 Float3, 4 Float4, 5 Half, 6 Half2, 7 Half3,
 19 Short2N, 20 Short3N, 21 Short4N, 22 UShort2, 23 UShort4, 24 UShort2N, 25 UShort4N, 26 Int, ...
 39 UInt4N, 40-43 (U)Comp3(N)_10_10_10, 44-47 (U)Comp3(N)_11_11_10, 48-51 (U)Comp4(N)_10_10_10_2.
 `meshset.FORMAT_CODES` reads and writes 1-26.
+
+**REA's static survey** (a read-only pass over the installed game's files by REA, reported
+2026-10-18; not checked in game unless said): every one of the 147,564 distinct stock resource
+ids is odd (low bit set); a section's key is in the ShaderBlockDepot of its own bundle in 99.99%
+of sections (per-bundle keys, as above); `PhysicsPartInfos` has one entry in 99.6% of
+blueprints, and where it has more the count matches the instance or group count (the part
+record's +0x34 word, 2), with the blueprint's other per-part arrays (`PartBoundingBoxes`,
+`PartLinks`, `PartNetworkIdRanges`, `PartStates`, `PartMaterials`) sharing its length; the
+section fields +84, +212, +320, +324, +336 and +352 as in the table above. No per-section
+sub-material index field was found. Usage 51 (UByte4) is probably a SubMaterialIndex and usage 52
+(UByte4N) a TangentSpace (both unverified; the writer keeps zeros in 51 and the template's most
+common value in 52).
 
 **Usages on the skatepark box** (LOD 0; the PC): 33 (Half2) is TexCoord0, atlas-like (section 0
 u 0.277..0.723, v -0.238..0.238; section 1 u -0.217..1.723); 34 (Half2) TexCoord1 at world scale,
@@ -1027,9 +1042,11 @@ there are exactly that many kinds (ground, bench, steps for the box's 3), otherw
 x; vertices equal to the last bit are shared. With util_groundplane: one shape of 5,284 triangles
 and 2,803 vertices for the Embarcadero (223,152 bytes). Materials stay per part (the part record's
 packed material; no per-triangle material is known). `--parts grow` keeps one part per chunk and
-grows `PhysicsPartInfos` and `PartBoundingBoxes` to that many entries (entry 0 copied, each box
-set to its part's; untested, and not what the box's file shows); other per-part tables are only
-reported.
+grows `PhysicsPartInfos` and its non-empty sibling arrays (`PartBoundingBoxes`, `PartLinks`,
+`PartNetworkIdRanges`, `PartStates`, `PartMaterials`) to that many entries (entry 0 copied, each
+box set to its part's; untested, and not what the box's file shows); empty ones stay empty. Every
+build checks that each non-empty sibling has `PhysicsPartInfos`' length (REA's static survey: they
+share it), before and after growing, and refuses a mismatch; the dry run prints the lengths.
 
 **Tested in game** (976f955, merged into util_groundplane's one part): the Embarcadero collision
 works, every reading within 0.1 m of the printed table (299.4, 299.4, 300.2, 301.0, 300.2, 300.4,
@@ -1042,7 +1059,13 @@ slot table whose entries carry two tag bits: bit 0 set, skipped; bit 1 set, the 
 used as an object. The value read, 0x14e9899ef8f39c32, is exactly our resource id of
 `visual_ground_0_0_tm2_m1_mesh` (an MD5 of the name): an id ending in binary 10 is taken for a
 tagged object. The d1b slab's ids ended in 00 (mesh and collision) and Embarcadero's collision in
-01; base ids seen end in 01 and 11. Our ids now always end in 00. `--visuals-only` also takes the
+01; base ids seen end in 01 and 11. Our ids then always ended in 00, and every build since
+loaded. REA's static survey found every stock id odd (147,564 distinct ids), and the slot walk
+skips an entry with bit 0 set as an unresolved handle, so ids are now the name's MD5 with the low
+bit set (`ground.RESOURCE_ID_STYLE = "odd"`; never 0, never ending in 10); the dry run prints
+"New resource ids: odd". **Tested in game** (24fe5c6, the PC's M1): the Embarcadero with odd
+ids loads, no crash, readings unchanged; odd is the confirmed default. `--resource-ids clear`
+keeps the 00 form. `--visuals-only` also takes the
 names the dry run prints (`ground_0_0_tm2_m1`), and `--visual-slab W,H,D` adds the d1b slab's
 shape through the visual path.
 
@@ -1086,6 +1109,125 @@ section of a mesh named concrete, curb, sidewalk or pavement, else the template'
 the template's section 0 (`--no-auto-materials` keeps the template's section 0 for all). The
 writer fills each stream of any layout: position, TexCoord0, TexCoord1, 51 and 52 as above, any
 other element (such as the ramp wedge's 12-byte usage 42 stream) from the template vertex.
+
+**Materials from other levels** (tested in game, below). The PC's scan of bam's root bundle
+(ef109c6): 41 MeshSets, all usable materials the skatepark kit's (concrete 2 sections, neither
+usable; wood 0; metal 25, 17 usable; ground 41, 21 usable). Real concrete, stone and wood must
+come from other levels' bundles, and a section's key resolves only in the depot of the bundle
+holding the MeshSet; a foreign depot copied into our ground bundle under our name hung, with its
+shader data crashed (6.3). Approaches weighed:
+
+- (a) `--material-bundle SUPERBUNDLE:BUNDLE` (implemented): the donor bundle is listed in our
+  level's TOC under its own name (as bam_coregameassets keeps its name), its payloads staying in
+  the game's archives, so its depot comes with its own name and contents. It becomes our sublevel:
+  its sublevel EBX (the one named like the bundle) is replaced by our tile (or added), our layer
+  joins it, and the root's sub-world reference names it, so the game loads it as it loads our
+  ground bundle. Visual objects whose `--material-donor` is one of its meshes go into it whole
+  (blueprint, collision, mesh, MeshSet, chunks), every section taking that donor section's key; the
+  build refuses any object whose keys are not in its target bundle's depot. Chunks of the donor
+  superbundle's TOC named by the bundle's small resources (texture and mesh headers) are added to
+  our TOC. Risks: shader data the depot needs outside the bundle (in the donor superbundle's
+  shared bundles) is not listed; the bundle's own other documents stay in it unreferenced.
+- (b) basing the level root on another level's root bundle: its depot covers only that root's
+  own pool, as bam's does (the skatepark kit); not pursued until the scan shows a root bundle rich
+  in materials.
+- `scan-materials --game G [--superbundle S ...] [--bundle-contains T]` (read-only) walks the
+  superbundles layout.toc lists (or those given), and per bundle with MeshSets reads its depots and
+  its sections whose material or mesh names say concrete, stone, wood or metal, marks those whose
+  key is in the bundle's own depot (and that have a TexCoord0) usable, and ranks the bundles by
+  usable sections per MB of stored size, noting sublevel bundles (holding an EBX of their own name).
+  A superbundle layout.toc lists but that is not on disk (the locale ones such as `loc/wc`) is
+  skipped silently; one named with `--superbundle` is reported. `--every` lists every usable
+  section of a bundle (not the first 12), `--class C` (repeatable) keeps only sections and bundles
+  of that class, `--both` only bundles with usable concrete (or stone) and usable wood.
+
+**Tested in game** (3c6fcda, the PC): `scan-materials` over the whole game read 1,502 bundles with
+classed sections; usable sections: concrete 6,533, stone 7,226, wood 2,942, metal 12,200. The
+best small candidates were bam's world-partition tile sublevels (`wproot/...`, 1.5 to 2.5 MB). The
+trial material bundle, bam's tile sublevel
+`win32/levels/game/bam_levelroot/wproot/wp/s9600_x0z0/s200_x900z1700/s100_x850z1650/s50_x825z1675_sublevel`
+(0.9 MB), with ground =
+`dtn_plt_23_base_e_pillar_base_01_mesh:2` (`Concrete_Poured_01_2x2m_M_Grey_mat`, strides 8, 4, 12,
+4) and wood = `cmn_prp_menuboard_01_mesh:4` (`Wood_Accent`): the Embarcadero level loaded with
+pale grey poured concrete ground and reddish-brown wood benches, every reading exact. Its dry run
+said "0 chunks of bam_levelroot's TOC added": expected, since our level's TOC starts as a copy of
+bam's chunk list (`COPY_BASE_CHUNKS`), so a bam bundle's chunks are all listed already; the line
+now says how many chunks the bundle's resources name, how many were added and how many were
+already there.
+
+`--material-bundle auto` (or `auto:SUPERBUNDLE[,...]`; default bam's superbundle) prints the
+pick, the donors it takes from it and the equivalent explicit command; a `--material-donor` given
+wins over the auto pick for its material.
+
+**Tested in game** (24fe5c6, the PC's M1, the first auto rule: the smallest sublevel with usable
+concrete or stone and wood): it chose `wp_vista_medium_vistarootquadrant3/wp/s100_x4750z4750_sublevel`
+(0.02 MB, the smallest of 46 tried) and took every donor (ground, concrete, stone, wood) from one
+section, `levels/game/bam_levelroot/vistas/vista_medium_quadrant_095x095_vista_m_vista_0_mesh:0`, a
+baked vista material whose long name holds `benchbacklessstone_01_3m_Stone_mat`, so substring
+matching classed it stone and wood. In game the ground drew almost black and the ledges and stairs
+flat grey or white (impostor shading). No crash. The rule is now:
+
+- Never usable (in `scan-materials` too): a section of a bundle, mesh or material whose name
+  holds vista, impostor, imposter, proxy, billboard, shadow or `_lod` (`materials.PROXY_WORDS`).
+- Classes for the auto pick come from the words of the material name only (split at anything not
+  a letter or digit, a plural s dropped): `Wood_Accent` and `Planks_Wood_mat` are wood,
+  `benchbacklessstone_01_3m_Stone_mat` is only stone (`materials.material_words`).
+- Distinct sections: concrete (steps, kerbs, banks; poured first), then ground (pavers, paving,
+  pavement, cobble, tile, granite or stone first, then concrete; never concrete's section, a
+  different material while one matches), then wood; none reuses a section taken before. Building,
+  stone and metal may share one (`materials.AUTO_PICKS`).
+- Candidates: `*_sublevel` bundles, vista or proxy bundles left out, world-partition tiles
+  (`wproot/wp/`) first, each group smallest first; a bundle qualifies with distinct concrete,
+  ground and wood sections and at least 10 usable sections (`AUTO_MIN_USABLE`). Of the first 12
+  that qualify (at most 400 read), the best wins by: pavers or stone ground, poured concrete,
+  ground material different from concrete's, a wproot tile; then the smallest. The dry run lists
+  the top 5 candidates with these marks. Not yet run in game.
+
+The PC's M3 (46636f8, Freedom Plaza): the dry run refused ("no sublevel bundle … has usable
+concrete (or stone) and wood"), 1,052 candidates, 155 vista or proxy bundles left out, at most
+400 read, although the trial tile (ground `Stone_Granite_02_2x2m_M_SgGrdSlabs01_mat` :0, concrete
+`Concrete_Poured_01_2x2m_M_Grey_mat` :2 of the same mesh, wood `Wood_Accent`) qualifies by the
+rules (a unit test feeds its exact names). Likely causes: the 400-read cap (smallest first, so
+the 0.9 MB tile may come after it) and the 10-usable minimum. Now: every candidate is read (no
+cap; progress every 100), bundles under 64 KB stored are skipped unread (`AUTO_MIN_BYTES`; the
+vista was 0.02 MB), a bundle needs 3 usable classed sections (`AUTO_MIN_USABLE`), proxy words
+match whole words of a name only (`name_words`: `lod` and `lod1` as words, never inside one),
+and the dry run prints the time, the count read and the first 5 rejected bundles with reasons.
+`scan-materials --explain SUPERBUNDLE:BUNDLE` prints, for one bundle, every section with its
+material-name words, its classes, its auto roles, usable or why not (proxy word, key not in the
+depots, no TexCoord0), and the auto pick's verdict, picks and score.
+
+**Tested in game** (e64ed32, the PC's M3, Freedom Plaza, auto): no crash, readings identical;
+stairs, kerbs and banks grey poured concrete and clearly visible; the building granite cladding
+without streaks. But the ground drew almost black: its pick was a planter's
+`Stone_Granite_Trim_02_2x2m_M_Black_mat` (:1; the planter's others: :0 poured concrete, :2
+`Terrain_Clovers_01_2x2m_M_mat`, :3 `Stone_Granite_02_2x2m_M_SgWllCladding01_mat`). The ground
+is now ranked (`materials.ground_quality`): 3 paving (grd, ground, slab, paver, paving, pavement,
+sidewalk, floor, cobble, flagstone, tile), 2 plain (stone, granite, concrete, cement), 1 terrain
+(terrain, clover, grass, dirt), 0 penalised (trim, cladding, wll, wall, facade, roof, black, dark;
+used only when nothing else is); words are also split at camelCase and digit runs, so
+`SgGrdSlabs01` holds grd and slab. The ground's rank is the first mark of a bundle's score, so a
+tile with slab ground beats one whose best is a trim. The dry run and `--explain` print each
+ground candidate with its rank and reason, and whether it was picked or taken by concrete. Not
+yet run in game.
+
+**Tested in game** (main 0830262, Freedom Plaza 150 x 60): loads, every reading within 0.1 m, 47
+of 47 visuals drawn; banks show their hump and slope. Stairs and kerbs were hard to see (low,
+dark on the ramp-wedge ground), and the west-edge `buildings` sliver was drawn full height with
+its texture in vertical streaks. Cause: the planar UVs picked each vertex's plane from the
+average normal of the faces sharing it, and the export's buildings are welded (roof and walls
+share corners), so a wall's top corners took the roof's top-down projection and its v stayed
+constant up the wall. The writer now splits every vertex shared by faces of different main axes
+(one copy per axis, `meshset.split_by_axis`), so each face is projected by its own normal (x, z
+on top; z, y facing x; x, y facing z); the dry run prints "vertices split by face axis" when it
+splits. The `buildings` part is now its own visual class, `building` (`place.PART_CLASSES`;
+the export calls it concrete), drawn with `--material-donor building=...`, else with concrete's
+donor (`ground.MATERIAL_FALLBACK`); `--skip-visual buildings` leaves it out (it is drawn by
+default). The dry run prints which parts make each class and which donor draws it. With
+`--material-bundle auto` the picks prefer different materials per class: ground pavers, paving,
+pavement, cobble, tile or stone first; concrete (steps, kerbs, banks) poured concrete first;
+building brick, wall, facade or stone, then concrete; a section already taken by an earlier class
+is skipped while another matches (`materials.AUTO_PICKS`). Not yet run in game.
 
 **Visuals** (`--visuals`, written, not yet run in game): each visual object of each tile (13 in
 the Embarcadero export) gets its own blueprint, mesh and placement (at `--at`, like the

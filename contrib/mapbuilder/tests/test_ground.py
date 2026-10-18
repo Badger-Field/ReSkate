@@ -585,7 +585,7 @@ def test_default_slab_with_padded_bounds_part_boxes_and_bounds_fields(tmp_path, 
 
 
 def test_vertex_helpers():
-    from reskate_mapbuilder.meshset import decode_element, encode_element, padded_bounds, planar_uv, vertex_normals
+    from reskate_mapbuilder.meshset import decode_element, encode_element, padded_bounds, planar_uv, split_by_axis
     lo, hi = padded_bounds([(0.0, 1.0, 0.0), (2.0, 1.0, 3.0)])
     assert lo == [0.0, 0.95, 0.0] and hi == [2.0, 1.05, 3.0]
     assert planar_uv((2.0, 1.0, 3.0), (0.0, 1.0, 0.0), 0.5) == (1.0, 1.5)
@@ -601,7 +601,7 @@ def test_vertex_helpers():
     assert decode_element(6, buffer, 0) == [0.25, -1.0]
     from reskate_mapbuilder.meshset import box_geometry
     vertices, triangles = box_geometry((0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
-    normals = vertex_normals(vertices, triangles)
+    vertices, triangles, normals = split_by_axis(vertices, triangles)          # a box: nothing to split
     assert sorted(set(normals)) == sorted({(0.0, 1.0, 0.0), (0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0),
                                           (0.0, 0.0, 1.0), (0.0, 0.0, -1.0)})
 
@@ -710,3 +710,66 @@ def test_auto_material_donors(tmp_path, monkeypatch):
     assert "auto material donor: metal: no mesh named like 'no_such'; the default" in text
     assert f"auto material donor: concrete = {BOX}_mesh:1" in text
     assert f"material {GROUNDPLANE}_mesh:0 ->" in text
+
+
+def test_write_mesh_keeps_the_copied_fields_the_second_declaration_and_the_box_pads():
+    import struct
+    from reskate_mapbuilder.meshset import first_vertex
+    ms, chunk = meshset(guid(1))
+    template = bytearray(ms)
+    for s in read_layout(ms)[0].sections:
+        struct.pack_into("<I", template, s.at + 348, 7)                    # pads not zero in the template:
+        struct.pack_into("<I", template, s.at + 364, 7)                    # ours are written zero
+    verts = [(0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (0.0, 0.0, 2.0), (2.0, 1.0, 2.0)]
+    out, chunks, report = write_mesh(bytes(template), [chunk], verts, [(0, 2, 1), (1, 2, 3)], [guid(2)])
+    assert any("ours kept in sync" in line for line in report)
+    for s in read_layout(out)[0].sections:
+        assert struct.unpack_from("<I", out, s.at + 84)[0] == s.vertex_start
+        assert struct.unpack_from("<I", out, s.at + 320)[0] == s.first_index
+        assert out[s.at + 212:s.at + 312] == out[s.at + 112:s.at + 212]
+        assert struct.unpack_from("<4f", out, s.at + 336)[3] == 0.0 and struct.unpack_from("<4f", out, s.at + 352)[3] == 0.0
+        assert struct.unpack_from("<3f", out, s.at + 352)[1] >= 1.0    # the box max: ours (y 1), not the flat template's
+    assert read_layout(out)[0].sections[1].vertex_start > 0          # the second section's start moved, and +84 with it
+
+    # Another mesh's section as the donor: both its declarations taken.
+    donor_ms, donor_chunk = meshset(guid(3), "other_mesh")
+    donor_section = read_layout(donor_ms)[0].sections[1]
+    donor = (donor_ms[donor_section.at:donor_section.at + 384], first_vertex(donor_section, donor_chunk))
+    out, _, report = write_mesh(ms, [chunk], verts, [(0, 2, 1), (1, 2, 3)], [guid(2)], donor=donor)
+    assert any("(second vertex declaration): equal to its +112 declaration, both taken" in line for line in report)
+    for s in read_layout(out)[0].sections:
+        assert out[s.at + 212:s.at + 312] == donor[0][212:312] == donor[0][112:212]
+        assert struct.unpack_from("<I", out, s.at + 84)[0] == s.vertex_start
+
+    # A template whose +84 / +320 are not copies: left alone, and said so.
+    broken = bytearray(ms)
+    struct.pack_into("<I", broken, read_layout(ms)[0].sections[1].at + 84, 12345)
+    out, _, report = write_mesh(bytes(broken), [chunk], verts, [(0, 2, 1), (1, 2, 3)], [guid(2)])
+    assert any("are not copies of the template sections' vertex start / first index: left as they were" in line
+               for line in report)
+    assert struct.unpack_from("<I", out, read_layout(out)[0].sections[1].at + 84)[0] == 12345
+
+
+def test_a_welded_wall_gets_side_projected_uvs_per_face():
+    from reskate_mapbuilder.meshset import section_element, split_by_axis
+    ms, chunk = meshset(guid(1))
+    # A welded 2 x 4 x 2 m column: 8 shared corners, 12 triangles, outward; the roof shares its corners
+    # with the walls (as the export's buildings do).
+    verts = [(x, y, z) for y in (0.0, 4.0) for z in (0.0, 2.0) for x in (0.0, 2.0)]
+    quads = [(4, 6, 7, 5), (0, 1, 3, 2), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+    tris = [t for a, b, c, d in quads for t in ((a, b, c), (a, c, d))]
+    split_vertices, split_tris, normals = split_by_axis(verts, tris)
+    assert len(split_vertices) == 24 and len(split_tris) == 12      # each corner once per axis it touches
+    out, chunks, report = write_mesh(ms, [chunk], verts, tris, [guid(2)])
+    assert any("vertices split by face axis for per-face UVs: 8 -> 24" in line for line in report)
+    s = read_layout(out)[0].sections[0]
+    positions = section_positions(s, chunks[0])
+    uvs = section_element(s, chunks[0], 33)
+    walls = [t for t in section_triangles(read_layout(out)[0], s, chunks[0])
+             if {positions[i][1] for i in t} == {0.0, 4.0}]
+    assert len(walls) == 8
+    for t in walls:
+        low = [uvs[i][1] for i in t if positions[i][1] == 0.0]
+        high = [uvs[i][1] for i in t if positions[i][1] == 4.0]
+        # v follows y up the wall: 4 m at the default 1 / 6 per metre (the fixture UVs measure no density)
+        assert all(abs(h - lo - 4.0 / 6) < 0.01 for h in high for lo in low)

@@ -81,6 +81,12 @@ SECTION_KEY = 0x138
 # What a section takes from a shader donor (--shader-from): bytes per vertex (+30) and everything
 # from the vertex declaration (+112) through the key (+0x138..+0x140).
 DONOR_SPANS = ((30, 31), (112, SECTION_KEY + 8))
+# REA's static survey (FORMAT-NOTES): +84 is a copy of the vertex start (+40) and +320 a copy of
+# the first index (+36); +212..+311 a second vertex declaration (the first is +112..+211);
+# +336 and +352 the section's box minimum and maximum, each three floats and a zero pad word.
+VERTEX_START_COPY, FIRST_INDEX_COPY = 84, 320
+DECLARATION, DECLARATION_2, DECLARATION_SIZE = 112, 212, 100
+SECTION_BOX = 336
 
 DEPOT_TYPE = 0x73312045          # ShaderBlockDepot: "<bundle path>_win32_shaderstate/shaderblockdepot_<n>"
 SHADER_STATE_ID_TYPE = 0x2FEC6526  # 32 bytes: "<bundle path>_win32_shaderstateshaderstateassetid"
@@ -433,6 +439,13 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
     report.append(f"section +{AREA_OFFSET} " + ("is each template section's surface area: ours written" if area_ok else
                                                  "is not the template sections' surface area: left as it was"))
     report += ["template sections:"] + section_list(template)
+    # +84 / +320: written as copies of our vertex start / first index when the template's own are copies.
+    copies_ok = all(struct.unpack_from("<I", template, s.at + VERTEX_START_COPY)[0] == s.vertex_start
+                    and struct.unpack_from("<I", template, s.at + FIRST_INDEX_COPY)[0] == s.first_index
+                    for lod in lods for s in lod.sections)
+    report.append(f"section +{VERTEX_START_COPY} / +{FIRST_INDEX_COPY} " + (
+        "copy each template section's vertex start / first index: ours kept in sync" if copies_ok else
+        "are not copies of the template sections' vertex start / first index: left as they were"))
 
     if keep_section is not None:
         report += keep_one_section(meshset, keep_section)
@@ -444,6 +457,18 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
                     meshset[s.at + a:s.at + b] = donor_section[a:b]
         report.append(f"donor section: key {struct.unpack_from('<Q', donor_section, SECTION_KEY)[0]:#018x}, "
                       f"{donor_section[30]} bytes per vertex")
+        # The spans take the donor's second declaration (+212) with its first (+112): they must agree
+        # as they do in the donor (stock sections carry the same declaration twice).
+        first_decl = donor_section[DECLARATION:DECLARATION + DECLARATION_SIZE]
+        second_decl = donor_section[DECLARATION_2:DECLARATION_2 + DECLARATION_SIZE]
+        report.append(f"donor section +{DECLARATION_2}..+{DECLARATION_2 + DECLARATION_SIZE - 1} (second vertex "
+                      f"declaration): " + ("equal to its +112 declaration, both taken" if first_decl == second_decl
+                                           else "differs from its +112 declaration; both taken as the donor's"))
+        for lod in read_layout(bytes(meshset)):
+            for s in lod.sections:
+                if (meshset[s.at + DECLARATION:s.at + DECLARATION + DECLARATION_SIZE] != first_decl
+                        or meshset[s.at + DECLARATION_2:s.at + DECLARATION_2 + DECLARATION_SIZE] != second_decl):
+                    raise ValueError(f"section at {s.at}: the declarations are not the donor's after the copy")
     lods_now = read_layout(bytes(meshset))
 
     if copy_template:
@@ -454,9 +479,13 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
         report.append("copy of the template's own geometry and vertex bytes, under new chunk GUIDs")
         return bytes(meshset), chunks, report
 
+    given = len(vertices)
+    # Per-face UV planes: vertices shared by faces of different main axes are split (ours, outward).
+    vertices, triangles, normals = split_by_axis(vertices, triangles)
     if len(vertices) > 0xFFFF:
-        raise ValueError("at most 65535 vertices")
-    normals = vertex_normals(vertices, triangles)          # ours, outward: picks each face's UV plane
+        raise ValueError(f"at most 65535 vertices ({len(vertices)} after splitting by face axis)")
+    if len(vertices) != given:
+        report.append(f"vertices split by face axis for per-face UVs: {given} -> {len(vertices)}")
     first, first_chunk = lods[0].sections[0], template_chunks[0]
     theirs = _outward(section_positions(first, first_chunk), section_triangles(lods[0], first, first_chunk))
     flip = theirs is False
@@ -534,6 +563,9 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
                             vertex[o:o + element_size(f)] = colour
                     vertex_data += vertex
             struct.pack_into("<4I", meshset, s.at + 32, len(tris), first_index, start, len(verts))
+            if copies_ok:
+                struct.pack_into("<I", meshset, s.at + VERTEX_START_COPY, start)
+                struct.pack_into("<I", meshset, s.at + FIRST_INDEX_COPY, first_index)
             if area_ok:
                 struct.pack_into("<f", meshset, s.at + AREA_OFFSET, _area(verts, tris))
             first_index += 3 * len(tris)
@@ -551,6 +583,9 @@ def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangle
     for at, gap, _ in boxes:
         struct.pack_into("<3f", meshset, at, *lo)
         struct.pack_into("<3f", meshset, at + gap, *hi)
+        if gap == 16:                        # min, pad, max, pad: the pads zero (as in every stock section)
+            struct.pack_into("<I", meshset, at + 12, 0)
+            struct.pack_into("<I", meshset, at + 28, 0)
     report.append(f"ours: {len(vertices)} vertices, {len(triangles)} triangles per section, chunks "
                   f"{[len(c) for c in chunks]} bytes; box {[round(v, 2) for v in lo]}..{[round(v, 2) for v in hi]} "
                   f"written to the header and {len(boxes)} boxes found in the structs")
@@ -613,8 +648,11 @@ LOD_FIELDS = {0: "word 0", 8: "section count", 12: "section table pointer", 80: 
               128: "chunk GUID"}
 SECTION_FIELDS = {8: "material name pointer", 16: "bone palette pointer", 24: "bone count (u16)",
                   28: "bytes per vertex (byte 30) / primitive (31)", 32: "triangle count", 36: "first index",
-                  40: "vertex start", 44: "vertex count", SECTION_KEY: "shader-block key (low)",
-                  SECTION_KEY + 4: "shader-block key (high)"}
+                  40: "vertex start", 44: "vertex count", VERTEX_START_COPY: "vertex start (copy)",
+                  DECLARATION: "vertex declaration", DECLARATION_2: "vertex declaration (second)",
+                  SECTION_KEY: "shader-block key (low)", SECTION_KEY + 4: "shader-block key (high)",
+                  FIRST_INDEX_COPY: "first index (copy)", 324: "material-derived hash", AREA_OFFSET: "surface area",
+                  SECTION_BOX: "box min", SECTION_BOX + 16: "box max"}
 
 
 def _word_diff(a: bytes, b: bytes, at_a: int, at_b: int, size: int, fields: dict, label: str) -> list[str]:
@@ -622,7 +660,10 @@ def _word_diff(a: bytes, b: bytes, at_a: int, at_b: int, size: int, fields: dict
     for o in range(0, size, 4):
         wa, wb = a[at_a + o:at_a + o + 4], b[at_b + o:at_b + o + 4]
         if wa != wb and len(wa) == len(wb) == 4:
-            name = fields.get(o) or (f"vertex declaration +{o - 112}" if 112 <= o < 112 + 98 else "")
+            name = fields.get(o) or (f"vertex declaration +{o - DECLARATION}" if fields is SECTION_FIELDS
+                                     and DECLARATION <= o < DECLARATION + DECLARATION_SIZE else
+                                     f"second vertex declaration +{o - DECLARATION_2}" if fields is SECTION_FIELDS
+                                     and DECLARATION_2 <= o < DECLARATION_2 + DECLARATION_SIZE else "")
             ua, ub = struct.unpack("<I", wa)[0], struct.unpack("<I", wb)[0]
             fa, fb = struct.unpack("<f", wa)[0], struct.unpack("<f", wb)[0]
             out.append(f"  {label} +{o}{' ' + name if name else ''}: {ua:#010x} ({fa:.6g}) vs {ub:#010x} ({fb:.6g})")
@@ -673,21 +714,46 @@ def _unit(n):
     return (n[0] / length, n[1] / length, n[2] / length) if length else (0.0, 1.0, 0.0)
 
 
-def vertex_normals(vertices, triangles):
-    """Per vertex, the sum of its triangles' (b - a) x (c - a), normalised."""
-    sums = [[0.0, 0.0, 0.0] for _ in vertices]
-    for a, b, c in triangles:
-        n = _face_normal(vertices[a], vertices[b], vertices[c])
-        for i in (a, b, c):
+def face_axis(n) -> int:
+    """The main axis of a normal: 0 (faces x), 1 (top or bottom), 2 (faces z)."""
+    return max(range(3), key=lambda i: abs(n[i]))
+
+
+def split_by_axis(vertices, triangles):
+    """(vertices, triangles, normals) with every vertex shared by faces of different main axes
+    split, one copy per axis, so each face's planar UVs use its own projection (x, z on top; z, y
+    facing x; x, y facing z). A vertex's normal is its faces' axis, signed by their summed normal.
+    Welded geometry (a building's roof and walls sharing corners) otherwise gives the wall's top
+    corners a roof projection: UVs constant up the wall, drawn as vertical streaks."""
+    index: dict[tuple[int, int], int] = {}
+    sums: list[list[float]] = []
+    out_vertices, out_triangles = [], []
+    for tri in triangles:
+        n = _face_normal(*(vertices[i] for i in tri))
+        axis = face_axis(n) if any(n) else 1
+        new = []
+        for i in tri:
+            key = (i, axis)
+            if key not in index:
+                index[key] = len(out_vertices)
+                out_vertices.append(vertices[i])
+                sums.append([0.0, 0.0, 0.0])
+            j = index[key]
             for k in range(3):
-                sums[i][k] += n[k]
-    return [_unit(n) for n in sums]
+                sums[j][k] += n[k]
+            new.append(j)
+        out_triangles.append(tuple(new))
+    normals = []
+    for (_, axis), j in sorted(index.items(), key=lambda item: item[1]):
+        normal = [0.0, 0.0, 0.0]
+        normal[axis] = -1.0 if sums[j][axis] < 0 else 1.0
+        normals.append(tuple(normal))
+    return out_vertices, out_triangles, normals
 
 
 def planar_uv(p, n, density):
     """UV by the face's main axis: x, z for top and bottom; z, y facing x; x, y facing z."""
-    axis = max(range(3), key=lambda i: abs(n[i]))
-    u, v = {1: (p[0], p[2]), 0: (p[2], p[1]), 2: (p[0], p[1])}[axis]
+    u, v = {1: (p[0], p[2]), 0: (p[2], p[1]), 2: (p[0], p[1])}[face_axis(n)]
     return u * density, v * density
 
 

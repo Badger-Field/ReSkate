@@ -88,9 +88,11 @@ TYPES = [
     ("InterfaceDescriptorData", 16, 8, [("$", enc(T.inherited, C.none), 0, 0)]),
     ("StaticModelGroupEntityData", 16, 8, [("$", enc(T.inherited, C.none), 0, 0)]),
     ("ObjectBlueprint", 32, 8, [("$", enc(T.inherited, C.none), 1, 0), ("Object", enc(T.pointer, C.pointer), 0, 24)]),
-    ("StaticModelEntityData", 40, 8, [("$", enc(T.inherited, C.none), 0, 0), ("Mesh", enc(T.pointer, C.pointer), 0, 16),
+    ("StaticModelEntityData", 56, 8, [("$", enc(T.inherited, C.none), 0, 0), ("Mesh", enc(T.pointer, C.pointer), 0, 16),
                                       ("PhysicsPartInfos", enc(T.structure, C.array), 20, 24),
-                                      ("PartBoundingBoxes", enc(T.structure, C.array), 21, 32)]),
+                                      ("PartBoundingBoxes", enc(T.structure, C.array), 21, 32),
+                                      ("PartLinks", enc(T.uint32, C.array), 0, 40),
+                                      ("PartStates", enc(T.uint32, C.array), 0, 48)]),
     ("RigidMeshAsset", 32, 8, [("$", enc(T.inherited, C.none), 1, 0),
                                ("MeshSetResource", enc(T.resourceRef, C.primitive), 0, 24)]),
     ("PhysicsPartInfo", 8, 4, [("PartIndex", enc(T.uint32, C.primitive), 0, 0)]),
@@ -227,7 +229,7 @@ def groundplane():
     return document(BP_GUID, [
         (lambda d: obj(d, "ObjectBlueprint", Name="Common/Utilities/Meshes/Util_GroundPlane", Object=ptr(1)), BP_ROOT_GUID),
         (lambda d: obj(d, "StaticModelEntityData", Mesh=PointerReference(PointerKind.external, 0),
-                       PhysicsPartInfos=[obj(d, "PhysicsPartInfo", PartIndex=i) for i in range(1)], PartBoundingBoxes=[obj(d, "AxisAlignedBox", Min=obj(d, "Vec3", x=0.0, y=0.0, z=0.0), Max=obj(d, "Vec3", x=1.0, y=1.0, z=1.0)) for _ in range(1)]), guid(95))],
+                       PhysicsPartInfos=[obj(d, "PhysicsPartInfo", PartIndex=i) for i in range(1)], PartBoundingBoxes=[obj(d, "AxisAlignedBox", Min=obj(d, "Vec3", x=0.0, y=0.0, z=0.0), Max=obj(d, "Vec3", x=1.0, y=1.0, z=1.0)) for _ in range(1)], PartStates=[0]), guid(95))],
         imports=[(MESH_GUID, guid(96))])
 
 
@@ -252,11 +254,13 @@ def depot(keys):
     return bytes(out)
 
 
-def meshset(chunk_guid, name=GROUNDPLANE + "_mesh", lods=1):
+def meshset(chunk_guid, name=GROUNDPLANE + "_mesh", lods=1, material=None):
     """(MeshSet, chunk): a rigid MeshSet with `lods` LODs (LOD k names chunk_guid, then guid(200 +
     k)) of two sections, a 50 m quad each, laid out as FORMAT-NOTES 1 says: section 0 with float
     positions in stream 0 and a normal and UV in stream 1, section 1 (a shadow) with half-float
-    positions only. Every LOD has the same geometry, so one chunk serves them all."""
+    positions only. Every LOD has the same geometry, so one chunk serves them all. As REA's survey
+    found in stock sections: +84 / +320 copy the vertex start / first index, +212 repeats the
+    +112 declaration, +336 / +352 hold the box with zero pad words."""
     quad = [(-25.0, 0.0, -25.0), (25.0, 0.0, -25.0), (-25.0, 0.0, 25.0), (25.0, 0.0, 25.0)]
     tris = [(0, 1, 2), (1, 3, 2)]      # clockwise seen from above
     chunk = bytearray()
@@ -272,12 +276,15 @@ def meshset(chunk_guid, name=GROUNDPLANE + "_mesh", lods=1):
     chunk += bytes(-len(chunk) % 16)
     tables = 208 + 176 * lods
     names = tables + 2 * 384 * lods
-    data = bytearray(max(1376, names + 64))
+    material_at = names + len(name) + 1
+    data = bytearray(max(1376, material_at + len(material or "") + 64))
     struct.pack_into("<III", data, 0, 192, 176, 384)
     struct.pack_into("<4f", data, 0x10, -25.0, 0.0, -25.0, 0.0)
     struct.pack_into("<4f", data, 0x20, 25.0, 0.0, 25.0, 0.0)
     struct.pack_into("<HH", data, 180, lods, 2 * lods)
     data[names:names + len(name) + 1] = name.encode() + b"\0"
+    if material:                                      # the sections' material name (default: the mesh name)
+        data[material_at:material_at + len(material) + 1] = material.encode() + b"\0"
     struct.pack_into("<Q", data, 0x68, names - 16)
     for k in range(lods):
         lod = 208 + 176 * k
@@ -291,7 +298,7 @@ def meshset(chunk_guid, name=GROUNDPLANE + "_mesh", lods=1):
                 (20, 0, 0, [(1, 3, 0, 0), (33, 6, 0, 1), (52, 13, 4, 1)], [12, 8]),
                 (8, 80, 6, [(1, 8, 0, 0)], [8]))):
             at = table + 384 * s
-            struct.pack_into("<Q", data, at + 8, names - 16)
+            struct.pack_into("<Q", data, at + 8, (material_at if material else names) - 16)
             data[at + 30], data[at + 31] = per_vertex, 3
             struct.pack_into("<4I", data, at + 32, 2, first, start, 4)
             struct.pack_into("<Q", data, at + 0x138, section_keys(name)[s])
@@ -303,6 +310,9 @@ def meshset(chunk_guid, name=GROUNDPLANE + "_mesh", lods=1):
             for e, stride in enumerate(strides):
                 data[at + 112 + 64 + 2 * e] = stride
             data[at + 112 + 96], data[at + 112 + 97] = len(elements), len(strides)
+            data[at + 212:at + 312] = data[at + 112:at + 212]                # the second declaration, the same
+            struct.pack_into("<I", data, at + 84, start)                      # copies of vertex start / first index
+            struct.pack_into("<I", data, at + 320, first)
     return bytes(data), bytes(chunk)
 
 
@@ -379,6 +389,54 @@ def box_physics():
     parts = [Part(i, material=BOX_MATERIAL, word_34=i) for i in range(3)]
     compute_edge_data(shapes, parts)
     return write_physics(shapes, parts, 2)
+
+
+# Another level's sublevel bundle with a concrete material (for --material-bundle): its own
+# sublevel EBX, a concrete curb MeshSet whose keys are in its own depot, a texture naming a chunk
+# of its superbundle's TOC.
+PLAZA_BUNDLE = "win32/levels/game/dingolevel_ftue_island/wp_concrete_plaza_sublevel"
+PLAZA_MESH = "world/plots/plaza/concrete_curb_mesh"
+PLAZA_CHUNK, PLAZA_TEXTURE_CHUNK = guid(130), guid(131)
+
+
+def concrete_plaza(bundle, toc_chunk):
+    ms, chunk = meshset(PLAZA_CHUNK, PLAZA_MESH)
+    b = bundle(PLAZA_BUNDLE, {PLAZA_BUNDLE[len("win32/"):]: b"their sublevel", PLAZA_MESH: b"mesh ebx"},
+               {PLAZA_MESH: (0x49B156D4, 0x9990, ms),
+                "world/plots/plaza/concrete_curb_d": (0x6BDE20BA, 0x9994, b"texture" + PLAZA_TEXTURE_CHUNK.bytes),
+                PLAZA_BUNDLE[len("win32/"):] + "_win32_shaderstate/shaderblockdepot_3": (
+                    0x73312045, 0x9998, depot(section_keys(PLAZA_MESH)))},
+               [(PLAZA_CHUNK, chunk)])
+    return b, [toc_chunk(PLAZA_TEXTURE_CHUNK, b"concrete texels")]
+
+
+# More sublevel bundles for --material-bundle auto: a park with pavers, poured concrete and wood
+# (as the trial's tile: Concrete_Poured_01_2x2m_M_Grey_mat, Wood_Accent), a bigger one (padded
+# with a filler resource), and a tiny vista whose one baked material names stone and a bench
+# (the PC's bad M1 pick): never usable.
+PARK_BUNDLE = "win32/levels/game/dingolevel_ftue_island/wp_park_sublevel"
+BIG_PARK_BUNDLE = "win32/levels/game/dingolevel_ftue_island/wp_big_park_sublevel"
+VISTA_BUNDLE = "win32/levels/game/dingolevel_ftue_island/wp_vista_medium_quadrant3_sublevel"
+PARK_PAVEMENT, PARK_STEP, PARK_BENCH = ("world/plots/park/park_pavement_mesh", "world/plots/park/park_step_mesh",
+                                        "world/plots/park/park_bench_mesh")
+VISTA_MESH = "levels/game/bam_levelroot/vistas/vista_medium_quadrant_095x095_vista_m_vista_0_mesh"
+PARK_MATERIALS = {PARK_PAVEMENT: "Pavers_Grey_01_mat", PARK_STEP: "Concrete_Poured_01_2x2m_M_Grey_mat",
+                  PARK_BENCH: "Wood_Accent", VISTA_MESH: "vista_m_benchbacklessstone_01_3m_Stone_mat"}
+
+
+def park(bundle, name, n, filler=0, meshes=(PARK_PAVEMENT, PARK_STEP, PARK_BENCH)):
+    sub = name[len("win32/"):]
+    resources, chunks, keys = {}, [], []
+    for k, mesh in enumerate(meshes):
+        chunk_guid = guid(140 + 4 * n + k)
+        ms, chunk = meshset(chunk_guid, mesh, material=PARK_MATERIALS[mesh])
+        resources[mesh] = (0x49B156D4, 0x9A00 + 16 * n + k, ms)
+        chunks.append((chunk_guid, chunk))
+        keys += section_keys(mesh)
+    resources[sub + "_win32_shaderstate/shaderblockdepot_1"] = (0x73312045, 0x9A08 + 16 * n, depot(keys))
+    if filler:
+        resources[sub + "/filler"] = (0x12345678, 0x9A09 + 16 * n, bytes(range(256)) * filler)
+    return bundle(name, {sub: b"their sublevel", **{m: b"mesh ebx" for m in meshes}}, resources, chunks)
 
 
 def template_physics():
@@ -505,9 +563,11 @@ def fake_game(tmp_path):
         return TocChunk(g, CasIdentifier(False, CHUNK, 2), len(cas) - len(stored), len(stored))
 
     island, island_chunks = lighthouse(bundle, toc_chunk)
-    tocs[FTUE] = [island]
+    plaza, plaza_chunks = concrete_plaza(bundle, toc_chunk)
+    tocs[FTUE] = [island, plaza, park(bundle, BIG_PARK_BUNDLE, 1, filler=64), park(bundle, PARK_BUNDLE, 0),
+                  park(bundle, VISTA_BUNDLE, 2, meshes=(VISTA_MESH,))]
     chunks = {BAM: [TocChunk(guid(50), CasIdentifier(False, CHUNK, 2), 0, 4), toc_chunk(MESH_CHUNK, meshset(MESH_CHUNK)[1])],
-              FTUE: island_chunks}
+              FTUE: island_chunks + plaza_chunks}
     for path, bundles in tocs.items():
         target = data / "Win32" / (path + ".toc")
         target.parent.mkdir(parents=True, exist_ok=True)
