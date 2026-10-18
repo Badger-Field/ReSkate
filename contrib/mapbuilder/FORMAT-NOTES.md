@@ -1197,6 +1197,20 @@ and the dry run prints the time, the count read and the first 5 rejected bundles
 material-name words, its classes, its auto roles, usable or why not (proxy word, key not in the
 depots, no TexCoord0), and the auto pick's verdict, picks and score.
 
+**Tested in game** (e64ed32, the PC's M3, Freedom Plaza, auto): no crash, readings identical;
+stairs, kerbs and banks grey poured concrete and clearly visible; the building granite cladding
+without streaks. But the ground drew almost black: its pick was a planter's
+`Stone_Granite_Trim_02_2x2m_M_Black_mat` (:1; the planter's others: :0 poured concrete, :2
+`Terrain_Clovers_01_2x2m_M_mat`, :3 `Stone_Granite_02_2x2m_M_SgWllCladding01_mat`). The ground
+is now ranked (`materials.ground_quality`): 3 paving (grd, ground, slab, paver, paving, pavement,
+sidewalk, floor, cobble, flagstone, tile), 2 plain (stone, granite, concrete, cement), 1 terrain
+(terrain, clover, grass, dirt), 0 penalised (trim, cladding, wll, wall, facade, roof, black, dark;
+used only when nothing else is); words are also split at camelCase and digit runs, so
+`SgGrdSlabs01` holds grd and slab. The ground's rank is the first mark of a bundle's score, so a
+tile with slab ground beats one whose best is a trim. The dry run and `--explain` print each
+ground candidate with its rank and reason, and whether it was picked or taken by concrete. Not
+yet run in game.
+
 **Tested in game** (main 0830262, Freedom Plaza 150 x 60): loads, every reading within 0.1 m, 47
 of 47 visuals drawn; banks show their hump and slope. Stairs and kerbs were hard to see (low,
 dark on the ramp-wedge ground), and the west-edge `buildings` sliver was drawn full height with
