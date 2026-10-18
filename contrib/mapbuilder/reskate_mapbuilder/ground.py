@@ -125,6 +125,20 @@ class _Source:
             self._payloads[at] = self.game.payload(self.region, at)
         return self._payloads[at]
 
+    def toc_chunks(self) -> dict:
+        """GUID -> TocChunk of the superbundle's own chunk list."""
+        if getattr(self, "_toc_chunks", None) is None:
+            self._toc_chunks = {c.guid: c for c in self.game.superbundle(self.superbundle).chunks}
+        return self._toc_chunks
+
+    def where_chunk(self, guid: Guid) -> str:
+        places = []
+        if any(c.guid == guid for c in self.manifest.chunks):
+            places.append(f"{self.name}'s chunk entries")
+        if guid in self.toc_chunks():
+            places.append(f"{self.superbundle}'s TOC chunk list")
+        return " and ".join(places) or f"NEITHER {self.name} nor {self.superbundle}'s TOC"
+
     def has_ebx(self, name: str) -> bool:
         return any(a.name.lower() == name.lower() for a in self.manifest.ebx)
 
@@ -190,7 +204,14 @@ def _flag_fields(doc: Document) -> list[str]:
     return out
 
 
-def _closure(source: _Source, roots: list[Guid], skip: set[str], log: list[str]) -> dict[str, list[int]]:
+def _guids_in(data: bytes, candidates: set[bytes]) -> set[bytes]:
+    """The candidate 16-byte GUIDs that occur anywhere in `data`."""
+    if not candidates:
+        return set()
+    return {data[i:i + 16] for i in range(len(data) - 15) if data[i:i + 16] in candidates}
+
+
+def _closure(source: _Source, roots: list[Guid], skip: set[str], log: list[str]) -> dict[str, list]:
     """What `roots` import from `source`'s bundle, followed through imports: the EBX, the resources
     named like them, and the chunks whose GUID appears in those resources' bytes."""
     guids = source.guids()
@@ -212,9 +233,18 @@ def _closure(source: _Source, roots: list[Guid], skip: set[str], log: list[str])
     copied = {EBX: [i for i, a in enumerate(source.manifest.ebx) if a.name.lower() in lower]}
     copied["res"] = [i for i, r in enumerate(source.manifest.resources) if r.name.lower() in lower]
     payloads = [source.payload("res", i) for i in copied["res"]]
-    copied[CHUNK] = [i for i, c in enumerate(source.manifest.chunks) if any(c.guid.bytes in p for p in payloads)]
+    bundle_guids = {c.guid.bytes for c in source.manifest.chunks}
+    toc = source.toc_chunks()
+    found: set[bytes] = set()
+    for data in payloads:
+        found |= _guids_in(data, bundle_guids | {g.bytes for g in toc})
+    copied[CHUNK] = [i for i, c in enumerate(source.manifest.chunks) if c.guid.bytes in found]
+    # Chunks the superbundle's TOC lists are listed in the level's TOC too (as the 333 map's own
+    # TOC lists 80,006): the source superbundle's TOC is not read when the level loads.
+    copied["toc"] = [c for g, c in toc.items() if g.bytes in found]
     log.append(f"  listed from {source.name} in the ground bundle: {len(copied[EBX])} EBX {sorted(names)}, "
-               f"{len(copied['res'])} res, {len(copied[CHUNK])} chunks; {len(outside)} imported files are not in that "
+               f"{len(copied['res'])} res, {len(copied[CHUNK])} chunks (and {len(copied['toc'])} chunks of "
+               f"{source.superbundle}'s TOC for the level's TOC); {len(outside)} imported files are not in that "
                f"bundle and must come from another bundle the level loads")
     return copied
 
@@ -413,10 +443,10 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         mesh_old = _read(bp_source.ebx(template_mesh_name), template_mesh_name, log)
         ms_data = bp_source.payload("res", ms_index)
         layout = read_mesh_layout(ms_data)
-        chunk_data = _chunk_payload(game, bp_source, layout[0].chunk)
+        chunk_data = [_chunk_payload(game, bp_source, lod.chunk) for lod in layout]
         grid_mesh = flat_grid(size, GRID_CELL)
-        chunk_guid = derived_guid(level, "ground_mesh_chunk")
-        new_ms, new_chunk, lines = write_mesh(ms_data, chunk_data, grid_mesh.vertices, grid_mesh.triangles, chunk_guid)
+        chunk_guids = [derived_guid(level, "ground_mesh_chunk", *([str(k)] if k else [])) for k in range(len(layout))]
+        new_ms, new_chunks, lines = write_mesh(ms_data, chunk_data, grid_mesh.vertices, grid_mesh.triangles, chunk_guids)
         mesh_new = clone_document(mesh_old, derived_guid(level, "ground_mesh", mesh_old.file_guid.string()),
                                   level + ":ground_mesh")
         refresh_flags(mesh_old, mesh_new)
@@ -434,16 +464,18 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
             if imp.file_guid == template_import.file_guid:
                 imp.file_guid, imp.class_guid = mesh_new.file_guid, new_class
                 retargeted += 1
-        log.append(f"  --mesh own: template {template_mesh_name} (MeshSet id {ms_asset.resource_id:#x}, chunk "
-                   f"{layout[0].chunk.string()}, {len(chunk_data)} bytes)")
+        log.append(f"  --mesh own: template {template_mesh_name} (MeshSet id {ms_asset.resource_id:#x}, chunks "
+                   + ", ".join(f"{lod.chunk.string()} ({len(c)} bytes, in {bp_source.where_chunk(lod.chunk)})"
+                               for lod, c in zip(layout, chunk_data)) + ")")
         log.extend("    " + line for line in lines)
         log.append(f"    new {mesh_name}: file guid {mesh_new.file_guid.string()}, MeshSet {mesh_name} id {meshset_id:#x} "
                    f"({named} resource references named the template's id"
-                   + ("" if named else "; GUESS: then it is found by name") + f"), chunk {chunk_guid.string()}; "
+                   + ("" if named else "; GUESS: then it is found by name") + f"), chunks "
+                   f"{[g.string() for g in chunk_guids]}; "
                    f"{retargeted} blueprint imports moved to it")
         for line in describe_meshset(new_ms)[:2]:
             log.append("    " + line)
-        own = (mesh_new, new_ms, new_chunk, chunk_guid, ms_asset)
+        own = (mesh_new, new_ms, new_chunks, chunk_guids, ms_asset)
 
     # 3. Our collision, with the template part's material and words.
     shapes, parts, version = read_physics(bp_source.payload("res", physics_index))
@@ -540,7 +572,7 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
 
     # 5b. What the blueprint (and our mesh) need from the blueprint's bundle, unless that is bam's
     # root bundle, which the level's root bundle copies (and which is loaded with the level).
-    copied = {EBX: [], "res": [], CHUNK: []}
+    copied = {EBX: [], "res": [], CHUNK: [], "toc": []}
     if bp_source.name.lower() == BASE_ROOT_BUNDLE:
         log.append("  the blueprint's imports are in bam's root bundle, which the level's root bundle copies: nothing listed")
     else:
@@ -618,17 +650,51 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                      copy.copy(physics_asset.resource_meta))
     new_counts = [3, 1, 0]
     if own is not None:
-        mesh_new, new_ms, new_chunk, chunk_guid, ms_asset = own
+        mesh_new, new_ms, new_chunks, chunk_guids, ms_asset = own
         mod.add_ebx(path, ground_bundle, mesh_name, _checked_bytes(mesh_new, mesh_name))
         mod.add_resource(path, ground_bundle, mesh_name, ms_asset.resource_type, new_ms, resource_id(mesh_name),
                          copy.copy(ms_asset.resource_meta))
-        mod.add_chunk(path, ground_bundle, chunk_guid, new_chunk)
-        new_counts = [4, 2, 1]
+        # GUESS: a geometry chunk is looked up in the level's TOC chunk list as well as the bundle's
+        # entries; ours are in both (the lighthouse crashed with its chunks in neither).
+        for guid, data in zip(chunk_guids, new_chunks):
+            mod.add_chunk(path, ground_bundle, guid, data)
+            mod.add_toc_chunk_payload(path, guid, data, chunk)
+        new_counts = [4, 2, len(new_chunks)]
     for kind, assets in ((EBX, bp_source.manifest.ebx), ("res", bp_source.manifest.resources),
                          (CHUNK, bp_source.manifest.chunks)):
         for i in copied[kind]:
             mod.add_copied(path, ground_bundle, assets[i], bp_source.region.files[bp_source.file_index(kind, i)])
+    added = sum(mod.add_toc_chunk(path, c) for c in copied["toc"])
     log.append(f"{ground_bundle}: {new_counts[0]} new EBX, {new_counts[1]} new res, {new_counts[2]} new chunks, "
-               f"{sum(len(v) for v in copied.values())} entries listed from {bp_source.name}; new payloads in install "
-               f"chunk {chunk:#x}")
+               f"{sum(len(copied[k]) for k in (EBX, 'res', CHUNK))} entries listed from {bp_source.name}; "
+               f"{added} of {len(copied['toc'])} chunks of {bp_source.superbundle}'s TOC added to the level's TOC "
+               f"(the others it already lists); new payloads in install chunk {chunk:#x}")
+    log.extend(_mesh_chunk_report(mod, path, ground_bundle, bp_source, template_mesh, own))
     return log
+
+
+def _mesh_chunk_report(mod, path: str, ground_bundle: str, source: _Source, template_mesh, own) -> list[str]:
+    """Per mesh the ground draws: each LOD's chunk, where the base game keeps it and whether the
+    level's TOC chunk list, the ground bundle or the level's root bundle now list it."""
+    toc = {c.guid for c in mod.new_superbundles[path]} | set(mod.toc_chunk_payloads.get(path, {}))
+    bundles = {}
+    for name in (ground_bundle, "win32/" + path):
+        found = mod._find(path, name)
+        bundles[name] = {c.guid for c in found.manifest.chunks} if found is not None and found.manifest else set()
+    out = []
+    meshes = []
+    if template_mesh is not None:
+        name, _, (index, _) = template_mesh
+        meshes.append((name + (" (replaced by ours)" if own else ""), read_mesh_layout(source.payload("res", index)),
+                       True))
+    if own is not None:
+        meshes.append((f"ours ({own[0].instances[0].object.get('Name')})", read_mesh_layout(own[1]), False))
+    for label, layout, base in meshes:
+        for k, lod in enumerate(layout):
+            where = source.where_chunk(lod.chunk) if base else "the mod's archive"
+            listed = [n for n, ok in (("the level's TOC", lod.chunk in toc),
+                                      ("the ground bundle", lod.chunk in bundles[ground_bundle]),
+                                      ("the level's root bundle", lod.chunk in bundles["win32/" + path])) if ok]
+            out.append(f"  mesh {label} LOD {k} chunk {lod.chunk.string()}: in {where}; listed by "
+                       + (", ".join(listed) if listed else "NOTHING the level loads"))
+    return out

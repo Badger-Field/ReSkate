@@ -54,6 +54,7 @@ class ModBuilder:
         self.layout_bytes: bytes = game.layout_bytes
         self.new_superbundles: dict[str, list[TocChunk]] = {}   # path under Win32 -> chunks of its TOC
         self.levels: list[dict] = []                            # rows of reskate-levels.json
+        self.toc_chunk_payloads: dict[str, dict] = {}           # path -> {guid: (install chunk, decoded)}
 
     def _find(self, superbundle: str, bundle_name: str) -> _Bundle | None:
         for b in self.bundles:
@@ -82,6 +83,21 @@ class ModBuilder:
         written as Win32/<path>.toc with the bundles given to it."""
         self.layout_bytes = nativedb.add_superbundle(self.layout_bytes, "Win32/" + path, chunk_name)
         self.new_superbundles[path] = list(chunks or [])
+
+    def add_toc_chunk(self, path: str, chunk: TocChunk) -> bool:
+        """Lists a chunk (as another TOC lists it: its location stays) in a new superbundle's TOC;
+        False when the TOC already lists that GUID."""
+        chunks = self.new_superbundles[path]
+        if any(c.guid == chunk.guid for c in chunks) or chunk.guid in self.toc_chunk_payloads.get(path, {}):
+            return False
+        chunks.append(TocChunk(chunk.guid, chunk.location, chunk.offset, chunk.size, chunk.removed))
+        return True
+
+    def add_toc_chunk_payload(self, path: str, guid, decoded: bytes, install_chunk: int) -> None:
+        """A new chunk listed in a new superbundle's TOC, its payload in the mod's archive."""
+        if any(c.guid == guid for c in self.new_superbundles[path]):
+            raise ValueError(f"chunk {guid.string()} is already in {path}")
+        self.toc_chunk_payloads.setdefault(path, {})[guid] = (install_chunk, decoded)
 
     def copy_bundle(self, superbundle: str, toc_bundle: TocBundle) -> None:
         """A base bundle listed unchanged in another superbundle: its region is copied as is, so
@@ -244,8 +260,13 @@ class ModBuilder:
         }
         if self.levels:
             out["reskate-levels.json"] = (json.dumps({"schema": 1, "levels": self.levels}, indent=2) + "\n").encode()
+        toc_chunks = {path: list(chunks) for path, chunks in self.new_superbundles.items()}
+        for path, payloads in self.toc_chunk_payloads.items():
+            for guid, (install_chunk, decoded) in payloads.items():
+                info = store(install_chunk, encode_raw(decoded))
+                toc_chunks[path].append(TocChunk(guid, info.location, info.offset, info.size))
         for superbundle, bundles in tocs.items():
-            data = write_patch_toc(bundles, self.new_superbundles.get(superbundle))
+            data = write_patch_toc(bundles, toc_chunks.get(superbundle))
             verify_toc(read_toc(data))
             out["Win32/" + superbundle + ".toc"] = data
         for package, data in archives.items():

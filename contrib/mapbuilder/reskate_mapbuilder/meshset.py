@@ -170,72 +170,76 @@ def _align(value: int, to: int) -> int:
     return (value + to - 1) // to * to
 
 
-def write_mesh(template: bytes, template_chunk: bytes, vertices, triangles, chunk_guid: Guid) -> tuple[bytes, bytes, list[str]]:
-    """A MeshSet and its geometry chunk holding `vertices` and `triangles` in every section of a
-    one-LOD template; every vertex's other elements are the template section's first vertex's.
-    Triangles take the template's winding (seen from +y). Returns (meshset, chunk, report)."""
+def write_mesh(template: bytes, template_chunks: list[bytes], vertices, triangles,
+               chunk_guids: list[Guid]) -> tuple[bytes, list[bytes], list[str]]:
+    """A MeshSet and its geometry chunks (one per LOD) holding `vertices` and `triangles` in every
+    section of every LOD of the template; every vertex's other elements are the template section's
+    first vertex's. Triangles take the template's winding (seen from +y), read from LOD 0's first
+    section. Returns (meshset, chunks, report)."""
     lods = read_layout(template)
-    if len(lods) != 1:
-        raise ValueError(f"the template has {len(lods)} LODs; only one is handled")
-    lod = lods[0]
-    if rebuild_chunk(lod, template_chunk) != template_chunk:
-        raise ValueError("the template's chunk does not rebuild from its layout; not written")
+    if len(template_chunks) != len(lods) or len(chunk_guids) != len(lods):
+        raise ValueError(f"the template has {len(lods)} LODs; give one chunk and one GUID for each")
+    for k, (lod, chunk) in enumerate(zip(lods, template_chunks)):
+        if rebuild_chunk(lod, chunk) != chunk:
+            raise ValueError(f"the template's LOD {k} chunk does not rebuild from its layout; not written")
     if len(vertices) > 0xFFFF:
         raise ValueError("at most 65535 vertices")
-    report = []
-    flip = False
-    first = lod.sections[0]
-    points, tris = section_positions(first, template_chunk), section_triangles(lod, first, template_chunk)
+    first = lods[0].sections[0]
+    points, tris = section_positions(first, template_chunks[0]), section_triangles(lods[0], first, template_chunks[0])
     ups = [((b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]))
            for a, b, c in ((points[i], points[j], points[k]) for i, j, k in tris)]
     ours = [((vertices[b][2] - vertices[a][2]) * (vertices[c][0] - vertices[a][0])
              - (vertices[b][0] - vertices[a][0]) * (vertices[c][2] - vertices[a][2])) for a, b, c in triangles[:1]]
-    if ups and ours and (sum(ups) > 0) != (ours[0] > 0):
-        flip = True
+    flip = bool(ups and ours and (sum(ups) > 0) != (ours[0] > 0))
     if flip:
         triangles = [(a, c, b) for a, b, c in triangles]
-    report.append(f"template: {len(lod.sections)} sections, {[s.vertex_count for s in lod.sections]} vertices, "
-                  f"{[s.triangle_count for s in lod.sections]} triangles; chunk {len(template_chunk)} bytes rebuilds "
-                  f"identically; winding {'flipped to match' if flip else 'as the template'}")
+    report = [f"template: {len(lods)} LODs; " + "; ".join(
+        f"LOD {k}: {len(lod.sections)} sections, {[s.vertex_count for s in lod.sections]} vertices, "
+        f"{[s.triangle_count for s in lod.sections]} triangles, chunk {len(c)} bytes rebuilds identically"
+        for k, (lod, c) in enumerate(zip(lods, template_chunks)))
+        + f"; winding {'flipped to match' if flip else 'as the template'}"]
 
     meshset = bytearray(template)
-    vertex_data = bytearray()
-    first_index = 0
-    for s in lod.sections:
-        fmt, offset, stream = _position(s)
-        start = _align(len(vertex_data), 16)
-        vertex_data += bytes(start - len(vertex_data))
-        for t, stride in enumerate(s.strides):
-            model = template_chunk[_stream_base(s, t):_stream_base(s, t) + stride]
-            for x, y, z in vertices:
-                vertex = bytearray(model)
-                if t == stream:
-                    struct.pack_into("<3f" if fmt == 3 else "<3e", vertex, offset, x, y, z)
-                vertex_data += vertex
-        struct.pack_into("<4I", meshset, s.at + 32, len(triangles), first_index, start, len(vertices))
-        first_index += 3 * len(triangles)
-    vertex_bytes = _align(len(vertex_data), 16)
-    indices = struct.pack(f"<{3 * len(triangles)}H", *(i for t in triangles for i in t)) * len(lod.sections)
-    chunk = bytes(vertex_data) + bytes(vertex_bytes - len(vertex_data)) + indices
-    chunk += bytes(-len(chunk) % 16)
-    struct.pack_into("<II", meshset, lod.at + 88, len(indices), vertex_bytes)
-    meshset[lod.at + 116:lod.at + 132] = chunk_guid.bytes
+    chunks = []
+    for lod, template_chunk, guid in zip(lods, template_chunks, chunk_guids):
+        vertex_data = bytearray()
+        first_index = 0
+        for s in lod.sections:
+            fmt, offset, stream = _position(s)
+            start = _align(len(vertex_data), 16)
+            vertex_data += bytes(start - len(vertex_data))
+            for t, stride in enumerate(s.strides):
+                model = template_chunk[_stream_base(s, t):_stream_base(s, t) + stride]
+                for x, y, z in vertices:
+                    vertex = bytearray(model)
+                    if t == stream:
+                        struct.pack_into("<3f" if fmt == 3 else "<3e", vertex, offset, x, y, z)
+                    vertex_data += vertex
+            struct.pack_into("<4I", meshset, s.at + 32, len(triangles), first_index, start, len(vertices))
+            first_index += 3 * len(triangles)
+        vertex_bytes = _align(len(vertex_data), 16)
+        indices = struct.pack(f"<{3 * len(triangles)}H", *(i for t in triangles for i in t)) * len(lod.sections)
+        chunk = bytes(vertex_data) + bytes(vertex_bytes - len(vertex_data)) + indices
+        chunk += bytes(-len(chunk) % 16)
+        struct.pack_into("<II", meshset, lod.at + 88, len(indices), vertex_bytes)
+        meshset[lod.at + 116:lod.at + 132] = guid.bytes
+        chunks.append(chunk)
     lo = [min(v[i] for v in vertices) for i in range(3)]
     hi = [max(v[i] for v in vertices) for i in range(3)]
     struct.pack_into("<3f", meshset, 0x10, *lo)
     struct.pack_into("<3f", meshset, 0x20, *hi)
     old_lo, old_hi = struct.unpack_from("<3f", template, 0x10), struct.unpack_from("<3f", template, 0x20)
-    report.append(f"ours: {len(vertices)} vertices, {len(triangles)} triangles per section, chunk {len(chunk)} bytes; "
-                  f"box {[round(v, 2) for v in lo]}..{[round(v, 2) for v in hi]}"
+    report.append(f"ours: {len(vertices)} vertices, {len(triangles)} triangles per section in every LOD, chunks "
+                  f"{[len(c) for c in chunks]} bytes; box {[round(v, 2) for v in lo]}..{[round(v, 2) for v in hi]}"
                   + ("" if all(abs(a - b) < 1e-3 for a, b in zip(lo + hi, old_lo + old_hi)) else
                      " (differs from the template's; each section's own box, not decoded, still says the template's)"))
-    back = read_layout(bytes(meshset))[0]
-    if rebuild_chunk(back, chunk) != chunk:
-        raise ValueError("the written chunk does not rebuild from the written layout")
-    for s in back.sections:
-        tolerance = 1e-4 if _position(s)[0] == 3 else 0.05
-        read = section_positions(s, chunk)
-        if section_triangles(back, s, chunk) != list(triangles) or any(
-                abs(a - b) > tolerance * max(1.0, abs(b)) for p, v in zip(read, vertices) for a, b in zip(p, v)):
-            raise ValueError("the written mesh does not read back")
-    return bytes(meshset), chunk, report
+    for back, chunk in zip(read_layout(bytes(meshset)), chunks):
+        if rebuild_chunk(back, chunk) != chunk:
+            raise ValueError("the written chunk does not rebuild from the written layout")
+        for s in back.sections:
+            tolerance = 1e-4 if _position(s)[0] == 3 else 0.05
+            read = section_positions(s, chunk)
+            if section_triangles(back, s, chunk) != list(triangles) or any(
+                    abs(a - b) > tolerance * max(1.0, abs(b)) for p, v in zip(read, vertices) for a, b in zip(p, v)):
+                raise ValueError("the written mesh does not read back")
+    return bytes(meshset), chunks, report
