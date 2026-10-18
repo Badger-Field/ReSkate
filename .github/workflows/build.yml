@@ -2,6 +2,9 @@
 # (MSVC, as releases are built), and the dedicated server with the regression tests on Linux.
 # Each job runs a script in ci/, so the same checks run on your own PC with no Actions minutes:
 # ci/local.sh (Linux, LiDAR parks) and ci/local.ps1 (Windows). Changes to docs alone build nothing.
+# On a pull request, ci/changes.sh picks the jobs its files need: a change only to the LiDAR parks
+# tool skips the Windows and Linux builds, and one with no LiDAR parks change skips its tests.
+# Pushes to main and runs by hand build everything.
 name: Build
 
 on:
@@ -20,8 +23,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: What changed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.diff.outputs.native }}
+      lidar: ${{ steps.diff.outputs.lidar }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # a pull request is checked out as its merge commit: HEAD^1 is the base
+      - id: diff
+        run: |
+          if [[ "${{ github.event_name }}" == pull_request ]]; then
+            ci/changes.sh HEAD^1 HEAD >> "$GITHUB_OUTPUT"
+          else
+            ci/changes.sh >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+
   windows:
     name: Windows (MSVC)
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: windows-2022
     timeout-minutes: 90
     env:
@@ -72,17 +97,38 @@ jobs:
 
   linux:
     name: Linux (server and tests)
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      # Compiled files are kept between runs (ccache, in a cache below), as sccache does on Windows.
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Install ccache
+        run: sudo apt-get install -y -qq ccache || (sudo apt-get update -qq && sudo apt-get install -y -qq ccache)
+      - name: Compiled files from earlier runs
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-linux-${{ github.sha }}
+          restore-keys: ccache-linux-
       - name: Configure, build and test
-        run: ci/local.sh linux
+        run: |
+          ccache --zero-stats
+          ci/local.sh linux
+          ccache --show-stats
 
   lidar-parks:
     name: LiDAR parks (Python)
+    needs: changes
+    if: needs.changes.outputs.lidar == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -93,5 +139,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip  # the wheels (numpy, laspy, shapely...) are downloaded once, not every run
+          cache-dependency-path: contrib/lidar-parks/requirements.txt
       - if: steps.present.outputs.yes
         run: ci/local.sh lidar

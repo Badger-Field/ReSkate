@@ -38,7 +38,14 @@ ReSkateLauncher.exe --no-gui --no-update
 
 ### Why CI is quick
 
-- **Compiled files are kept between runs.** The Windows job builds with Ninja and sccache, and keeps sccache's files in the Actions cache, so a change to a few files rebuilds only those. Debug information goes into each object file (`/Z7`) under Ninja so the cache can hold it; the PDBs come out the same.
+- **Compiled files are kept between runs.** The Windows job builds with Ninja and sccache, and keeps sccache's files in the Actions cache, so a change to a few files rebuilds only those. Debug information goes into each object file (`/Z7`) under Ninja so the cache can hold it; the PDBs come out the same. The Linux job does the same with ccache: a rebuild from its cache takes seconds, not about three minutes.
+- **A pull request runs only the jobs its files need.** `ci/changes.sh` (the first job, "What changed") compares the pull request with its base:
+  - A change only to `contrib/lidar-parks/` skips the Windows and Linux builds.
+  - A change that leaves `contrib/lidar-parks/` alone skips its tests.
+  - A change to `ci/` or `.github/` runs everything.
+
+  Pushes to `main` and runs by hand always build everything. A skipped job counts as passed in a required check. To add another tool that the C++ build never reads, add its folder to `PYTHON_ONLY` in `ci/changes.sh`.
+- **The LiDAR parks job keeps pip's downloads** in the Actions cache until `requirements.txt` changes.
 - **The Spotify device (Rust) is kept too.** Its cargo build is cached until `SpotifyHelper` changes.
 - **Releases build only what ships**, the launcher and `ReSkate.dll`, and skip the tests, which the Build workflow already ran on that commit. So cut releases from `main` once its checks are green.
 
