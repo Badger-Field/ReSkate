@@ -14,6 +14,19 @@ on:
         default: ""
   schedule:
     - cron: "17 6 * * 1"  # Mondays, 06:17 UTC
+  # And on a pull request that changes what it tests (a workflow on a branch alone cannot be run
+  # by hand until it is on the default branch).
+  pull_request:
+    paths:
+      - "Extension/Assets/mod_browser*"
+      - "Extension/Assets/package_install*"
+      - "Extension/Assets/mods_writer.h"
+      - "Extension/Assets/live_mods_preview.cpp"
+      - "Extension/Assets/Test/mod_browser_live_test.cpp"
+      - "Engine/Vfs/thunderstore_listing*"
+      - "Engine/Vfs/thunderstore_package*"
+      - "Launcher/mod_manager*"
+      - ".github/workflows/mod-browser-live.yml"
 
 permissions:
   contents: read
