@@ -333,6 +333,13 @@ if(DINGOSDK_BUILD_TESTS AND EXISTS "${PROJECT_SOURCE_DIR}/tests/logging_tests.cp
     target_link_libraries(dingosdk_logging_tests PRIVATE dingosdk_logging)
     add_test(NAME logging_regressions COMMAND dingosdk_logging_tests)
 endif()
+if(DINGOSDK_BUILD_TESTS)
+    enable_testing()
+    # The mesh unload guard's registry walk (header-only), against a stand-in registry.
+    add_executable(dingosdk_mesh_registry_tests Extension/World/Test/mesh_registry_tests.cpp)
+    target_include_directories(dingosdk_mesh_registry_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    add_test(NAME mesh_registry COMMAND dingosdk_mesh_registry_tests)
+endif()
 
 # Header-only game contracts belong to the runtime's subsystem tree.
 if(WIN32)
