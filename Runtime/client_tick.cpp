@@ -1234,13 +1234,15 @@ void update_model(std::uintptr_t client, TickState& frame) {
     model.progression = dingosdk::local_profile_progression();
     model.player_card = dingosdk::local_profile_player_card();
     model.hall_of_meat = {dingosdk::hall_of_meat::available(), dingosdk::hall_of_meat::enabled()};
-    model.road_rash = {dingosdk::road_rash::available(), dingosdk::road_rash::enabled(), dingosdk::road_rash::blood()};
+    model.road_rash = {dingosdk::road_rash::available(), dingosdk::road_rash::enabled(), dingosdk::road_rash::blood(),
+                       dingosdk::road_rash::turned_off()};
     const auto breakable_deck = dingosdk::board_break::deck();
     model.board_break = {dingosdk::board_break::available(), dingosdk::board_break::enabled(), !breakable_deck.empty(),
                          dingosdk::board_break::deck_label(breakable_deck)};
     {
         const auto feel = dingosdk::board_break::settings();
         auto& bb = model.board_break;
+        bb.off = dingosdk::board_break::turned_off();
         bb.always = feel.always;
         bb.rails = feel.rails;
         bb.wear = feel.wear;
