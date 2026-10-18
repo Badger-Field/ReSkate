@@ -141,25 +141,64 @@ bool stepper(const char* id, Value* value, Value low, Value high, const char* fo
     static double kept_until{};
     if (kept == item && g.Time < kept_until) *value = kept_value;
     else if (kept == item) kept = 0;
+    bool changed = false;
     int direction = 0;
-    if (clicked && !disabled && hovered && g.IO.MouseReleased[0]) direction = g.IO.MousePos.x < at.x + width * .5f ? -1 : 1;
+    const bool logarithmic = (flags & ImGuiSliderFlags_Logarithmic) && low > 0 && high > low;
+    const float bar_left = at.x + px(48), bar_width = width - px(96);
+    // Where a value sits along the bar (0 low, 1 high; outside for a typed value past the ends), and back.
+    const auto fraction_of = [&](double v) {
+        if (!(high > low)) return 0.0;
+        if (logarithmic) return v > 0 ? std::log(v / low) / std::log(static_cast<double>(high) / low) : 0.0;
+        return (v - low) / (static_cast<double>(high) - low);
+    };
+    const auto value_at = [&](double f) {
+        return logarithmic ? low * std::pow(static_cast<double>(high) / low, f) : low + f * (static_cast<double>(high) - low);
+    };
+    // The mouse: a click steps (left half down, right half up, as the arrows show); press and move left or right
+    // to slide it instead. From a typed value past an end the slide starts there and is not pulled back first.
+    static ImGuiID dragging{};
+    static double drag_from{}, drag_value{};
+    static float drag_x{};
+    static bool slid_far{};
+    if (!disabled && ImGui::IsItemActivated() && g.ActiveIdSource == ImGuiInputSource_Mouse) {
+        dragging = item, drag_x = g.IO.MousePos.x, drag_value = static_cast<double>(*value), drag_from = fraction_of(drag_value), slid_far = false;
+    }
+    if (dragging == item && std::abs(g.IO.MousePos.x - drag_x) > px(4)) slid_far = true;
+    if (clicked && !disabled && hovered && !slid_far) direction = g.IO.MousePos.x < at.x + width * .5f ? -1 : 1;
+    if (dragging == item && (!ImGui::IsItemActive() || !g.IO.MouseDown[0])) dragging = 0;
+    if (dragging == item && slid_far && bar_width > 0) {
+        double next = value_at(drag_from + (g.IO.MousePos.x - drag_x) / bar_width);
+        if (flags & ImGuiSliderFlags_AlwaysClamp) next = std::clamp(next, static_cast<double>(low), static_cast<double>(high));
+        else next = std::clamp(next, std::min(static_cast<double>(low), drag_value), std::max(static_cast<double>(high), drag_value));
+        if (unit > 0) next = drag_value + std::round((next - drag_value) / unit) * unit;
+        Value slid;
+        if constexpr (std::is_integral_v<Value>) slid = static_cast<Value>(std::lround(next));
+        else slid = static_cast<Value>(next);
+        if (slid != *value) {
+            *value = slid;
+            changed = true;
+            ImGui::MarkItemEdited(item);
+        }
+        kept = item, kept_value = *value, kept_until = g.Time + 1.0;
+    }
     const bool holding = focused && !disabled && sideways_held();
+    if ((focused || hovered) && !pending_hint.empty()) focus_hint = pending_hint;
     if (focused && !disabled) {
         if (left_pressed(true)) direction = -1;
         if (right_pressed(true)) direction = 1;
         if (holding || direction) ImGui::NavMoveRequestCancel();
         if (!pending_hint.empty()) focus_hint = pending_hint;
     }
-    bool changed = false;
     if (direction) {
-        const bool logarithmic = (flags & ImGuiSliderFlags_Logarithmic) && low > 0 && high > low;
         const double speed = held_for() > 1.2f ? 4.0 : 1.0;
         double next = static_cast<double>(*value);
         if (unit > 0) next += direction * speed * unit;
         else if (logarithmic) next *= std::pow(static_cast<double>(high) / static_cast<double>(low), direction * speed / 40.0);
         else if constexpr (std::is_integral_v<Value>) next += direction * speed * std::max(1.0, std::round((static_cast<double>(high) - low) / 40.0));
         else next += direction * speed * (static_cast<double>(high) - low) / 40.0;
-        next = std::clamp(next, static_cast<double>(low), static_cast<double>(high));
+        // A typed value past an end stays where it is until a step brings it back inside.
+        if (flags & ImGuiSliderFlags_AlwaysClamp) next = std::clamp(next, static_cast<double>(low), static_cast<double>(high));
+        else next = std::clamp(next, std::min(static_cast<double>(low), static_cast<double>(*value)), std::max(static_cast<double>(high), static_cast<double>(*value)));
         Value stepped;
         if constexpr (std::is_integral_v<Value>) stepped = static_cast<Value>(std::lround(next));
         else stepped = static_cast<Value>(next);
@@ -190,14 +229,9 @@ bool stepper(const char* id, Value* value, Value low, Value high, const char* fo
     const auto size = font->CalcTextSizeA(px(17), FLT_MAX, 0, text);
     draw->AddText(font, px(17), ImVec2(at.x + (width - size.x) * .5f, at.y + (height - size.y) * .5f - px(4)), disabled ? muted : paper, text);
     // Where the value sits in its range, in steps.
-    double fraction = 0;
-    if (high > low) {
-        if ((flags & ImGuiSliderFlags_Logarithmic) && low > 0)
-            fraction = std::log(static_cast<double>(*value) / low) / std::log(static_cast<double>(high) / low);
-        else fraction = (static_cast<double>(*value) - low) / (static_cast<double>(high) - low);
-    }
+    const double fraction = fraction_of(static_cast<double>(*value));
     constexpr int ticks = 20;
-    const float bar_left = at.x + px(48), bar_width = width - px(96), tick = bar_width / ticks;
+    const float tick = bar_width / ticks;
     for (int i = 0; i < ticks && (unit <= 0 || (static_cast<double>(high) - low) / unit < 2000); ++i) {
         const bool lit = (i + 0.5) / ticks <= std::clamp(fraction, 0.0, 1.0);
         draw->AddRectFilled(ImVec2(bar_left + tick * i + px(1), end.y - px(10)), ImVec2(bar_left + tick * (i + 1) - px(1), end.y - px(6)),
@@ -570,8 +604,29 @@ template<class Value, class Slide, class Type>
 bool slider_with_box(const char* id, Value* value, Value low, Value high, ImGuiSliderFlags flags, const char* format, const char* box,
                      Slide slide, Type type) {
     if (console_mode) {
+        // Full screen: the stepper, and a number box beside it for a mouse and keyboard (the controller's focus
+        // skips it). A typed value may go past the stepper's ends unless the caller clamps.
+        const bool boxed = !(flags & ImGuiSliderFlags_NoInput);
+        const float total = ImGui::CalcItemWidth(), box_width = px(96), gap = ImGui::GetStyle().ItemInnerSpacing.x;
         ImGui::BeginGroup();
-        const bool changed = stepper(id, value, low, high, format, flags);
+        ImGui::SetNextItemWidth(boxed ? std::max(px(120), total - box_width - gap) : total);
+        bool changed = stepper(id, value, low, high, format, flags);
+        if (boxed) {
+            ImGui::SameLine(0, gap);
+            ImGui::PushID(id);
+            ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+            ImGui::SetNextItemWidth(box_width);
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + std::max(0.0f, (px(46) - ImGui::GetFrameHeight()) * 0.5f));
+            Value typed = *value;
+            type("##exact", &typed, box);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Type an exact value and press Enter");
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                *value = (flags & ImGuiSliderFlags_AlwaysClamp) ? std::clamp(typed, low, high) : typed;
+                changed = true;
+            }
+            ImGui::PopItemFlag();
+            ImGui::PopID();
+        }
         ImGui::EndGroup();
         return changed;
     }

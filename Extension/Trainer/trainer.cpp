@@ -364,18 +364,18 @@ std::optional<Vec3> read_position(const Json &value) {
 Json write_position(const Vec3 &p) { return Json::array({Json(p[0]), Json(p[1]), Json(p[2])}); }
 
 // Gravity as a multiple of the game's own.
-constexpr float gravity_low = 0.05f, gravity_high = 10.0f;
+constexpr float gravity_low = 0.001f, gravity_high = 1000.0f; // a typed number may go far past the slider
 struct RevertField {
     std::string_view name;
     float RevertTuning::*member;
     float low, high;
 };
 constexpr RevertField revert_fields[]{
-    {"spin", &RevertTuning::min_spin, 0.0f, 100000.0f},     {"slip", &RevertTuning::min_slip, 0.0f, 90.0f},
-    {"twist", &RevertTuning::min_twist, 0.0f, 90.0f},       {"bend", &RevertTuning::bend_boost, -1000.0f, 1000.0f},
-    {"full", &RevertTuning::full_boost, -1000.0f, 1000.0f}, {"auto", &RevertTuning::auto_boost, -1000.0f, 1000.0f},
-    {"max_speed", &RevertTuning::max_speed, 0.0f, 1000.0f}, {"cooldown", &RevertTuning::cooldown, 0.0f, 60.0f},
-    {"min_air", &RevertTuning::min_air, 0.0f, 60.0f},
+    {"spin", &RevertTuning::min_spin, 0.0f, 100000.0f},     {"slip", &RevertTuning::min_slip, 0.0f, 360.0f},
+    {"twist", &RevertTuning::min_twist, 0.0f, 360.0f},       {"bend", &RevertTuning::bend_boost, -1.0e6f, 1.0e6f},
+    {"full", &RevertTuning::full_boost, -1.0e6f, 1.0e6f}, {"auto", &RevertTuning::auto_boost, -1.0e6f, 1.0e6f},
+    {"max_speed", &RevertTuning::max_speed, 0.0f, 1.0e6f}, {"cooldown", &RevertTuning::cooldown, 0.0f, 3600.0f},
+    {"min_air", &RevertTuning::min_air, 0.0f, 3600.0f},
 };
 RevertTuning sane_revert(RevertTuning tuning) {
     const RevertTuning stock;
@@ -397,27 +397,27 @@ void load_store() {
             s.pad_shortcuts = o.value("pad_shortcuts", false);
             s.hud = o.value("hud", false);
             s.hud_jump = o.value("hud_jump", false);
-            s.return_delay = std::clamp(o.value("return_delay", 1.5f), 0.0f, 10.0f);
+            s.return_delay = std::clamp(o.value("return_delay", 1.5f), 0.0f, 3600.0f);
             s.hippy_height = std::clamp(o.value("hippy_height", 1.0f), height_low, height_high);
             s.nocomply_height = std::clamp(o.value("nocomply_height", 1.0f), height_low, height_high);
             s.manual_height = std::clamp(o.value("manual_height", 1.0f), height_low, height_high);
             s.gravity = std::clamp(o.value("gravity", 1.0f), gravity_low, gravity_high);
-            s.grind_side = std::clamp(o.value("grind_side", 1.0f), 0.0f, 1000.0f);
-            s.grind_push = std::clamp(o.value("grind_push", 0.0f), -50.0f, 50.0f);
+            s.grind_side = std::clamp(o.value("grind_side", 1.0f), 0.0f, 1.0e6f);
+            s.grind_push = std::clamp(o.value("grind_push", 0.0f), -1.0e6f, 1.0e6f);
             // (grind_lean, grind_turn and grind_tip were levers of earlier builds that did nothing: read past.)
-            s.grind_range = std::clamp(o.value("grind_range", 0.0f), -360.0f, 360.0f);
+            s.grind_range = std::clamp(o.value("grind_range", 0.0f), -1.0e6f, 1.0e6f);
             for (std::size_t i = 0; i < grind_settings.size(); ++i)
                 s.grind_setting[i] = static_cast<std::int8_t>(std::clamp(o.value("grind.set." + std::string(grind_settings[i].key), -1), -1, 1));
             for (std::size_t i = 0; i < grind_switches.size(); ++i)
                 s.grind_mode[i] = grind_switches[i].read_only ? std::int8_t{-1}
                                                                : static_cast<std::int8_t>(std::clamp(o.value("grind." + std::string(grind_switches[i].key), -1), -1, 1));
-            s.tr_lean = std::clamp(o.value("transition.lean", 0.0f), -1.0f, 1.0f);
-            s.tr_carry = std::clamp(o.value("transition.carry", 0.0f), 0.0f, 1.0f);
-            s.tr_drop = std::clamp(o.value("transition.drop", 1.0f), 0.0f, 100.0f);
-            s.tr_unstick = std::clamp(o.value("transition.unstick", 0.0f), 0.0f, 100.0f);
-            s.tr_lockout = std::clamp(o.value("transition.lockout", 0.0f), 0.0f, 60.0f);
+            s.tr_lean = std::clamp(o.value("transition.lean", 0.0f), -1000.0f, 1000.0f);
+            s.tr_carry = std::clamp(o.value("transition.carry", 0.0f), 0.0f, 1000.0f);
+            s.tr_drop = std::clamp(o.value("transition.drop", 1.0f), 0.0f, 1.0e6f);
+            s.tr_unstick = std::clamp(o.value("transition.unstick", 0.0f), 0.0f, 1.0e6f);
+            s.tr_lockout = std::clamp(o.value("transition.lockout", 0.0f), 0.0f, 3600.0f);
             s.tr_spine = o.value("transition.spine", false);
-            s.tr_plant = std::clamp(o.value("transition.plant", 0.0f), 0.0f, 1.0f);
+            s.tr_plant = std::clamp(o.value("transition.plant", 0.0f), 0.0f, 1000.0f);
             for (std::size_t i = 0; i < transition_settings.size(); ++i)
                 s.tr_setting[i] = static_cast<std::int8_t>(std::clamp(o.value("transition.set." + std::string(transition_settings[i].key), -1), -1, 1));
             for (std::size_t i = 0; i < foot_settings.size(); ++i)
@@ -1147,9 +1147,9 @@ const std::vector<Setup> &setups() {
             all->back().title = std::string(flip_tricks[i].label) + ": flip speed";
             all->back().in_force = [&s] { return s.flip_advanced; };
         }
-        real("grind.side", topic_grinds, &s.grind_side, 1.0f, 0.0f, 1000.0f);
-        real("grind.push", topic_grinds, &s.grind_push, 0.0f, -50.0f, 50.0f);
-        real("grind.range", topic_grinds, &s.grind_range, 0.0f, -360.0f, 360.0f);
+        real("grind.side", topic_grinds, &s.grind_side, 1.0f, 0.0f, 1.0e6f);
+        real("grind.push", topic_grinds, &s.grind_push, 0.0f, -1.0e6f, 1.0e6f);
+        real("grind.range", topic_grinds, &s.grind_range, 0.0f, -1.0e6f, 1.0e6f);
         for (std::size_t i = 0; i < grind_settings.size(); ++i) {
             mode("grind.set." + std::string(grind_settings[i].key), topic_grinds, &s.grind_setting[i]);
             all->back().title = "Grinds: " + std::string(grind_settings[i].label);
@@ -1159,13 +1159,13 @@ const std::vector<Setup> &setups() {
                 mode("grind.hold." + std::string(grind_switches[i].key), topic_grinds, &s.grind_mode[i]);
                 all->back().title = "Grinds: " + std::string(grind_switches[i].label);
             }
-        real("transition.lean", topic_transition, &s.tr_lean, 0.0f, -1.0f, 1.0f);
-        real("transition.carry", topic_transition, &s.tr_carry, 0.0f, 0.0f, 1.0f);
-        real("transition.drop", topic_transition, &s.tr_drop, 1.0f, 0.0f, 100.0f);
+        real("transition.lean", topic_transition, &s.tr_lean, 0.0f, -1000.0f, 1000.0f);
+        real("transition.carry", topic_transition, &s.tr_carry, 0.0f, 0.0f, 1000.0f);
+        real("transition.drop", topic_transition, &s.tr_drop, 1.0f, 0.0f, 1.0e6f);
         all->back().in_force = [&s] { return s.tr_carry != 0.0f; }; // the limit on what the row above keeps
-        real("transition.unstick", topic_transition, &s.tr_unstick, 0.0f, 0.0f, 100.0f);
-        real("transition.lockout", topic_transition, &s.tr_lockout, 0.0f, 0.0f, 60.0f);
-        real("transition.plant", topic_transition, &s.tr_plant, 0.0f, 0.0f, 1.0f);
+        real("transition.unstick", topic_transition, &s.tr_unstick, 0.0f, 0.0f, 1.0e6f);
+        real("transition.lockout", topic_transition, &s.tr_lockout, 0.0f, 0.0f, 3600.0f);
+        real("transition.plant", topic_transition, &s.tr_plant, 0.0f, 0.0f, 1000.0f);
         toggle("transition.spine", topic_transition, &s.tr_spine);
         for (std::size_t i = 0; i < transition_settings.size(); ++i)
         {
@@ -2904,12 +2904,12 @@ std::string transition_command(const std::vector<std::string> &a) {
         std::string_view says;
     };
     const Number numbers[]{
-        {"lean", &s.tr_lean, -1.0f, 1.0f, "Lean into the ramp on a coping grind"},
-        {"carry", &s.tr_carry, 0.0f, 1.0f, "Speed kept along the coping rolling off it"},
-        {"drop", &s.tr_drop, 0.0f, 100.0f, "Most speed across the coping while it is kept (m/s)"},
-        {"unstick", &s.tr_unstick, 0.0f, 100.0f, "Push out of a hang-up"},
-        {"lockout", &s.tr_lockout, 0.0f, 60.0f, "Seconds the coping cannot be caught again"},
-        {"plant", &s.tr_plant, 0.0f, 1.0f, "Handplant exit like Skate 3's"},
+        {"lean", &s.tr_lean, -1000.0f, 1000.0f, "Lean into the ramp on a coping grind"},
+        {"carry", &s.tr_carry, 0.0f, 1000.0f, "Speed kept along the coping rolling off it"},
+        {"drop", &s.tr_drop, 0.0f, 1.0e6f, "Most speed across the coping while it is kept (m/s)"},
+        {"unstick", &s.tr_unstick, 0.0f, 1.0e6f, "Push out of a hang-up"},
+        {"lockout", &s.tr_lockout, 0.0f, 3600.0f, "Seconds the coping cannot be caught again"},
+        {"plant", &s.tr_plant, 0.0f, 1000.0f, "Handplant exit like Skate 3's"},
     };
     for (const auto &one : numbers) {
         if (what != one.key) continue;
@@ -3224,7 +3224,7 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
             const auto value = number(arg(1));
             if (!value) return "error: usage: trainer grind range <degrees>, 0 = off (the game's own turn, by the right stick); negative turns the other way.";
             if (*value != 0 && !editable(&why)) return "error: " + why;
-            s.grind_range = std::clamp(static_cast<float>(*value), -360.0f, 360.0f);
+            s.grind_range = std::clamp(static_cast<float>(*value), -1.0e6f, 1.0e6f);
             changed();
             return std::format("Left stick turns the board on a grind: up to {:.1f} degrees{}.", s.grind_range, s.grind_range == 0 ? " (off)" : "");
         }
@@ -3232,7 +3232,7 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
             const auto value = number(arg(1));
             if (!value) return "error: usage: trainer grind push <m/s at full stick>, 0 = none, 1.8 = Skate 3's; a negative number pushes the other way.";
             if (*value != 0 && !editable(&why)) return "error: " + why;
-            s.grind_push = std::clamp(static_cast<float>(*value), -50.0f, 50.0f);
+            s.grind_push = std::clamp(static_cast<float>(*value), -1.0e6f, 1.0e6f);
             changed();
             return std::format("Sideways pop with the stick: {:.2f} m/s at full stick.", s.grind_push);
         }
@@ -3240,7 +3240,7 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
             const auto value = number(arg(1));
             if (!value || *value < 0) return "error: usage: trainer grind side <multiplier>, 1 = the game's own.";
             if (!editable(&why)) return "error: " + why;
-            s.grind_side = std::clamp(static_cast<float>(*value), 0.0f, 1000.0f);
+            s.grind_side = std::clamp(static_cast<float>(*value), 0.0f, 1.0e6f);
             changed();
             return std::format("Side force off grinds x {:.2f}.", s.grind_side);
         }
@@ -3315,7 +3315,7 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
         } else if (name == "return_delay") {
             const auto value = number(arg(1));
             if (!value) return "error: return_delay needs seconds.";
-            s.return_delay = std::clamp(static_cast<float>(*value), 0.0f, 10.0f);
+            s.return_delay = std::clamp(static_cast<float>(*value), 0.0f, 3600.0f);
         } else if (!flag(arg(1), on)) {
             return "error: usage: trainer option hud|hud_jump|auto_return|pad|flip_advanced|flip_pop|flip_flick|log 0|1";
         } else if (name == "hud") s.hud = on;

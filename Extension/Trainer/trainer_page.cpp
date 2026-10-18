@@ -244,7 +244,7 @@ void value_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const tra
         // Full screen: a switch, or the value nudged a step at a time (a fiftieth of its size).
         ImGui::PushID(row.id.c_str());
         const auto label = friendly && !row.friendly.empty() ? row.friendly : with_group ? row.group + " / " + row.label : row.label;
-        const auto hint = std::format("{}. The game's own is {}.{}", row.id, number(row.stock),
+        const auto hint = std::format("{}{}{}. The game's own is {}.{}", row.help, row.help.empty() ? "" : " ", row.id, number(row.stock),
                                       row.used ? "" : " The game was not found reading it, so changing it may do nothing.");
         const bool can = view.editable && callbacks.queue_console_command;
         if (row.kind == trainer::Kind::flag) {
@@ -257,8 +257,13 @@ void value_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const tra
             const bool whole = row.kind == trainer::Kind::integer;
             double value = row.value;
             set_console_step(whole ? 1.0 : scale ? 0.05 : std::max({std::abs(row.stock), std::abs(value), 0.01}) * 0.02);
+            // The bar spans a sensible range around the game's own value (sliding covers it); the box beside it, or
+            // stepping on past the end, takes any number.
+            const double size = std::max({std::abs(row.stock), whole ? 5.0 : 0.01});
+            const double low = scale ? 0.0 : row.stock >= 0 ? (row.stock == 0 ? -size * 10 : 0.0) : row.stock * 4,
+                         high = scale ? 4.0 : row.stock <= 0 ? (row.stock == 0 ? size * 10 : 0.0) : row.stock * 4;
             ImGui::BeginDisabled(!can);
-            if (slider_double("##value", &value, scale ? 0.0 : -1.0e6, 1.0e6, whole ? "%.0f" : scale ? "x %.2f" : "%.4g", ImGuiSliderFlags_AlwaysClamp))
+            if (slider_double("##value", &value, low, high, whole ? "%.0f" : scale ? "x %.2f" : "%.4g"))
                 trainer_command(menu, callbacks, std::format("set {} {}", row.id, number(value)));
             ImGui::EndDisabled();
         }
@@ -285,7 +290,10 @@ void value_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const tra
     ImGui::TextUnformatted(row.used ? label.c_str() : (label + "  (no use found)").c_str());
     if (tinted) ImGui::PopStyleColor();
     if (ImGui::IsItemHovered())
-        wrapped_tooltip("%s%s%s\nStock: %s%s", row.help.c_str(), row.help.empty() ? "" : "\n", row.id.c_str(), number(row.stock).c_str(),
+        wrapped_tooltip("%s\n%s\nStock: %s%s",
+            row.help.empty() ? std::format("{} / {}: one of the game's own tuning values, under the game's own name. No plain explanation "
+                                           "is written for it yet; the name says what it belongs to.", row.group, row.label).c_str() : row.help.c_str(),
+            row.id.c_str(), number(row.stock).c_str(),
             row.used ? "" : "\nThe game was not found (or seen) reading this value, so changing it may do nothing.");
     ImGui::SameLine(column);
     const float reset = ImGui::CalcTextSize("Reset").x + ImGui::GetStyle().FramePadding.x * 2;
@@ -1120,7 +1128,7 @@ void trick_heights(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const
     // `limited`: the game itself stops at the slider's end, so a typed number is held to it too.
     const auto slider = [&](const char *label, const char *option, float value, float &edit, bool &editing, const char *help, float high = 50.0f, bool limited = false, bool always = false) {
         if (!always && !wanted(label)) return false;
-        field(menu, label);
+        field(menu, label, help);
         ImGui::PushID(option);
         if (console_style()) {
             float shown = editing ? edit : value;
@@ -1288,9 +1296,9 @@ void practice_tab(SkateMenu &menu, const Model &model, const CallbacksV3 &callba
                 p.speed_until = ImGui::GetTime() + 1.0;
                 send_console(menu, callbacks, speed == 1.0 ? "reset SimulationTime.TimeScale" : "SimulationTime.TimeScale " + number(speed));
             };
-            field(menu, "Speed");
+            field(menu, "Speed", "How fast the whole game runs: 1x is normal, 0.5x half speed. Type a number for anything past the slider.");
             auto value = static_cast<float>(current);
-            if (::dingosdk::overlay::menu::slider_float("##game-speed", &value, 0.05f, 2.0f, current == 0.0 ? "paused" : "%.2fx", ImGuiSliderFlags_AlwaysClamp))
+            if (::dingosdk::overlay::menu::slider_float("##game-speed", &value, 0.05f, 2.0f, current == 0.0 ? "paused" : "%.2fx") && value >= 0)
                 set(value);
             const int pressed = button_row(menu, "speeds", {{current == 0.0 ? "RESUME" : "PAUSE", true, current == 0.0}, {"0.1x", true, current == 0.1},
                 {"0.25x", true, current == 0.25}, {"0.5x", true, current == 0.5}, {"0.75x", true, current == 0.75}, {"1x", true, current == 1.0}});
@@ -1319,11 +1327,11 @@ void practice_tab(SkateMenu &menu, const Model &model, const CallbacksV3 &callba
     bool auto_return = view.auto_return;
     if (toggle_row(menu, "Return after a bail", "Go back to the selected marker when the skater wipes out.", auto_return))
         trainer_command(menu, callbacks, std::format("option auto_return {}", auto_return ? 1 : 0));
-    field(menu, "Return delay");
+    field(menu, "Return delay", "How long after a bail before you are put back at the marker, in seconds.");
     float delay = view.return_delay;
-    ::dingosdk::overlay::menu::slider_float("##return-delay", &delay, 0.0f, 10.0f, "%.1f s", ImGuiSliderFlags_AlwaysClamp);
-    if (!ImGui::IsItemActive()) tip("How long after a bail before you are put back at the marker.");
-    if (ImGui::IsItemDeactivatedAfterEdit()) trainer_command(menu, callbacks, std::format("option return_delay {:.1f}", delay));
+    ::dingosdk::overlay::menu::slider_float("##return-delay", &delay, 0.0f, 10.0f, "%.1f s");
+    if (!ImGui::IsItemActive()) tip("How long after a bail before you are put back at the marker. Type a number for longer than the slider.");
+    if (ImGui::IsItemDeactivatedAfterEdit()) trainer_command(menu, callbacks, std::format("option return_delay {:.2f}", std::max(0.0f, delay)));
     bool pad = view.pad_shortcuts;
     if (toggle_row(menu, "Controller shortcuts", "Hold LB + RB, then D-pad: up saves, down goes, left / right pick the slot.", pad))
         trainer_command(menu, callbacks, std::format("option pad {}", pad ? 1 : 0));
@@ -1488,7 +1496,7 @@ void trickline_section(SkateMenu &menu, const Model &, const CallbacksV3 &callba
                  &p.grind_range_edit, &p.grind_range_editing, -180.0f, 180.0f, "off"},
             };
             for (const auto &one : speeds) {
-                field(menu, one.label);
+                field(menu, one.label, one.help);
                 ImGui::PushID(one.key);
                 float value = *one.editing ? *one.edit : one.view;
                 const float box = px(64);
@@ -1600,7 +1608,7 @@ void trickline_section(SkateMenu &menu, const Model &, const CallbacksV3 &callba
         // The revert speed boost: its strength, then what counts and what it is worth.
         const auto number_row = [&](const char *label, const char *command, float value, float low, float high, const char *format, const char *tip) {
             ImGui::PushID(command);
-            field(menu, label);
+            field(menu, label, tip);
             const auto key = std::string("revert:") + command;
             float shown = p.active == key ? static_cast<float>(p.active_value) : value;
             ImGui::SetNextItemWidth(std::max(px(70), ImGui::GetContentRegionAvail().x - px(64) - ImGui::GetStyle().ItemSpacing.x));
@@ -1672,7 +1680,7 @@ void transition_section(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, 
     // A slider with a box for any number beside it; `command` gets the number appended.
     const auto number_row = [&](const char *label, const char *command, float value, float low, float high, const char *format, const char *help) {
         ImGui::PushID(command);
-        field(menu, label);
+        field(menu, label, help);
         const auto key = std::string("transition:") + command;
         float shown = p.active == key ? static_cast<float>(p.active_value) : value;
         ImGui::SetNextItemWidth(std::max(px(70), ImGui::GetContentRegionAvail().x - px(64) - ImGui::GetStyle().ItemSpacing.x));
