@@ -514,6 +514,22 @@ def test_kerbs_are_capped():
     assert spots(model, "kerb") == []
 
 
+def test_bridge_points_are_not_ground_where_there_is_ground():
+    # Ground at 5 m, sparse as a 2014 survey saw it (about one point per 0.5 m cell), under three
+    # times as many "bridge" points 15 m up: one survey classes tree crowns and roofs as bridge.
+    rng = np.random.default_rng(0)
+    ground = np.column_stack([rng.uniform(0, 20, 600), rng.uniform(0, 20, 600), np.full(600, 5.0)])
+    canopy = np.column_stack([rng.uniform(0, 10, 1800), rng.uniform(0, 20, 1800), np.full(1800, 15.0)])
+    classes = np.repeat([ept.GROUND, ept.BRIDGE], [600, 1800]).astype(np.uint8)
+    points = ept.Points(np.vstack([ground, canopy]), classes, "test", np.zeros(2400, bool))
+    grid, measured = city.ground_grid(points, (0, 0, 20, 20), 0.5)
+    assert measured and grid.heights.max() == pytest.approx(5.0)
+    # A place on a deck, with no ground under it, still has the deck's height.
+    deck = ept.Points(canopy - [0, 0, 7.0], np.full(1800, ept.BRIDGE, np.uint8), "test", np.zeros(1800, bool))
+    grid, measured = city.ground_grid(deck, (0, 0, 10, 20), 0.5)
+    assert measured and grid.sample([(5.0, 10.0)]) == pytest.approx([8.0])
+
+
 def test_best_slice_finds_the_busy_strip():
     feature = lambda x, y: city.Spot(features.Feature("ledge", (x, y), 0.0, 2.0, 0.5, 0.4), 10.0, 10.0, "osm", "bench")
     kerb = lambda x, y: city.Spot(features.Feature("ledge", (x, y), 0.0, 3.0, 0.4, 0.15), 10.0, 10.0, "ground", "kerb")

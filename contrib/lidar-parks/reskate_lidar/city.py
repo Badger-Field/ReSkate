@@ -153,27 +153,39 @@ class CityModel:
 
 # ---------------------------------------------------------------- ground
 
-def ground_grid(points: ept.Points | None, bounds, cell: float) -> tuple[Grid, bool]:
-    """Bare earth: the median of the ground points in each cell, holes filled smoothly."""
-    xmin, ymin, xmax, ymax = bounds
-    cols = max(2, int(math.ceil((xmax - xmin) / cell)) + 1)
-    rows = max(2, int(math.ceil((ymax - ymin) / cell)) + 1)
-    origin = np.array([xmin, ymin])
-    ground = points.of(ept.GROUND, ept.WATER, ept.BRIDGE) if points is not None else np.zeros((0, 3))
-    if len(ground) < 10:
-        return Grid(np.zeros((rows, cols), np.float64), origin, cell), False
-    c = np.round((ground[:, 0] - xmin) / cell).astype(int)
-    r = np.round((ground[:, 1] - ymin) / cell).astype(int)
+def _cell_medians(xyz: np.ndarray, origin, cell: float, rows: int, cols: int) -> np.ndarray:
+    """The median elevation of the points nearest each grid point, flat; NaN where there are none."""
+    heights = np.full(rows * cols, np.nan)
+    if not len(xyz):
+        return heights
+    c = np.round((xyz[:, 0] - origin[0]) / cell).astype(int)
+    r = np.round((xyz[:, 1] - origin[1]) / cell).astype(int)
     inside = (r >= 0) & (r < rows) & (c >= 0) & (c < cols)
-    flat, z = (r * cols + c)[inside], ground[inside, 2]
+    flat, z = (r * cols + c)[inside], xyz[inside, 2]
     order = np.lexsort((z, flat))
     flat, z = flat[order], z[order]
     counts = np.bincount(flat, minlength=rows * cols)
     starts = np.concatenate([[0], np.cumsum(counts)[:-1]])
     has = counts > 0
-    heights = np.full(rows * cols, np.nan)
     heights[has] = z[starts[has] + (counts[has] - 1) // 2]
-    heights = heights.reshape(rows, cols)
+    return heights
+
+
+def ground_grid(points: ept.Points | None, bounds, cell: float) -> tuple[Grid, bool]:
+    """Bare earth: the median of the ground points in each cell, holes filled smoothly. Bridge
+    points are used only where there is no ground or water at all (a place on a deck): some
+    surveys put trees and roofs in the bridge class, which would lift the ground under them, and
+    a deck over a road can't be part of a ground surface anyway."""
+    xmin, ymin, xmax, ymax = bounds
+    cols = max(2, int(math.ceil((xmax - xmin) / cell)) + 1)
+    rows = max(2, int(math.ceil((ymax - ymin) / cell)) + 1)
+    origin = np.array([xmin, ymin])
+    ground = points.of(ept.GROUND, ept.WATER) if points is not None else np.zeros((0, 3))
+    if len(ground) < 10 and points is not None:
+        ground = points.of(ept.BRIDGE)
+    if len(ground) < 10:
+        return Grid(np.zeros((rows, cols), np.float64), origin, cell), False
+    heights = _cell_medians(ground, origin, cell, rows, cols).reshape(rows, cols)
     holes = np.isnan(heights)
     _, (near_r, near_c) = ndimage.distance_transform_edt(holes, return_indices=True)
     heights = heights[near_r, near_c]
