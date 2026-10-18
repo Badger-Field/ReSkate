@@ -801,6 +801,22 @@ like bounds, distances, sizes, and sets any Min/Max box struct to our bounds; ou
 cover the same W x D and each part's box is printed. Ladder for the size limit: 6,1,6 (as the
 working box), 12,0.2,12, 50,0.2,50.
 
+**Tested in game** (ae03ddd): the 50 x 0.2 x 50 slab is drawn (a flat tan floor to the horizon with
+the skater's shadow; at the box's own texel density, 0.1667 per metre, no grain shows). Its
+collision was the box's, not ours: `trainer ground` 1, -1 read 301 (the box's top) and 0, 0 "still
+loading". So 50 m objects do spawn (cf7e536's plane did too: it was probed outside the box's
+footprint). The box blueprint imports its collision EBX, `<blueprint>.physics` (beside the
+resource of that name), and the copy kept that import; util_groundplane's copy took our resource,
+found by name. Since then, a blueprint's import of its `.physics` EBX is moved to a copy of that EBX
+(renamed, its resource references set to ours) with `--collision own`; the dry run lists every
+import of our blueprint and where it resolves, and refuses one still naming the template's mesh or
+collision. `--uv-per-metre` sets the ground's texture density (default 1 for slab and plane).
+
+Formats 6 and 13 are not plain 8-bit xyz normals: on the box, unorm, snorm and reversed readings
+agree with the face normals at -0.16 to 0.26. The dry run now also scores octahedral 16-bit
+(snorm and unorm, z or y up) and 8-bit quaternions (each axis), as one line per element; our
+vertices copy matched template vertices whatever the format is.
+
 **What the base game does (checked on files, the PC's read-only scans).**
 
 - bam's world-partition tiles place their geometry through merged `StaticModelGroup`s. The first
