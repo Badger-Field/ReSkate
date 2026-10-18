@@ -137,6 +137,7 @@ These apply to every phase:
 ## Next
 
 Done since the last list:
+- **Ground from ground and water points only.** Bridge-class points count only where an area has no ground at all. The 2014 USGS survey of Washington DC puts tree crowns and roofs in class 17 (bridge deck), and they lifted Freedom Plaza's ground up to 19 m. Embarcadero's export is unchanged.
 - **Level tiles of just the slice.** With `--best-slice`, the ground, buildings and grinds are cropped to the chosen slice too. Before, only the spots were. Buildings are clipped at its edge, and spots whose middle is inside stay whole. The frame doesn't move. Embarcadero 130 x 20: 4 tiles, 20,920 visual and 5,320 collision triangles, against 16 tiles for the whole search range before.
 - **Level tiles for the map builder** (`city --level`): 50 m tiles of triangle lists with materials, visual and collision, in the park frame.
   - Collision is split into chunks of at most 256 triangles, with bit-identical shared vertices.
@@ -153,7 +154,10 @@ Done since the last list:
 
 1. **Whatever the map builder needs next.**
    - **Possible additions:** level of detail for visual tiles, grass split out of the ground, and texture coordinates.
-   - **Waiting on the builder's first in-game level**, built from these tiles. The first export is delivered: Embarcadero Plaza 130 x 20 (`--best-slice 60`, 4 tiles), a zip on the `level-exports` branch. That branch shares no history with the code branches and is never merged. The builder keeps the search centre as the origin and places the spawn itself.
+   - **Two places exported**, as zips on the `level-exports` branch. That branch shares no history with the code branches and is never merged. The builder keeps the search centre as the origin and places the spawn itself.
+     - **Embarcadero Plaza, San Francisco:** 130 x 20 m (`--best-slice 60`, 4 tiles). It is a working, drawn, skateable level in game.
+     - **Freedom Plaza, Washington DC:** 150 x 60 m, 8 tiles, with 8 flights of steps, 9 banks and 7 kerbs. The builder has it now.
+   - **Waiting on the builder's results** with both, which decide what this tool needs next.
 2. **Downloading national LiDAR.** Reading it works (above). Next is finding and fetching the tiles over an area:
    - AHN's tile index on PDOK;
    - the UK Environment Agency's survey catalogue;
