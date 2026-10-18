@@ -534,7 +534,8 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                      props: list[tuple[str, tuple[float, float, float]]] = (), keep_section: int | None = None,
                      mesh_shape: str = "slab", collision_mode: str = "own",
                      geometry_section: int | None = 0, uv_per_metre: float | None = None,
-                     grow_parts: bool = False) -> list[str]:
+                     grow_parts: bool = False, visuals=(), visual_template: str = None,
+                     material_donors: dict | None = None) -> list[str]:
     """Adds a level whose content is our own ground to `mod` (see the module's text). Appends a
     report to `log` (also when it refuses) and returns it.
 
@@ -879,6 +880,18 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
         log.append(text)
         stock.append((name, where, prop.file_guid, prop.instances[0].instance_guid))
 
+    # 3c. Visual objects (new-place-level --visuals): one blueprint, mesh and harmless collision per
+    # object, all in the level's root bundle (whose depot holds the template's shader blocks).
+    visual_assets = []
+    if visuals:
+        prepared = _prepare_visual_template(game, visual_template or VISUAL_TEMPLATE, log)
+        donors = _visual_donors(game, prepared, material_donors or {}, log)
+        for name, vertices, triangles, material in visuals:
+            asset = _visual_asset(game, level, name, vertices, triangles, prepared, donors.get(material, donors[None]),
+                                  uv_per_metre or 1.0, log)
+            visual_assets.append(asset)
+            stock.append((asset["bp_name"], tuple(at), asset["bp"].file_guid, asset["bp"].instances[0].instance_guid))
+
     # 4. The layer: one placement of our blueprint (or a grid of them).
     layer = clone_document(layer_old, derived_guid(level, "ground_layer", layer_old.file_guid.string()), level + ":ground_layer")
     refresh_flags(layer_old, layer)
@@ -1088,7 +1101,167 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                f"{added} of {len(copied['toc'])} chunks of {bp_source.superbundle}'s TOC added to the level's TOC "
                f"(the others it already lists); new payloads in install chunk {chunk:#x}")
     log.extend(_mesh_chunk_report(mod, path, assets_bundle, bp_source, template_mesh, own))
+    root_bundle = "win32/" + path
+    for asset in visual_assets:
+        mod.add_ebx(path, root_bundle, asset["bp_name"], _checked_bytes(asset["bp"], asset["bp_name"]))
+        if asset["physics_doc"] is not None:
+            mod.add_ebx(path, root_bundle, asset["physics_name"], _checked_bytes(asset["physics_doc"], asset["physics_name"]))
+        mod.add_resource(path, root_bundle, asset["physics_name"], asset["physics_type"], asset["physics"],
+                         resource_id(asset["physics_name"]), asset["physics_meta"])
+        mod.add_ebx(path, root_bundle, asset["mesh_name"], _checked_bytes(asset["mesh"], asset["mesh_name"]))
+        mod.add_resource(path, root_bundle, asset["mesh_name"], MESHSET_TYPE, asset["meshset"],
+                         resource_id(asset["mesh_name"]), asset["meshset_meta"])
+        for guid, data in zip(asset["chunk_guids"], asset["chunks"]):
+            mod.add_chunk(path, root_bundle, guid, data)
+            mod.add_toc_chunk_payload(path, guid, data, chunk)
+    if visual_assets:
+        log.append(f"{root_bundle}: {len(visual_assets)} visual objects added (blueprint, collision EBX and resource, "
+                   f"mesh, MeshSet and chunks each)")
     return log
+
+
+# ---- Visual objects (new-place-level --visuals, FORMAT-NOTES 6.4) --------------------------------
+
+VISUAL_TEMPLATE = ("world/props/common/skatepark/cmn_prp_skatepark_01/kit/"
+                   "cmn_prp_skatepark_01_box_100x600x600cm_hxwxd")
+# A visual blueprint's collision: one tiny triangle per template part, this far below the object's
+# origin, so the part count matches PhysicsPartInfos and nothing can be stood on.
+VISUAL_COLLISION_DEPTH = -500.0
+VISUAL_TRIANGLE = 0.1
+
+
+def _visual_name(level: str, name: str) -> str:
+    safe = "".join(c if c.isalnum() or c == "_" else "_" for c in name.lower())
+    return f"levels/game/{level}/visual_{safe}"
+
+
+def _prepare_visual_template(game, template: str, log: list[str]) -> dict:
+    """What every visual object copies: the template blueprint (of bam's root bundle), its mesh and
+    MeshSet with their chunks, its .physics resource and parts, and its collision EBX if imported."""
+    source = _source(game, BASE_ROOT_BUNDLE, template)
+    if source.name.lower() != BASE_ROOT_BUNDLE:
+        raise ValueError(f"--visual-template {template} is not in bam's root bundle")
+    bp_old = read_document(source.ebx(template))
+    mesh = None
+    for imp in used_imports(bp_old):
+        name = source.guids().get(imp.file_guid)
+        found = source.resource(name, MESHSET_TYPE) if name else None
+        if found:
+            mesh = (name, imp, found)
+            break
+    if mesh is None:
+        raise KeyError(f"--visual-template {template} imports no mesh with a MeshSet in {source.name}")
+    physics = source.resource(template + PHYSICS_SUFFIX, PHYSICS_TYPE)
+    if physics is None:
+        raise KeyError(f"--visual-template {template} has no {template + PHYSICS_SUFFIX}")
+    _, parts, _ = read_physics(source.payload("res", physics[0]))
+    physics_doc = None
+    if source.has_ebx(template + PHYSICS_SUFFIX):
+        doc = read_document(source.ebx(template + PHYSICS_SUFFIX))
+        if any(imp.file_guid == doc.file_guid for imp in bp_old.imports):
+            physics_doc = doc
+    ms_data = source.payload("res", mesh[2][0])
+    layout = read_mesh_layout(ms_data)
+    chunks = [_chunk_payload(game, source, lod.chunk) for lod in layout]
+    shaped = [p for p in parts if p.shape >= 0] or parts
+    log.append(f"Visual template {template}: mesh {mesh[0]} ({len(layout)} LODs, sections "
+               f"{[len(lod.sections) for lod in layout]}), {len(shaped)} collision parts"
+               + (", imports its collision EBX" if physics_doc else ""))
+    return {"source": source, "bp": bp_old, "mesh_name": mesh[0], "mesh_import": mesh[1], "ms_index": mesh[2][0],
+            "ms_asset": mesh[2][1], "ms_data": ms_data, "chunks": chunks, "mesh": read_document(source.ebx(mesh[0])),
+            "physics_asset": physics[1], "parts": shaped, "physics_doc": physics_doc, "template": template}
+
+
+def _visual_donors(game, prepared: dict, wanted: dict, log: list[str]) -> dict:
+    """material (None: the default) -> (geometry section of the template, donor section or None).
+    The default and any donor naming the template's own mesh use that section of the clone; a
+    donor of another mesh (in bam's root bundle) lends its section's layout, key and vertex."""
+    out = {None: (0, None)}
+    log.append(f"  material donors: default {prepared['mesh_name']}:0")
+    for material, spec in wanted.items():
+        mesh_name, _, section = spec.partition(":")
+        index = int(section or 0)
+        if mesh_name.lower() == prepared["mesh_name"].lower():
+            out[material] = (index, None)
+        else:
+            source = _source(game, BASE_ROOT_BUNDLE, mesh_name)
+            found = source.resource(mesh_name, MESHSET_TYPE)
+            if found is None:
+                raise KeyError(f"--material-donor {material}: no MeshSet {mesh_name} in {source.name}")
+            data = source.payload("res", found[0])
+            lod = read_mesh_layout(data)[0]
+            if not 0 <= index < len(lod.sections):
+                raise ValueError(f"--material-donor {material}: {mesh_name} LOD 0 has {len(lod.sections)} sections")
+            sec = lod.sections[index]
+            chunk_data = _chunk_payload(game, source, lod.chunk)
+            out[material] = (0, (data[sec.at:sec.at + 384], model_vertex(lod, sec, chunk_data)[0]))
+        log.append(f"  material donors: {material} = {mesh_name}:{index}")
+    return out
+
+
+def _visual_asset(game, level: str, name: str, vertices, triangles, prepared: dict, donor, uv_per_metre: float,
+                  log: list[str]) -> dict:
+    base = _visual_name(level, name)
+    bp_name, mesh_name, physics_name = base + "_bp", base + "_mesh", base + "_bp" + PHYSICS_SUFFIX
+    bp_old, mesh_old = prepared["bp"], prepared["mesh"]
+    bp = clone_document(bp_old, derived_guid(level, name, "bp"), f"{level}:{name}:bp")
+    refresh_flags(bp_old, bp)
+    if isinstance(bp.instances[0].object.get("Name"), str):
+        bp.instances[0].object.set("Name", bp_name)
+    mesh = clone_document(mesh_old, derived_guid(level, name, "mesh"), f"{level}:{name}:mesh")
+    refresh_flags(mesh_old, mesh)
+    if isinstance(mesh.instances[0].object.get("Name"), str):
+        mesh.instances[0].object.set("Name", mesh_name)
+    for holder, field_name, ref in _resource_refs([i.object for i in mesh.instances if i.object is not None]):
+        if ref.id == prepared["ms_asset"].resource_id:
+            holder.set(field_name, ResourceReference(resource_id(mesh_name)))
+    for imp in bp.imports:
+        if imp.file_guid == prepared["mesh_import"].file_guid:
+            imp.file_guid, imp.class_guid = mesh.file_guid, _new_guid_of(mesh_old, mesh, imp.class_guid)[0]
+
+    # Collision: one tiny triangle per template part, far below the object (not standable).
+    shapes, parts = [], []
+    for i, p in enumerate(prepared["parts"]):
+        x = i * 2 * VISUAL_TRIANGLE
+        shapes.append(Shape([(x, VISUAL_COLLISION_DEPTH, 0.0), (x, VISUAL_COLLISION_DEPTH, VISUAL_TRIANGLE),
+                             (x + VISUAL_TRIANGLE, VISUAL_COLLISION_DEPTH, 0.0)], [(0, 1, 2)]))
+        parts.append(Part(i, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), 1.0, p.material, KIND_TRIANGLE_MESH, p.hashes, 0,
+                          p.float_30, p.word_34 if len(prepared["parts"]) > 1 else 0, p.word_3c, p.word_44))
+    compute_edge_data(shapes, parts)
+    physics = write_physics(shapes, parts, 2)
+    physics_doc = None
+    if prepared["physics_doc"] is not None:
+        old = prepared["physics_doc"]
+        physics_doc = clone_document(old, derived_guid(level, name, "physics"), f"{level}:{name}:physics")
+        refresh_flags(old, physics_doc)
+        if isinstance(physics_doc.instances[0].object.get("Name"), str):
+            physics_doc.instances[0].object.set("Name", physics_name)
+        for holder, field_name, ref in _resource_refs([i.object for i in physics_doc.instances if i.object]):
+            if ref.id == prepared["physics_asset"].resource_id:
+                holder.set(field_name, ResourceReference(resource_id(physics_name)))
+        for imp in bp.imports:
+            if imp.file_guid == old.file_guid:
+                imp.file_guid, imp.class_guid = physics_doc.file_guid, _new_guid_of(old, physics_doc, imp.class_guid)[0]
+    stale = {prepared["mesh_import"].file_guid} | ({prepared["physics_doc"].file_guid} if physics_doc else set())
+    if any(imp.file_guid in stale for imp in bp.imports):
+        raise ValueError(f"visual {name}: its blueprint still imports the template's mesh or collision")
+    lines = _check_part_tables(bp, shapes, parts, "own", False)
+
+    geometry_section, donor_section = donor
+    chunk_guids = [derived_guid(level, name, "chunk", str(k)) for k in range(len(prepared["chunks"]))]
+    meshset, chunks, report = write_mesh(prepared["ms_data"], prepared["chunks"], vertices, triangles, chunk_guids,
+                                         donor_section, None, False, geometry_section, uv_per_metre)
+    lo, hi = padded_bounds(vertices)
+    _set_aabbs(bp, lo, hi)
+    _set_aabbs(mesh, lo, hi)
+    log.append(f"  visual {name}: {len(vertices)} vertices, {len(triangles)} triangles (limits 65,535 and 16-bit "
+               f"indices), box {[round(v, 2) for v in lo]}..{[round(v, 2) for v in hi]}, section {geometry_section}"
+               + (" with a donor section" if donor_section else "") + f" -> {bp_name}; "
+               + "; ".join(line.strip() for line in lines if "consistent" in line or "not checked" in line))
+    return {"bp_name": bp_name, "bp": bp, "mesh_name": mesh_name, "mesh": mesh, "physics_name": physics_name,
+            "physics": physics, "physics_doc": physics_doc, "physics_type": prepared["physics_asset"].resource_type,
+            "physics_meta": copy.copy(prepared["physics_asset"].resource_meta), "meshset": meshset,
+            "meshset_meta": copy.copy(prepared["ms_asset"].resource_meta), "chunks": chunks, "chunk_guids": chunk_guids}
 
 
 def _mesh_chunk_report(mod, path: str, ground_bundle: str, source: _Source, template_mesh, own) -> list[str]:

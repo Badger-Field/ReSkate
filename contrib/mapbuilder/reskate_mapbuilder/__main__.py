@@ -164,7 +164,8 @@ def new_ground_level_command(args, place=None):
                          getattr(args, "mesh_shape", "slab"), getattr(args, "collision", "own"),
                          None if getattr(args, "other_sections", "degenerate") == "geometry"
                          else getattr(args, "geometry_section", 0), getattr(args, "uv_per_metre", None),
-                         getattr(args, "parts", "merge") == "grow")
+                         getattr(args, "parts", "merge") == "grow", _visuals(args, place),
+                         getattr(args, "visual_template", None), _donors(args))
     finally:
         for line in log:
             print(line)
@@ -215,6 +216,35 @@ def _props(args) -> list:
     if len(names) != len(places):
         sys.exit("give one --prop-at X,Y,Z for each --prop")
     return [(name, _xyz(where, "--prop-at")) for name, where in zip(names, places)]
+
+
+def _visuals(args, place) -> list:
+    """(name, vertices, triangles, material) of the place's visual objects with --visuals, filtered
+    by --visuals-only (an object's name, its part, or a name prefix)."""
+    if place is None or not getattr(args, "visuals", False):
+        return []
+    only = getattr(args, "visuals_only", None) or []
+    out = []
+    for piece in place.visual:
+        if only and not any(piece.name == o or piece.part == o or piece.name.startswith(o) for o in only):
+            continue
+        label = f"{piece.name}_t{piece.tile[0]}_{piece.tile[1]}".replace("-", "m")
+        out.append((label, piece.vertices, piece.triangles, piece.material))
+    if not out:
+        sys.exit("--visuals: no visual object matches --visuals-only")
+    print(f"visual objects: {len(out)} of {len(place.visual)}: " + ", ".join(
+        f"{name} ({material}, {len(v)} vertices, {len(t)} triangles)" for name, v, t, material in out))
+    return out
+
+
+def _donors(args) -> dict:
+    out = {}
+    for spec in getattr(args, "material_donor", None) or []:
+        material, _, mesh = spec.partition("=")
+        if not material or not mesh:
+            sys.exit(f"--material-donor {spec!r}: give MATERIAL=MESH[:SECTION]")
+        out[material] = mesh
+    return out
 
 
 def _read_place_args(args, command: str):
@@ -358,6 +388,15 @@ def _place_options(p):
                    help="drop collision chunks whose top is above M metres (the place's frame), e.g. 20")
     p.add_argument("--skip-part", action="append", metavar="PART",
                    help="drop the collision chunks of this part or object name, e.g. buildings (repeatable)")
+    p.add_argument("--visuals", action="store_true",
+                   help="draw the place's visual objects: one blueprint and mesh each, cloned from --visual-template")
+    p.add_argument("--visuals-only", action="append", metavar="OBJECT",
+                   help="only these visual objects (name, part or name prefix; repeatable)")
+    p.add_argument("--visual-template", metavar="BLUEPRINT",
+                   help="the stock blueprint (bam root bundle) each visual object copies (default the skatepark box)")
+    p.add_argument("--material-donor", action="append", metavar="MATERIAL=MESH[:SECTION]",
+                   help="the mesh section whose material draws objects of MATERIAL (default the template's section 0)")
+    p.add_argument("--uv-per-metre", type=float, metavar="U", help="visual objects' texture repeats per metre (default 1)")
     p.add_argument("--parts", choices=("merge", "grow"), default="merge",
                    help="merge: the chunks merged into as many parts as the blueprint declares (PhysicsPartInfos; one "
                         "shape each); grow: one part per chunk, the blueprint's per-part tables grown to match")
