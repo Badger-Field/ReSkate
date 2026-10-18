@@ -167,7 +167,8 @@ def new_ground_level_command(args, place=None):
                          None if getattr(args, "other_sections", "degenerate") == "geometry"
                          else getattr(args, "geometry_section", 0), getattr(args, "uv_per_metre", None),
                          getattr(args, "parts", "merge") == "grow", _visuals(args, place),
-                         getattr(args, "visual_template", None), _donors(args))
+                         getattr(args, "visual_template", None), _donors(args),
+                         not getattr(args, "no_auto_materials", False))
     finally:
         for line in log:
             print(line)
@@ -280,7 +281,7 @@ def new_place_level_command(args):
 
 def material_donors_command(args):
     """Stock meshes of bam's root bundle whose sections could lend their material (read-only)."""
-    for line in material_donors(Game(args.game), args.contains, args.limit):
+    for line in material_donors(Game(args.game), args.contains, args.limit, args.every):
         print(line)
 
 
@@ -291,9 +292,8 @@ def place_info(args):
     for label, x, z, y in check_spots(place, tuple(args.at)):
         print(f"  trainer ground {x} {z}    -> {'-' if y is None else y}    ({label})")
     if args.views:
-        print("Where to look at each visual object from (the trainer cannot set the heading; after a teleport the "
-              "camera seems to face +x, heading 90, observed not confirmed; else turn until `trainer where` shows "
-              "the heading; 0 = north, +z; 90 = east, +x):")
+        print("Where to look at each visual object from (after `trainer ground` the camera faces heading 0, +z, "
+              "north; where the heading below is not 0, turn until `trainer where` shows it; 90 = east, +x):")
         for label, x, z, y, heading, note in view_spots(place, tuple(args.at)):
             print(f"  {label}: trainer ground {x} {z}    -> {'-' if y is None else y}, face heading {heading:g}  ({note})")
 
@@ -420,6 +420,9 @@ def _place_options(p):
     p.add_argument("--material-donor", action="append", metavar="MATERIAL=MESH[:SECTION]",
                    help="the mesh section whose material draws objects of MATERIAL (default the template's section 0)")
     p.add_argument("--uv-per-metre", type=float, metavar="U", help="visual objects' texture repeats per metre (default 1)")
+    p.add_argument("--no-auto-materials", action="store_true",
+                   help="without --material-donor, keep the template's section 0 for every material instead of the "
+                        "auto picks (ramp wedge surface for ground, a rail for metal, a concrete section)")
     p.add_argument("--parts", choices=("merge", "grow"), default="merge",
                    help="merge: the chunks merged into as many parts as the template's own .physics has (one shape "
                         "each); grow: one part per chunk, the blueprint's per-part tables grown (untested)")
@@ -520,8 +523,9 @@ def main(argv=None):
     p.add_argument("--dry-run", action="store_true", help="read and report only")
     p = sub.add_parser("material-donors", help="stock mesh sections that could lend a material (read-only)")
     p.add_argument("--game", required=True)
-    p.add_argument("--contains", default="skatepark", help="only MeshSets whose names hold this text")
-    p.add_argument("--limit", type=int, default=200)
+    p.add_argument("--contains", default="", help="only MeshSets whose names hold this text (default: all)")
+    p.add_argument("--limit", type=int, help="read at most this many MeshSets")
+    p.add_argument("--every", action="store_true", help="print every section, not only the classed ones")
     p = sub.add_parser("place-info", help="a tile export's summary and trainer spots (read-only, no game needed)")
     p.add_argument("--tiles", required=True, help="the directory `city --level DIR` wrote (reskate-level-tiles v2)")
     p.add_argument("--views", action="store_true", help="also a spot and heading to look at each visual object from")

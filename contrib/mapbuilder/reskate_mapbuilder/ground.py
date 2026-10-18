@@ -542,7 +542,7 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                      mesh_shape: str = "slab", collision_mode: str = "own",
                      geometry_section: int | None = 0, uv_per_metre: float | None = None,
                      grow_parts: bool = False, visuals=(), visual_template: str = None,
-                     material_donors: dict | None = None) -> list[str]:
+                     material_donors: dict | None = None, auto_material: bool = False) -> list[str]:
     """Adds a level whose content is our own ground to `mod` (see the module's text). Appends a
     report to `log` (also when it refuses) and returns it.
 
@@ -895,7 +895,10 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
     visual_assets = []
     if visuals:
         prepared = _prepare_visual_template(game, visual_template or VISUAL_TEMPLATE, log)
-        donors = _visual_donors(game, prepared, material_donors or {}, log)
+        wanted = dict(material_donors or {})
+        if not wanted and auto_material:
+            wanted = auto_donors(prepared, log)
+        donors = _visual_donors(game, prepared, wanted, log)
         for name, vertices, triangles, material in visuals:
             asset = _visual_asset(game, level, name, vertices, triangles, prepared, donors.get(material, donors[None]),
                                   uv_per_metre, log)
@@ -1309,51 +1312,91 @@ def _mesh_chunk_report(mod, path: str, ground_bundle: str, source: _Source, temp
 # ---- Material donors (material-donors, read-only) ------------------------------------------------
 
 MATERIAL_WORDS = {
-    "concrete": ("concrete", "cement", "curb", "kerb", "ledge", "stone", "plaza", "pavement", "slab", "cnc"),
-    "wood": ("wood", "plank", "timber", "bench", "deck", "ply"),
-    "metal": ("metal", "steel", "iron", "rail", "pipe", "coping", "alum", "chrome"),
+    "concrete": ("concrete", "cement", "curb", "kerb", "sidewalk", "pavement", "paving", "stone", "brick", "ledge",
+                 "plaza", "cnc"),
+    "wood": ("wood", "plank", "timber", "bench", "deck", "ply", "pallet"),
+    "metal": ("metal", "steel", "iron", "rail", "pipe", "coping", "alum", "chrome", "bollard", "hydrant", "bikerack",
+              "bike_rack"),
     "ground": ("asphalt", "ground", "road", "tarmac", "surface", "terrain", "dirt"),
 }
+# Picked when no --material-donor is given (the PC's trial, e3ed5ee): the skatepark ramp wedge's
+# surface for ground, a skatepark rail for metal; concrete the first usable section of a mesh
+# named like concrete, else the template's section 1 (the box's Sides_M); wood stays the template's
+# section 0.
+AUTO_DONORS = {"ground": ("cmn_prp_skatepark_01_rampwedge", 0), "metal": ("railflatrectangular", 0)}
 
 
-def material_donors(game, contains: str = "skatepark", limit: int = 200) -> list[str]:
-    """The MeshSets of bam's root bundle whose names contain `contains`: per LOD 0 section its
-    material name, layout and whether its key is in the bundle's depot, each section classed as
-    concrete, wood, metal or ground by its name's words; then a proposed default per class (the
-    first section of that class with TexCoord0 and its key in the depot)."""
-    source = _Source(game, BASE_SUPERBUNDLE, BASE_ROOT_BUNDLE)
-    keys = _source_depot_keys(source)
-    out, first = [], {}
+def _section_rows(source: _Source, keys: set[int], contains: str, limit: int | None = None):
+    """(mesh name, section index, material name, section, key in depot, usable, classes) for each
+    LOD 0 section of the bundle's MeshSets whose names contain `contains`."""
     shown = 0
     for i, r in enumerate(source.manifest.resources):
         if r.resource_type != MESHSET_TYPE or contains.lower() not in r.name.lower():
             continue
-        if shown >= limit:
-            out.append(f"... stopped at --limit {limit}")
-            break
+        if limit is not None and shown >= limit:
+            return
         shown += 1
         try:
             data = source.payload("res", i)
             lod = read_mesh_layout(data)[0]
-        except (ValueError, struct.error) as e:
-            out.append(f"{r.name}: not read ({e})")
+        except (ValueError, struct.error):
             continue
-        out.append(f"{r.name}: {len(lod.sections)} sections in LOD 0")
         for n, s in enumerate(lod.sections):
             (pointer,) = struct.unpack_from("<Q", data, s.at + 8)
             end = data.find(b"\0", pointer + 16) if pointer else -1
             material = data[pointer + 16:end].decode("latin-1") if pointer and end > 0 else ""
-            key = section_key(data, s)
             words = (r.name + " " + material).lower()
             kinds = [k for k, ws in MATERIAL_WORDS.items() if any(w in words for w in ws)]
-            usable = any(u == UV0_USAGE for u, _, _, _ in s.elements) and key in keys and "shadow" not in material.lower()
-            out.append(f"  {r.name}:{n}  material {material!r}, {s.triangle_count} triangles, strides {s.strides}, "
-                       f"key {'in' if key in keys else 'NOT in'} the depot, class {kinds or '-'}"
+            in_depot = section_key(data, s) in keys
+            usable = any(u == UV0_USAGE for u, _, _, _ in s.elements) and in_depot and "shadow" not in material.lower()
+            yield r.name, n, material, s, in_depot, usable, kinds
+
+
+def material_donors(game, contains: str = "", limit: int | None = None, every: bool = False) -> list[str]:
+    """The MeshSets of bam's root bundle (all, or those whose names contain `contains`): each
+    classed LOD 0 section (every section with `every`) with its material name, strides, depot key
+    and a class guessed from the words of its names; counts per class; and a proposed
+    `--material-donor` per class (the first usable section)."""
+    source = _Source(game, BASE_SUPERBUNDLE, BASE_ROOT_BUNDLE)
+    keys = _source_depot_keys(source)
+    out, first, counts, meshes = [], {}, Counter(), set()
+    for name, n, material, s, in_depot, usable, kinds in _section_rows(source, keys, contains, limit):
+        meshes.add(name)
+        for k in kinds:
+            counts[k] += 1
+            counts[k, "usable"] += usable
+            if usable:
+                first.setdefault(k, f"{name}:{n}")
+        if kinds or every:
+            out.append(f"  {name}:{n}  material {material!r}, {s.triangle_count} triangles, strides {s.strides}, "
+                       f"key {'in' if in_depot else 'NOT in'} the depot, class {kinds or '-'}"
                        + ("" if usable else " (not usable: no TexCoord0, a shadow, or no depot key)"))
-            for k in kinds:
-                if usable and k not in first:
-                    first[k] = f"{r.name}:{n}"
-    out.append("Proposed --material-donor defaults (try them; the classes are guesses from names):")
+    out.insert(0, f"{len(meshes)} MeshSets read; classed sections: " + ", ".join(
+        f"{k} {counts[k]} ({counts[k, 'usable']} usable)" for k in MATERIAL_WORDS))
+    out.append("Proposed --material-donor defaults (the classes are guesses from names):")
     for k in ("ground", "concrete", "wood", "metal"):
-        out.append(f"  --material-donor {k}={first[k]}" if k in first else f"  {k}: no candidate under {contains!r}")
+        out.append(f"  --material-donor {k}={first[k]}" if k in first else f"  {k}: no candidate")
     return out
+
+
+def auto_donors(prepared: dict, log: list[str]) -> dict[str, str]:
+    """--material-donor values picked when none is given (AUTO_DONORS), each only if its section
+    is usable (TexCoord0, key in the root depot)."""
+    source = prepared["source"]
+    keys = _source_depot_keys(source)
+    picks: dict[str, str] = {}
+    meshes = sorted(r.name for r in source.manifest.resources if r.resource_type == MESHSET_TYPE)
+    for material, (needle, index) in AUTO_DONORS.items():
+        name = next((m for m in meshes if needle in m.lower()), None)
+        if name is None:
+            log.append(f"  auto material donor: {material}: no mesh named like {needle!r}; the default")
+            continue
+        row = next((row for row in _section_rows(source, keys, name, 1) if row[1] == index), None)
+        if row is not None and row[5]:
+            picks[material] = f"{name}:{index}"
+    concrete = next((f"{row[0]}:{row[1]}" for word in ("concrete", "curb", "sidewalk", "pavement")
+                     for row in _section_rows(source, keys, word, 20) if row[5]), None)
+    picks["concrete"] = concrete or f"{prepared['mesh_name']}:1"
+    for material, spec in picks.items():
+        log.append(f"  auto material donor: {material} = {spec}")
+    return picks

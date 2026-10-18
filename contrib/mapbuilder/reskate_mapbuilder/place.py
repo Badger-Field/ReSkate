@@ -337,29 +337,33 @@ def visual_label(piece: Piece) -> str:
 
 def view_spots(place: Place, at: tuple[float, float, float]) -> list[tuple[str, float, float, float | None, float, str]]:
     """Per visual object: (label, game x, game z, expected ground there, heading to face, note).
-    The spot is outside the object's footprint, on the side with ground (west first, as the camera
-    seems to face +x after a teleport; then south, north, east), at a distance that fits its size (4 m, more for big objects, at most 40 m); the
-    heading follows `trainer where`'s convention (0 = +z, north; 90 = +x, east)."""
+    After `trainer tp` and `trainer ground` the camera faces heading 0, +z (north; the PC,
+    e3ed5ee: `trainer where` read 0 after every teleport), so the spot is on the object's south
+    side when there is ground there, looking north; else north (heading 180), west (90) or east
+    (270). The distance fits the object (4 m, more for big ones: up to 40 m, or 1.5 times a tall
+    object's height so it is framed), shortened until the spot has ground."""
     out = []
     for piece in place.visual:
         lo, hi = place.bounds([piece])
         cx, cz = (lo[0] + hi[0]) / 2, (lo[2] + hi[2]) / 2
-        size = max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2])
-        gap = min(40.0, max(4.0, 0.6 * size if size > 10 else 4.0))
+        size = max(hi[0] - lo[0], hi[2] - lo[2])
+        height = hi[1] - lo[1]
+        far = max(4.0, min(40.0, 0.6 * size) if size > 10 else 4.0, min(150.0, 1.5 * height) if height > 10 else 0.0)
         best = None
-        # West first: after a teleport the camera faces about +x (east), by observation on the PC
-        # (3bc3aa5), not confirmed; an object east of the spot is then in view.
-        for side, x, z in (("west", lo[0] - gap, cz), ("south", cx, lo[2] - gap), ("north", cx, hi[2] + gap),
-                           ("east", hi[0] + gap, cz)):
-            y = place.ground(x, z)
-            if y is not None:
-                best = (side, x, z, y)
+        for side, heading, place_at in (("south", 0.0, lambda g: (cx, lo[2] - g)), ("north", 180.0, lambda g: (cx, hi[2] + g)),
+                                        ("west", 90.0, lambda g: (lo[0] - g, cz)), ("east", 270.0, lambda g: (hi[0] + g, cz))):
+            for gap in sorted({g for g in (far, far / 2, far / 4, 4.0, 2.0) if g >= 2.0}, reverse=True):
+                x, z = place_at(gap)
+                y = place.ground(x, z)
+                if y is not None:
+                    best = (side, heading, x, z, y, gap)
+                    break
+            if best:
                 break
         if best is None:
-            best = ("south, no ground found there", cx, lo[2] - gap, None)
-        side, x, z, y = best
-        heading = math.degrees(math.atan2(cx - x, cz - z)) % 360.0
+            best = ("south, no ground found near it", 0.0, cx, lo[2] - far, None, far)
+        side, heading, x, z, y, gap = best
         out.append((visual_label(piece), round(x + at[0], 2), round(z + at[2], 2),
-                    None if y is None else round(y + at[1], 2), round(heading),
+                    None if y is None else round(y + at[1], 2), heading,
                     f"{side} of it, {gap:.0f} m off; it spans y {lo[1] + at[1]:.1f}..{hi[1] + at[1]:.1f}"))
     return out
