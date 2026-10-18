@@ -22,6 +22,7 @@ Control does not block it) and is tested on Linux CI.
 | Level registration (layout, level TOC, description, on-demand entry, detached sublevel) | written as a clone of bam, tested on a synthetic game; not yet run on the PC |
 | Own ground (tile -> layer -> placement of a copy of util_groundplane, its 50 m plane mesh reused, own flat collision found by name) | `new-ground-level`: loads in game and the collision holds; the reused plane is not drawn (being diagnosed) |
 | Own MeshSet (`--mesh own`, a patched copy of the template's) | written, tested on a synthetic game; not yet run in game |
+| A real place's collision (lidar-parks tiles v2, `new-place-level`) | written, tested on a synthetic tile directory; not yet run in game |
 | World-partition tiles of our own | not started (FORMAT-NOTES 6.3) |
 
 What has been verified in the game so far: a mod written this way that overrides one
@@ -44,6 +45,8 @@ can be stood on.
         --level dingolevel_reskate_ground --bam all --dry-run
     python -m reskate_mapbuilder list-assets --game "<Skate>" --superbundle <path> [--bundle B] [--contains TEXT]
     python -m reskate_mapbuilder inspect-meshset --game "<Skate>" --superbundle S --bundle B --resource R
+    python -m reskate_mapbuilder new-place-level --game "<Skate>" --name zz-place-level \
+        --level dingolevel_reskate_place --tiles <DIR from city --level> --dry-run
     python -m reskate_mapbuilder mesh-refs --game "<Skate>" [--mod <mod>] --superbundle S --bundle B --mesh EBX
     python -m reskate_mapbuilder ebx-roundtrip --game "<Skate>" --superbundle globals \
         --ebx levels/game/dingolevel_root/dingolevel_root/description

@@ -794,6 +794,50 @@ manifest is found as the template's is.
 …`); the `--mesh own` dry run. In game each time: `load levels/game/<new>/<new>`, `trainer
 ground 0 0` twice (300 expected), and what is drawn at (0, 300, 0) and (10, 300, 10).
 
+### 6.4 A real place's collision (written by `new-place-level`; not yet run in game)
+
+`python -m reskate_mapbuilder new-place-level --tiles DIR` (`place.py`) is `new-ground-level`
+with the flat square replaced by the collision of a place exported by `contrib/lidar-parks`
+(`city --level DIR`, format `reskate-level-tiles` version 2; the format's text is the docstring of
+`reskate_lidar/levelexport.py` on the `real-cities` branch). Tested on a synthetic tile directory
+in `tests/test_place.py`.
+
+**Axes.** The tiles are in metres, x east, y up, z north, with y = 0 at the origin's elevation and
+the origin at the area's centre. That is the frame ReSkate's park mods are placed in
+(`park.to_game` maps a placement's (east, north, up) to game (x, z, y), no mirror), so place to
+game is a translation: game = place + `--at` (default (0, 300, 0), as the ground's). The
+translation is the OROD's `BlueprintTransform`; the collision stays in the place's frame, as the
+square did (the transform moving the collision is tested in game, 6.3). Whether the game's z
+really is north (and not mirrored) is not tested: `--mirror` flips z and swaps each triangle's
+corners so it still faces out. The exporter's winding, (b - a) x (c - a) pointing out of the
+surface, is the one physics.py writes; the up-facing square held the skater.
+
+**What is written.** Everything as 6.3, but the collision resource holds one shape and one part
+per collision chunk (at most 256 triangles each, welded by the exporter with bit-identical shared
+vertices, so edge data finds twins across chunks and tiles), each part a copy of the template
+part's material and words, in the place's frame. GUESS: word +0x34 gets the part's index when
+there is more than one part (it differs per part in base multi-part files; zeros crashed a
+version-0 rewrite; a version-2 file with many parts has not been written before). Every chunk gets
+the same material; the tiles' own materials (ground, concrete, wood, metal, grass) are counted in
+the summary for a later material map.
+
+**Refused**, with the reason: a missing `level.json`, a format other than `reskate-level-tiles`,
+a version other than 2, units other than metres, no tiles, a tile or `.bin` missing, an object's
+data past the end of its `.bin`, an index past its vertices, a non-finite vertex, a collision
+chunk too large for one shape (21,845 triangles), a triangle repeating a corner, and the
+exporter's own report of edges a half-edge shape cannot hold (`edges_same_direction_twice`,
+`edges_shared_by_3_or_more` non-zero).
+
+**Printed:** tiles, chunks, triangles and vertices, the bounds in both frames, collision by
+material and by part, the origin and spawn, and a list of `trainer ground X Z` spots (the spawn,
+the origin, the bounds' centre and quarters, and one outside) with the height the collision
+gives there (the highest surface above the point; walls seen from above are skipped). The spawn
+itself is game logic (6.1); the skater is put there with `trainer ground`.
+
+**Visuals** are read (role `visual`) and counted, not written: drawing is open (6.3). `Place.visual`
+keeps them for the MeshSet writer; `--mesh own` is refused with a place for now. `--bam` defaults
+to `333` (the empty world of 6.3).
+
 ## 7. Practical notes
 
 - Ground probing with `trainer ground x z` reports the height about 5 ms after the teleport, before
