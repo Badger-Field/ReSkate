@@ -13,7 +13,8 @@ from test_level import LEVEL, NEW, fake_game  # noqa: E402
 from reskate_mapbuilder.__main__ import main  # noqa: E402
 from reskate_mapbuilder.game import Game  # noqa: E402
 from reskate_mapbuilder.physics import Part, read_physics  # noqa: E402
-from reskate_mapbuilder.place import PlaceError, check_spots, collision, read_place  # noqa: E402
+from reskate_mapbuilder.place import (PlaceError, check_spots, collision, filter_collision, read_place,  # noqa: E402
+                                      spawn_at)
 from reskate_mapbuilder.toc import read_toc  # noqa: E402
 
 SUBLEVEL = f"levels/game/{LEVEL}/ground_sublevel"
@@ -39,6 +40,7 @@ def write_tiles(root: Path, version=2, checks=None, spawn=(5.0, 0.0, 5.0), corru
         (0, 0): [("ground", "collision", "ground", "ground", _rows(0.0), 0, 2),
                  ("ground", "collision", "ground", "ground", _rows(25.0), 1, 2),
                  ("spot_1_ledge", "collision", "concrete", "ledge", grid(10, 10, 2, 1, 0.5), 0, 1),
+                 ("buildings", "collision", "concrete", "buildings", grid(40, 40, 2, 1, 159.0), 0, 1),
                  ("ground", "visual", "ground", "ground", grid(0, 0, 50, 2), 0, 1)],
         (-1, 0): [("ground", "collision", "ground", "ground", grid(-50, 0, 50, 2), 0, 1)],
     }
@@ -65,7 +67,9 @@ def write_tiles(root: Path, version=2, checks=None, spawn=(5.0, 0.0, 5.0), corru
     manifest = {"format": "reskate-level-tiles", "version": version, "units": "metres", "tile_size": 50.0,
                 "origin": {"lat": 37.795, "lon": -122.395, "elevation": 3.0}, "collision_chunk_triangles": 256,
                 "collision_checks": checks or {"edges_same_direction_twice": 0, "edges_shared_by_3_or_more": 0},
-                "spawn": list(spawn), "grinds": [], "tiles": listed, "attribution": ["test"]}
+                "spawn": list(spawn), "tiles": listed, "attribution": ["test"],
+                "grinds": [{"surface": "concrete", "what": "ledge", "closed": False, "radius": 0.04,
+                            "points": [[10.0, 0.5, 11.0], [12.0, 0.5, 11.0]]}]}
     (root / "level.json").write_text(json.dumps(manifest))
     return root
 
@@ -79,10 +83,10 @@ def _rows(z0):
 
 def test_reads_the_tiles_and_finds_the_ground(tmp_path):
     place = read_place(write_tiles(tmp_path / "t"))
-    assert len(place.collision) == 4 and len(place.visual) == 1
-    assert sum(len(p.triangles) for p in place.collision) == 8 + 8 + 2 + 8
+    assert len(place.collision) == 5 and len(place.visual) == 1
+    assert sum(len(p.triangles) for p in place.collision) == 8 + 8 + 2 + 2 + 8
     lo, hi = place.bounds()
-    assert lo == (-50.0, 0.0, 0.0) and hi == (50.0, 0.5, 50.0)
+    assert lo == (-50.0, 0.0, 0.0) and hi == (50.0, 159.0, 50.0)
     assert place.ground(11.0, 11.0) == 0.5 and place.ground(5.0, 5.0) == 0.0 and place.ground(-25.0, 30.0) == 0.0
     assert place.ground(80.0, 10.0) is None
     for piece in place.collision:                                    # wound up, as the exporter says
@@ -98,6 +102,7 @@ def test_mirror_flips_north_and_keeps_the_winding(tmp_path):
     place = read_place(write_tiles(tmp_path / "t"), mirror=True)
     lo, hi = place.bounds()
     assert lo[2] == -50.0 and hi[2] == 0.0 and place.spawn == (5.0, 0.0, -5.0)
+    assert spawn_at(place) == (-5.0, 300.0, 5.0)
     assert place.ground(11.0, -11.0) == 0.5
     for piece in place.collision:
         for a, b, c in piece.triangles:
@@ -132,21 +137,23 @@ def test_refuses_bad_tiles(tmp_path, kind, message):
 def test_collision_is_one_part_per_chunk(tmp_path):
     place = read_place(write_tiles(tmp_path / "t"))
     shapes, parts = collision(place, Part(0, material=0x42, word_3c=7))
-    assert len(shapes) == len(parts) == 4
-    assert [p.shape for p in parts] == [0, 1, 2, 3] and [p.word_34 for p in parts] == [0, 1, 2, 3]
+    assert len(shapes) == len(parts) == 5
+    assert [p.shape for p in parts] == [0, 1, 2, 3, 4] and [p.word_34 for p in parts] == [0, 1, 2, 3, 4]
     assert all(p.material == 0x42 and p.word_3c == 7 and p.translation == (0.0, 0.0, 0.0) for p in parts)
     spots = check_spots(place, (0.0, 300.0, 0.0))
     assert spots[0] == ("spawn", 5.0, 5.0, 300.0)
     assert ("origin", 0.0, 0.0, 300.0) in spots and spots[-1][3] is None
+    assert ("grind 0 (ledge, concrete) midpoint, its top 300.50", 11.0, 11.0, 300.5) in spots
 
 
 def test_new_place_level_builds_the_collision(tmp_path, capsys):
     game_dir = fake_game(tmp_path / "game")
     tiles = write_tiles(tmp_path / "tiles")
     main(["new-place-level", "--game", str(game_dir), "--mods", str(tmp_path / "Mods"), "--name", "zz-place",
-          "--level", LEVEL, "--tiles", str(tiles), "--at", "0", "300", "0"])
+          "--level", LEVEL, "--tiles", str(tiles), "--at", "0", "300", "0", "--skip-part", "buildings"])
     out = capsys.readouterr().out
     assert "2 tiles (tile size 50.0 m), 4 collision chunks, 26 collision triangles" in out
+    assert "dropped 1 collision chunk(s) of buildings (skipped part buildings)" in out
     assert "bounds in the game: [-50.0, 300.0, 0.0]..[50.0, 300.5, 50.0]" in out
     assert "ours: version 2, 4 parts, one per collision chunk" in out
     assert "trainer ground 5.0 5.0    -> 300.0    (spawn)" in out
@@ -170,3 +177,25 @@ def test_new_place_level_refuses_with_a_clear_message(tmp_path):
     with pytest.raises(SystemExit, match="new-place-level: .*version 3"):
         main(["new-place-level", "--game", str(game_dir), "--name", "zz-place", "--level", LEVEL, "--tiles",
               str(tiles), "--dry-run"])
+
+
+def test_tall_chunks_are_noted_and_can_be_dropped(tmp_path):
+    root = write_tiles(tmp_path / "t")
+    place = read_place(root)
+    notes = filter_collision(place)
+    assert len(place.collision) == 5 and any("NOTE: 1 collision chunk(s) of 'buildings' rise to 159.0 m" in n for n in notes)
+    place = read_place(root)
+    notes = filter_collision(place, max_height=20)
+    assert len(place.collision) == 4 and notes == ["  dropped 1 collision chunk(s) of buildings (top 159.0 m above 20 m)"]
+    with pytest.raises(PlaceError, match="every collision chunk"):
+        filter_collision(read_place(root), max_height=-1)
+
+
+def test_place_info_needs_no_game_and_puts_the_spawn_at_the_origin(tmp_path, capsys):
+    tiles = write_tiles(tmp_path / "t", spawn=(5.0, 0.25, 7.0))
+    main(["place-info", "--tiles", str(tiles), "--max-height", "20"])
+    out = capsys.readouterr().out
+    assert "--at -5 300 -7: the export's spawn (5.0, 0.25, 7.0) goes to the game's (0, 300.25, 0)" in out
+    assert "trainer ground 0.0 0.0    -> 300.0    (spawn)" in out and "4 collision chunks" in out
+    with pytest.raises(SystemExit, match="place-info: .*not found"):
+        main(["place-info", "--tiles", str(tmp_path / "nothing")])
