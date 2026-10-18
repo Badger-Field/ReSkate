@@ -136,10 +136,15 @@ def test_refuses_bad_tiles(tmp_path, kind, message):
 
 def test_collision_is_one_part_per_chunk(tmp_path):
     place = read_place(write_tiles(tmp_path / "t"))
-    shapes, parts = collision(place, Part(0, material=0x42, word_3c=7))
+    shapes, parts, _ = collision(place, Part(0, material=0x42, word_3c=7))
     assert len(shapes) == len(parts) == 5
     assert [p.shape for p in parts] == [0, 1, 2, 3, 4] and [p.word_34 for p in parts] == [0, 1, 2, 3, 4]
     assert all(p.material == 0x42 and p.word_3c == 7 and p.translation == (0.0, 0.0, 0.0) for p in parts)
+    shapes, parts, what = collision(place, Part(0, material=0x42), 3, [Part(0, material=m) for m in (1, 2, 3)])
+    assert len(shapes) == 3 and [p.material for p in parts] == [1, 2, 3]                # by part: three kinds
+    assert "3 part(s)" in what and sum(len(s.triangles) for s in shapes) == 28
+    shapes, parts, _ = collision(place, Part(0), 1)
+    assert len(shapes) == 1 and len(shapes[0].triangles) == 28 and parts[0].word_34 == 0
     spots = check_spots(place, (0.0, 300.0, 0.0))
     assert spots[0] == ("spawn", 5.0, 5.0, 300.0)
     assert ("origin", 0.0, 0.0, 300.0) in spots and spots[-1][3] is None
@@ -155,7 +160,9 @@ def test_new_place_level_builds_the_collision(tmp_path, capsys):
     assert "2 tiles (tile size 50.0 m), 4 collision chunks, 26 collision triangles" in out
     assert "dropped 1 collision chunk(s) of buildings (skipped part buildings)" in out
     assert "bounds in the game: [-50.0, 300.0, 0.0]..[50.0, 300.5, 50.0]" in out
-    assert "ours: version 2, 4 parts, one per collision chunk" in out
+    assert "ours: version 2, 1 part(s) as the blueprint declares, each one shape merging its chunks (4 chunks of " \
+           "['ground', 'ledge'])" in out
+    assert "PhysicsPartInfos: 1, our physics parts: 1: consistent" in out
     assert "trainer ground 5.0 5.0    -> 300.0    (spawn)" in out
     assert "(outside, 20 m east of the bounds)" in out
     root = tmp_path / "Mods" / "zz-place"
@@ -163,12 +170,43 @@ def test_new_place_level_builds_the_collision(tmp_path, capsys):
     toc = read_toc((root / "Win32" / (NEW + ".toc")).read_bytes())
     _, region, manifest = view.bundle(toc, "win32/" + SUBLEVEL)
     shapes, parts, version = read_physics(view.payload(region, 1 + len(manifest.ebx)))
-    assert version == 2 and len(shapes) == 4 and [p.word_34 for p in parts] == [0, 1, 2, 3]
-    # The two ground chunks meet at z = 25: their shared edges are flat (twins found across shapes).
-    first = shapes[0]
-    seam = [h for h, (a, b, c) in enumerate(first.triangles) for k, (p, q) in enumerate(((a, b), (b, c), (c, a)))
-            if first.vertices[p][2] == first.vertices[q][2] == 25.0 for h in [3 * h + k]]
-    assert seam and all(first.edge_flat[h] for h in seam)
+    assert version == 2 and len(shapes) == 1 and [p.word_34 for p in parts] == [0]
+    merged = shapes[0]
+    assert len(merged.vertices) == 25 and len(merged.triangles) == 26          # shared vertices welded
+    # The two ground chunks met at z = 25: inside the merged shape those edges are flat.
+    seam = [3 * h + k for h, (a, b, c) in enumerate(merged.triangles) for k, (p, q) in enumerate(((a, b), (b, c), (c, a)))
+            if merged.vertices[p][2] == merged.vertices[q][2] == 25.0 and merged.vertices[p][0] >= 0
+            and merged.vertices[q][0] >= 0]
+    assert seam and all(merged.edge_flat[h] for h in seam)
+
+
+def test_grow_makes_the_blueprint_declare_every_chunk(tmp_path, capsys):
+    from reskate_mapbuilder.ebx import read_document
+    game_dir = fake_game(tmp_path / "game")
+    tiles = write_tiles(tmp_path / "tiles")
+    main(["new-place-level", "--game", str(game_dir), "--mods", str(tmp_path / "Mods"), "--name", "zz-place",
+          "--level", LEVEL, "--tiles", str(tiles), "--at", "0", "300", "0", "--skip-part", "buildings", "--parts", "grow"])
+    out = capsys.readouterr().out
+    assert "4 parts, one per collision chunk" in out and "from 1 to 4 entries" in out
+    root = tmp_path / "Mods" / "zz-place"
+    view = Game(game_dir, mod=root)
+    toc = read_toc((root / "Win32" / (NEW + ".toc")).read_bytes())
+    _, region, manifest = view.bundle(toc, "win32/" + SUBLEVEL)
+    bp = read_document(view.ebx(region, manifest, f"levels/game/{LEVEL}/ground_bp"))
+    entity = bp.instances[1].object
+    boxes = entity.get("PartBoundingBoxes")
+    assert len(entity.get("PhysicsPartInfos")) == 4 and len(boxes) == 4
+    assert [boxes[2].get("Min").get(a) for a in "xyz"][0] == 10.0                  # the ledge chunk's box
+    assert round(boxes[2].get("Max").get("y"), 2) == 0.55
+
+
+def test_a_part_count_mismatch_is_refused(tmp_path):
+    from reskate_mapbuilder.ground import new_ground_level
+    from reskate_mapbuilder.mod import ModBuilder
+    game = Game(fake_game(tmp_path / "game"))
+    place = read_place(write_tiles(tmp_path / "t"))
+    with pytest.raises(ValueError, match="PhysicsPartInfos has 1"):
+        new_ground_level(game, ModBuilder(game, "zz"), LEVEL, collision=lambda t, ts, n: collision(place, t))
 
 
 def test_new_place_level_refuses_with_a_clear_message(tmp_path):

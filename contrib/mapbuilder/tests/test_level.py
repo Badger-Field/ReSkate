@@ -88,9 +88,13 @@ TYPES = [
     ("InterfaceDescriptorData", 16, 8, [("$", enc(T.inherited, C.none), 0, 0)]),
     ("StaticModelGroupEntityData", 16, 8, [("$", enc(T.inherited, C.none), 0, 0)]),
     ("ObjectBlueprint", 32, 8, [("$", enc(T.inherited, C.none), 1, 0), ("Object", enc(T.pointer, C.pointer), 0, 24)]),
-    ("StaticModelEntityData", 24, 8, [("$", enc(T.inherited, C.none), 0, 0), ("Mesh", enc(T.pointer, C.pointer), 0, 16)]),
+    ("StaticModelEntityData", 40, 8, [("$", enc(T.inherited, C.none), 0, 0), ("Mesh", enc(T.pointer, C.pointer), 0, 16),
+                                      ("PhysicsPartInfos", enc(T.structure, C.array), 20, 24),
+                                      ("PartBoundingBoxes", enc(T.structure, C.array), 21, 32)]),
     ("RigidMeshAsset", 32, 8, [("$", enc(T.inherited, C.none), 1, 0),
                                ("MeshSetResource", enc(T.resourceRef, C.primitive), 0, 24)]),
+    ("PhysicsPartInfo", 8, 4, [("PartIndex", enc(T.uint32, C.primitive), 0, 0)]),
+    ("AxisAlignedBox", 32, 16, [("Min", enc(T.structure, C.structure), 9, 0), ("Max", enc(T.structure, C.structure), 9, 16)]),
 ]
 INDEX = {t[0]: i for i, t in enumerate(TYPES)}
 
@@ -222,7 +226,8 @@ def layer(file_guid=LAYER_GUID, name=TILE_LAYER):
 def groundplane():
     return document(BP_GUID, [
         (lambda d: obj(d, "ObjectBlueprint", Name="Common/Utilities/Meshes/Util_GroundPlane", Object=ptr(1)), BP_ROOT_GUID),
-        (lambda d: obj(d, "StaticModelEntityData", Mesh=PointerReference(PointerKind.external, 0)), guid(95))],
+        (lambda d: obj(d, "StaticModelEntityData", Mesh=PointerReference(PointerKind.external, 0),
+                       PhysicsPartInfos=[obj(d, "PhysicsPartInfo", PartIndex=i) for i in range(1)], PartBoundingBoxes=[obj(d, "AxisAlignedBox", Min=obj(d, "Vec3", x=0.0, y=0.0, z=0.0), Max=obj(d, "Vec3", x=1.0, y=1.0, z=1.0)) for _ in range(1)]), guid(95))],
         imports=[(MESH_GUID, guid(96))])
 
 
@@ -317,7 +322,8 @@ def lighthouse(bundle, toc_chunk):
     """(the bundle, the superbundle's TOC chunks)."""
     bp = document(LIGHTHOUSE_GUID, [
         (lambda d: obj(d, "ObjectBlueprint", Name=LIGHTHOUSE, Object=ptr(1)), guid(105)),
-        (lambda d: obj(d, "StaticModelEntityData", Mesh=PointerReference(PointerKind.external, 0)), guid(106))],
+        (lambda d: obj(d, "StaticModelEntityData", Mesh=PointerReference(PointerKind.external, 0),
+                       PhysicsPartInfos=[obj(d, "PhysicsPartInfo", PartIndex=i) for i in range(1)], PartBoundingBoxes=[obj(d, "AxisAlignedBox", Min=obj(d, "Vec3", x=0.0, y=0.0, z=0.0), Max=obj(d, "Vec3", x=1.0, y=1.0, z=1.0)) for _ in range(1)]), guid(106))],
         imports=[(LIGHTHOUSE_MESH_GUID, guid(107))])
     mesh = document(LIGHTHOUSE_MESH_GUID, [(lambda d: obj(d, "RigidMeshAsset", Name=LIGHTHOUSE + "_mesh",
                                                           MeshSetResource=ResourceReference(0x7777)), guid(107))],
@@ -350,7 +356,8 @@ def box():
     """The box imports its collision EBX (<blueprint>.physics) besides its mesh, as the real one does."""
     return document(BOX_GUID, [
         (lambda d: obj(d, "ObjectBlueprint", Name=BOX, Object=ptr(1)), guid(123)),
-        (lambda d: obj(d, "StaticModelEntityData", Mesh=PointerReference(PointerKind.external, 0)), guid(124))],
+        (lambda d: obj(d, "StaticModelEntityData", Mesh=PointerReference(PointerKind.external, 0),
+                       PhysicsPartInfos=[obj(d, "PhysicsPartInfo", PartIndex=i) for i in range(3)], PartBoundingBoxes=[obj(d, "AxisAlignedBox", Min=obj(d, "Vec3", x=0.0, y=0.0, z=0.0), Max=obj(d, "Vec3", x=1.0, y=1.0, z=1.0)) for _ in range(3)]), guid(124))],
         imports=[(BOX_MESH_GUID, guid(125)), (BOX_PHYSICS_GUID, guid(127))])
 
 
