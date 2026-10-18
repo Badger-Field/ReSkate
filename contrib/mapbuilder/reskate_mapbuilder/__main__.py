@@ -148,9 +148,12 @@ def new_ground_level_command(args, place=None):
     what = f"the place in {args.tiles}" if place else "its own ground"
     mod = ModBuilder(game, args.name, description=f"New level {args.level} with {what}")
     log: list[str] = []
-    def collision(template):
-        shapes, parts = place_collision(place, template)
-        return shapes, parts, f"{len(parts)} parts, one per collision chunk"
+    def collision(template, templates, declared):
+        # --parts merge (default): as many parts as the blueprint declares; chunks: one per chunk
+        # (and the blueprint's tables grown to match, --parts grow).
+        mode = getattr(args, "parts", "merge")
+        count = None if mode in ("chunks", "grow") else (declared or len(templates) or 1)
+        return place_collision(place, template, count, templates)
     grid = getattr(args, "grid", None)
     try:
         new_ground_level(game, mod, args.level, args.display_name, args.size, tuple(args.at), args.bam,
@@ -160,7 +163,8 @@ def new_ground_level_command(args, place=None):
                          getattr(args, "shader_from", None), _props(args), getattr(args, "keep_section", None),
                          getattr(args, "mesh_shape", "slab"), getattr(args, "collision", "own"),
                          None if getattr(args, "other_sections", "degenerate") == "geometry"
-                         else getattr(args, "geometry_section", 0), getattr(args, "uv_per_metre", None))
+                         else getattr(args, "geometry_section", 0), getattr(args, "uv_per_metre", None),
+                         getattr(args, "parts", "merge") == "grow")
     finally:
         for line in log:
             print(line)
@@ -354,6 +358,9 @@ def _place_options(p):
                    help="drop collision chunks whose top is above M metres (the place's frame), e.g. 20")
     p.add_argument("--skip-part", action="append", metavar="PART",
                    help="drop the collision chunks of this part or object name, e.g. buildings (repeatable)")
+    p.add_argument("--parts", choices=("merge", "grow"), default="merge",
+                   help="merge: the chunks merged into as many parts as the blueprint declares (PhysicsPartInfos; one "
+                        "shape each); grow: one part per chunk, the blueprint's per-part tables grown to match")
 
 
 def _template_options(p):

@@ -225,18 +225,64 @@ def spawn_at(place: Place, height: float = 300.0) -> tuple[float, float, float]:
     return (0.0 - place.spawn[0] + 0.0, height, 0.0 - place.spawn[2] + 0.0)
 
 
-def collision(place: Place, template: Part) -> tuple[list[Shape], list[Part]]:
-    """One shape and one part per collision chunk, in the place's frame (the placement moves it),
-    each part a copy of the template part's material and words. GUESS: word +0x34 differs per
-    part in the base game's multi-part files (and zeros crashed a version-0 rewrite), so each
-    part gets its own index there."""
+def merge(pieces: list[Piece]) -> Shape:
+    """One shape of several chunks: their triangles over one vertex list, positions equal to the
+    last bit shared (the exporter writes shared vertices bit-identical), so edges inside the merged
+    shape are a vertex pair as in a chunk."""
+    index: dict[tuple, int] = {}
+    vertices: list = []
+    triangles: list = []
+    for piece in pieces:
+        local = []
+        for v in piece.vertices:
+            key = struct.pack("<3f", *v)
+            if key not in index:
+                index[key] = len(vertices)
+                vertices.append(v)
+            local.append(index[key])
+        triangles += [(local[a], local[b], local[c]) for a, b, c in piece.triangles]
+    if 3 * len(triangles) > 0xFFFF or len(vertices) > 0xFFFF:
+        raise PlaceError(f"{len(triangles)} triangles do not fit one shape ({MAX_SHAPE_TRIANGLES} at most): "
+                         f"use more parts")
+    return Shape(vertices, [t for t in triangles if len(set(t)) == 3])
+
+
+def groups(place: Place, count: int) -> list[list[Piece]]:
+    """The collision chunks in `count` groups: by part (ground, bench, steps, ...) when there are
+    exactly that many parts, otherwise in strips along x by the chunks' centres, equal in chunks."""
+    kinds = sorted({p.part for p in place.collision})
+    if len(kinds) == count:
+        return [[p for p in place.collision if p.part == k] for k in kinds]
+    order = sorted(place.collision, key=lambda p: sum(v[0] for v in p.vertices) / max(1, len(p.vertices)))
+    size = -(-len(order) // count)
+    out = [order[i:i + size] for i in range(0, len(order), size)]
+    return out + [[] for _ in range(count - len(out))]
+
+
+def collision(place: Place, template: Part, part_count: int | None = None,
+              templates: list[Part] | None = None) -> tuple[list[Shape], list[Part], str]:
+    """Shapes and parts in the place's frame (the placement moves them).
+
+    `part_count` None: one shape and one part per collision chunk. Otherwise exactly that many
+    parts (the blueprint's PhysicsPartInfos count, FORMAT-NOTES 6.4), each one shape merging its
+    group of chunks (groups()). Part i copies `templates[i]` (or `template`): material, hashes and
+    words; GUESS: word +0x34 the part's index when there are several parts."""
+    if part_count is None:
+        sets = [[p] for p in place.collision]
+        what = f"{len(sets)} parts, one per collision chunk"
+    else:
+        sets = groups(place, part_count)
+        if any(not group for group in sets):
+            raise PlaceError(f"{len(place.collision)} collision chunks cannot fill {part_count} parts")
+        what = (f"{part_count} part(s) as the blueprint declares, each one shape merging its chunks ("
+                + ", ".join(f"{len(g)} chunks of {sorted({p.part for p in g})}" for g in sets) + ")")
     shapes, parts = [], []
-    for i, piece in enumerate(place.collision):
-        shapes.append(Shape(list(piece.vertices), list(piece.triangles)))
-        parts.append(Part(i, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), 1.0, template.material, KIND_TRIANGLE_MESH,
-                          template.hashes, 0, template.float_30, i if len(place.collision) > 1 else 0,
-                          template.word_3c, template.word_44))
-    return shapes, parts
+    for i, group in enumerate(sets):
+        shapes.append(merge(group) if len(group) > 1 else Shape(list(group[0].vertices), list(group[0].triangles)))
+        model = templates[i] if templates and i < len(templates) else template
+        parts.append(Part(i, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), 1.0, model.material, KIND_TRIANGLE_MESH,
+                          model.hashes, 0, model.float_30, i if len(sets) > 1 else 0, model.word_3c, model.word_44))
+    return shapes, parts, what
 
 
 def summary(place: Place, at: tuple[float, float, float]) -> list[str]:

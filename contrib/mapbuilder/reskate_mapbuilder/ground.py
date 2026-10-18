@@ -350,6 +350,77 @@ def _set_aabbs(doc: Document, lo, hi) -> list[str]:
     return done
 
 
+# Per-part tables of a blueprint (PC: util_groundplane declares 1 entry, the skatepark box 3, and a
+# 38-part collision under util_groundplane's copy gave no collision at all). PhysicsPartInfos must
+# have one entry per physics part; those listed in GROWABLE are grown (entry 0 copied) by --parts grow.
+PART_COUNT_TABLE = "PhysicsPartInfos"
+GROWABLE = ("PhysicsPartInfos", "PartBoundingBoxes")
+
+
+def _part_tables(doc: Document) -> dict[str, list[tuple[str, list]]]:
+    """Array fields of the document whose name has "Part" in it: name -> [(path, list)]."""
+    out: dict[str, list[tuple[str, list]]] = {}
+
+    def walk(value, path):
+        if isinstance(value, Object):
+            for f in value.fields:
+                if isinstance(f.value, list) and "part" in f.name.lower():
+                    out.setdefault(f.name, []).append((f"{path}.{f.name}", f.value))
+                if isinstance(f.value, (Object, list)):
+                    walk(f.value, f"{path}.{f.name}")
+        elif isinstance(value, list):
+            for i, v in enumerate(value):
+                walk(v, f"{path}[{i}]")
+
+    for i, instance in enumerate(doc.instances):
+        if instance.object is not None:
+            walk(instance.object, f"#{i}")
+    return out
+
+
+def _check_part_tables(bp: Document, shapes, parts, collision_mode: str, grow: bool) -> list[str]:
+    """Our physics part count against the blueprint's PhysicsPartInfos: grown with `grow`
+    (PartBoundingBoxes set per part), else refused on a mismatch. Other per-part tables printed."""
+    tables = _part_tables(bp)
+    out = ["  blueprint per-part tables: " + (", ".join(f"{path} [{len(values)}]" for name in sorted(tables)
+                                                          for path, values in tables[name]) or "none")]
+    declared = tables.get(PART_COUNT_TABLE)
+    if collision_mode == "template":
+        return out
+    if not declared:
+        return out + [f"  no {PART_COUNT_TABLE} in the blueprint: the part count ({len(parts)}) is not checked"]
+    have = len(declared[0][1])
+    if have == len(parts):
+        return out + [f"  {PART_COUNT_TABLE}: {have}, our physics parts: {len(parts)}: consistent"]
+    if not grow:
+        raise ValueError(f"our collision has {len(parts)} parts but the blueprint's {PART_COUNT_TABLE} has {have} "
+                         f"(a mismatch left the whole body out in game): merge the chunks (--parts merge) or grow the "
+                         f"tables (--parts grow)")
+    for name in GROWABLE:
+        for path, values in tables.get(name, []):
+            if not values or any(isinstance(v, PointerReference) for v in values):
+                raise ValueError(f"{path} holds pointers or nothing; growing it is not supported")
+            values[:] = [copy.deepcopy(values[min(i, len(values) - 1)]) for i in range(len(parts))]
+            if name == "PartBoundingBoxes":
+                for value, part in zip(values, parts):
+                    world = [part.to_world(v) for v in shapes[part.shape].vertices]
+                    lo, hi = padded_bounds(world)
+                    _set_aabbs_in(value, lo, hi)
+            out.append(f"  grew {path} from {have} to {len(parts)} entries (entry 0 copied)")
+    left = [f"{path} [{len(values)}]" for name, entries in tables.items() if name not in GROWABLE
+            for path, values in entries if len(values) == have and have != len(parts)]
+    if left:
+        out.append(f"  WARNING: per-part tables not grown (unknown): {left}")
+    return out
+
+
+def _set_aabbs_in(value: Object, lo, hi) -> None:
+    for vec, values in ((value.get("Min"), lo), (value.get("Max"), hi)):
+        if isinstance(vec, Object):
+            for a, c in zip("xyz", values):
+                vec.set(a, float(c))
+
+
 def _meshset_keys(data: bytes) -> list[int]:
     """Each section's shader-block key, LOD by LOD (empty when the MeshSet is not a rigid one)."""
     try:
@@ -462,7 +533,8 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                      collision=None, shader_from: str | None = None,
                      props: list[tuple[str, tuple[float, float, float]]] = (), keep_section: int | None = None,
                      mesh_shape: str = "slab", collision_mode: str = "own",
-                     geometry_section: int | None = 0, uv_per_metre: float | None = None) -> list[str]:
+                     geometry_section: int | None = 0, uv_per_metre: float | None = None,
+                     grow_parts: bool = False) -> list[str]:
     """Adds a level whose content is our own ground to `mod` (see the module's text). Appends a
     report to `log` (also when it refuses) and returns it.
 
@@ -747,13 +819,16 @@ def new_ground_level(game, mod, level: str, display_name: str | None = None, siz
                     f"{len(shaped)} parts as the template has (strips of the square, materials "
                     f"{[f'{p.material:#x}' for p in shaped]})")
         else:
-            new_shapes, new_parts, what = collision(template_part)
+            declared = _part_tables(bp).get("PhysicsPartInfos")
+            new_shapes, new_parts, what = collision(template_part, [p for p in parts if p.shape >= 0],
+                                                    len(declared[0][1]) if declared else None)
         compute_edge_data(new_shapes, new_parts)
         physics = write_physics(new_shapes, new_parts, 2)
         back_shapes, back_parts, back_version = read_physics(physics)
         if (back_version != 2 or len(back_shapes) != len(new_shapes) or len(back_parts) != len(new_parts)
                 or any(a.triangles != b.triangles for a, b in zip(back_shapes, new_shapes))):
             raise ValueError("the collision written does not read back")
+    log.extend(_check_part_tables(bp, new_shapes, new_parts, collision_mode, grow_parts))
     template_box = ""
     if shapes:
         world = [template_part.to_world(v) for v in shapes[max(template_part.shape, 0)].vertices]
