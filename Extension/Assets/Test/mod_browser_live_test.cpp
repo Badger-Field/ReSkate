@@ -288,7 +288,8 @@ std::string check_install(const mod_browser::Listing& listing) {
         check(list.issue.empty() && entry != list.entries.end() && entry->enabled, "it is enabled in mods.json");
         const auto content = package_install::check_installed(folder_name, ts::refuse_contents);
         check(content.empty(), "the folder on disk passes the content check" + (content.empty() ? std::string() : ": " + content));
-        const auto again = row_named(rows(listing, ""), folder_name);
+        const auto now = rows(listing, "");                     // (row_named points into it)
+        const auto again = row_named(now, folder_name);
         check(again && again->action == ts::Action::installed, "the card now shows it installed");
 
         say("== f. what applying it would do");
