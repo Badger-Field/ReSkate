@@ -2,7 +2,7 @@ local h = require("harness")
 local t = h.module("console")
 
 -- Try it by hand: ptest echo a b c
-reskate.console.command("ptest echo", "Prints its words back (reskate-test)", function(args)
+reskate.console.command("ptest echo", "Prints its words back", function(args)
     reskate.console.print("ptest echo: " .. table.concat(args, " "))
 end)
 
