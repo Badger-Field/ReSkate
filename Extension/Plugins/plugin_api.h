@@ -10,6 +10,10 @@ struct Api {
 // The overlay, menu, sound, mods, session and message parts of the API (plugin_api_ui.cpp), into
 // the reskate table on top of the stack.
 void install_ui_api(Plugin& plugin, lua_State* L);
+// Phase 3's parts of the API (plugin_api_more.cpp), into the reskate table on top of the stack.
+void install_more_api(Plugin& plugin, lua_State* L);
+// The wider set's game parts (plugin_api_world.cpp), into the same table.
+void install_world_api(Plugin& plugin, lua_State* L);
 // A player as plugins get one: {id = "<SteamID64>", name, me, host}.
 void push_player(lua_State* L, const SessionPlayer& player);
 // A file's bytes when it is a regular file no larger than `most`; otherwise empty, and `error`

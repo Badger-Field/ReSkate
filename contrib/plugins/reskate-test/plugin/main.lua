@@ -2,7 +2,7 @@
 -- `ptest <module>` for one (`ptest list` names them). Each API ReSkate adds gets a module here.
 local harness = require("harness")
 
-for _, name in {"base", "time", "level", "package", "json", "require", "console", "storage", "sandbox", "skater", "tricks", "overlay", "menu", "audio", "mods", "session"} do
+for _, name in {"base", "time", "level", "package", "json", "require", "console", "storage", "sandbox", "skater", "tricks", "overlay", "menu", "audio", "mods", "session", "wider"} do
     require("checks/" .. name)
 end
 

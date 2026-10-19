@@ -1,6 +1,7 @@
 #include "skate_menu_internal.h"
 #include "Extension/Plugins/plugin_ui.h"
 
+#include <algorithm>
 #include <map>
 #include <string>
 #include <vector>
@@ -29,7 +30,7 @@ void plugins_addon(SkateMenu& menu) {
     const auto panels = plugin_ui::latest_panels();
     const double now = ImGui::GetTime();
     std::erase_if(edits(), [&](const auto& item) { return now - item.second.at > 1.0; });
-    if (!panels || panels->empty()) {
+    if (!panels || std::none_of(panels->begin(), panels->end(), [](const auto& p) { return !p.screen; })) {
         begin_card(menu, "plugins-none", "PLUGINS");
         note("No plugin has a panel here. A plugin adds one with reskate.menu.panel (it needs the \"menu\" permission). "
              "plugin list in the console shows every plugin.");
@@ -38,6 +39,7 @@ void plugins_addon(SkateMenu& menu) {
     }
     int index = 0;
     for (const auto& panel : *panels) {
+        if (panel.screen) continue; // a full-screen screen (plugin_overlay.cpp), not a panel
         ImGui::PushID(index++);
         begin_card(menu, "plugin-panel", panel.title.c_str(), panel.plugin.c_str());
         int item = 0;

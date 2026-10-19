@@ -1,5 +1,6 @@
 #include "plugin_manifest.h"
 #include "Engine/Core/Json/json.h"
+#include <algorithm>
 #include <array>
 #include <stdexcept>
 
@@ -81,6 +82,22 @@ Manifest parse_manifest(std::string_view text) {
                 throw std::runtime_error("unknown permission \"" + name + "\": check the spelling, or update ReSkate");
             result.permissions.insert(name);
         }
+    }
+    if (json.contains("domains")) {
+        const auto& list = json.at("domains");
+        if (!list.is_array() || list.size() > 16) throw std::runtime_error("\"domains\" must be a list of at most 16 host names");
+        for (const auto& item : list) {
+            if (!item.is_string()) throw std::runtime_error("\"domains\" must be a list of host names");
+            std::string name = item.string();
+            for (auto& c : name) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+            const bool valid = !name.empty() && name.size() <= 253 && name.front() != '.' && name.back() != '.' &&
+                               name.find("..") == std::string::npos && name.find('.') != std::string::npos &&
+                               std::all_of(name.begin(), name.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '-'; });
+            if (!valid) throw std::runtime_error("\"" + item.string() + "\" is not a host name for \"domains\" (such as api.example.com: no scheme, port, path or *)");
+            result.domains.push_back(name);
+        }
+        if (!result.domains.empty() && !result.permissions.contains("net.http"))
+            throw std::runtime_error("\"domains\" is for web requests: add the \"net.http\" permission too");
     }
     return result;
 }

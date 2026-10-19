@@ -811,6 +811,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     ImGui::NewFrame();
     if (menu_frame) {
         draw_menu();
+        draw_plugin_screen();
         draw_console();
         draw_perf_window();
     }

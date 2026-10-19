@@ -101,6 +101,34 @@ attack("panel-loop", "stopped the next time the PLUGINS tab shows its panel", fu
     reskate.console.print("hostile: now open ADDONS > PLUGINS in the menu")
 end)
 
+attack("chat-spam", "keeps running: one chat line every 3 s, the rest refused", function()
+    local sent = 0
+    for i = 1, 100 do if reskate.chat.send("hostile spam " .. i) then sent += 1 end end
+    reskate.console.print("hostile chat-spam: " .. sent .. " of 100 sent")
+end)
+attack("edit-spam", "keeps running: 4 object edits a second, the rest refused", function()
+    local done = 0
+    for i = 1, 100 do if reskate.objects.place("nothing", vector.create(0, 0, 0)) then done += 1 end end
+    reskate.console.print("hostile edit-spam: " .. done .. " of 100 tried")
+end)
+attack("travel-spam", "keeps running: one trip every 5 s, the rest refused", function()
+    local trips = 0
+    for i = 1, 50 do if reskate.travel.go("nowhere") then trips += 1 end end
+    reskate.console.print("hostile travel-spam: " .. trips .. " of 50 went")
+end)
+attack("web-elsewhere", "keeps running: a web request to a host it does not list is refused", function()
+    local ok = pcall(reskate.http.request, {url = "https://example.com/steal"}, function() end)
+    reskate.console.print(ok and "ESCAPED: a web request to an unlisted host" or "hostile web-elsewhere: refused")
+end)
+attack("bind-spam", "keeps running: at most 16 actions", function()
+    local ok = pcall(function() for i = 1, 100 do reskate.input.bind("a" .. i, "F9") end end)
+    reskate.console.print(ok and "ESCAPED: more than 16 binds" or "hostile bind-spam: refused past 16")
+end)
+attack("screen-loop", "stopped as its screen is built", function()
+    reskate.ui.screen("hostile", function(ui) while true do end end)
+    reskate.ui.open("hostile")
+end)
+
 -- Each returns true when that way out worked.
 local escapes = {
     {"io", function() return io ~= nil end},

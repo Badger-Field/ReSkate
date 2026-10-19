@@ -1,6 +1,7 @@
 #pragma once
 #include "plugin_manifest.h"
 #include "plugin_ui.h"
+#include "plugin_game.h"
 #include "Engine/Core/Json/json.h"
 #include <array>
 #include <chrono>
@@ -50,6 +51,14 @@ struct Limits {
     std::size_t message_bytes_per_second = 16u << 10;
     std::size_t panels = 8;
     std::size_t widgets = 64;           // a panel's
+    std::size_t exposed = 64;           // functions a plugin offers others
+    std::size_t listeners = 64;         // on_plugin handlers
+    std::size_t event_bytes = 64u << 10; // an emitted event's data, as JSON
+    std::size_t events_per_tick = 64;   // emitted by one plugin
+    int http_per_minute = 10;
+    int http_in_flight = 4;
+    std::size_t http_body_bytes = 64u << 10;
+    std::size_t http_url_bytes = 2048;
 };
 
 // The game, as plugins see it (Environment, plugin_host.h, gives the host these).
@@ -88,6 +97,17 @@ struct SessionState {
     bool active{}, dedicated{};
     std::vector<SessionPlayer> players;
 };
+// net.http: a request the host makes for a plugin, and what came back.
+struct HttpRequest {
+    std::uint64_t id{};
+    std::string plugin, method, host, path, body, content_type;
+};
+struct HttpResponse {
+    std::uint64_t id{};
+    std::string plugin;
+    int status{};          // 0 when it failed
+    std::string body, error;
+};
 // A mod in the Mods folder: its folder, the name it gives itself, whether it is on.
 struct ModInfo {
     std::string folder, title;
@@ -122,6 +142,17 @@ public:
     // A world position on screen (x, y in pixels, z its depth in front of the camera), or empty behind it.
     virtual std::optional<Vec3> world_to_screen(const Vec3& position) = 0;
     virtual std::array<float, 2> display() = 0;
+    // Libraries and events between plugins: another running plugin's exposed function called with
+    // plain data (empty, and the result set, when it worked; else why not), the names it exposes,
+    // and an event for every plugin that listens (delivered at the next tick).
+    virtual std::string call_plugin(std::string_view caller, std::string_view target, std::string_view function,
+                                    const Json& arguments, Json& result) = 0;
+    virtual std::string exposed(std::string_view target, std::vector<std::string>& names) = 0;
+    virtual bool emit(std::string_view source, std::string_view event, Json data) = 0;
+    // net.http: false when it cannot be sent now (the answer comes as Plugin::http_done).
+    virtual bool http(HttpRequest request) = 0;
+    // The wider set's game (plugin_game.h).
+    virtual Game& game() = 0;
 };
 
 enum class State { loading, running, stopped };
@@ -158,6 +189,26 @@ public:
     void receive(const SessionPlayer& from, const std::string& payload);
     // The name its messages go under: the same plugin on every game has it (its manifest.json name).
     void set_channel(std::string channel);
+    const std::string& channel_name() const noexcept { return channel_; }
+    // Libraries: one of its exposed functions, called by another plugin. Empty when it worked.
+    std::string call_exposed(const std::string& function, const Json& arguments, Json& result);
+    std::vector<std::string> exposed_names() const;
+    // In a call now: it cannot be called into until that returns.
+    bool busy() const noexcept { return calls_ > 0; }
+    // An event another plugin emitted, to its on_plugin handlers for that plugin and event.
+    void plugin_event(const std::string& source, const std::string& source_channel, const std::string& event, const Json& data);
+    // net.http: the answer to one of its requests, to the function it gave.
+    void http_done(const HttpResponse& response);
+    // The wider set's events, each to a plugin with its permission and a handler for it.
+    void skater_changed(const char* state, const char* previous);
+    void bailed(std::uint64_t wipeouts);
+    void chat_line(const ChatLine& line);
+    void track_changed(const Track& track);
+    void throwdown_phase(const char* phase);
+    void action(const std::string& name);
+    // ui.screen: the screen it has open, built; and closed (by Esc), which it hears.
+    std::optional<plugin_ui::Panel> build_screen(const std::vector<plugin_ui::Action>& actions);
+    void close_screen();
     std::uint32_t channel() const noexcept { return channel_hash_; }
     // A console command it registered: the words after the command's name.
     void run_command(const std::string& name, const std::vector<std::string>& arguments);
@@ -180,6 +231,8 @@ private:
     friend struct Api;
     friend struct ApiFunctions;
     friend struct UiApi;
+    friend struct MoreApi;
+    friend struct WorldApi;
     struct Command { std::string help; int function{}; };
     struct Timer { double due{}, every{}; int function{}; };
     using Clock = std::chrono::steady_clock;
@@ -189,7 +242,8 @@ private:
     static void interrupt(lua_State* L, int gc);
     // Calls the function under the `count` arguments on top of the main stack; false (and the
     // error reported) when it raised one. Stops the plugin past its limits.
-    bool call(int count, std::string_view what, double limit_ms);
+    // With `results`, those are left on the main stack when it returns true.
+    bool call(int count, std::string_view what, double limit_ms, int results = 0);
     void report(std::string_view what, std::string_view message);
     // reskate.log and console.print: at most limits_.log_lines_per_second lines between them.
     bool count_line();
@@ -247,6 +301,25 @@ private:
     std::size_t message_bytes_{};
     std::string channel_;
     std::uint32_t channel_hash_{};
+    std::map<std::string, int, std::less<>> exposed_;
+    struct Listener {
+        std::string source, event;
+        int function{};
+    };
+    std::vector<Listener> listeners_;
+    int calls_{};
+    double emit_tick_{};
+    std::size_t emitted_{};
+    std::map<std::uint64_t, int> http_pending_; // request id: its callback
+    double control_second_{}, edit_second_{}, environment_second_{}, voice_second_{}, music_second_{};
+    int controls_{}, edits_{}, environments_{}, voices_{}, musics_{};
+    double travel_at_{-1e9}, chat_at_{-1e9};
+    std::optional<std::pair<Vec3, float>> trainer_point_;
+    std::set<std::string, std::less<>> binds_;
+    std::vector<PanelEntry> screens_;
+    std::string open_screen_;
+    std::vector<double> http_sent_;
+    std::uint64_t next_http_{1};
 
     std::map<std::string, std::vector<int>, std::less<>> handlers_;
     std::map<int, Timer> timers_;

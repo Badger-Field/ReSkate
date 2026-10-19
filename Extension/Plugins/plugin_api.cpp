@@ -17,10 +17,12 @@ namespace {
 struct Event {
     std::string_view name, permission;
 };
-constexpr std::array<Event, 12> events{{
+constexpr std::array<Event, 19> events{{
     {"load", {}}, {"unload", {}}, {"tick", {}}, {"level_loaded", {}}, {"level_unloading", {}},
     {"trick_started", "events.tricks"}, {"trick_landed", "events.tricks"}, {"line_broken", "events.tricks"},
     {"draw", "overlay"}, {"player_joined", "session.read"}, {"player_left", "session.read"}, {"message", "net.session"},
+    {"skater_state", "events.skater"}, {"bail", "events.skater"}, {"chat", "chat.read"}, {"track_changed", "music"},
+    {"throwdown", "throwdowns"}, {"action", "input"}, {"screen_closed", "ui.screen"},
 }};
 constexpr std::size_t maximum_key = 128;
 constexpr std::size_t maximum_command = 48;
@@ -659,6 +661,8 @@ void Api::install(Plugin& plugin, lua_State* L) {
     lua_setfield(L, -2, "world");
 
     install_ui_api(plugin, L);
+    install_more_api(plugin, L);
+    install_world_api(plugin, L);
     readonly();
     lua_setglobal(L, "reskate");
     lua_pushcfunction(L, ApiFunctions::print, "print");

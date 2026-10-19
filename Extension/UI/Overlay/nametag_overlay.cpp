@@ -325,6 +325,15 @@ void draw_nametags() {
                     draw->AddText(font, detail, label_at, with_alpha(IM_COL32(90, 232, 255, 255), alpha), label);
                     bubble_bottom = label_at.y;
                 }
+                // A plugin's tag for the player (reskate.session.tag): above the name, or the drone label over it.
+                if (!tag.extra.empty()) {
+                    const auto extra_size = font->CalcTextSizeA(detail, FLT_MAX, 0.0f, tag.extra.c_str());
+                    const float above = std::min(bubble_bottom, name_at.y);
+                    const ImVec2 extra_at(at.x - extra_size.x * 0.5f, above - extra_size.y);
+                    draw->AddText(font, detail, ImVec2(extra_at.x + offset, extra_at.y + offset), shadow, tag.extra.c_str());
+                    draw->AddText(font, detail, extra_at, with_alpha(tag.extra_color, alpha), tag.extra.c_str());
+                    bubble_bottom = extra_at.y;
+                }
                 if (tag.talking) speaker(draw, ImVec2(left - size * 1.05f, name_at.y + name_size.y * 0.5f), size * 0.8f,
                                          with_alpha(animated_colour, alpha));
                 bubble_bottom = std::min(bubble_bottom, name_at.y); // above the name, or the drone label over it

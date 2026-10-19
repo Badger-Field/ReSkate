@@ -7,4 +7,7 @@ namespace dingosdk::overlay {
 // closed), then the drawing.
 bool plugins_pending();
 void draw_plugins();
+// A plugin's open full-screen screen (reskate.ui.screen), over everything, with the input while it
+// shows (State::plugin_screen_visible, set by plugins_pending). Esc closes it.
+void draw_plugin_screen();
 }

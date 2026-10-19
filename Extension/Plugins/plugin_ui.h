@@ -50,7 +50,10 @@ struct Widget {
 struct Panel {
     std::string plugin, title;
     std::vector<Widget> widgets;
+    bool screen{}; // a full-screen screen (reskate.ui.screen), not a PLUGINS tab panel
 };
+// The widget a full-screen screen's Esc sends.
+inline constexpr char close_widget[] = "__close";
 // What the player did to a widget: pressed a button, or set a toggle, slider or dropdown.
 struct Action {
     std::string plugin, panel, widget;

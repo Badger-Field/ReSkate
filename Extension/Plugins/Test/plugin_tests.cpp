@@ -7,6 +7,7 @@
 #include "Engine/Vfs/mod_list.h"
 #include <algorithm>
 #include <chrono>
+#include <format>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -18,6 +19,65 @@ namespace {
 void check(bool value, const std::string& message) { if (!value) throw std::runtime_error(message); }
 
 std::filesystem::path scratch;
+
+
+// The wider set's game, faked: it records what plugins asked of it and answers as told.
+struct FakeGame final : Game {
+    std::optional<std::uint32_t> state;
+    std::uint64_t wipe{};
+    std::vector<std::string> calls;
+    std::vector<ChatLine> lines;
+    Track now_playing;
+    ThrowdownState throwdown;
+    std::vector<std::pair<std::string, std::string>> presses;
+    std::map<std::string, std::uint32_t> binds;
+    std::vector<std::string> released;
+    std::optional<std::uint32_t> physics_state() override { return state; }
+    std::uint64_t wipeouts() override { return wipe; }
+    std::string control(std::string_view action) override { calls.push_back("control " + std::string(action)); return {}; }
+    void hide_hud(std::string_view plugin, bool hidden) override { calls.push_back(std::string("hud ") + std::string(plugin) + (hidden ? " on" : " off")); }
+    std::vector<CatalogItem> object_catalog() override { return {{"bench_01", "Bench", "Benches"}}; }
+    std::vector<GameObject> objects() override { return {{42, "bench_01", {1, 0, 2}, {0, 0, 0, 1}, 1}}; }
+    std::string edit_object(std::string_view op, const GameObject& o) override {
+        calls.push_back(std::format("{} {} {} {:.1f}", op, o.id, o.item, o.position[0]));
+        return {};
+    }
+    std::string set_environment(std::string_view kind, std::string_view key, std::string_view value) override {
+        calls.push_back(std::format("env {} {} {}", kind, key, value));
+        return key == "never" ? "refused" : "";
+    }
+    std::vector<Destination> destinations() override { return {{"bam", "BAM", "bam"}}; }
+    std::vector<LevelInfo> levels() override { return {{"Levels/Game/X/X", "X", true}}; }
+    std::string travel(std::string_view kind, std::string_view target) override { calls.push_back(std::format("travel {} {}", kind, target)); return {}; }
+    std::string ai(std::string_view op, int count) override { calls.push_back(std::format("ai {} {}", op, count)); return {}; }
+    int ai_count() override { return 3; }
+    std::vector<PeerSkater> peer_skaters() override { return {{7, {1, 2, 3}, 0.5f, 40}}; }
+    void set_nametag(std::string_view plugin, std::uint64_t player, std::string text, std::uint32_t colour) override {
+        calls.push_back(std::format("tag {} {} {} {:08x}", plugin, player, text, colour));
+    }
+    std::string voice_volume(std::uint64_t player, float volume) override { calls.push_back(std::format("voice {} {:.1f}", player, volume)); return {}; }
+    std::vector<ChatLine> chat_since(std::uint64_t sequence) override {
+        std::vector<ChatLine> result;
+        for (const auto& line : lines) if (line.sequence > sequence) result.push_back(line);
+        return result;
+    }
+    std::string send_chat(std::string_view text) override { calls.push_back("chat " + std::string(text)); return {}; }
+    ThrowdownState throwdowns() override { return throwdown; }
+    Track track() override { return now_playing; }
+    std::string music(std::string_view command) override { calls.push_back("music " + std::string(command)); return {}; }
+    Progress progress() override { return {true, {{"historic", "Historic", 4}}, {{"c1", "line", "historic", 2, 1, 3}}, 1500, 9000, 2}; }
+    std::optional<std::string> setting(std::string_view name) override { return name == "Render.Fov" ? std::optional<std::string>("90") : std::nullopt; }
+    std::vector<std::string> setting_names() override { return {"Render.Fov"}; }
+    std::string bind(std::string_view plugin, std::string_view action, std::uint32_t combo) override {
+        binds[std::string(plugin) + "/" + std::string(action)] = combo;
+        return {};
+    }
+    std::vector<std::pair<std::string, std::string>> take_presses() override { return std::exchange(presses, {}); }
+    void release(std::string_view plugin) override { released.emplace_back(plugin); }
+    bool called(std::string_view part) const {
+        return std::any_of(calls.begin(), calls.end(), [&](const auto& c) { return c.find(part) != std::string::npos; });
+    }
+};
 
 struct TestEnvironment final : Environment {
     std::vector<std::string> logs, lines;
@@ -67,6 +127,15 @@ struct TestEnvironment final : Environment {
     bool panels_shown() override { return panels_open; }
     void publish_panels(std::vector<plugin_ui::Panel> value) override { panels = std::move(value); }
     std::vector<plugin_ui::Action> take_actions() override { return std::exchange(actions, {}); }
+    std::vector<HttpRequest> requests;
+    std::vector<HttpResponse> responses;
+    bool http_request(HttpRequest request) override {
+        requests.push_back(std::move(request));
+        return true;
+    }
+    std::vector<HttpResponse> take_http_responses() override { return std::exchange(responses, {}); }
+    FakeGame fake;
+    Game& game() override { return fake; }
     Teleport teleport(const Vec3& position, float heading) override {
         if (teleport_forbidden) return Teleport::forbidden;
         if (teleport_unavailable || !local_skater) return Teleport::unavailable;
@@ -722,6 +791,194 @@ void plugins_follow_the_session_and_message_each_other() {
     running(host_a, "chat-a", a);
 }
 
+void plugins_call_and_hear_each_other() {
+    TestEnvironment environment;
+    Host host(environment, Side::client);
+    host.apply({package("library", {{manifest_file, manifest()}, {"manifest.json", R"({"name": "Lib"})"}, {"plugin/main.lua", R"(
+        reskate.expose({
+            add = function(a, b) return a + b end,
+            echo = function(t) return {got = t, n = #t.list} end,
+            fail = function() error("library failure") end,
+            back = function() return reskate.require_plugin("user").poke() end,
+        })
+        reskate.on_plugin("user", "hello", function(from, data) reskate.log("heard " .. data.word .. " from " .. from) end)
+        reskate.on_plugin("*", "anyone", function(from, data) reskate.log("anyone from " .. from) end)
+    )"}}), script("user", R"(
+        reskate.expose({poke = function() return 1 end})
+        reskate.console.command("use", "x", function()
+            local lib = assert(reskate.require_plugin("lib"), "by its manifest name")
+            assert(lib.add(2, 3) == 5)
+            local echoed = lib.echo({list = {1, 2, 3}, word = "hi"})
+            assert(echoed.n == 3 and echoed.got.word == "hi")
+            local ok, err = pcall(lib.fail)
+            assert(not ok and err:find("raised an error"), err)
+            assert(not pcall(lib.add, print, 1), "a function does not cross")
+            ok, err = pcall(lib.back)
+            assert(not ok, "a call back into a plugin in a call is refused")
+            local none, why = reskate.require_plugin("nobody")
+            assert(none == nil and why:find("no running plugin"), why)
+            assert(reskate.emit("hello", {word = "hey"}))
+            assert(reskate.emit("anyone"))
+            assert(not pcall(reskate.emit, "bad name!"))
+            reskate.log("library fine")
+        end)
+    )", R"("console")")});
+    running(host, "library", environment);
+    host.run_console("use");
+    check(environment.logged("[user] library fine"), "Libraries work\n" + environment.all());
+    running(host, "library", environment);
+    ticks(host, environment, 1);
+    check(environment.logged("[library] heard hey from user") && environment.logged("[library] anyone from user"), "Events reach the next tick\n" + environment.all());
+}
+
+void web_requests_go_only_to_listed_domains() {
+    TestEnvironment environment;
+    check([] {
+        try { parse_manifest(R"({"api": 1, "entry": "a.lua", "domains": ["api.example.com"]})"); } catch (const std::exception&) { return true; }
+        return false;
+    }(), "domains need net.http");
+    check([] {
+        try { parse_manifest(R"({"api": 1, "entry": "a.lua", "permissions": ["net.http"], "domains": ["*.example.com"]})"); } catch (const std::exception&) { return true; }
+        return false;
+    }(), "and are plain host names");
+    Host host(environment, Side::client);
+    host.apply({package("web", {{manifest_file, R"({"api": 1, "entry": "plugin/main.lua", "permissions": ["console", "net.http"], "domains": ["API.example.com"]})"},
+        {"plugin/main.lua", R"(
+        reskate.console.command("fetch", "x", function()
+            assert(reskate.http.request({url = "https://api.example.com/v1/x?y=1"}, function(status, body, err)
+                reskate.log("answer " .. status .. " " .. body .. " " .. tostring(err))
+            end))
+            assert(reskate.http.request({url = "https://api.example.com:443/post", method = "POST", body = "{}", content_type = "application/json"}, function() end))
+            for _, bad in {"http://api.example.com/", "https://other.com/", "https://user@api.example.com/", "https://api.example.com:8080/",
+                           "https://api.example.com/a b", "ftp://api.example.com/"} do
+                assert(not pcall(reskate.http.request, {url = bad}, function() end), bad)
+            end
+            assert(not pcall(reskate.http.request, {url = "https://api.example.com/", method = "DELETE"}, function() end))
+            reskate.log("web fine")
+        end)
+        reskate.console.command("many", "x", function()
+            local ok, err = pcall(function() for i = 1, 20 do reskate.http.request({url = "https://api.example.com/"}, function() end) end end)
+            reskate.log("many " .. tostring(err):match("more than %d+ web requests [%a ]+"))
+        end)
+    )"}})});
+    host.run_console("fetch");
+    check(environment.logged("[web] web fine") && environment.requests.size() == 2, "Requests go out\n" + environment.all());
+    check(environment.requests[0].host == "api.example.com" && environment.requests[0].path == "/v1/x?y=1" && environment.requests[1].method == "POST",
+          "with their host, path and method");
+    environment.responses.push_back({environment.requests[0].id, "web", 200, "hello", ""});
+    ticks(host, environment, 1);
+    check(environment.logged("[web] answer 200 hello nil"), "and the answer comes back\n" + environment.all());
+    host.run_console("many");
+    check(environment.logged("many more than 4 web requests waiting"), "4 waiting at most\n" + environment.all());
+}
+
+void the_wider_set_reaches_the_game() {
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    environment.local_skater = SkaterState{{1, 0, 1}, 0.25f, 3, 0, false, 0};
+    Host host(environment, Side::client);
+    host.apply({script("wide", R"(
+        reskate.on("skater_state", function(now, before) reskate.log("state " .. before .. " to " .. now) end)
+        reskate.on("bail", function(e) reskate.log("bail " .. e.count) end)
+        reskate.on("chat", function(line) reskate.log("chat " .. line.name .. ": " .. line.text) end)
+        reskate.on("track_changed", function(t) reskate.log("track " .. t.title .. " by " .. t.artist) end)
+        reskate.on("throwdown", function(e) reskate.log("throwdown " .. e.phase) end)
+        reskate.on("action", function(name) reskate.log("action " .. name) end)
+        reskate.on("screen_closed", function(title) reskate.log("closed " .. title) end)
+        assert(reskate.input.bind("jump", "Ctrl+K"))
+        assert(not pcall(reskate.input.bind, "bad", "Esc"), "Esc is not bindable")
+        reskate.ui.screen("Big", function(ui) ui:heading("A screen") if ui:button("ok", "OK") then reskate.log("screen ok") end end)
+        reskate.console.command("do", "x", function()
+            assert(reskate.skater.state() == "riding")
+            assert(reskate.skater.noclip(true) and reskate.skater.boost("up"))
+            assert(not pcall(reskate.skater.boost, "sideways"))
+            assert(reskate.trainer.set_point() and reskate.trainer.back())
+            reskate.hud.hide(true)
+            assert(#reskate.objects.catalog() == 1 and reskate.objects.list()[1].id == "42")
+            assert(reskate.objects.place("bench_01", vector.create(5, 0, 5), 1.0))
+            assert(reskate.objects.move("42", vector.create(6, 0, 6)))
+            assert(reskate.objects.remove("42"))
+            assert(not pcall(reskate.objects.remove, "not a number"))
+            assert(reskate.world.set_time("night") and reskate.world.set_control("fog", 1) and reskate.world.set_park("historic", "skatepark_02"))
+            local ok, why = reskate.world.set_time("never")
+            assert(not ok and why == "refused")
+            assert(#reskate.travel.locations() == 1 and #reskate.travel.levels() == 1)
+            assert(reskate.travel.go("bam"))
+            local again, wait = reskate.travel.load("Levels/Game/X/X")
+            assert(not again and wait:find("5 s"), "one trip every 5 s")
+            assert(reskate.ai.spawn(2) and reskate.ai.count() == 3 and reskate.ai.clear())
+            assert(not pcall(reskate.ai.spawn, 20))
+            local s = reskate.session.skaters()[1]
+            assert(s.id == "7" and s.position.y == 2 and s.heading == 0.5)
+            reskate.session.tag("7", "IT", 0xff0000ff)
+            assert(reskate.voice.set_volume("7", 0))
+            assert(reskate.chat.send("hello all"))
+            local soon, three = reskate.chat.send("again")
+            assert(not soon and three:find("3 s"))
+            assert(not pcall(reskate.chat.send, "/kick someone"), "no commands")
+            assert(reskate.throwdowns.state().active == false)
+            assert(reskate.music.next())
+            local p = reskate.progression.get()
+            assert(p.districts[1].rank == 4 and p.challenges[1].completed_goals == 1 and p.score == 1500)
+            assert(reskate.settings.game("Render.Fov") == "90" and reskate.settings.game("Nope") == nil and #reskate.settings.names() == 1)
+            reskate.ui.open("Big")
+            reskate.log("wide fine")
+        end)
+    )", R"("console", "events.skater", "skater.read", "skater.control", "trainer", "hud", "world.objects", "world.environment", "travel",
+          "world.ai", "session.skaters", "session.nametags", "voice.control", "chat.read", "chat.send", "throwdowns", "music",
+          "progression.read", "settings.read", "input", "ui.screen")")});
+    running(host, "wide", environment);
+    game.state = 100;
+    game.lines = {{1, 5, "Old", "before", false, false}};
+    ticks(host, environment, 1);
+    check(environment.logged("[wide] state none to riding"), "The skater's state is heard\n" + environment.all());
+    host.run_console("do");
+    check(environment.logged("[wide] wide fine"), "Every wider-set call works\n" + environment.all());
+    for (const auto* call : {"control noclip_on", "control boost_up", "hud wide on", "place 0 bench_01 5.0", "move 42  6.0", "delete 42",
+                             "env tod night", "env control fog 1", "env park historic skatepark_02", "travel location bam", "ai spawn 2",
+                             "ai clear", "tag wide 7 IT ff0000ff", "voice 7 0.0", "chat hello all", "music next"})
+        check(game.called(call), std::string("The game was asked: ") + call);
+    check(environment.teleports.size() == 1, "The save point teleports back");
+    check(game.binds["wide/jump"] == combo_of("Ctrl+K"), "Its bind is held by the game");
+    game.state = 401;
+    game.wipe = 1;
+    game.lines.push_back({2, 6, "Ann", "hi there", false, false});
+    game.now_playing = {true, true, "Spotify", "Song", "Band", "Album", 9};
+    game.throwdown.active = true;
+    game.presses = {{"wide", "jump"}, {"someone", "jump"}};
+    environment.now += 1000; // the music is looked at once a second
+    ticks(host, environment, 1);
+    check(environment.logged("[wide] state riding to grinding") && environment.logged("[wide] chat Ann: hi there") && !environment.logged("before") &&
+          environment.logged("[wide] track Song by Band") && environment.logged("[wide] throwdown started") && environment.logged("[wide] action jump"),
+          "And its events, but not chat from before it listened\n" + environment.all());
+    ticks(host, environment, 1);
+    game.wipe = 2;
+    ticks(host, environment, 1);
+    check(environment.logged("[wide] bail 2"), "A wipeout is a bail");
+    ticks(host, environment, 10);
+    const auto screen = std::find_if(environment.panels.begin(), environment.panels.end(), [](const auto& p) { return p.screen; });
+    check(screen != environment.panels.end() && screen->title == "Big" && screen->widgets.size() == 2, "Its open screen is built, without the PLUGINS tab");
+    environment.actions = {plugin_ui::Action{"wide", "Big", "ok"}};
+    ticks(host, environment, 10);
+    check(environment.logged("[wide] screen ok"), "and answers its widgets");
+    environment.actions = {plugin_ui::Action{"wide", "Big", plugin_ui::close_widget}};
+    ticks(host, environment, 10);
+    check(environment.logged("[wide] closed Big") && std::none_of(environment.panels.begin(), environment.panels.end(), [](const auto& p) { return p.screen; }),
+          "Esc closes it, which it hears");
+    host.apply({});
+    check(std::find(game.released.begin(), game.released.end(), "wide") != game.released.end(), "Unloading gives back what it held of the game");
+}
+
+void key_names_become_binds() {
+    check(combo_of("F7") == (0x80000000u | 0x76u), "F7");
+    check(combo_of("k") == (0x80000000u | 'K'), "a letter, any case");
+    check(combo_of("Ctrl+K") != 0 && (combo_of("Ctrl+K") & 0xc0000000u) == 0x40000000u, "a chord");
+    check(combo_of("Ctrl+K") == combo_of("k+ctrl"), "in any order");
+    check(combo_of("Pad.LB+Pad.RB") == 0x300u && combo_of("pad.a") == 0x1000u && combo_of("Pad.RT") == 0x20000u, "pad combos");
+    for (const auto* bad : {"", "Esc", "F13", "Ctrl+", "Pad.Z", "Ctrl+Pad.A", "A+B+C+D+E+F", "Num1"})
+        check(combo_of(bad) == 0, std::string("not a bind: ") + bad);
+}
+
 void level_events_reach_plugins() {
     TestEnvironment environment;
     Host host(environment, Side::client);
@@ -822,7 +1079,7 @@ void reskate_test_passes_its_own_checks() {
     check(host.run_console("ptest all"), "ptest is its command");
     ticks(host, environment, 120); // its later checks run on timers
     const auto output = printed_lines(environment);
-    check(output.find("ptest: 55 passed, 0 failed, 9 skipped") != std::string::npos &&
+    check(output.find("ptest: 67 passed, 0 failed, 9 skipped") != std::string::npos &&
           output.find("FAIL") == std::string::npos, "Every reskate-test check passes:\n" + output + environment.all());
     check(host.run_console("ptest echo a b") && environment.printed("ptest echo: a b"), "and its echo command answers");
     // With a skater on the ground, its skater checks run too.
@@ -867,6 +1124,8 @@ void reskate_hostile_is_stopped_or_refused_every_time() {
         {"errors", true, 10}, {"slow", true, 60 * 5}, {"log-flood", false, 1}, {"timers", false, 1},
         {"recursion", false, 1}, {"escapes", false, 1}, {"teleport-spam", false, 1}, {"raycast-flood", false, 1}, {"trick-loop", true, 0, true}, {"draw-flood", false, 2}, {"toast-spam", false, 1},
         {"sound-spam", false, 1}, {"message-flood", false, 1}, {"panel-loop", true, 2, false, true},
+        {"chat-spam", false, 1}, {"edit-spam", false, 1}, {"travel-spam", false, 1}, {"web-elsewhere", false, 1},
+        {"bind-spam", false, 1}, {"screen-loop", true, 10},
     };
     for (const auto& item : cases) {
         check(host.reload("reskate-hostile").find("reloaded") != std::string::npos, std::string("reloads before ") + item.attack);
@@ -912,6 +1171,10 @@ int main() {
         plugins_have_menu_panels();
         plugins_play_sounds_and_read_the_mods();
         plugins_follow_the_session_and_message_each_other();
+        plugins_call_and_hear_each_other();
+        web_requests_go_only_to_listed_domains();
+        the_wider_set_reaches_the_game();
+        key_names_become_binds();
         level_events_reach_plugins();
         timers_run_when_due();
         a_package_with_a_program_or_on_the_wrong_side_is_not_loaded();

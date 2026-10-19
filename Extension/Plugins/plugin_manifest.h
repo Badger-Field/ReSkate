@@ -1,5 +1,6 @@
 #pragma once
 #include <set>
+#include <vector>
 #include <string>
 #include <string_view>
 
@@ -18,6 +19,8 @@ struct Manifest {
     std::string entry; // inside the package, as safe_relative_path leaves it
     Side side{Side::client};
     std::set<std::string, std::less<>> permissions;
+    // net.http: the exact host names its web requests may go to ("api.example.com"), lowercase.
+    std::vector<std::string> domains;
 };
 // Every permission a manifest may name, including those whose APIs a later ReSkate adds, so a
 // manifest written for the whole plan stays valid. The base set needs none.

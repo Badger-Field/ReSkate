@@ -175,7 +175,7 @@ bool Plugin::load_chunk(lua_State* L, const std::string& relative, const std::fi
     return status == 0;
 }
 
-bool Plugin::call(int count, std::string_view what, double limit_ms) {
+bool Plugin::call(int count, std::string_view what, double limit_ms, int results) {
     const int function = lua_gettop(L_) - count;
     if (state_ != State::running) {
         lua_settop(L_, function - 1);
@@ -187,13 +187,16 @@ bool Plugin::call(int count, std::string_view what, double limit_ms) {
     deadline_ = start + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double, std::milli>(limit_ms));
     timed_ = true;
     interrupts_ = 0;
-    const int status = lua_pcall(L_, count, 0, function);
-    timed_ = false;
+    ++calls_;
+    const int status = lua_pcall(L_, count, results, function);
+    --calls_;
+    timed_ = calls_ > 0; // a call this one was made from goes on, timed
     spent_ms_ += elapsed_ms(start);
     // Caught in the script or not, going over its memory stops it.
     if (memory_exceeded_ && halt_ == Halt::none) halt_ = Halt::memory;
     if (status == LUA_OK && halt_ == Halt::none) {
-        lua_settop(L_, function - 1);
+        if (results) lua_remove(L_, function);
+        else lua_settop(L_, function - 1);
         return true;
     }
     if (halt_ == Halt::none && (memory_exceeded_ || status == LUA_ERRMEM)) halt_ = Halt::memory;
@@ -256,6 +259,12 @@ void Plugin::close() {
     building_ = nullptr;
     drawing_ = false;
     draw_table_ = ui_table_ = 0;
+    exposed_.clear();
+    listeners_.clear();
+    http_pending_.clear();
+    screens_.clear();
+    open_screen_.clear();
+    binds_.clear();
     handlers_.clear();
     timers_.clear();
     commands_.clear();
@@ -471,6 +480,172 @@ void Plugin::receive(const SessionPlayer& from, const std::string& payload) {
         lua_pushlstring(L, payload.data(), payload.size());
         return 2;
     });
+}
+
+std::string Plugin::call_exposed(const std::string& function, const Json& arguments, Json& result) {
+    if (state_ != State::running) return "it is not running";
+    if (busy()) return "it is in a call already (a plugin cannot be called back into)";
+    const auto found = exposed_.find(function);
+    if (found == exposed_.end()) return "it exposes no function \"" + function + "\"";
+    const int top = lua_gettop(L_);
+    try {
+        lua_getref(L_, found->second);
+        int count = 0;
+        for (const auto& argument : arguments) {
+            push_json(L_, argument);
+            ++count;
+        }
+        if (!call(count, "its exposed function " + function, limits_.call_ms, 1))
+            return state_ == State::running ? "it raised an error (its log says which)" : "it stopped: " + reason_;
+        result = lua_to_json(L_, -1);
+        lua_settop(L_, top);
+        return {};
+    } catch (const std::exception& error) {
+        if (L_ && state_ == State::running) lua_settop(L_, top);
+        return std::string("its answer could not be handed over: ") + error.what();
+    }
+}
+
+std::vector<std::string> Plugin::exposed_names() const {
+    std::vector<std::string> names;
+    for (const auto& item : exposed_) names.push_back(item.first);
+    return names;
+}
+
+void Plugin::plugin_event(const std::string& source, const std::string& source_channel, const std::string& event, const Json& data) {
+    if (state_ != State::running) return;
+    const auto lower = [](std::string text) {
+        for (auto& c : text) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+        return text;
+    };
+    const auto listeners = listeners_;
+    for (const auto& listener : listeners) {
+        if (state_ != State::running) return;
+        if (listener.event != event) continue;
+        const auto from = lower(listener.source);
+        if (from != "*" && from != lower(source) && from != lower(source_channel)) continue;
+        lua_getref(L_, listener.function);
+        int count = 2;
+        try {
+            lua_pushlstring(L_, source.data(), source.size());
+            push_json(L_, data);
+        } catch (const std::exception& error) {
+            stop(std::string("an event could not be handed over: ") + error.what());
+            return;
+        }
+        call(count, "its on_plugin handler for " + event, limits_.call_ms);
+    }
+}
+
+void Plugin::http_done(const HttpResponse& response) {
+    if (state_ != State::running) return;
+    const auto found = http_pending_.find(response.id);
+    if (found == http_pending_.end()) return;
+    const int function = found->second;
+    http_pending_.erase(found);
+    lua_getref(L_, function);
+    lua_unref(L_, function);
+    lua_pushinteger(L_, response.status);
+    lua_pushlstring(L_, response.body.data(), response.body.size());
+    if (response.error.empty()) lua_pushnil(L_);
+    else lua_pushlstring(L_, response.error.data(), response.error.size());
+    call(3, "its web request's callback", limits_.call_ms);
+}
+
+void Plugin::skater_changed(const char* state, const char* previous) {
+    if (state_ != State::running || !has("events.skater")) return;
+    fire_with("skater_state", [&](lua_State* L) {
+        lua_pushstring(L, state);
+        lua_pushstring(L, previous);
+        return 2;
+    });
+}
+
+void Plugin::bailed(std::uint64_t wipeouts) {
+    if (state_ != State::running || !has("events.skater")) return;
+    fire_with("bail", [&](lua_State* L) {
+        lua_createtable(L, 0, 2);
+        lua_pushnumber(L, static_cast<double>(wipeouts));
+        lua_setfield(L, -2, "count");
+        if (const auto s = services_.skater()) {
+            lua_pushvector(L, s->position[0], s->position[1], s->position[2]);
+            lua_setfield(L, -2, "at");
+        }
+        return 1;
+    });
+}
+
+void Plugin::chat_line(const ChatLine& line) {
+    if (state_ != State::running || !has("chat.read")) return;
+    fire_with("chat", [&](lua_State* L) {
+        lua_createtable(L, 0, 5);
+        const auto id = std::to_string(line.sender);
+        lua_pushlstring(L, id.data(), id.size());
+        lua_setfield(L, -2, "sender");
+        lua_pushlstring(L, line.name.data(), line.name.size());
+        lua_setfield(L, -2, "name");
+        lua_pushlstring(L, line.text.data(), line.text.size());
+        lua_setfield(L, -2, "text");
+        lua_pushboolean(L, line.local);
+        lua_setfield(L, -2, "local");
+        lua_pushboolean(L, line.server);
+        lua_setfield(L, -2, "server");
+        return 1;
+    });
+}
+
+void Plugin::track_changed(const Track& track) {
+    if (state_ != State::running || !has("music")) return;
+    fire_with("track_changed", [&](lua_State* L) {
+        lua_createtable(L, 0, 4);
+        lua_pushlstring(L, track.app.data(), track.app.size());
+        lua_setfield(L, -2, "app");
+        lua_pushlstring(L, track.title.data(), track.title.size());
+        lua_setfield(L, -2, "title");
+        lua_pushlstring(L, track.artist.data(), track.artist.size());
+        lua_setfield(L, -2, "artist");
+        lua_pushboolean(L, track.playing);
+        lua_setfield(L, -2, "playing");
+        return 1;
+    });
+}
+
+void Plugin::throwdown_phase(const char* phase) {
+    if (state_ != State::running || !has("throwdowns")) return;
+    fire_with("throwdown", [&](lua_State* L) {
+        lua_createtable(L, 0, 1);
+        lua_pushstring(L, phase);
+        lua_setfield(L, -2, "phase");
+        return 1;
+    });
+}
+
+void Plugin::action(const std::string& name) {
+    if (state_ != State::running || !has("input")) return;
+    fire({"action"}, {name});
+}
+
+std::optional<plugin_ui::Panel> Plugin::build_screen(const std::vector<plugin_ui::Action>& actions) {
+    if (state_ != State::running || !has("ui.screen") || open_screen_.empty()) return std::nullopt;
+    const auto found = std::find_if(screens_.begin(), screens_.end(), [&](const auto& e) { return e.title == open_screen_; });
+    if (found == screens_.end()) return std::nullopt;
+    const auto entry = *found;
+    plugin_ui::Panel panel{id_, entry.title, {}, true};
+    pending_ = actions;
+    building_ = &panel;
+    lua_getref(L_, entry.function);
+    lua_getref(L_, ui_table_);
+    call(1, "the screen " + entry.title, limits_.call_ms);
+    building_ = nullptr;
+    pending_.clear();
+    if (state_ != State::running || open_screen_ != entry.title) return std::nullopt;
+    return panel;
+}
+
+void Plugin::close_screen() {
+    if (open_screen_.empty()) return;
+    const auto title = std::exchange(open_screen_, {});
+    fire("screen_closed", {title});
 }
 
 void Plugin::set_channel(std::string channel) {

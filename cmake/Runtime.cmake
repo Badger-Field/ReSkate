@@ -124,6 +124,8 @@ add_library(dingosdk_runtime SHARED
     Extension/Scripting/custom_script_loader.cpp
     Extension/Plugins/plugin_runtime.cpp
     Extension/Plugins/plugin_commands.cpp
+    Extension/Plugins/plugin_http.cpp
+    Extension/Plugins/plugin_game_runtime.cpp
     Extension/Assets/morph_memory_pool.cpp
     Extension/Assets/native_render_resource_pool.cpp
     Extension/World/native_entity_pages.cpp

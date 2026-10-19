@@ -2,6 +2,8 @@
 #include "plugin_discovery.h"
 #include "plugin_host.h"
 #include "plugin_camera.h"
+#include "plugin_http.h"
+#include "plugin_game_runtime.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Game/Multiplayer/session_tools.h"
 #include "Extension/Multiplayer/Session/session.h"
@@ -128,6 +130,9 @@ public:
     bool panels_shown() override { return plugin_ui::panels_shown(); }
     void publish_panels(std::vector<plugin_ui::Panel> panels) override { plugin_ui::publish_panels(std::move(panels)); }
     std::vector<plugin_ui::Action> take_actions() override { return plugin_ui::take_actions(); }
+    bool http_request(HttpRequest request) override { return http::start(std::move(request)); }
+    Game& game() override { return real_game(base); }
+    std::vector<HttpResponse> take_http_responses() override { return http::take(); }
 
 private:
     std::chrono::steady_clock::time_point next_session_{};

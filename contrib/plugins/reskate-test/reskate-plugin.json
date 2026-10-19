@@ -7,5 +7,6 @@
                     "trainer", "camera", "world.raycast", "world.objects", "world.environment", "world.ai",
                     "travel", "session.read", "session.skaters", "session.nametags", "net.session", "net.http",
                     "voice.control", "chat.read", "chat.send", "throwdowns", "replay", "music",
-                    "progression.read", "settings.read", "audio.ui", "mods.read"]
+                    "progression.read", "settings.read", "audio.ui", "mods.read"],
+    "domains": ["api.github.com"]
 }

@@ -55,6 +55,14 @@ public:
     virtual bool panels_shown() { return false; }
     virtual void publish_panels(std::vector<plugin_ui::Panel>) {}
     virtual std::vector<plugin_ui::Action> take_actions() { return {}; }
+    // net.http, made off the client thread: false when it cannot start; answers come back later.
+    virtual bool http_request(HttpRequest) { return false; }
+    virtual std::vector<HttpResponse> take_http_responses() { return {}; }
+    // The wider set's game (plugin_game.h); none by default.
+    virtual Game& game() {
+        static Game none;
+        return none;
+    }
 };
 
 struct Status {
@@ -123,6 +131,18 @@ private:
     bool send(std::uint32_t channel, std::uint64_t to, std::string_view payload) override;
     std::optional<Vec3> world_to_screen(const Vec3& position) override { return environment_.world_to_screen(position); }
     std::array<float, 2> display() override { return environment_.display(); }
+    std::string call_plugin(std::string_view caller, std::string_view target, std::string_view function, const Json& arguments,
+                            Json& result) override;
+    std::string exposed(std::string_view target, std::vector<std::string>& names) override;
+    bool emit(std::string_view source, std::string_view event, Json data) override;
+    bool http(HttpRequest request) override { return environment_.http_request(std::move(request)); }
+    Game& game() override { return environment_.game(); }
+    // What the game did since the last tick, to the plugins with the permission for it.
+    void follow_game();
+    void deliver_http();
+    // A running plugin by its folder's name or its manifest.json name, whatever their case.
+    Entry* running(std::string_view name);
+    void deliver_events();
     // The session's players who came and went, and the messages that came in, to the plugins;
     // then what the plugins draw this tick, and their panels.
     void follow_session();
@@ -139,5 +159,18 @@ private:
     SessionState session_;
     double next_panels_{};
     std::vector<plugin_ui::Action> actions_; // waiting for the next panel build
+    struct Emitted {
+        std::string source, event;
+        Json data;
+    };
+    std::vector<Emitted> events_; // emitted since the last tick
+    std::optional<std::uint32_t> skater_state_;
+    std::uint64_t wipeouts_{};
+    bool wipeouts_known_{};
+    std::uint64_t chat_seen_{};
+    bool chat_started_{};
+    std::uint64_t track_revision_{};
+    double next_track_{};
+    bool throwdown_active_{};
 };
 }

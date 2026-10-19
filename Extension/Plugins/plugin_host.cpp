@@ -81,6 +81,7 @@ void Host::unload(Entry& entry) {
         entry.plugin.reset();
     }
     release_commands(entry.candidate.id);
+    environment_.game().release(entry.candidate.id);
 }
 
 void Host::collect(Entry& entry) {
@@ -89,6 +90,7 @@ void Host::collect(Entry& entry) {
     entry.plugin->close_if_stopped();
     entry.plugin.reset();
     release_commands(entry.candidate.id);
+    environment_.game().release(entry.candidate.id);
 }
 
 void Host::release_commands(std::string_view id) {
@@ -129,6 +131,9 @@ void Host::tick(double dt_ms) {
     if (save) next_save_ = now + 2000;
     follow_session();
     deliver_messages();
+    deliver_events();
+    deliver_http();
+    follow_game();
     for (auto& [id, entry] : entries_) {
         if (!entry.plugin) continue;
         entry.plugin->tick(dt_ms);
@@ -176,6 +181,124 @@ void Host::deliver_messages() {
     }
 }
 
+Host::Entry* Host::running(std::string_view name) {
+    const auto wanted = lowercase(std::string(name));
+    for (auto& [id, entry] : entries_)
+        if (entry.plugin && entry.plugin->state() == State::running &&
+            (lowercase(id) == wanted || lowercase(entry.plugin->channel_name()) == wanted))
+            return &entry;
+    return nullptr;
+}
+
+std::string Host::call_plugin(std::string_view caller, std::string_view target, std::string_view function, const Json& arguments,
+                              Json& result) {
+    auto* entry = running(target);
+    if (!entry) return std::format("there is no running plugin {}", target);
+    if (entry->candidate.id == caller) return "a plugin calls its own functions directly";
+    auto error = entry->plugin->call_exposed(std::string(function), arguments, result);
+    // (It is closed if that stopped it; the plugin that called carries on.)
+    if (entry->plugin->state() == State::stopped) collect(*entry);
+    return error;
+}
+
+std::string Host::exposed(std::string_view target, std::vector<std::string>& names) {
+    auto* entry = running(target);
+    if (!entry) return std::format("there is no running plugin {}", target);
+    names = entry->plugin->exposed_names();
+    return {};
+}
+
+bool Host::emit(std::string_view source, std::string_view event, Json data) {
+    if (events_.size() >= 1024) return false;
+    events_.push_back({std::string(source), std::string(event), std::move(data)});
+    return true;
+}
+
+void Host::follow_game() {
+    auto& game = environment_.game();
+    const auto wants = [&](std::string_view permission) {
+        return std::any_of(entries_.begin(), entries_.end(),
+            [&](const auto& item) { return item.second.plugin && item.second.plugin->has(permission); });
+    };
+    const auto each = [&](const auto& tell) {
+        for (auto& [id, entry] : entries_) {
+            if (!entry.plugin) continue;
+            tell(*entry.plugin, id);
+            collect(entry);
+        }
+    };
+    if (wants("events.skater")) {
+        const auto now = game.physics_state();
+        const auto name = [](std::optional<std::uint32_t> s) { return s ? skater_state_name(*s) : "none"; };
+        if (std::string_view(name(now)) != name(skater_state_)) {
+            const auto previous = name(skater_state_);
+            each([&](Plugin& plugin, const std::string&) { plugin.skater_changed(name(now), previous); });
+        }
+        skater_state_ = now;
+        const auto wipeouts = game.wipeouts();
+        if (wipeouts_known_ && wipeouts > wipeouts_) each([&](Plugin& plugin, const std::string&) { plugin.bailed(wipeouts); });
+        wipeouts_ = wipeouts;
+        wipeouts_known_ = true;
+    }
+    if (wants("chat.read")) {
+        auto lines = game.chat_since(chat_seen_);
+        // Lines from before the first plugin listened are not news.
+        if (!chat_started_) {
+            chat_started_ = true;
+            for (const auto& line : lines) chat_seen_ = std::max(chat_seen_, line.sequence);
+            lines.clear();
+        }
+        if (lines.size() > 20) lines.erase(lines.begin(), lines.end() - 20);
+        for (const auto& line : lines) {
+            chat_seen_ = std::max(chat_seen_, line.sequence);
+            each([&](Plugin& plugin, const std::string&) { plugin.chat_line(line); });
+        }
+    }
+    const double now = environment_.now_ms();
+    if (wants("music") && now >= next_track_) {
+        next_track_ = now + 1000;
+        const auto track = game.track();
+        if (track.available && track.revision != track_revision_) {
+            track_revision_ = track.revision;
+            each([&](Plugin& plugin, const std::string&) { plugin.track_changed(track); });
+        }
+    }
+    if (wants("throwdowns")) {
+        const bool active = game.throwdowns().active;
+        if (active != throwdown_active_) {
+            throwdown_active_ = active;
+            each([&](Plugin& plugin, const std::string&) { plugin.throwdown_phase(active ? "started" : "ended"); });
+        }
+    }
+    for (const auto& [plugin, action] : game.take_presses())
+        if (auto* entry = find(plugin); entry && entry->plugin) {
+            entry->plugin->action(action);
+            collect(*entry);
+        }
+}
+
+void Host::deliver_http() {
+    for (const auto& response : environment_.take_http_responses()) {
+        auto* entry = find(response.plugin);
+        if (!entry || !entry->plugin) continue; // unloaded since: its answer goes nowhere
+        entry->plugin->http_done(response);
+        collect(*entry);
+    }
+}
+
+void Host::deliver_events() {
+    const auto events = std::exchange(events_, {});
+    for (const auto& emitted : events) {
+        std::string channel = emitted.source;
+        if (const auto* source = find(emitted.source); source && source->plugin) channel = source->plugin->channel_name();
+        for (auto& [id, entry] : entries_) {
+            if (!entry.plugin || id == emitted.source) continue;
+            entry.plugin->plugin_event(emitted.source, channel, emitted.event, emitted.data);
+            collect(entry);
+        }
+    }
+}
+
 bool Host::send(std::uint32_t channel, std::uint64_t to, std::string_view payload) {
     if (!session_.active) return false;
     return environment_.send_message(wire::encode(channel, to, payload));
@@ -193,18 +316,32 @@ void Host::draw_and_build() {
         }
     }
     environment_.publish_layers(std::move(layers));
-    for (auto& action : environment_.take_actions())
+    for (auto& action : environment_.take_actions()) {
+        // Esc on a full-screen screen closes it at once; the plugin hears screen_closed.
+        if (action.widget == plugin_ui::close_widget) {
+            if (auto* entry = find(action.plugin); entry && entry->plugin) {
+                entry->plugin->close_screen();
+                collect(*entry);
+            }
+            continue;
+        }
         if (actions_.size() < 256) actions_.push_back(std::move(action));
-    // Panels are built ten times a second, and only while the PLUGINS tab shows them.
+    }
+    // Panels and screens are built ten times a second: panels only while the PLUGINS tab shows
+    // them, a screen while its plugin has it open.
     const double now = environment_.now_ms();
-    if (!environment_.panels_shown() || now < next_panels_) return;
+    if (now < next_panels_) return;
     next_panels_ = now + 100;
+    const bool panels_shown = environment_.panels_shown();
     std::vector<plugin_ui::Panel> panels;
     for (auto& [id, entry] : entries_) {
         if (!entry.plugin) continue;
         std::vector<plugin_ui::Action> mine;
         for (const auto& action : actions_)
             if (action.plugin == id) mine.push_back(action);
+        if (auto screen = entry.plugin->build_screen(mine)) panels.push_back(std::move(*screen));
+        collect(entry);
+        if (!panels_shown || !entry.plugin) continue;
         auto built = entry.plugin->build_panels(mine);
         collect(entry);
         for (auto& panel : built) panels.push_back(std::move(panel));

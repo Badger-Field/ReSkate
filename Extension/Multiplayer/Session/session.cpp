@@ -3,6 +3,7 @@
 #include "Extension/Skater/drone_beacon.h"
 #include "Extension/Plugins/plugin_runtime.h"
 #include "Extension/Plugins/plugin_wire.h"
+#include "Extension/Plugins/plugin_session_feed.h"
 #include "Engine/Core/Debug/trace.h"
 #include "Extension/Multiplayer/Hud/native_player_ui.h"
 #include "Extension/Multiplayer/Hud/native_indicators.h"
@@ -529,6 +530,10 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
         tag.nameless = s.nametags_friends && !std::binary_search(s.friend_ids.begin(), s.friend_ids.end(), p.member.id);
         tag.talking = std::any_of(voices.begin(), voices.end(), [&](const auto &v) { return v.id == p.member.id && v.speaking; });
         tag.flying_drone = drone::beacon::flying(p.member.id);
+        if (const auto extra = plugin_feed::tag_of(p.member.id)) {
+            tag.extra = extra->text;
+            tag.extra_color = extra->colour;
+        }
         tag.bubbles = recent_bubbles(p.member.id);
         if (bubbles)
             if (auto hint = typing_bubble(p.typing_until); !hint.text.empty()) tag.bubbles.push_back(std::move(hint));
@@ -728,6 +733,15 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
             tag.bubbles = std::move(own);
             nametags.push_back(std::move(tag));
         }
+    }
+    // Other players' skaters as last heard, for plugins (reskate.session.skaters).
+    {
+        std::vector<plugin_feed::Peer> peers;
+        for (const auto &p : active_peers(s))
+            if (p.member.id && p.latest_root)
+                peers.push_back({p.member.id, p.latest_root->position, p.latest_root->rotation,
+                                 now > p.pose_arrival ? static_cast<double>(now - p.pose_arrival) / 1000.0 : 0.0});
+        plugin_feed::publish_peers(std::move(peers));
     }
     if (labels)
         publish_custom_nametags(s.base, std::move(nametags),
