@@ -5,6 +5,8 @@
 #include "Engine/Game/Multiplayer/session_tools.h"
 #include "Extension/Console/commands.h"
 #include "Extension/Profile/local_profile_runtime.h"
+#include "Extension/Skater/score_hud.h"
+#include "Extension/Skater/trick_watch.h"
 #include "Extension/Trainer/trainer.h"
 #include <Windows.h>
 #include <ShlObj.h>
@@ -53,6 +55,8 @@ public:
         return teleport_local_skater_heading(position, heading) ? Teleport::sent : Teleport::unavailable;
     }
     std::optional<Vec3> raycast(const Vec3& from, const Vec3& to) override { return local_surface_hit(from, to); }
+    std::optional<ScoreState> score() override { return score_now; }
+    std::optional<ScoreState> score_now; // read each tick while a plugin wants tricks
 
 private:
     std::filesystem::path storage_;
@@ -68,6 +72,55 @@ std::vector<Candidate> found;      // under found_mutex
 std::uint64_t found_generation{};  // under found_mutex
 std::uint64_t applied_generation{};
 std::chrono::steady_clock::time_point last_tick{};
+std::uintptr_t base{};
+// The local skater's tricks (Extension/Skater/trick_watch.h), and where and when the one going on began.
+tricks::TrickWatch trick_watch;
+Vec3 started_at{};
+std::chrono::steady_clock::time_point started_time{};
+std::string watched_level;
+
+// The score HUD into the trick watch, and what it saw to the plugins. Client thread.
+void read_tricks() {
+    const auto hud = tricks::read_score_hud(base);
+    if (!hud) {
+        environment->score_now.reset();
+        return;
+    }
+    const auto skater = trainer::telemetry();
+    tricks::TrickSignals signals;
+    signals.action = hud->action;
+    signals.line_score = hud->line_score;
+    signals.multiplier = hud->multiplier;
+    signals.slam = hud->slam;
+    // A wipeout is physics states 300-399 (as Domination reads it).
+    signals.wipeout = skater.skater && skater.physics_state >= 300 && skater.physics_state < 400;
+    const auto event = trick_watch.update(signals);
+    environment->score_now = ScoreState{hud->line_score, hud->multiplier, trick_watch.in_trick()};
+    const auto now = std::chrono::steady_clock::now();
+    TrickNews news;
+    switch (event.kind) {
+    case tricks::TrickEvent::Kind::none: return;
+    case tricks::TrickEvent::Kind::started:
+        started_at = skater.position;
+        started_time = now;
+        news.kind = TrickNews::Kind::started;
+        news.started_at = started_at;
+        break;
+    case tricks::TrickEvent::Kind::landed:
+        news.kind = TrickNews::Kind::landed;
+        news.points = event.points;
+        news.multiplier = event.multiplier;
+        news.started_at = started_at;
+        news.landed_at = skater.position;
+        news.ms = std::chrono::duration<double, std::milli>(now - started_time).count();
+        break;
+    case tricks::TrickEvent::Kind::broken:
+        news.kind = TrickNews::Kind::broken;
+        news.reason = signals.slam ? "slam" : "wipeout";
+        break;
+    }
+    host->trick(news);
+}
 
 void watch() {
     FileChecks checks;
@@ -96,9 +149,10 @@ std::filesystem::path local_storage() {
 }
 }
 
-bool start() noexcept {
+bool start(std::uintptr_t image_base) noexcept {
     try {
         if (host) return true;
+        base = image_base;
         std::array<wchar_t, 32768> path{};
         const auto length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
         if (!length || length >= path.size()) return false;
@@ -136,6 +190,8 @@ void on_client_tick() noexcept {
         const double dt = last_tick == std::chrono::steady_clock::time_point{} ? 0
             : std::chrono::duration<double, std::milli>(now - last_tick).count();
         last_tick = now;
+        if (host->wants_tricks()) read_tricks();
+        else environment->score_now.reset();
         host->tick(dt);
     } catch (const std::exception& error) {
         logging::log(logging::Level::error, logging::Channel::plugins, "Plugin tick failed: {}", error.what());
@@ -144,7 +200,14 @@ void on_client_tick() noexcept {
 
 void set_level(std::string_view level) noexcept {
     if (!host) return;
-    try { host->set_level(std::string(level)); }
+    try {
+        // A new level starts a new line: a trick going on before it scores nothing.
+        if (level != watched_level) {
+            watched_level = std::string(level);
+            trick_watch = tricks::TrickWatch{};
+        }
+        host->set_level(std::string(level));
+    }
     catch (const std::exception& error) {
         logging::log(logging::Level::error, logging::Channel::plugins, "Plugin level change failed: {}", error.what());
     }

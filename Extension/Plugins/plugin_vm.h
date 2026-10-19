@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -55,6 +56,18 @@ struct SkaterState {
     float air_time{};     // seconds into the jump going on
 };
 enum class Teleport { sent, unavailable, forbidden };
+// A trick of the local skater, read from the score HUD (Extension/Skater/trick_watch.h).
+struct TrickNews {
+    enum class Kind { started, landed, broken } kind{Kind::started};
+    float points{}, multiplier{}; // landed
+    Vec3 started_at{}, landed_at{};
+    double ms{};                  // landed: from its start
+    std::string reason;           // broken: "slam" or "wipeout"
+};
+struct ScoreState {
+    float line{}, multiplier{};
+    bool in_trick{};
+};
 
 // What a plugin's VM can reach outside itself. The host implements it.
 class Services {
@@ -72,6 +85,8 @@ public:
     virtual Teleport teleport(const Vec3& position, float heading) = 0;
     // Where the line first meets the world's collision, or empty when it is clear (or not loaded).
     virtual std::optional<Vec3> raycast(const Vec3& from, const Vec3& to) = 0;
+    // The score HUD now, or empty without one.
+    virtual std::optional<ScoreState> score() = 0;
 };
 
 enum class State { loading, running, stopped };
@@ -95,6 +110,8 @@ public:
 
     void tick(double dt_ms);
     void level_changed(const std::string& previous, const std::string& current);
+    // trick_started, trick_landed or line_broken, to a plugin with events.tricks.
+    void trick(const TrickNews& news);
     // A console command it registered: the words after the command's name.
     void run_command(const std::string& name, const std::vector<std::string>& arguments);
     void save_storage();
@@ -133,6 +150,8 @@ private:
     // The compiled chunk of a source file on the main stack, or false and the error on it.
     bool load_chunk(lua_State* L, const std::string& relative, const std::filesystem::path& file);
     void fire(std::string_view event, const std::vector<std::string>& arguments);
+    // Each handler of `event` with what `push` puts on the stack (it returns how many values).
+    void fire_with(std::string_view event, const std::function<int(lua_State*)>& push);
     void close();
 
     std::string id_;

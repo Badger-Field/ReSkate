@@ -31,6 +31,8 @@ struct TestEnvironment final : Environment {
     std::vector<std::pair<Vec3, float>> teleports;
     int rays{};
     std::optional<SkaterState> skater() override { return local_skater; }
+    std::optional<ScoreState> score_now;
+    std::optional<ScoreState> score() override { return score_now; }
     Teleport teleport(const Vec3& position, float heading) override {
         if (teleport_forbidden) return Teleport::forbidden;
         if (teleport_unavailable || !local_skater) return Teleport::unavailable;
@@ -455,6 +457,53 @@ void the_skater_can_be_read_moved_and_the_world_probed() {
     running(host, "mover", environment);
 }
 
+void tricks_reach_plugins_that_ask_for_them() {
+    TestEnvironment environment;
+    Host host(environment, Side::client);
+    host.apply({script("bare", R"(
+        local ok, err = pcall(reskate.on, "trick_landed", function() end)
+        assert(not ok and err:find("events.tricks"), err)
+        ok, err = pcall(reskate.score.current)
+        assert(not ok and err:find("events.tricks"), err)
+        reskate.log("bare refused")
+    )")});
+    check(environment.logged("bare refused") && !host.wants_tricks(), "Tricks need events.tricks, and none is read without it");
+    host.apply({script("bare", "reskate.log('bare')"), script("tricks", R"(
+        reskate.on("trick_started", function(e) reskate.log(string.format("started at %.0f %.0f %.0f", e.at.x, e.at.y, e.at.z)) end)
+        reskate.on("trick_landed", function(e)
+            reskate.log(string.format("landed %.0f x%.1f from %.0f to %.0f in %.0f ms", e.points, e.multiplier, e.started_at.x, e.landed_at.x, e.ms))
+        end)
+        reskate.on("line_broken", function(e) reskate.log("broken by a " .. e.reason) end)
+        reskate.console.command("score", "x", function()
+            local s = reskate.score.current()
+            reskate.log(s and string.format("score %.0f x%.1f %s", s.line, s.multiplier, tostring(s.in_trick)) or "no score")
+        end)
+    )", R"("console", "events.tricks")")});
+    check(host.wants_tricks(), "With a plugin that has events.tricks, tricks are read");
+    TrickNews started;
+    started.started_at = {1, 2, 3};
+    host.trick(started);
+    TrickNews landed;
+    landed.kind = TrickNews::Kind::landed;
+    landed.points = 250;
+    landed.multiplier = 2;
+    landed.started_at = {1, 2, 3};
+    landed.landed_at = {9, 2, 3};
+    landed.ms = 1200;
+    host.trick(landed);
+    TrickNews broken;
+    broken.kind = TrickNews::Kind::broken;
+    broken.reason = "slam";
+    host.trick(broken);
+    check(environment.logged("[tricks] started at 1 2 3") && environment.logged("[tricks] landed 250 x2.0 from 1 to 9 in 1200 ms") &&
+          environment.logged("[tricks] broken by a slam"), "Each trick event reaches it, with its values\n" + environment.all());
+    host.run_console("score");
+    environment.score_now = ScoreState{708, 2, true};
+    host.run_console("score");
+    check(environment.logged("[tricks] no score") && environment.logged("[tricks] score 708 x2.0 true"), "and the score HUD as it is");
+    running(host, "tricks", environment);
+}
+
 void level_events_reach_plugins() {
     TestEnvironment environment;
     Host host(environment, Side::client);
@@ -554,7 +603,7 @@ void reskate_test_passes_its_own_checks() {
     check(host.run_console("ptest all"), "ptest is its command");
     ticks(host, environment, 120); // its later checks run on timers
     const auto output = printed_lines(environment);
-    check(output.find("ptest: 46 passed, 0 failed, 4 skipped") != std::string::npos &&
+    check(output.find("ptest: 47 passed, 0 failed, 7 skipped") != std::string::npos &&
           output.find("FAIL") == std::string::npos, "Every reskate-test check passes:\n" + output + environment.all());
     check(host.run_console("ptest echo a b") && environment.printed("ptest echo: a b"), "and its echo command answers");
     // With a skater on the ground, its skater checks run too.
@@ -563,6 +612,16 @@ void reskate_test_passes_its_own_checks() {
     check(host.run_console("ptest skater"), "ptest skater");
     check(environment.printed("ptest: 5 passed, 0 failed (skater 5/5)"), "The skater checks pass with a skater:\n" + printed_lines(environment));
     check(host.run_console("ptest tp") && environment.teleports.size() == 1, "and ptest tp teleports it");
+    // ptest trick waits for a trick and says what its events held.
+    check(host.run_console("ptest trick"), "ptest trick");
+    host.trick({TrickNews::Kind::started, 0, 0, {1, 0, 1}});
+    host.trick({TrickNews::Kind::landed, 250, 2, {1, 0, 1}, {4, 0, 5}, 900});
+    check(environment.printed("ptest trick: started at (1.0, 0.0, 1.0)") &&
+          environment.printed("ptest trick: landed 250 points at x2.0 in 900 ms, from (1.0, 0.0, 1.0) to (4.0, 0.0, 5.0)"),
+          "ptest trick prints the trick");
+    environment.lines.clear();
+    check(host.run_console("ptest tricks") && environment.printed("ptest: 3 passed, 0 failed, 1 skipped"),
+          "and the tricks checks pass once one landed");
     running(host, "reskate-test", environment);
 }
 
@@ -571,17 +630,18 @@ void reskate_hostile_is_stopped_or_refused_every_time() {
     Host host(environment, Side::client);
     host.apply({contributed("reskate-hostile")});
     running(host, "reskate-hostile", environment);
-    struct Case { const char* attack; bool stops; int ticks; };
+    struct Case { const char* attack; bool stops; int ticks; bool trick = false; };
     const Case cases[] = {
         {"loop", true, 0}, {"caught-loop", true, 0}, {"tick-loop", true, 1}, {"memory", true, 0},
         {"caught-memory", true, 0}, {"huge-string", true, 0}, {"buffer", true, 0}, {"coroutines", true, 0},
         {"errors", true, 10}, {"slow", true, 60 * 5}, {"log-flood", false, 1}, {"timers", false, 1},
-        {"recursion", false, 1}, {"escapes", false, 1}, {"teleport-spam", false, 1}, {"raycast-flood", false, 1},
+        {"recursion", false, 1}, {"escapes", false, 1}, {"teleport-spam", false, 1}, {"raycast-flood", false, 1}, {"trick-loop", true, 0, true},
     };
     for (const auto& item : cases) {
         check(host.reload("reskate-hostile").find("reloaded") != std::string::npos, std::string("reloads before ") + item.attack);
         check(host.run_console(std::string("hostile ") + item.attack), item.attack);
         ticks(host, environment, item.ticks);
+        if (item.trick) host.trick({TrickNews::Kind::landed, 100, 1});
         const auto state = status_of(host, "reskate-hostile").state;
         check((state == "stopped") == item.stops, std::string(item.attack) + " left it " + state + "\n" + environment.all());
     }
@@ -611,6 +671,7 @@ int main() {
         a_plugin_over_its_time_budget_is_stopped();
         a_plugin_reloads_when_its_files_change();
         the_skater_can_be_read_moved_and_the_world_probed();
+        tricks_reach_plugins_that_ask_for_them();
         level_events_reach_plugins();
         timers_run_when_due();
         a_package_with_a_program_or_on_the_wrong_side_is_not_loaded();

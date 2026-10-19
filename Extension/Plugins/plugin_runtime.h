@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -8,8 +9,9 @@
 //
 // Every function but start is for the client thread, the one that runs console commands.
 namespace dingosdk::plugins {
-// Once, at startup. Plugins load at the first client tick after discovery finds them.
-bool start() noexcept;
+// Once, at startup, with the game's image base (the score HUD is read from it). Plugins load at the
+// first client tick after discovery finds them.
+bool start(std::uintptr_t image_base) noexcept;
 void on_client_tick() noexcept;
 // The level being played, or empty without one: plugins hear level_loaded and level_unloading.
 void set_level(std::string_view level) noexcept;

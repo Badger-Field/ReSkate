@@ -2,5 +2,5 @@
     "api": 1,
     "entry": "plugin/main.lua",
     "side": "client",
-    "permissions": ["console", "skater.read", "skater.teleport", "world.raycast"]
+    "permissions": ["console", "skater.read", "skater.teleport", "world.raycast", "events.tricks"]
 }

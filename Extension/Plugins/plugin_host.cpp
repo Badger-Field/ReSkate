@@ -1,6 +1,7 @@
 #include "plugin_host.h"
 #include "plugin_api.h"
 #include "Engine/Core/Console/console_core.h"
+#include <algorithm>
 #include <format>
 #include <utility>
 
@@ -128,6 +129,19 @@ void Host::set_level(std::string level) {
         entry.plugin->level_changed(previous, level_);
         collect(entry);
     }
+}
+
+void Host::trick(const TrickNews& news) {
+    for (auto& [id, entry] : entries_) {
+        if (!entry.plugin || !entry.plugin->has("events.tricks")) continue;
+        entry.plugin->trick(news);
+        collect(entry);
+    }
+}
+
+bool Host::wants_tricks() const {
+    return std::any_of(entries_.begin(), entries_.end(),
+        [](const auto& item) { return item.second.plugin && item.second.plugin->has("events.tricks"); });
 }
 
 bool Host::run_console(std::string_view text) {

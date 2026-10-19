@@ -73,6 +73,11 @@ attack("raycast-flood", "keeps running: refused past 64 raycasts a tick", functi
     for i = 1, 100000 do reskate.world.raycast(vector.create(0, 100, 0), vector.create(0, -100, 0)) end
 end)
 
+attack("trick-loop", "stopped at the next trick landed", function()
+    reskate.on("trick_landed", function() while true do end end)
+    reskate.console.print("hostile: now land a trick")
+end)
+
 -- Each returns true when that way out worked.
 local escapes = {
     {"io", function() return io ~= nil end},

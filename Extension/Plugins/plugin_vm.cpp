@@ -281,6 +281,13 @@ void Plugin::unload() {
 }
 
 void Plugin::fire(std::string_view event, const std::vector<std::string>& arguments) {
+    fire_with(event, [&](lua_State* L) {
+        for (const auto& argument : arguments) lua_pushlstring(L, argument.data(), argument.size());
+        return static_cast<int>(arguments.size());
+    });
+}
+
+void Plugin::fire_with(std::string_view event, const std::function<int(lua_State*)>& push) {
     if (state_ != State::running) return;
     const auto found = handlers_.find(event);
     if (found == handlers_.end()) return;
@@ -289,8 +296,54 @@ void Plugin::fire(std::string_view event, const std::vector<std::string>& argume
     for (const int handler : handlers) {
         if (state_ != State::running) return;
         lua_getref(L_, handler);
-        for (const auto& argument : arguments) lua_pushlstring(L_, argument.data(), argument.size());
-        call(static_cast<int>(arguments.size()), what, limits_.call_ms);
+        int count = 0;
+        try {
+            count = push(L_);
+        } catch (const std::exception& error) {
+            // Out of memory building the event: the VM is closed next, so its stack is left as it is.
+            stop(std::string("its event could not be handed over: ") + error.what());
+            return;
+        }
+        call(count, what, limits_.call_ms);
+    }
+}
+
+void Plugin::trick(const TrickNews& news) {
+    if (state_ != State::running || !has("events.tricks")) return;
+    const auto vector = [](lua_State* L, const Vec3& v) { lua_pushvector(L, v[0], v[1], v[2]); };
+    switch (news.kind) {
+    case TrickNews::Kind::started:
+        fire_with("trick_started", [&](lua_State* L) {
+            lua_createtable(L, 0, 1);
+            vector(L, news.started_at);
+            lua_setfield(L, -2, "at");
+            return 1;
+        });
+        break;
+    case TrickNews::Kind::landed:
+        fire_with("trick_landed", [&](lua_State* L) {
+            lua_createtable(L, 0, 5);
+            lua_pushnumber(L, news.points);
+            lua_setfield(L, -2, "points");
+            lua_pushnumber(L, news.multiplier);
+            lua_setfield(L, -2, "multiplier");
+            vector(L, news.started_at);
+            lua_setfield(L, -2, "started_at");
+            vector(L, news.landed_at);
+            lua_setfield(L, -2, "landed_at");
+            lua_pushnumber(L, news.ms);
+            lua_setfield(L, -2, "ms");
+            return 1;
+        });
+        break;
+    case TrickNews::Kind::broken:
+        fire_with("line_broken", [&](lua_State* L) {
+            lua_createtable(L, 0, 1);
+            lua_pushlstring(L, news.reason.data(), news.reason.size());
+            lua_setfield(L, -2, "reason");
+            return 1;
+        });
+        break;
     }
 }
 

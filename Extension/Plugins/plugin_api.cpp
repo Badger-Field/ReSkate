@@ -13,7 +13,14 @@
 // luaL_error, or a C++ exception, which Luau turns into a Lua error with its message.
 namespace dingosdk::plugins {
 namespace {
-constexpr std::array<std::string_view, 5> events{"load", "unload", "tick", "level_loaded", "level_unloading"};
+// Events and the permission each needs (none for the base set).
+struct Event {
+    std::string_view name, permission;
+};
+constexpr std::array<Event, 8> events{{
+    {"load", {}}, {"unload", {}}, {"tick", {}}, {"level_loaded", {}}, {"level_unloading", {}},
+    {"trick_started", "events.tricks"}, {"trick_landed", "events.tricks"}, {"line_broken", "events.tricks"},
+}};
 constexpr std::size_t maximum_key = 128;
 constexpr std::size_t maximum_command = 48;
 constexpr std::size_t maximum_listing = 1000;
@@ -197,8 +204,10 @@ struct ApiFunctions {
         auto& plugin = plugin_of(L);
         const std::string event = luaL_checkstring(L, 1);
         luaL_checktype(L, 2, LUA_TFUNCTION);
-        if (std::find(events.begin(), events.end(), event) == events.end())
-            luaL_error(L, "there is no event \"%s\" in this ReSkate", event.c_str());
+        const auto known = std::find_if(events.begin(), events.end(), [&](const Event& e) { return e.name == event; });
+        if (known == events.end()) luaL_error(L, "there is no event \"%s\" in this ReSkate", event.c_str());
+        if (!known->permission.empty() && !plugin.has(known->permission))
+            luaL_error(L, "the %s event needs the \"%s\" permission in reskate-plugin.json", event.c_str(), std::string(known->permission).c_str());
         auto& list = plugin.handlers_[event];
         if (list.size() >= plugin.limits_.handlers) luaL_error(L, "more than %d handlers for one event", static_cast<int>(plugin.limits_.handlers));
         lua_pushvalue(L, 2);
@@ -493,6 +502,24 @@ struct ApiFunctions {
         else lua_pushnil(L);
         return 1;
     }
+    // events.tricks: the score HUD now (the line's score, its multiplier, a trick going on), or nil.
+    static int score(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "events.tricks", "reskate.score.current");
+        const auto now = plugin.services_.score();
+        if (!now) {
+            lua_pushnil(L);
+            return 1;
+        }
+        lua_createtable(L, 0, 3);
+        lua_pushnumber(L, now->line);
+        lua_setfield(L, -2, "line");
+        lua_pushnumber(L, now->multiplier);
+        lua_setfield(L, -2, "multiplier");
+        lua_pushboolean(L, now->in_trick);
+        lua_setfield(L, -2, "in_trick");
+        return 1;
+    }
     // Modules come from the plugin's own package, beside its entry: require("./rules") or
     // require("rules") is <entry folder>/rules.luau or rules.lua. Each runs once.
     static int require(lua_State* L) {
@@ -619,6 +646,11 @@ void Api::install(Plugin& plugin, lua_State* L) {
     lua_setfield(L, -2, "teleport");
     readonly();
     lua_setfield(L, -2, "skater");
+
+    lua_createtable(L, 0, 1);
+    set_function(L, "current", ApiFunctions::score);
+    readonly();
+    lua_setfield(L, -2, "score");
 
     lua_createtable(L, 0, 1);
     set_function(L, "raycast", ApiFunctions::raycast);

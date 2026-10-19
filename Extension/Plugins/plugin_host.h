@@ -35,6 +35,7 @@ public:
     virtual std::optional<SkaterState> skater() { return std::nullopt; }
     virtual Teleport teleport(const Vec3&, float) { return Teleport::unavailable; }
     virtual std::optional<Vec3> raycast(const Vec3&, const Vec3&) { return std::nullopt; }
+    virtual std::optional<ScoreState> score() { return std::nullopt; }
 };
 
 struct Status {
@@ -58,6 +59,10 @@ public:
     void apply(const std::vector<Candidate>& found);
     void tick(double dt_ms);
     void set_level(std::string level);
+    // A trick of the local skater, to every plugin with events.tricks.
+    void trick(const TrickNews& news);
+    // Whether a running plugin has events.tricks: the score HUD is read only then.
+    bool wants_tricks() const;
     // Runs a plugin's console command when the text starts with one; false when none matched.
     bool run_console(std::string_view text);
     std::vector<Status> status() const;
@@ -91,6 +96,7 @@ private:
     std::optional<SkaterState> skater() override { return environment_.skater(); }
     Teleport teleport(const Vec3& position, float heading) override { return environment_.teleport(position, heading); }
     std::optional<Vec3> raycast(const Vec3& from, const Vec3& to) override { return environment_.raycast(from, to); }
+    std::optional<ScoreState> score() override { return environment_.score(); }
 
     Environment& environment_;
     Side side_;
