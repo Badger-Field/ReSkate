@@ -13,6 +13,9 @@ Built on ReSkate 2.1.0, like 0.8.0.
   grind exit triggers and Board Break show at the top of QUICK SETTINGS with what they are set to (Go to, Reset), are
   named on the MODIFIED line at the top of SANDBOX instead of STOCK, and RESET EVERYTHING turns them back. Road Rash
   and Hall of Meat only show bails and still never count.
+- **Dials go to 0.** A preset's dial (Grind lock-on, Grind friction, Body flip speed...) refused 0 in its box and in
+  `trainer dial`. 0 now puts every value it moves to 0, for example Grind lock-on at 0 for no grind lock-on at all; a
+  value it moves the other way stays the game's own.
 - **Landings on time with another gravity.** The game plans each flight's landing with its own gravity and the
   skater's air pose reaches for the ground as that countdown runs out. Above x1 the skater came down before the
   countdown ended, so the body sank into the ground before the wheels touched, and the landing came late and

@@ -35,6 +35,7 @@
 #include <format>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <map>
 #include <numbers>
 #include <optional>
@@ -1067,8 +1068,11 @@ std::string apply_dial(std::string_view name, double factor) {
     const auto &rules = presets[p].rules;
     if (rules.empty() || !rules[0].multiply || rules[0].amount <= 0 || rules[0].amount == 1)
         return "error: " + std::string(presets[p].name) + " is a switch, not a dial.";
-    if (!(factor > 0) || !std::isfinite(factor)) return "error: a dial needs a multiplier above 0; 1 is the game's own.";
-    const double t = std::log(factor) / std::log(rules[0].amount);
+    if (!(factor >= 0) || !std::isfinite(factor)) return "error: a dial needs a multiplier of 0 or more; 1 is the game's own.";
+    // 0 (t = -infinity): the values that move with the first go to 0; one that moves the other way stays the game's own
+    // rather than going to infinity.
+    const double t = factor == 0 ? -std::numeric_limits<double>::infinity() : std::log(factor) / std::log(rules[0].amount);
+    const bool up = rules[0].amount > 1;
     std::size_t count{}, locked{};
     for (const auto &[index, r] : preset_targets()[p]) {
         auto &e = s.entries[index];
@@ -1077,7 +1081,8 @@ std::string apply_dial(std::string_view name, double factor) {
             ++locked;
             continue;
         }
-        if (rule.multiply) set_entry(e, rule.amount > 0 ? e.stock * std::pow(rule.amount, t) : e.stock * (1 + (rule.amount - 1) * t));
+        if (rule.multiply && factor == 0) set_entry(e, rule.amount > 0 && (rule.amount > 1) == up ? 0.0 : e.stock);
+        else if (rule.multiply) set_entry(e, rule.amount > 0 ? e.stock * std::pow(rule.amount, t) : e.stock * (1 + (rule.amount - 1) * t));
         else set_entry(e, t > 0.01 ? rule.amount : e.stock); // a switch that goes with the preset's direction
         ++count;
     }

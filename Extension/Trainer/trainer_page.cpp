@@ -351,7 +351,7 @@ void dial_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const trai
         field(menu, std::abs(preset.factor - 1.0) > 1e-4 ? (preset.title + "  *").c_str() : preset.title.c_str(), hint.c_str());
         double value = preset.factor;
         const double low = preset.amount < 1 ? 0.05 : 0.2, high = preset.amount < 1 ? 3.0 : 10.0;
-        if (slider_double("##dial", &value, low, high, "x %.2f", ImGuiSliderFlags_Logarithmic) && value > 0)
+        if (slider_double("##dial", &value, low, high, "x %.2f", ImGuiSliderFlags_Logarithmic) && value >= 0)
             trainer_command(menu, callbacks, std::format("dial {} {}", number(value), preset.name));
         ImGui::PopID();
         (void)p;
@@ -388,9 +388,9 @@ void dial_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const trai
     // Any number at all: the slider only covers the sensible range.
     double typed = preset.factor;
     ImGui::SetNextItemWidth(box);
-    if (ImGui::InputDouble("##typed", &typed, 0, 0, "%.6g", ImGuiInputTextFlags_EnterReturnsTrue) && typed > 0)
+    if (ImGui::InputDouble("##typed", &typed, 0, 0, "%.6g", ImGuiInputTextFlags_EnterReturnsTrue) && typed >= 0)
         trainer_command(menu, callbacks, std::format("dial {} {}", number(typed), preset.name));
-    if (ImGui::IsItemHovered()) wrapped_tooltip("Type any multiplier and press Enter: the slider's ends are not a limit.");
+    if (ImGui::IsItemHovered()) wrapped_tooltip("Type any multiplier and press Enter: the slider's ends are not a limit. 0 turns what it moves to 0.");
     ImGui::SameLine();
     if (preset.active) ImGui::PushStyleColor(ImGuiCol_Button, skate_theme::blue);
     const bool pressed = ImGui::Button(preset.name.c_str(), ImVec2(button, 0));
