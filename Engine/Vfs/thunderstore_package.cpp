@@ -61,7 +61,7 @@ std::wstring download_url(const Name& name, std::string_view wanted) {
     return wide(std::string(site) + "/package/download/" + name.owner + '/' + name.name + '/' + std::string(wanted) + '/');
 }
 
-Choice choose(std::string_view json, const Name& wanted, std::string_view community) {
+Choice choose(std::string_view json, const Name& wanted, std::string_view community, std::string_view wanted_category) {
     Choice choice;
     try {
         const auto root = Json::parse(json);
@@ -83,14 +83,18 @@ Choice choose(std::string_view json, const Name& wanted, std::string_view commun
                 if (listing.contains("categories") && listing.at("categories").is_array())
                     for (const auto& category : listing.at("categories"))
                     {
-                        map = map || (category.is_string() && same(category.string(), "Maps"));
+                        map = map || (category.is_string() && same(category.string(), wanted_category));
                         nsfw = nsfw || (category.is_string() && same(category.string(), "NSFW"));
                     }
             }
         if (!listed) { choice.reason = "Its package is not listed for ReSkate on Thunderstore."; return choice; }
         if (rejected) { choice.reason = "Its package was rejected by Thunderstore's moderators."; return choice; }
         if (nsfw) { choice.reason = "Its package is marked NSFW on Thunderstore."; return choice; }
-        if (!map) { choice.reason = "Its package is not listed as a map on Thunderstore."; return choice; }
+        if (!map && !wanted_category.empty()) {
+            choice.reason = same(wanted_category, "Maps") ? "Its package is not listed as a map on Thunderstore."
+                                                          : "Its package is not listed as " + std::string(wanted_category) + " on Thunderstore.";
+            return choice;
+        }
         const auto newest = root.contains("latest") ? text_of(root.at("latest"), "version_number") : std::string();
         if (!version(newest)) { choice.reason = "Thunderstore gave no version of that package."; return choice; }
         choice.newest = newest;

@@ -74,6 +74,7 @@ DWORD test_get_temp_path(DWORD capacity, LPWSTR output) {
 #define now_us fake_now_us
 #define GetTempPathW test_get_temp_path
 #include "../map_download.cpp"
+#include "../package_install.cpp"
 #undef GetTempPathW
 #undef now_us
 
@@ -123,6 +124,7 @@ namespace dingosdk::mods {
 std::filesystem::path engine_data_root() noexcept { return fixture::root; }
 ModList scan_mods(const std::filesystem::path&) noexcept { return {}; }
 void save_mod_order(const std::filesystem::path&, const std::vector<ModEntry>&) {}
+std::string ascii_path(const std::filesystem::path& path) { return path.generic_string(); }
 }
 namespace dingosdk::launcher_mods {
 std::string install(const std::filesystem::path& root, const std::filesystem::path& source, bool,

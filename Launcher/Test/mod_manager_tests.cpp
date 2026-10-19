@@ -11,6 +11,7 @@
 
 #include <miniz.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -404,6 +405,23 @@ int main() {
                   !fs::exists(store / L"Team-Empty"),
               "Thunderstore installs refuse a package with nothing to load");
         check(install(store, sources / L"empty.zip") == "empty", "A plain install still takes a description-only mod");
+
+        // What the game's mod browser asks: every file that would be installed, before any is written.
+        std::vector<std::string> asked;
+        options.folder = "Team-Desert";
+        options.accept = [&](std::span<const std::string> files) {
+            asked.assign(files.begin(), files.end());
+            return std::string(std::find(files.begin(), files.end(), "Win32/levels/desert.sb") != files.end() ? "no bundles here" : "");
+        };
+        check(error_of([&] { launcher_mods::install(store, sources / L"nested.zip", true, {}, cancel, options); }) == "no bundles here" &&
+                  !fs::exists(store / L"Team-Desert"),
+              "A refused package is not installed");
+        std::ranges::sort(asked);
+        check(asked == std::vector<std::string>{"CHANGELOG.md", "README.md", "Win32/levels/desert.sb", "icon.png", "layout.toc", "manifest.json"},
+              "The files asked about are the ones the mod would hold, package files included, the wrapper folder gone");
+        options.accept = [](std::span<const std::string>) { return std::string(); };
+        check(launcher_mods::install(store, sources / L"nested.zip", true, {}, cancel, options) == "Team-Desert",
+              "An accepted package installs");
     }
 
     // A built-in pack in ReSkate's own format unpacks to exactly its files (a name with spaces

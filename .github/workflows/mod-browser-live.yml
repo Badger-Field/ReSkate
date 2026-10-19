@@ -1,0 +1,98 @@
+# The MODS page's GET MODS against the real Thunderstore, on Windows with no game: reading the
+# community's listing, installing a small map into a data root of its own, cancelling a download,
+# refusing what may not be installed from the game, one installer at a time, and what applying
+# would do (Extension/Assets/Test/mod_browser_live_test.cpp). It downloads from thunderstore.io, so
+# it runs weekly and by hand, not with every build. RESKATE_LIVE_TEST_PACKAGE picks the map.
+name: Mod browser (live Thunderstore)
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Map package to install (Owner-Name); empty for the smallest in the Maps category"
+        required: false
+        default: ""
+  schedule:
+    - cron: "17 6 * * 1"  # Mondays, 06:17 UTC
+  # And on a pull request that changes what it tests (a workflow on a branch alone cannot be run
+  # by hand until it is on the default branch).
+  pull_request:
+    paths:
+      - "Extension/Assets/mod_browser*"
+      - "Extension/Assets/package_install*"
+      - "Extension/Assets/mods_writer.h"
+      - "Extension/Assets/live_mods_preview.cpp"
+      - "Extension/Assets/Test/mod_browser_live_test.cpp"
+      - "Engine/Vfs/thunderstore_listing*"
+      - "Engine/Vfs/thunderstore_package*"
+      - "Launcher/mod_manager*"
+      - ".github/workflows/mod-browser-live.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mod-browser-live-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live:
+    name: GET MODS against thunderstore.io
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      # Compiled files are kept between runs, as in build.yml.
+      SCCACHE_DIR: ${{ github.workspace }}\.sccache
+      SCCACHE_CACHE_SIZE: 1G
+      # No crash uploads from CI (Engine/Core/Debug/protocol.h).
+      RESKATE_NO_CRASH_UPLOAD: "1"
+      RESKATE_LIVE_TEST_PACKAGE: ${{ github.event.inputs.package }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install sccache
+        shell: pwsh
+        run: |
+          $version = "v0.8.2"
+          $sha256 = "2b35d159eff6d662b38d2527e7f362be90f5d9d8b9116f6197243f4b1cd926ff"
+          $zip = "$env:RUNNER_TEMP\sccache.zip"
+          Invoke-WebRequest "https://github.com/mozilla/sccache/releases/download/$version/sccache-$version-x86_64-pc-windows-msvc.zip" -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $sha256) { throw "sccache download does not match its checksum" }
+          Expand-Archive $zip "$env:RUNNER_TEMP\sccache"
+          "$env:RUNNER_TEMP\sccache\sccache-$version-x86_64-pc-windows-msvc" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - name: Compiled files from earlier runs
+        uses: actions/cache@v4
+        with:
+          path: .sccache
+          key: sccache-mod-browser-live-${{ github.sha }}
+          restore-keys: |
+            sccache-mod-browser-live-
+            sccache-windows-
+      - name: Build the test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # The x64 compiler's environment, as ci/local.ps1 sets it up.
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $devcmd = Join-Path $vs "Common7\Tools\VsDevCmd.bat"
+          foreach ($line in & cmd.exe /c "`"$devcmd`" -arch=amd64 -host_arch=amd64 -no_logo && set") {
+            if ($line -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($Matches[1])" -Value $Matches[2] }
+          }
+          cmake --preset ninja-x64 -DDINGOSDK_CRASH_REPORT_URL= -DDINGOSDK_BUILD_MOD_BROWSER_LIVE_TEST=ON `
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          if ($LASTEXITCODE -ne 0) { throw "Configure failed" }
+          cmake --build build/ninja-x64 --target dingosdk_mod_browser_live_test --parallel
+          if ($LASTEXITCODE -ne 0) { throw "Build failed" }
+          sccache --show-stats
+      - name: Run it against thunderstore.io
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force logs | Out-Null
+          & build/ninja-x64/dingosdk_mod_browser_live_test.exe --log logs/ReSkate.log 2>&1 | Tee-Object -FilePath logs/mod-browser-live.txt
+          if ($LASTEXITCODE -ne 0) { throw "The live test failed (exit $LASTEXITCODE)" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mod-browser-live-${{ github.run_id }}
+          path: logs/
+          retention-days: 14

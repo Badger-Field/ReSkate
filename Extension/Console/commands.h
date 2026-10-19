@@ -29,6 +29,8 @@ void register_trainer_commands(Commands &);
 void register_hall_of_meat_commands(Commands &);
 void register_road_rash_commands(Commands &);
 void register_board_break_commands(Commands &);
+// `mods browse|install|cancel|apply|status` (Extension/Assets/mod_browser_commands.cpp).
+void register_mod_browser_commands(Commands &);
 void register_grind_exit_commands(Commands &);
 void register_replay_keyframes_commands(Commands &);
 // Runtime adapters. Invoked only by the verified game-thread dispatcher.

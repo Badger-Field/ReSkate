@@ -3,6 +3,7 @@
 #include <atomic>
 #include <filesystem>
 #include <functional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -36,6 +37,10 @@ struct InstallOptions {
     // Refuse a source with nothing the game loads, unless its manifest.json
     // lists dependencies (a mod pack).
     bool require_content{};
+    // Asked, before anything is written, with the path inside the mod of every file that would be
+    // installed ('/' between folders): a non-empty answer refuses the source with it as the reason.
+    // The game's mod browser installs only what it can apply (Extension/Assets/mod_browser.h).
+    std::function<std::string(std::span<const std::string> files)> accept;
 };
 
 // Installs `source` (a .zip, or a folder) as Mods/<name> and returns <name>.

@@ -1,5 +1,6 @@
 #include "Engine/Core/Platform/launcher_support.h"
 #include "skate_menu_internal.h"
+#include "Extension/Assets/mod_browser.h"
 #include "Extension/Skater/drone_flight.h"
 #include "skate_menu.h"
 #include "modding_menu.h"
@@ -1367,6 +1368,7 @@ void draw_skate_menu(SkateMenu& menu, const Model& model, const CallbacksV3& cal
     menu.rail_indent = 0;
     if (trainer_page_wanted()) open_page(menu, page_sandbox);
     if (dingosdk::drone::menu_flag().exchange(false)) open_page(menu, page_addons, addon_drone); // `dronemenu`
+    if (dingosdk::mod_browser::take_open()) open_page(menu, page_mods);                          // `mods browse`
     menu.page = std::clamp(menu.page, 0, static_cast<int>(page_count) - 1);
     if (page_hidden(menu, model, menu.page)) menu.page = full ? page_home : page_map;
     menu_page_owns_pad().store(full && (menu.page == page_online || menu.recording_bind));

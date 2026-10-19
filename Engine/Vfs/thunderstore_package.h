@@ -36,8 +36,8 @@ struct Choice {
     std::string reason;    // why not, for the player
 };
 // Reads that answer. The package is taken only when it is the one asked for, is listed in
-// `community` as a map (the "Maps" category), is not deprecated or marked NSFW there and was
-// not rejected by the community's moderators.
-Choice choose(std::string_view json, const Name& wanted, std::string_view community);
+// `community` in `category` (a map: "Maps"; empty for any), is not deprecated or marked NSFW
+// there and was not rejected by the community's moderators.
+Choice choose(std::string_view json, const Name& wanted, std::string_view community, std::string_view category = "Maps");
 
 } // namespace dingosdk::thunderstore_package

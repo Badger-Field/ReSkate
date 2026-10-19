@@ -389,6 +389,26 @@ if(DINGOSDK_BUILD_TESTS)
     add_executable(dingosdk_mesh_registry_tests Extension/World/Test/mesh_registry_tests.cpp)
     target_include_directories(dingosdk_mesh_registry_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     add_test(NAME mesh_registry COMMAND dingosdk_mesh_registry_tests)
+    # The MODS page's Thunderstore browser: the listing, search, versions and what may be installed.
+    add_executable(dingosdk_thunderstore_listing_tests Engine/Vfs/Test/thunderstore_listing_tests.cpp
+        Engine/Vfs/thunderstore_listing.cpp)
+    target_include_directories(dingosdk_thunderstore_listing_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_link_libraries(dingosdk_thunderstore_listing_tests PRIVATE dingosdk_json dingosdk_miniz)
+    add_test(NAME thunderstore_listing COMMAND dingosdk_thunderstore_listing_tests)
+    # One installer at a time in the Mods folder: a map download and the MODS page's installs.
+    add_executable(dingosdk_mods_writer_tests Extension/Assets/Test/mods_writer_tests.cpp)
+    target_include_directories(dingosdk_mods_writer_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    find_package(Threads REQUIRED)
+    target_link_libraries(dingosdk_mods_writer_tests PRIVATE Threads::Threads)
+    add_test(NAME mods_writer COMMAND dingosdk_mods_writer_tests)
+    # The package a map comes from (Windows builds run it with the launcher's tests).
+    if(NOT WIN32)
+        add_executable(dingosdk_thunderstore_package_tests Engine/Vfs/Test/thunderstore_package_tests.cpp
+            Engine/Vfs/thunderstore_package.cpp)
+        target_include_directories(dingosdk_thunderstore_package_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+        target_link_libraries(dingosdk_thunderstore_package_tests PRIVATE dingosdk_json)
+        add_test(NAME thunderstore_package COMMAND dingosdk_thunderstore_package_tests)
+    endif()
 endif()
 
 # Header-only game contracts belong to the runtime's subsystem tree.
@@ -470,6 +490,18 @@ if(DINGOSDK_BUILD_HALL_OF_MEAT_TESTS)
         target_link_libraries(dingosdk_hall_of_meat_skeleton_tests PRIVATE dingosdk_game_archives dingosdk_logging)
         add_test(NAME hall_of_meat_skeleton COMMAND dingosdk_hall_of_meat_skeleton_tests "${DINGOSDK_TEST_GAME_ROOT}")
     endif()
+endif()
+# The MODS page's GET MODS against the real Thunderstore, with no game (it downloads, so it is off by
+# default and not a ctest test): .github/workflows/mod-browser-live.yml builds and runs it.
+option(DINGOSDK_BUILD_MOD_BROWSER_LIVE_TEST "Build the GET MODS test that installs from the real Thunderstore" OFF)
+if(DINGOSDK_BUILD_MOD_BROWSER_LIVE_TEST AND WIN32)
+    add_executable(dingosdk_mod_browser_live_test Extension/Assets/Test/mod_browser_live_test.cpp
+        Extension/Assets/mod_browser.cpp Extension/Assets/package_install.cpp Extension/Assets/live_mods_preview.cpp
+        Engine/Vfs/thunderstore_listing.cpp Engine/Vfs/thunderstore_package.cpp Launcher/mod_manager.cpp)
+    target_include_directories(dingosdk_mod_browser_live_test PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_link_libraries(dingosdk_mod_browser_live_test PRIVATE dingosdk_mods dingosdk_mod_list dingosdk_logging dingosdk_https
+        dingosdk_launcher_support dingosdk_initfs dingosdk_content_cache_install dingosdk_world_layer_scan dingosdk_json dingosdk_miniz
+        shell32 winhttp ole32)
 endif()
 get_property(project_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(target IN LISTS project_targets)
