@@ -134,3 +134,16 @@ endif()
 # World layers read from the installed level data, cached per game build.
 add_library(dingosdk_world_layer_scan STATIC Engine/Vfs/world_layer_scan.cpp)
 target_link_libraries(dingosdk_world_layer_scan PUBLIC dingosdk_json PRIVATE dingosdk_game_archives dingosdk_content_cache)
+
+# Plugins (Extension/Plugins): Luau scripts in mods, each in its own sandboxed VM. The host, its
+# VMs and the API; finding plugins among the mods needs the mod list, so it is Windows only for now.
+add_library(dingosdk_plugins STATIC
+    Extension/Plugins/plugin_manifest.cpp
+    Extension/Plugins/plugin_vm.cpp
+    Extension/Plugins/plugin_api.cpp
+    Extension/Plugins/plugin_host.cpp)
+target_link_libraries(dingosdk_plugins PUBLIC dingosdk_json dingosdk_console_core PRIVATE dingosdk_luau)
+if(WIN32)
+    target_sources(dingosdk_plugins PRIVATE Extension/Plugins/plugin_discovery.cpp)
+    target_link_libraries(dingosdk_plugins PUBLIC dingosdk_mod_list)
+endif()

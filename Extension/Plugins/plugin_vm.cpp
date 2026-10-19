@@ -1,0 +1,384 @@
+#include "plugin_vm.h"
+#include "plugin_api.h"
+#include "lua.h"
+#include "luacode.h"
+#include "lualib.h"
+#include <cstdlib>
+#include <format>
+#include <fstream>
+
+namespace dingosdk::plugins {
+namespace {
+double elapsed_ms(std::chrono::steady_clock::time_point since) {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - since).count();
+}
+// One log line: an error message can be as long as a script makes it.
+std::string shortened(std::string_view text) {
+    constexpr std::size_t most = 2000;
+    return text.size() <= most ? std::string(text) : std::string(text.substr(0, most)) + " ...";
+}
+// The traceback is added where the error was raised, while its stack is still there.
+int traceback(lua_State* L) {
+    std::string text = lua_isstring(L, 1) ? lua_tostring(L, 1) : "an error that is not a string";
+    if (const char* trace = lua_debugtrace(L); trace && *trace) {
+        text += "\n";
+        text += trace;
+    }
+    lua_pushlstring(L, text.data(), text.size());
+    return 1;
+}
+}
+
+std::string read_package_file(const std::filesystem::path& file, std::size_t most, std::string& error) {
+    error.clear();
+    std::error_code code;
+    if (!std::filesystem::is_regular_file(file, code)) { error = "not found"; return {}; }
+    const auto size = std::filesystem::file_size(file, code);
+    if (code) { error = "cannot be read"; return {}; }
+    if (size > most) { error = std::format("is larger than {} MB", most >> 20); return {}; }
+    std::ifstream in(file, std::ios::binary);
+    std::string text(static_cast<std::size_t>(size), '\0');
+    if (!in || !in.read(text.data(), static_cast<std::streamsize>(size))) { error = "cannot be read"; return {}; }
+    return text;
+}
+
+Plugin::Plugin(std::string id, std::filesystem::path directory, Manifest manifest, Services& services, Limits limits)
+    : id_(std::move(id)), directory_(std::move(directory)), manifest_(std::move(manifest)), services_(services),
+      limits_(limits) {
+    const auto entry = std::filesystem::path(manifest_.entry);
+    code_root_ = entry.has_parent_path() ? entry.parent_path().generic_string() : std::string{};
+}
+
+Plugin::~Plugin() { close(); }
+
+void* Plugin::allocate(void* ud, void* ptr, std::size_t old_size, std::size_t new_size) {
+    auto& self = *static_cast<Plugin*>(ud);
+    if (!ptr) old_size = 0;
+    if (new_size == 0) {
+        std::free(ptr);
+        self.memory_ -= old_size;
+        return nullptr;
+    }
+    if (new_size > old_size && self.memory_ - old_size + new_size > self.limits_.memory) {
+        self.memory_exceeded_ = true;
+        return nullptr;
+    }
+    void* block = std::realloc(ptr, new_size);
+    if (!block) return nullptr;
+    self.memory_ = self.memory_ - old_size + new_size;
+    return block;
+}
+
+// Called at Luau's safe points: loop back edges, calls and returns. Once a plugin is over a limit
+// every safe point raises again, so a pcall in the script cannot catch it and carry on.
+void Plugin::interrupt(lua_State* L, int gc) {
+    if (gc >= 0) return; // inside the collector, where raising is not allowed
+    auto& self = *static_cast<Plugin*>(lua_callbacks(L)->userdata);
+    if (self.halt_ == Halt::none) {
+        if (self.memory_exceeded_) self.halt_ = Halt::memory;
+        else if (self.timed_ && (++self.interrupts_ & 63) == 0 && Clock::now() > self.deadline_) self.halt_ = Halt::time;
+    }
+    if (self.halt_ != Halt::none) luaL_error(L, "the plugin was stopped");
+}
+
+bool Plugin::load(std::string entry) {
+    if (L_) return state_ == State::running;
+    state_ = State::loading;
+    reason_.clear();
+    halt_ = Halt::none;
+    memory_exceeded_ = false;
+    if (!storage_loaded_) {
+        storage_loaded_ = true;
+        const auto file = services_.storage_file(id_);
+        std::string error;
+        const auto text = read_package_file(file, limits_.storage_bytes * 2, error);
+        if (error.empty()) {
+            try {
+                auto stored = Json::parse(text, {limits_.storage_bytes * 2, 33, 1u << 20});
+                if (!stored.is_object()) throw std::runtime_error("it does not hold an object");
+                storage_ = std::move(stored);
+            } catch (const std::exception& problem) {
+                // Kept aside, not overwritten by the next save.
+                std::error_code code;
+                std::filesystem::rename(file, std::filesystem::path(file) += ".bad", code);
+                log(LogLevel::warn, std::string("its storage could not be read and was set aside: ") + problem.what());
+            }
+        }
+    }
+    L_ = lua_newstate(&Plugin::allocate, this);
+    if (!L_) {
+        stop("its VM could not be created");
+        return false;
+    }
+    auto* callbacks = lua_callbacks(L_);
+    callbacks->userdata = this;
+    callbacks->interrupt = &Plugin::interrupt;
+    try {
+        luaL_openlibs(L_);
+        Api::install(*this, L_);
+        luaL_sandbox(L_);
+        lua_State* thread = lua_newthread(L_);
+        luaL_sandboxthread(thread);
+        script_thread_ = lua_ref(L_, -1);
+        lua_pop(L_, 1);
+        lua_newtable(L_);
+        modules_ = lua_ref(L_, -1);
+        lua_pop(L_, 1);
+    } catch (const std::exception& error) {
+        stop(std::string("its VM could not be set up: ") + error.what());
+        close();
+        return false;
+    }
+    state_ = State::running;
+    const auto relative = entry.empty() ? manifest_.entry : entry;
+    if (!load_chunk(L_, relative, directory_ / std::filesystem::path(relative))) {
+        const std::string message = lua_isstring(L_, -1) ? lua_tostring(L_, -1) : "it could not be loaded";
+        lua_pop(L_, 1);
+        stop(relative + " " + message);
+        close();
+        return false;
+    }
+    if (!call(0, relative, limits_.call_ms) && state_ == State::running) stop(relative + " raised an error as it ran");
+    if (state_ == State::running) fire("load", {});
+    if (state_ != State::running) {
+        close();
+        return false;
+    }
+    return true;
+}
+
+bool Plugin::load_chunk(lua_State* L, const std::string& relative, const std::filesystem::path& file) {
+    std::string error;
+    const auto source = read_package_file(file, limits_.source_bytes, error);
+    if (!error.empty()) {
+        lua_pushstring(L, error.c_str());
+        return false;
+    }
+    lua_CompileOptions options{};
+    options.optimizationLevel = 1;
+    options.debugLevel = 1;
+    std::size_t size = 0;
+    // Only text is ever loaded: the bytecode handed to the VM is the compiler's own.
+    char* bytecode = luau_compile(source.data(), source.size(), &options, &size);
+    if (!bytecode) {
+        lua_pushstring(L, "could not be compiled");
+        return false;
+    }
+    lua_getref(L, script_thread_);
+    lua_State* thread = lua_tothread(L, -1);
+    lua_pop(L, 1);
+    const std::string chunk = "@" + relative;
+    const int status = luau_load(thread, chunk.c_str(), bytecode, size, 0);
+    std::free(bytecode);
+    lua_xmove(thread, L, 1);
+    return status == 0;
+}
+
+bool Plugin::call(int count, std::string_view what, double limit_ms) {
+    const int function = lua_gettop(L_) - count;
+    if (state_ != State::running) {
+        lua_settop(L_, function - 1);
+        return false;
+    }
+    lua_pushcfunction(L_, traceback, "traceback");
+    lua_insert(L_, function);
+    const auto start = Clock::now();
+    deadline_ = start + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double, std::milli>(limit_ms));
+    timed_ = true;
+    interrupts_ = 0;
+    const int status = lua_pcall(L_, count, 0, function);
+    timed_ = false;
+    spent_ms_ += elapsed_ms(start);
+    // Caught in the script or not, going over its memory stops it.
+    if (memory_exceeded_ && halt_ == Halt::none) halt_ = Halt::memory;
+    if (status == LUA_OK && halt_ == Halt::none) {
+        lua_settop(L_, function - 1);
+        return true;
+    }
+    if (halt_ == Halt::none && (memory_exceeded_ || status == LUA_ERRMEM)) halt_ = Halt::memory;
+    std::string message;
+    if (halt_ == Halt::none) message = lua_isstring(L_, -1) ? lua_tostring(L_, -1) : "an error that is not a string";
+    lua_settop(L_, function - 1);
+    if (halt_ == Halt::time) stop(std::format("{} ran longer than {:g} ms", what, limit_ms));
+    else if (halt_ == Halt::memory) stop(std::format("it used more than {} MB of memory", limits_.memory >> 20));
+    else if (halt_ == Halt::none) report(what, message);
+    return false;
+}
+
+void Plugin::report(std::string_view what, std::string_view message) {
+    services_.log(id_, LogLevel::error, shortened(std::string(what) + ": " + std::string(message)));
+    const double now = services_.now_ms();
+    errors_.push_back(now);
+    std::erase_if(errors_, [&](double at) { return now - at > limits_.error_window_ms; });
+    if (static_cast<int>(errors_.size()) > limits_.errors)
+        stop(std::format("more than {} errors in {} s", limits_.errors, limits_.error_window_ms / 1000));
+}
+
+bool Plugin::count_line() {
+    const double now = services_.now_ms();
+    if (now - log_second_ >= 1000) {
+        log_second_ = now;
+        log_lines_ = 0;
+    }
+    if (++log_lines_ <= limits_.log_lines_per_second) return true;
+    if (log_lines_ == limits_.log_lines_per_second + 1)
+        services_.log(id_, LogLevel::warn, std::format("more than {} lines in a second: the rest of this second's are left out",
+            limits_.log_lines_per_second));
+    return false;
+}
+
+void Plugin::log(LogLevel level, std::string_view text) {
+    if (count_line()) services_.log(id_, level, shortened(text));
+}
+
+void Plugin::print(std::string_view text) {
+    if (count_line()) services_.console(shortened(text));
+}
+
+void Plugin::stop(std::string reason) {
+    if (state_ == State::stopped) return;
+    state_ = State::stopped;
+    reason_ = std::move(reason);
+    if (halt_ == Halt::none) halt_ = Halt::stopped;
+    services_.log(id_, LogLevel::error, "stopped: " + reason_);
+}
+
+void Plugin::close_if_stopped() {
+    if (state_ == State::stopped && L_) close();
+}
+
+void Plugin::close() {
+    save_storage();
+    handlers_.clear();
+    timers_.clear();
+    commands_.clear();
+    loading_modules_.clear();
+    if (L_) {
+        lua_close(L_);
+        L_ = nullptr;
+    }
+    script_thread_ = modules_ = 0;
+}
+
+void Plugin::unload() {
+    if (!L_) return;
+    if (state_ == State::running) {
+        const auto start = Clock::now();
+        const auto found = handlers_.find("unload");
+        const auto handlers = found == handlers_.end() ? std::vector<int>{} : found->second;
+        for (const int handler : handlers) {
+            const double left = limits_.unload_ms - elapsed_ms(start);
+            if (left <= 0 || state_ != State::running) break;
+            lua_getref(L_, handler);
+            call(0, "the unload handler", left);
+        }
+        if (state_ == State::running) {
+            state_ = State::stopped;
+            reason_ = "unloaded";
+        }
+    }
+    close();
+}
+
+void Plugin::fire(std::string_view event, const std::vector<std::string>& arguments) {
+    if (state_ != State::running) return;
+    const auto found = handlers_.find(event);
+    if (found == handlers_.end()) return;
+    const auto handlers = found->second; // a handler may add others
+    const auto what = std::format("the {} handler", event);
+    for (const int handler : handlers) {
+        if (state_ != State::running) return;
+        lua_getref(L_, handler);
+        for (const auto& argument : arguments) lua_pushlstring(L_, argument.data(), argument.size());
+        call(static_cast<int>(arguments.size()), what, limits_.call_ms);
+    }
+}
+
+void Plugin::tick(double dt_ms) {
+    if (state_ != State::running) return;
+    const double now = services_.now_ms();
+    std::vector<int> due;
+    for (const auto& [id, timer] : timers_)
+        if (timer.due <= now) due.push_back(id);
+    for (const int id : due) {
+        if (state_ != State::running) break;
+        const auto found = timers_.find(id);
+        if (found == timers_.end()) continue; // cancelled by an earlier one
+        const int function = found->second.function;
+        const bool repeat = found->second.every > 0;
+        if (repeat) found->second.due = now + found->second.every;
+        else timers_.erase(found);
+        lua_getref(L_, function);
+        if (!repeat) lua_unref(L_, function);
+        call(0, "a timer", limits_.call_ms);
+    }
+    if (const auto found = handlers_.find("tick"); found != handlers_.end() && state_ == State::running) {
+        const auto handlers = found->second;
+        for (const int handler : handlers) {
+            if (state_ != State::running) break;
+            lua_getref(L_, handler);
+            lua_pushnumber(L_, dt_ms);
+            call(1, "the tick handler", limits_.call_ms);
+        }
+    }
+    // The time budget: everything it ran since the last tick counts towards this one.
+    window_spent_ += spent_ms_;
+    spent_ms_ = 0;
+    ++window_ticks_;
+    if (!window_started_) {
+        window_started_ = true;
+        window_start_ = now;
+    } else if (now - window_start_ >= 1000) {
+        last_window_ms_ = window_spent_ / window_ticks_;
+        over_windows_ = last_window_ms_ > limits_.tick_ms ? over_windows_ + 1 : 0;
+        window_start_ = now;
+        window_spent_ = 0;
+        window_ticks_ = 0;
+        if (over_windows_ >= limits_.over_windows && state_ == State::running)
+            stop(std::format("it took {:.2f} ms a tick for {} s, over its {} ms", last_window_ms_, limits_.over_windows,
+                limits_.tick_ms));
+    }
+}
+
+void Plugin::level_changed(const std::string& previous, const std::string& current) {
+    if (!previous.empty()) fire("level_unloading", {previous});
+    if (!current.empty()) fire("level_loaded", {current});
+}
+
+void Plugin::run_command(const std::string& name, const std::vector<std::string>& arguments) {
+    if (state_ != State::running) return;
+    const auto found = commands_.find(name);
+    if (found == commands_.end()) return;
+    lua_getref(L_, found->second.function);
+    lua_createtable(L_, static_cast<int>(arguments.size()), 0);
+    for (std::size_t i = 0; i < arguments.size(); ++i) {
+        lua_pushlstring(L_, arguments[i].data(), arguments[i].size());
+        lua_rawseti(L_, -2, static_cast<int>(i + 1));
+    }
+    call(1, "the command " + name, limits_.call_ms);
+}
+
+std::vector<std::pair<std::string, std::string>> Plugin::commands() const {
+    std::vector<std::pair<std::string, std::string>> result;
+    for (const auto& [name, command] : commands_) result.emplace_back(name, command.help);
+    return result;
+}
+
+void Plugin::save_storage() {
+    if (!storage_dirty_) return;
+    storage_dirty_ = false;
+    const auto file = services_.storage_file(id_);
+    try {
+        std::filesystem::create_directories(file.parent_path());
+        auto temporary = std::filesystem::path(file) += ".tmp";
+        {
+            std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+            const auto text = storage_.dump(2);
+            if (!out || !out.write(text.data(), static_cast<std::streamsize>(text.size()))) throw std::runtime_error("cannot write it");
+        }
+        std::filesystem::rename(temporary, file);
+    } catch (const std::exception& error) {
+        services_.log(id_, LogLevel::warn, std::string("its storage could not be saved: ") + error.what());
+    }
+}
+}

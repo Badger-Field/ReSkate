@@ -16,6 +16,7 @@
 #include "Extension/Settings/replay_drafts.h"
 #include "Engine/Game/World/client_state.h"
 #include "Extension/HallOfMeat/hall_of_meat.h"
+#include "Extension/Plugins/plugin_runtime.h"
 #include "Extension/RoadRash/road_rash.h"
 #include "Extension/BoardBreak/board_break.h"
 #include "Extension/BoardBreak/board_break_audio.h"
@@ -1096,6 +1097,10 @@ void update_model(std::uintptr_t client, TickState& frame) {
     dingosdk::drone::outfit::on_client_tick();
     dingosdk::board_break::on_client_tick(client);
     dingosdk::grind_exit_control::on_client_tick(client);
+    {
+        DINGO_PROFILE_ZONE("tick/plugins");
+        dingosdk::plugins::on_client_tick();
+    }
     if (!has_request && now < r.next_model && state == r.previous_state) return;
     r.next_model = now + 500;
     DINGO_PROFILE_ZONE("tick/update_model/world model (500 ms)");
@@ -1104,6 +1109,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
     const auto& current_level = description.lm_level.empty() ? description.level : description.lm_level;
     dingosdk::live_mods::set_current_level(current_level);
     dingosdk::hall_of_meat::set_level(current_level);
+    dingosdk::plugins::set_level(current_level);
     dingosdk::replay_drafts::on_client_tick(r.base, state);
     // A live mod apply hands over the destinations its mods declare. A map
     // being played that is no longer among them (its mod disabled or deleted)
