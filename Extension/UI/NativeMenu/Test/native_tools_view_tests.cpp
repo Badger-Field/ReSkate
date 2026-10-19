@@ -124,34 +124,6 @@ int main() {
         model.hall_of_meat = {true, true};
         activate(state, model, cb, "hall-of-meat", "");
         check(meat_row().title == "Hall of Meat: On" && capture.command == "hallofmeat 0", "and off again");
-        // Road Rash's switches sit there too; its blood and its healing wait for it to be on.
-        const auto rash_row = [&](std::string_view id) {
-            const auto page = render(state, model, cb, player_section);
-            return *find(page.main, id);
-        };
-        check(rash_row("road-rash").title == "Road Rash: Off" && rash_row("road-rash").command.empty(), "Road Rash waits until it started");
-        model.road_rash = {true, false, true};
-        check(rash_row("road-rash-blood").command.empty() && rash_row("road-rash-heal").command.empty(), "Its blood and healing wait for it");
-        activate(state, model, cb, "road-rash", "");
-        check(rash_row("road-rash").command == "road-rash" && capture.command == "roadrash 1", "Road Rash turns on");
-        model.road_rash = {true, true, true};
-        check(rash_row("road-rash").title == "Road Rash: On" && rash_row("road-rash-blood").title == "Road Rash blood: On", "and shows it");
-        activate(state, model, cb, "road-rash-blood", "");
-        check(capture.command == "roadrashblood 0", "The blood switches off");
-        activate(state, model, cb, "road-rash-heal", "");
-        check(capture.command == "roadrash heal", "and the skater heals");
-        // Board Break's switch sits there too, with the deck that is in the game; another deck waits for a deck pack.
-        check(rash_row("board-break").title == "Board Break: Off" && rash_row("board-break").command.empty(), "Board Break waits until it started");
-        model.board_break = {true, true, false, "None"};
-        check(rash_row("board-break").title == "Board Break: On" && rash_row("board-break-deck").command.empty(),
-              "Without a deck pack there is no deck to change");
-        activate(state, model, cb, "board-break", "");
-        check(capture.command == "boardbreak 0", "Board Break turns off");
-        model.board_break = {true, true, true, "Wide"};
-        check(rash_row("board-break-deck").title == "Board Break deck: Wide" && rash_row("board-break-deck").command == "board-break-deck",
-              "The deck in the game shows");
-        activate(state, model, cb, "board-break-deck", "");
-        check(capture.command == "boardbreak deck next", "and steps to the next one");
         // Grind exit triggers: the switch, what LT / RT mean, and the stance toe/heel needs.
         const auto grind_row = [&](std::string_view id) {
             const auto page = render(state, model, cb, player_section);

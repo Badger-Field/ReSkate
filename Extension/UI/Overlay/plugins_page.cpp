@@ -94,6 +94,9 @@ void plugins_addon(SkateMenu& menu) {
                 }
                 break;
             }
+            case Kind::bar:
+                ImGui::ProgressBar((w.value - w.minimum) / (w.maximum - w.minimum), ImVec2(-FLT_MIN, px(22)), w.text.c_str());
+                break;
             }
             ImGui::PopID();
         }

@@ -144,7 +144,9 @@ add_library(dingosdk_plugins STATIC
     Extension/Plugins/plugin_api_ui.cpp
     Extension/Plugins/plugin_api_more.cpp
     Extension/Plugins/plugin_api_world.cpp
-    Extension/Plugins/plugin_host.cpp)
+    Extension/Plugins/plugin_host.cpp
+    Extension/AnimationStudio/anim_core.cpp
+    Extension/Plugins/plugin_wave.cpp)
 target_link_libraries(dingosdk_plugins PUBLIC dingosdk_json dingosdk_console_core PRIVATE dingosdk_luau)
 if(WIN32)
     target_sources(dingosdk_plugins PRIVATE Extension/Plugins/plugin_discovery.cpp)

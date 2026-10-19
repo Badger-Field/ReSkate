@@ -1,6 +1,5 @@
 #include "Engine/Core/Platform/launcher_support.h"
 #include "skate_menu_internal.h"
-#include "Extension/Skater/drone_flight.h"
 #include "skate_menu.h"
 #include "modding_menu.h"
 #include "skate_style.h"
@@ -817,10 +816,9 @@ constexpr std::array<const char*, page_count> page_subtitles{
     "Everything, a button away.", "Pick your spot. Set the vibe.", "Make the park yours.", "Ride it your way.",
     "Tune it. Drill it.", "What ReSkate adds to skate.", "Bring your crew.", "Pick up where you want.",
     "Bring your own.", "Your controls, your screen.", "Under the hood."};
-constexpr std::array<const char*, addon_count> addon_names{"ADDONS", "DRONE", "BOARD BREAK", "ROAD RASH", "HALL OF MEAT", "GRIND EXITS", "MUSIC", "PLUGINS"};
+constexpr std::array<const char*, addon_count> addon_names{"ADDONS", "HALL OF MEAT", "GRIND EXITS", "MUSIC", "PLUGINS"};
 constexpr std::array<const char*, addon_count> addon_subtitles{
-    "What ReSkate adds to skate.", "Take it to the sky.", "Slams snap your board.", "Bails leave their mark.", "Every bone counts.", "Pick the side you pop out.",
-    "Your sound, in the game.", "What your plugins add."};
+    "What ReSkate adds to skate.", "Every bone counts.", "Pick the side you pop out.", "Your sound, in the game.", "What your plugins add."};
 // The side rail's groups: the heading above the page that starts each.
 const char* group_of(int page) {
     switch (page) {
@@ -1056,7 +1054,7 @@ void draw_windowed(SkateMenu& menu, const Model& model, const CallbacksV3& callb
         const auto origin = ImGui::GetWindowPos();
         auto* draw = ImGui::GetWindowDrawList();
         const float sidebar = px(190.0f);
-        if (menu.page == page_addons && menu.addon == addon_all) menu.addon = addon_drone;
+        if (menu.page == page_addons && menu.addon == addon_all) menu.addon = addon_first;
 
         // Side rail: brushed wordmark, then the pages in their groups like the HUB's tab icons.
         draw->AddRectFilled(origin, ImVec2(origin.x + sidebar, origin.y + size.y), IM_COL32(10, 10, 11, 250));
@@ -1074,7 +1072,7 @@ void draw_windowed(SkateMenu& menu, const Model& model, const CallbacksV3& callb
                 if (page_hidden(menu, model, i)) continue;
                 if (i != page_addons) ++rows;
                 else
-                    for (int a = addon_drone; a < addon_count; ++a) rows += !addon_hidden(model, a);
+                    rows += addon_count - addon_first;
                 if (group_of(i)) ++groups;
             }
             const float spacing = ImGui::GetStyle().ItemSpacing.y;
@@ -1110,8 +1108,7 @@ void draw_windowed(SkateMenu& menu, const Model& model, const CallbacksV3& callb
             }
             ImGui::PushID(i);
             if (i == page_addons) {
-                for (int a = addon_drone; a < addon_count; ++a) {
-                    if (addon_hidden(model, a)) continue;
+                for (int a = addon_first; a < addon_count; ++a) {
                     ImGui::PushID(a);
                     if (row("##addon", addon_names[static_cast<std::size_t>(a)], menu.page == page_addons && menu.addon == a, row_height, 0,
                             menu.bold, px(16)))
@@ -1366,7 +1363,6 @@ void draw_skate_menu(SkateMenu& menu, const Model& model, const CallbacksV3& cal
     io.FontGlobalScale = large ? ui_scale / large_font_ratio : ui_scale;
     menu.rail_indent = 0;
     if (trainer_page_wanted()) open_page(menu, page_sandbox);
-    if (dingosdk::drone::menu_flag().exchange(false)) open_page(menu, page_addons, addon_drone); // `dronemenu`
     menu.page = std::clamp(menu.page, 0, static_cast<int>(page_count) - 1);
     if (page_hidden(menu, model, menu.page)) menu.page = full ? page_home : page_map;
     menu_page_owns_pad().store(full && (menu.page == page_online || menu.recording_bind));

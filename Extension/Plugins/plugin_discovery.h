@@ -13,7 +13,4 @@ namespace dingosdk::plugins {
 using FileChecks = std::map<std::string, std::string, std::less<>>;
 // `mods`, when given, gets every mod in the Mods folder (for reskate.mods).
 std::vector<Candidate> discover(const std::filesystem::path& data_root, FileChecks& checks, std::vector<ModInfo>* mods = nullptr);
-// Why a package may not load, from its files alone, or empty. A plugin never ships a program: no
-// Windows executable (by its first bytes, whatever its name) and no script Windows runs.
-std::string check_package_files(const std::filesystem::path& directory);
 }

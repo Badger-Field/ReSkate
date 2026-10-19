@@ -3,6 +3,7 @@
 #include "lua.h"
 #include "lualib.h"
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 
@@ -80,6 +81,18 @@ plugin_ui::Style style_of(lua_State* L, int index) {
     lua_pop(L, 1);
     if (field("shadow")) style.shadow = lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);
+    // A picture's source rectangle, {u0, v0, u1, v1} from 0 to 1: one glyph of a font atlas, a tile.
+    if (field("uv")) {
+        luaL_checktype(L, -1, LUA_TTABLE);
+        for (int i = 0; i < 4; ++i) {
+            lua_rawgeti(L, -1, i + 1);
+            const float v = finite(L, -1, "a uv corner");
+            if (v < 0 || v > 1) luaL_error(L, "uv corners are 0 to 1");
+            style.uv[static_cast<std::size_t>(i)] = v;
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
     if (field("align")) {
         const std::string align = luaL_checkstring(L, -1);
         if (align == "left") style.align = 0;
@@ -109,8 +122,13 @@ struct UiApi {
     static void add(lua_State* L, Plugin& plugin, plugin_ui::Shape shape) {
         plugin.shape_text_ += shape.text.size();
         if (plugin.shapes_.size() >= plugin.limits_.shapes || plugin.shape_text_ > plugin.limits_.shape_text_bytes) {
-            if (!std::exchange(plugin.shapes_warned_, true))
-                plugin.log(LogLevel::warn, "more than " + std::to_string(plugin.limits_.shapes) + " shapes in a frame: the rest are left out");
+            if (const double now = plugin.services_.now_ms(); now - plugin.shapes_warned_at_ >= 10000) {
+                plugin.shapes_warned_at_ = now;
+                plugin.log(LogLevel::warn, plugin.shapes_.size() >= plugin.limits_.shapes
+                                               ? "more than " + std::to_string(plugin.limits_.shapes) + " shapes in a frame: the rest are left out"
+                                               : "more than " + std::to_string(plugin.limits_.shape_text_bytes >> 10) +
+                                                     " KB of text in a frame's shapes: the rest are left out");
+            }
             return;
         }
         (void)L;
@@ -132,6 +150,38 @@ struct UiApi {
         const float radius = finite(L, 3, "the radius");
         if (radius < 0) luaL_argerror(L, 3, "a radius is 0 or more");
         add(L, plugin, {kind, {point(L, 2, "the circle's centre")}, radius, {}, style_of(L, 4)});
+        return 0;
+    }
+    // A picture of the package's own (PNG or JPG), as the overlay loads it: its file's full path.
+    static std::string image_file(lua_State* L, Plugin& plugin, int index) {
+        const auto path = checked_text(L, index, 200, "a picture's path");
+        if (const auto found = plugin.image_files_.find(path); found != plugin.image_files_.end()) return found->second;
+        if (plugin.image_files_.size() >= plugin.limits_.images)
+            luaL_error(L, "a plugin draws at most %d different pictures", static_cast<int>(plugin.limits_.images));
+        auto extension = std::filesystem::path(path).extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (extension != ".png" && extension != ".jpg" && extension != ".jpeg") luaL_error(L, "a picture is a .png or .jpg file");
+        const auto file = package_file(L, plugin, path);
+        std::error_code code;
+        if (!std::filesystem::is_regular_file(file, code)) luaL_error(L, "\"%s\" is not a file in the plugin's package", path.c_str());
+        const auto utf8 = file.u8string();
+        return plugin.image_files_.emplace(path, std::string(utf8.begin(), utf8.end())).first->second;
+    }
+    // d:image(path, top_left, bottom_right, style): style's colour tints it, rounding rounds it.
+    static int image(lua_State* L) {
+        auto& plugin = drawing(L);
+        auto file = image_file(L, plugin, 2);
+        add(L, plugin, {plugin_ui::Shape::Kind::image, {point(L, 3, "a picture's top left"), point(L, 4, "a picture's bottom right")}, 0,
+                        std::move(file), style_of(L, 5)});
+        return 0;
+    }
+    // d:world_image(path, position, height): standing at a world position, `height` metres tall.
+    static int world_image(lua_State* L) {
+        auto& plugin = drawing(L);
+        auto file = image_file(L, plugin, 2);
+        const float height = finite(L, 4, "the picture's height");
+        if (!(height > 0 && height <= 1000)) luaL_argerror(L, 4, "a height is more than 0 and at most 1000 metres");
+        add(L, plugin, {plugin_ui::Shape::Kind::world_image, {point(L, 3, "the picture's place")}, height, std::move(file), style_of(L, 5)});
         return 0;
     }
     static int text(lua_State* L) { return text_shape(L, plugin_ui::Shape::Kind::text); }
@@ -228,6 +278,18 @@ struct UiApi {
     static int heading(lua_State* L) { return plain(L, plugin_ui::Widget::Kind::heading); }
     static int label(lua_State* L) { return plain(L, plugin_ui::Widget::Kind::label); }
     static int separator(lua_State* L) { return plain(L, plugin_ui::Widget::Kind::separator); }
+    // ui:bar(text, value, minimum, maximum): a gauge, read only.
+    static int bar(lua_State* L) {
+        auto& plugin = building(L);
+        plugin_ui::Widget widget{plugin_ui::Widget::Kind::bar};
+        widget.text = checked_text(L, 2, 60, "a bar's text");
+        widget.minimum = finite(L, 4, "the minimum");
+        widget.maximum = finite(L, 5, "the maximum");
+        if (!(widget.maximum > widget.minimum)) luaL_argerror(L, 5, "the maximum must be above the minimum");
+        widget.value = std::clamp(finite(L, 3, "the value"), widget.minimum, widget.maximum);
+        plugin.building_->widgets.push_back(std::move(widget));
+        return 0;
+    }
     // Each returns its value: what the player set since the last build, else what it was given.
     static int button(lua_State* L) {
         auto& plugin = building(L);
@@ -386,8 +448,11 @@ struct UiApi {
             if (std::from_chars(id.data(), id.data() + id.size(), to).ec != std::errc{} || !to) luaL_argerror(L, 1, "not a player");
         } else {
             const std::string text = luaL_checkstring(L, 1);
-            if (text != "all" && (std::from_chars(text.data(), text.data() + text.size(), to).ec != std::errc{} || !to))
-                luaL_argerror(L, 1, "send to \"all\", a player's id, or a player");
+            if (text == "server") {
+                if (plugin.services_.authority()) luaL_argerror(L, 1, "the server copy is the server: send to \"all\" or a player");
+                to = wire::authority;
+            } else if (text != "all" && (std::from_chars(text.data(), text.data() + text.size(), to).ec != std::errc{} || to <= wire::authority))
+                luaL_argerror(L, 1, "send to \"all\", \"server\", a player's id, or a player");
         }
         std::string payload;
         if (lua_isbuffer(L, 2)) {
@@ -430,6 +495,8 @@ void UiApi::install(Plugin& plugin, lua_State* L) {
     set_function(L, "world_text", UiApi::world_text);
     set_function(L, "world_line", UiApi::world_line);
     set_function(L, "world_circle", UiApi::world_circle);
+    set_function(L, "image", UiApi::image);
+    set_function(L, "world_image", UiApi::world_image);
     set_function(L, "size", UiApi::size);
     set_function(L, "world_to_screen", UiApi::world_to_screen);
     readonly();
@@ -444,6 +511,7 @@ void UiApi::install(Plugin& plugin, lua_State* L) {
     set_function(L, "toggle", UiApi::toggle);
     set_function(L, "slider", UiApi::slider);
     set_function(L, "dropdown", UiApi::dropdown);
+    set_function(L, "bar", UiApi::bar);
     readonly();
     plugin.ui_table_ = lua_ref(L, -1);
     lua_pop(L, 1);

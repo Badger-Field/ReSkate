@@ -48,7 +48,7 @@ struct Catalog {
     std::vector<std::string> set_aside;
 };
 
-// Board Break's decks (Extension/BoardBreak/board_break.h). The game has one deck model for every
+// The breakable decks (Extension/Skater/breakable_deck.h). The game has one deck model for every
 // board, so each deck that can break is a copy of it in a content mod, and the deck the player
 // chose is the one that loads. A deck comes in one of two ways:
 //   - a mod whose folder is named Board_Break_<Name> (also behind a team name, as a mod manager

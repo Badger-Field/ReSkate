@@ -104,9 +104,8 @@ struct MoreApi {
         Json data = lua_isnoneornil(L, 2) ? Json{} : lua_to_json(L, 2);
         if (data.dump().size() > plugin.limits_.event_bytes)
             luaL_error(L, "an event's data is at most %d KB as JSON", static_cast<int>(plugin.limits_.event_bytes >> 10));
-        const double now = plugin.services_.now_ms();
-        if (now != plugin.emit_tick_) {
-            plugin.emit_tick_ = now;
+        if (plugin.tick_number_ != plugin.emit_tick_) {
+            plugin.emit_tick_ = plugin.tick_number_;
             plugin.emitted_ = 0;
         }
         if (++plugin.emitted_ > plugin.limits_.events_per_tick)

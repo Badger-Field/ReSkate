@@ -100,6 +100,16 @@ struct Hosted {
     std::vector<std::uint64_t> members, added; // remote joiners in join order; those in the queue here
     bool relayed{}, started{}, start_sent{};
     std::uint64_t next_offer{};
+    // A plugin's drop (throwdown_relay_host): only these may join, and it starts once all have.
+    std::vector<std::uint64_t> invited;
+    bool plugin{}, start_asked{};
+};
+// A plugin's drop on its way: spawned by the lab, its MMID not known yet.
+struct PluginSpawn {
+    std::uint64_t token{}, asked_at{};
+    std::string series;
+    std::vector<std::uint64_t> invited;
+    std::uint32_t max_players{};
 };
 // Another player's drop, spawned on the local server hosted by the leader's virtual id.
 struct Mirror {
@@ -156,6 +166,13 @@ struct Relay {
     std::uint64_t next_prepare{}, next_info{};
     std::map<std::uint64_t, std::size_t> peers; // Steam ID -> slot
     std::optional<Hosted> hosted;
+    // A plugin's drop: asked for (under `mutex`), spawning, and its parameters by token (under `mutex`).
+    std::optional<PluginSpawn> host_request, plugin_spawn;
+    bool cancel_request{};
+    std::map<std::uint64_t, std::vector<std::uint8_t>> host_placements;
+    std::string host_status; // under `mutex`
+    // Drops shown only to chosen players: who may see each (an invite before its offer).
+    std::map<Key, std::vector<std::uint64_t>> invites;
     std::map<Key, Mirror> mirrors;
     std::optional<Key> running;
     std::string running_series;
@@ -267,6 +284,11 @@ ThrowdownMessage message(Kind kind, std::uint64_t leader, std::uint32_t id) {
 // The local player's own drop.
 void send_offer(Relay &r, std::uint64_t now) {
     auto &h = *r.hosted;
+    if (!h.invited.empty()) {
+        auto invite = message(Kind::invite, r.local, h.id);
+        invite.order = h.invited;
+        send(r, invite);
+    }
     auto m = message(Kind::offer, r.local, h.id);
     m.series = h.series; m.placement = h.placement; m.settings = h.settings; m.order = h.members;
     const auto before = r.outgoing.size();
@@ -626,12 +648,20 @@ void on_beacon_message(Relay &r, std::uint64_t sender, const ThrowdownMessage &m
 void on_message(Relay &r, std::uint64_t sender, const ThrowdownMessage &m, std::uint64_t now) {
     if (!r.peers.contains(sender)) return;
     if (m.kind == Kind::beacon) { on_beacon_message(r, sender, m); return; }
-    if (m.kind >= Kind::challenge_start) { on_challenge_message(r, sender, m, now); return; }
+    if (m.kind >= Kind::challenge_start && m.kind != Kind::invite) { on_challenge_message(r, sender, m, now); return; }
     const Key key{m.leader, m.id};
     const auto mirror = r.mirrors.find(key);
     switch (m.kind) {
+    case Kind::invite: {
+        if (m.leader != sender) return;
+        r.invites[key] = m.order;
+        // Not for this player: nothing shows it here.
+        if (!contains(m.order, r.local) && mirror != r.mirrors.end()) destroy_mirror(r, mirror->second, now);
+        return;
+    }
     case Kind::offer: {
         if (m.leader != sender || !relayed_mode(m.series)) return;
+        if (const auto invite = r.invites.find(key); invite != r.invites.end() && !contains(invite->second, r.local)) return;
         if (mirror != r.mirrors.end()) {
             // A copy removed here (full, or left) stays removed while the leader keeps offering it.
             if (mirror->second.state == Mirror::State::gone) mirror->second.gone_at = now;
@@ -658,7 +688,7 @@ void on_message(Relay &r, std::uint64_t sender, const ThrowdownMessage &m, std::
     case Kind::join:
         if (m.leader == r.local) {
             if (!r.hosted || r.hosted->id != m.id || r.hosted->started || !r.hosted->relayed ||
-                contains(r.hosted->members, sender))
+                contains(r.hosted->members, sender) || (!r.hosted->invited.empty() && !contains(r.hosted->invited, sender)))
                 return;
             r.hosted->members.push_back(sender);
             add_to_hosted(r);
@@ -722,7 +752,45 @@ void on_message(Relay &r, std::uint64_t sender, const ThrowdownMessage &m, std::
     }
 }
 
+void set_host_status(Relay &r, std::string text) {
+    std::lock_guard lock(r.mutex);
+    r.host_status = std::move(text);
+}
 void on_spawned(Relay &r, std::uint64_t token, std::uint32_t mmid, std::uint32_t capacity, std::uint64_t now) {
+    if (r.plugin_spawn && r.plugin_spawn->token == token) {
+        auto spawn = std::move(*r.plugin_spawn);
+        r.plugin_spawn.reset();
+        std::vector<std::uint8_t> placement;
+        {
+            std::lock_guard lock(r.mutex);
+            if (const auto found = r.host_placements.find(token); found != r.host_placements.end()) {
+                placement = std::move(found->second);
+                r.host_placements.erase(found);
+            }
+        }
+        if (!mmid) {
+            set_host_status(r, "the drop did not spawn");
+            return;
+        }
+        if (placement.empty() || !r.in_world) {
+            if (r.in_world) queue_throwdown_destroy(mmid);
+            set_host_status(r, "the drop could not be described to the other players");
+            return;
+        }
+        close_hosted(r);
+        Hosted h;
+        h.id = mmid;
+        h.series = spawn.series;
+        h.placement = std::move(placement);
+        h.relayed = true;
+        h.plugin = true;
+        h.invited = std::move(spawn.invited);
+        r.hosted = std::move(h);
+        send_offer(r, now);
+        note("a plugin's {} (MMID {:#x}) is offered to {} player(s).", spawn.series, mmid, r.hosted->invited.size());
+        set_host_status(r, "open");
+        return;
+    }
     for (auto &[key, m] : r.mirrors) {
         if (m.token != token) continue;
         if (!mmid) {
@@ -1051,6 +1119,8 @@ void reset(Relay &r, bool destroy_copies, std::uint64_t now) {
     if (destroy_copies && r.in_world && r.prepared)
         for (auto &[key, m] : r.mirrors) destroy_mirror(r, m, now);
     r.mirrors.clear();
+    r.invites.clear();
+    r.plugin_spawn.reset();
     r.spawn_refused.clear();
     r.declined.clear();
     r.running.reset();
@@ -1203,6 +1273,39 @@ void apply_queue_timer(Relay &r, bool linked, std::uint64_t now) {
     }
 }
 
+// A plugin's drop: spawned once the world, the event types and the players are there.
+void pump_plugin_host(Relay &r, const ThrowdownRelayInput &input, std::uint64_t now) {
+    std::optional<PluginSpawn> request;
+    bool cancel{};
+    {
+        std::lock_guard lock(r.mutex);
+        request = std::exchange(r.host_request, std::nullopt);
+        cancel = std::exchange(r.cancel_request, false);
+    }
+    if (cancel && r.hosted && r.hosted->plugin && !r.hosted->started) {
+        if (r.in_world) queue_throwdown_destroy(r.hosted->id);
+        close_hosted(r);
+        set_host_status(r, "cancelled");
+    }
+    if (r.plugin_spawn && now - r.plugin_spawn->asked_at > spawning_wait_ms) {
+        r.plugin_spawn.reset();
+        set_host_status(r, "the drop never spawned");
+    }
+    if (!request) return;
+    const auto refuse = [&](const char *why) { set_host_status(r, why); };
+    if (input.barred) return refuse("your game is out of linked throwdowns (its speed or mods)");
+    if (!r.in_world || !r.position) return refuse("the skater is not in the world");
+    if (!r.prepared) return refuse("the throwdown events are not found yet; try again in a moment");
+    if (r.running || r.challenge) return refuse("a throwdown or challenge is running");
+    if (r.plugin_spawn) return refuse("a plugin's drop is spawning already");
+    for (const auto player : request->invited)
+        if (!r.peers.contains(player)) return refuse("a chosen player is not in the session");
+    request->token = r.next_token++;
+    request->asked_at = now;
+    if (!queue_throwdown_host(request->token, request->series, *r.position, request->max_players)) return refuse("the drop could not be queued");
+    r.plugin_spawn = std::move(request);
+    set_host_status(r, "spawning");
+}
 void maintain(Relay &r, std::uint64_t now) {
     if (!r.in_world) return;
     // The event types belong to the level: each one's are found by a background heap scan,
@@ -1245,6 +1348,15 @@ void maintain(Relay &r, std::uint64_t now) {
             else add_to_mirror(r, m);
         }
         add_to_hosted(r);
+        // A plugin's drop starts once every invited player is in it here.
+        if (r.hosted && r.hosted->plugin && !r.hosted->started && !r.hosted->start_asked && !r.hosted->invited.empty() &&
+            std::all_of(r.hosted->invited.begin(), r.hosted->invited.end(), [&](std::uint64_t p) { return contains(r.hosted->added, p); })) {
+            if (queue_throwdown_start(r.hosted->series, r.hosted->id)) {
+                r.hosted->start_asked = true;
+                note("everyone invited joined the plugin's {}; starting it.", r.hosted->series);
+                set_host_status(r, "started");
+            }
+        }
         if (r.running) {
             for (auto &[player, score] : r.scores)
                 if (score.dirty)
@@ -1399,6 +1511,7 @@ std::vector<std::vector<std::uint8_t>> tick_throwdown_relay(std::uintptr_t base,
         refresh_player_info(r, now);
         for (auto &action : actions) on_local(r, action, now);
         for (const auto &[token, mmid, max] : spawned) on_spawned(r, token, mmid, max, now);
+        pump_plugin_host(r, input, now);
         for (const auto &[sender, bytes] : inbox) {
             if (const auto m = decode_throwdown(bytes)) on_message(r, sender, *m, now);
             else logging::write(logging::Level::warning, logging::Channel::progression, "Throwdowns: unreadable message from another player dropped.");
@@ -1550,6 +1663,41 @@ std::optional<std::array<float, 3>> throwdown_relay_celebration_offset(std::uint
 void set_challenge_invites(bool enabled) noexcept { challenge_invites_enabled.store(enabled, std::memory_order_relaxed); }
 bool challenge_invites() noexcept { return challenge_invites_enabled.load(std::memory_order_relaxed); }
 
+std::string throwdown_relay_host(const std::string &series, std::vector<std::uint64_t> players, std::uint32_t most_players) {
+    if (!relayed_mode(series)) return "a throwdown is \"JamSession\", \"SpotBattle\" or \"ThrowdownSkate\"";
+    if (players.empty() || players.size() > 7) return "a drop is for 1 to 7 other players";
+    auto &r = relay();
+    std::lock_guard lock(r.mutex);
+    if (!r.local) return "not in a session";
+    if (r.host_request) return "a drop is asked for already";
+    PluginSpawn spawn;
+    spawn.series = series;
+    spawn.invited = std::move(players);
+    spawn.max_players = std::max<std::uint32_t>(most_players, static_cast<std::uint32_t>(spawn.invited.size()) + 1);
+    r.host_request = std::move(spawn);
+    r.host_status = "asked";
+    return {};
+}
+void throwdown_relay_cancel_host() noexcept {
+    try {
+        auto &r = relay();
+        std::lock_guard lock(r.mutex);
+        r.cancel_request = true;
+        r.host_request.reset();
+    } catch (...) {}
+}
+std::string throwdown_relay_host_status() {
+    auto &r = relay();
+    std::lock_guard lock(r.mutex);
+    return r.host_status;
+}
+void throwdown_relay_host_placement(std::uint64_t token, std::vector<std::uint8_t> placement) noexcept {
+    try {
+        auto &r = relay();
+        std::lock_guard lock(r.mutex);
+        if (r.host_placements.size() < 8) r.host_placements[token] = std::move(placement);
+    } catch (...) {}
+}
 std::string throwdown_relay_status() {
     auto &r = relay();
     std::lock_guard lock(r.mutex);

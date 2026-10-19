@@ -6,7 +6,7 @@
 #include "Engine/Vfs/mod_catalog.h"
 #include "Engine/Vfs/mod_conflicts.h"
 #include "Extension/Assets/live_mods.h"
-#include "Extension/BoardBreak/board_break.h"
+#include "Extension/Skater/breakable_deck.h"
 #include "Extension/UI/skate_theme.h"
 #include "Engine/Core/Log/logging.h"
 
@@ -67,28 +67,28 @@ struct DeckScan {
 };
 }
 namespace menu {
-// Board Break's decks (Extension/BoardBreak/board_break.h). The game has one deck model and each
-// deck is a mod's copy of it, so picking one applies the mods with that deck first and loads the
+// The breakable decks (Extension/Skater/breakable_deck.h), which the board-break plugin snaps. The
+// game has one deck model and each deck is a mod's copy of it, so picking one applies the mods with that deck first and loads the
 // level again. A button for each deck the feature was made with, greyed out while it is not
 // installed, and for any other deck that is; the Mods folder is read again every 1.5 s while the
 // card shows. A deck goes by the name its deck.ini gives it (label), else by its folder's.
-void board_break_deck_card(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) {
+void breakable_deck_card(SkateMenu& menu, const CallbacksV3& callbacks) {
     static auto* scans = new FolderRead<DeckScan>; // process lifetime, as the threads that fill it
     const auto scan = scans->get([] {
         DeckScan read;
         read.installed = mods::installed_board_break_decks();
         read.chosen = mods::wanted_board_break_deck();
-        for (const auto& deck : read.installed) read.titles.push_back(board_break::deck_label(deck));
+        for (const auto& deck : read.installed) read.titles.push_back(breakable_deck::label(deck));
         return read;
     }, 1500);
     if (!scan) return;
     const auto& installed = scan->installed;
     const auto& titles = scan->titles;
     const auto& chosen = scan->chosen;
-    if (!model.board_break.available || installed.empty()) return;
+    if (installed.empty()) return;
     const auto there = [&](const std::string& deck) { return std::find(installed.begin(), installed.end(), deck) != installed.end(); };
     // The known decks in their own order, then the others that are installed: the numbers are the
-    // ones `boardbreak deck` prints.
+    // ones `boarddeck` prints.
     std::vector<std::string> decks(mods::board_break_decks.begin(), mods::board_break_decks.end());
     for (const auto& deck : installed)
         if (std::find(decks.begin(), decks.end(), deck) == decks.end()) decks.push_back(deck);
@@ -110,7 +110,7 @@ void board_break_deck_card(SkateMenu& menu, const Model& model, const CallbacksV
         return std::to_string(place) + " " + name;
     };
     const auto in_play = mods::board_break_in_play();
-    begin_card(menu, "board-break-decks", "BOARD BREAK DECK", in_play.empty() ? "none in the game" : label(in_play).c_str());
+    begin_card(menu, "breakable-decks", "BREAKABLE DECK", in_play.empty() ? "none in the game" : label(in_play).c_str());
     const bool busy = live_mods::busy();
     if (menu::console_style()) {
         // Full screen: one row, left / right to a deck and A to put it in the game.
@@ -131,7 +131,7 @@ void board_break_deck_card(SkateMenu& menu, const Model& model, const CallbacksV
         if (load && staged >= 0) {
             const auto& deck = decks[static_cast<std::size_t>(staged)];
             if (!there(deck)) menu::feedback(menu, "That deck is not installed.");
-            else if (deck != in_play) send_console(menu, callbacks, "boardbreak deck " + deck);
+            else if (deck != in_play) send_console(menu, callbacks, "boarddeck " + deck);
         }
     } else {
     const float gap = ImGui::GetStyle().ItemSpacing.x;
@@ -142,7 +142,7 @@ void board_break_deck_card(SkateMenu& menu, const Model& model, const CallbacksV
         ImGui::PushID(static_cast<int>(i));
         ImGui::BeginDisabled(!there(deck) || busy || deck == in_play || !callbacks.queue_console_command);
         if (ImGui::Button((label(deck) + (deck == in_play ? " *" : "")).c_str(), ImVec2(width, 0)))
-            send_console(menu, callbacks, "boardbreak deck " + deck);
+            send_console(menu, callbacks, "boarddeck " + deck);
         ImGui::EndDisabled();
         ImGui::PopID();
     }
@@ -334,7 +334,7 @@ void draw_installed_mods(SkateMenu& menu) {
         } else if (set_aside(entry)) {
             status = "SET ASIDE";
             hover = "Set aside while a Board Break deck is the one in the game: the game has one deck model, so one "
-                    "mod's deck loads at a time. Pick another deck under BOARD BREAK DECK, or disable Board Break's decks.";
+                    "mod's deck loads at a time. Pick another deck under BREAKABLE DECK, or disable the breakable decks.";
         } else if (entry.enabled && effect) {
             status = "LOADED";
             colour = skate_theme::good;
@@ -440,7 +440,7 @@ void draw_custom_scripts(SkateMenu& menu) {
     menu::end_card();
 }
 }
-void draw_modding_menu(SkateMenu& menu, int tab, const Model&, const CallbacksV3&) {
+void draw_modding_menu(SkateMenu& menu, int tab, const Model&, const CallbacksV3& callbacks) {
     // Loose files are switched in the launcher; custom scripts only need to know
     // whether they are on.
     if (!menu.loose_files_settings_loaded) {
@@ -449,6 +449,9 @@ void draw_modding_menu(SkateMenu& menu, int tab, const Model&, const CallbacksV3
         catch (const std::exception&) {}
     }
     if (tab == 1) draw_custom_scripts(menu);
-    else draw_installed_mods(menu);
+    else {
+        menu::breakable_deck_card(menu, callbacks);
+        draw_installed_mods(menu);
+    }
 }
 }

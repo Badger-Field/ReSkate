@@ -14,11 +14,14 @@ std::string lowercase(std::string text) {
 }
 }
 
-Host::Host(Environment& environment, Side side, Limits limits) : environment_(environment), side_(side), limits_(limits) {}
+Host::Host(Environment& environment, Side side, Limits limits, std::string suffix)
+    : environment_(environment), side_(side), limits_(limits), suffix_(std::move(suffix)) {}
 
 Host::~Host() { shutdown(); }
 
 Host::Entry* Host::find(std::string_view id) {
+    // An owner's id, as the game was given it, names its entry too.
+    if (!suffix_.empty() && id.ends_with(suffix_)) id.remove_suffix(suffix_.size());
     const auto found = entries_.find(id);
     return found == entries_.end() ? nullptr : &found->second;
 }
@@ -52,7 +55,7 @@ void Host::load(Entry& entry) {
     std::string permissions;
     for (const auto& permission : manifest.permissions) permissions += (permissions.empty() ? "" : ", ") + permission;
     Services& services = *this;
-    entry.plugin = std::make_unique<Plugin>(id, entry.candidate.directory, std::move(manifest), services, limits_);
+    entry.plugin = std::make_unique<Plugin>(id + suffix_, entry.candidate.directory, std::move(manifest), services, limits_);
     // Its messages go under the name its manifest.json gives it, the same on every player's game
     // whatever its folder is called; the folder's name when it has none.
     std::string channel = id;
@@ -80,8 +83,8 @@ void Host::unload(Entry& entry) {
         entry.plugin->unload();
         entry.plugin.reset();
     }
-    release_commands(entry.candidate.id);
-    environment_.game().release(entry.candidate.id);
+    release_commands(entry.candidate.id + suffix_);
+    environment_.game().release(entry.candidate.id + suffix_);
 }
 
 void Host::collect(Entry& entry) {
@@ -89,8 +92,8 @@ void Host::collect(Entry& entry) {
     entry.failure = entry.plugin->reason();
     entry.plugin->close_if_stopped();
     entry.plugin.reset();
-    release_commands(entry.candidate.id);
-    environment_.game().release(entry.candidate.id);
+    release_commands(entry.candidate.id + suffix_);
+    environment_.game().release(entry.candidate.id + suffix_);
 }
 
 void Host::release_commands(std::string_view id) {
@@ -167,12 +170,22 @@ void Host::deliver_messages() {
     std::uint64_t me = 0;
     for (const auto& player : session_.players)
         if (player.me) me = player.id;
+    const bool server = side_ == Side::server;
     for (const auto& received : environment_.take_messages()) {
         const auto message = wire::decode(received.bytes);
-        if (!message || (message->to && message->to != me)) continue;
+        // A server copy hears what is for everyone or for the authority; a client copy, what is
+        // for everyone or for it, and the authority's words only from the authority (the session
+        // checks who sent those).
+        if (!message || (server ? message->to > wire::authority && message->to != me : message->to && message->to != me) ||
+            (server && message->authority))
+            continue;
         SessionPlayer from{received.from};
         for (const auto& player : session_.players)
             if (player.id == received.from) from = player;
+        if (message->authority) {
+            from.server = true;
+            if (from.name.empty()) from.name = "Server";
+        }
         for (auto& [id, entry] : entries_) {
             if (!entry.plugin || entry.plugin->channel() != message->channel) continue;
             entry.plugin->receive(from, message->payload);
@@ -194,7 +207,7 @@ std::string Host::call_plugin(std::string_view caller, std::string_view target, 
                               Json& result) {
     auto* entry = running(target);
     if (!entry) return std::format("there is no running plugin {}", target);
-    if (entry->candidate.id == caller) return "a plugin calls its own functions directly";
+    if (entry->candidate.id + suffix_ == caller) return "a plugin calls its own functions directly";
     auto error = entry->plugin->call_exposed(std::string(function), arguments, result);
     // (It is closed if that stopped it; the plugin that called carries on.)
     if (entry->plugin->state() == State::stopped) collect(*entry);
@@ -236,9 +249,43 @@ void Host::follow_game() {
         }
         skater_state_ = now;
         const auto wipeouts = game.wipeouts();
-        if (wipeouts_known_ && wipeouts > wipeouts_) each([&](Plugin& plugin, const std::string&) { plugin.bailed(wipeouts); });
+        if (wipeouts_known_ && wipeouts > wipeouts_) {
+            const auto slam = game.last_slam();
+            each([&](Plugin& plugin, const std::string&) { plugin.bailed(wipeouts, slam); });
+        }
         wipeouts_ = wipeouts;
         wipeouts_known_ = true;
+        auto news = game.take_skater_news();
+        for (const auto& l : news.landings) {
+            auto data = Json::object();
+            data["down_speed"] = l.down_speed;
+            data["speed"] = l.speed;
+            data["onto"] = l.rail ? "rail" : "ground";
+            each([&](Plugin& plugin, const std::string&) { plugin.game_event("board_landed", "events.skater", data); });
+        }
+        for (const auto& h : news.hits) {
+            auto data = Json::object();
+            data["bone"] = h.bone;
+            data["impact"] = h.impact;
+            data["vehicle"] = h.vehicle;
+            data["board"] = h.board;
+            each([&](Plugin& plugin, const std::string&) { plugin.game_event("body_hit", "events.skater", data); });
+        }
+        for (const auto& f : news.falls) {
+            auto data = Json::object();
+            data["seconds"] = f.seconds;
+            data["left"] = f.left;
+            data["right"] = f.right;
+            auto bones = Json::object();
+            for (const auto& b : f.bones) {
+                auto bone = Json::object();
+                bone["impact"] = b.impact;
+                bone["slide"] = b.slide;
+                bones[b.name] = std::move(bone);
+            }
+            data["bones"] = std::move(bones);
+            each([&](Plugin& plugin, const std::string&) { plugin.game_event("bail_end", "events.skater", data); });
+        }
     }
     if (wants("chat.read")) {
         auto lines = game.chat_since(chat_seen_);
@@ -292,7 +339,7 @@ void Host::deliver_events() {
         std::string channel = emitted.source;
         if (const auto* source = find(emitted.source); source && source->plugin) channel = source->plugin->channel_name();
         for (auto& [id, entry] : entries_) {
-            if (!entry.plugin || id == emitted.source) continue;
+            if (!entry.plugin || id + suffix_ == emitted.source) continue;
             entry.plugin->plugin_event(emitted.source, channel, emitted.event, emitted.data);
             collect(entry);
         }
@@ -301,7 +348,8 @@ void Host::deliver_events() {
 
 bool Host::send(std::uint32_t channel, std::uint64_t to, std::string_view payload) {
     if (!session_.active) return false;
-    return environment_.send_message(wire::encode(channel, to, payload));
+    if (side_ == Side::server && to == wire::authority) return false; // it is the authority
+    return environment_.send_message(wire::encode(channel, to, payload, side_ == Side::server));
 }
 
 void Host::draw_and_build() {
@@ -404,7 +452,7 @@ std::vector<Status> Host::status() const {
             status.commands = entry.plugin->commands();
         } else if (entry.held) {
             status.state = "switched off";
-            status.reason = "plugin on " + id + " starts it again";
+            status.reason = "plugin on " + id + suffix_ + " starts it again";
         } else {
             status.state = entry.failure.starts_with("it is a ") ? "not loaded" : "stopped";
             status.reason = entry.failure;
@@ -428,7 +476,7 @@ std::string Host::switch_off(std::string_view id) {
     if (!entry) return std::format("error: There is no plugin {}.", id);
     entry->held = true;
     unload(*entry);
-    return std::format("Plugin {} switched off until plugin on {}, or the next launch.", id, id);
+    return std::format("Plugin {} switched off until plugin on {}, or the next launch.", std::string(id) + suffix_, std::string(id) + suffix_);
 }
 
 std::string Host::switch_on(std::string_view id) {

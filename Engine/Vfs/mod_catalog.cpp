@@ -381,7 +381,7 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
         const auto deck_of = [&](const Mod& mod) {
             return std::find(packs.begin(), packs.end(), mod.name) != packs.end() ? std::string{} : board_break_deck_of(mod.name);
         };
-        // Board Break (Extension/BoardBreak/board_break.h). The deck that can break is a mod's own
+        // The breakable decks (Extension/Skater/breakable_deck.h). The deck that can break is a mod's own
         // copy of the game's one deck model, and any mod that reshapes the deck replaces that same
         // model: the one higher in the load order has it. So the deck the player chose goes first
         // for this run, whatever mods.json says of the order, and what would fight it is set aside:

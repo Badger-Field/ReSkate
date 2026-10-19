@@ -13,3 +13,12 @@ folder into the game's `Mods` folder and open the console.
   the sandbox.
 
 Both also run without the game, in `dingosdk_plugin_tests` (`DINGOSDK_BUILD_PLUGIN_TESTS`).
+
+## Ports
+
+- **road-rash** is Road Rash (`Extension/RoadRash`) as a mod: bails leave marks that build up,
+  worn over the outfit with `reskate.outfit`. It needs the Road Rash items mod, and the built-in
+  Road Rash switched off (`roadrash 0`), since ReSkate refuses outfit changes while that one is on.
+  While the built-in one exists it owns the `roadrash` command, so this one answers to `road rash`
+  (`road rash heal`, `road rash bails 20`, `road rash blood 0`, `road rash tattoos 1`,
+  `road rash test` for its own checks). Its switches are on its panel in the PLUGINS tab too.

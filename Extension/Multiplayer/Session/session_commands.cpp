@@ -1143,4 +1143,24 @@ std::string command(std::string_view action, std::string_view argument, std::str
         return s.status;
     }
 }
+std::string host_kick(std::uint64_t player, std::string_view why) {
+    auto &s = session();
+    if (s.mode != Mode::host) return "only the lobby's host can";
+    if (player == s.host_id) return "the host cannot be kicked";
+    const auto *peer = find_peer(s, player);
+    if (!peer || !peer->handshaken) return "that player is not in the session";
+    s.banned.insert(player);
+    disconnect(s, player, why.empty() ? std::string("You were removed from the session.") : "You were removed from the session: " + std::string(why));
+    s.next_party_update = 0;
+    return {};
+}
+std::string host_teleport(std::uint64_t player, const std::array<float, 3> &at) {
+    auto &s = session();
+    if (s.mode != Mode::host) return "only the lobby's host can";
+    auto *peer = find_peer(s, player);
+    if (!peer || !peer->handshaken || !peer->world_ready) return "that player is not in the world";
+    auto p = packet(s, PacketKind::teleport, now_us());
+    p.teleport = at;
+    return send_packet(s, player, p, true, false) ? std::string{} : "it could not be sent";
+}
 } // namespace dingosdk::multiplayer

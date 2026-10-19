@@ -93,6 +93,12 @@ bool Plugin::load(std::string entry) {
         const auto file = services_.storage_file(id_);
         std::string error;
         const auto text = read_package_file(file, limits_.storage_bytes * 2, error);
+        if (!error.empty() && error != "not found") {
+            // Kept aside, not overwritten by the next save.
+            std::error_code code;
+            std::filesystem::rename(file, std::filesystem::path(file) += ".bad", code);
+            log(LogLevel::warn, "its storage could not be read and was set aside: " + error);
+        }
         if (error.empty()) {
             try {
                 auto stored = Json::parse(text, {limits_.storage_bytes * 2, 33, 1u << 20});
@@ -349,6 +355,8 @@ void Plugin::trick(const TrickNews& news) {
             lua_setfield(L, -2, "landed_at");
             lua_pushnumber(L, news.ms);
             lua_setfield(L, -2, "ms");
+            lua_pushlstring(L, news.name.data(), news.name.size());
+            lua_setfield(L, -2, "name");
             return 1;
         });
         break;
@@ -365,6 +373,7 @@ void Plugin::trick(const TrickNews& news) {
 
 void Plugin::tick(double dt_ms) {
     if (state_ != State::running) return;
+    ++tick_number_;
     raycasts_ = 0;
     const double now = services_.now_ms();
     std::vector<int> due;
@@ -561,12 +570,26 @@ void Plugin::skater_changed(const char* state, const char* previous) {
     });
 }
 
-void Plugin::bailed(std::uint64_t wipeouts) {
+void Plugin::game_event(std::string_view event, std::string_view permission, const Json& data) {
+    if (state_ != State::running || !has(permission)) return;
+    fire_with(event, [&](lua_State* L) {
+        push_json(L, data);
+        return 1;
+    });
+}
+void Plugin::bailed(std::uint64_t wipeouts, std::optional<SlamNews> slam) {
     if (state_ != State::running || !has("events.skater")) return;
     fire_with("bail", [&](lua_State* L) {
-        lua_createtable(L, 0, 2);
+        lua_createtable(L, 0, 4);
         lua_pushnumber(L, static_cast<double>(wipeouts));
         lua_setfield(L, -2, "count");
+        // The slam that did it, when one was recorded in the last second: its force and cause.
+        if (slam && slam->ago_ms < 1000) {
+            lua_pushnumber(L, slam->force);
+            lua_setfield(L, -2, "force");
+            lua_pushinteger(L, slam->cause);
+            lua_setfield(L, -2, "cause");
+        }
         if (const auto s = services_.skater()) {
             lua_pushvector(L, s->position[0], s->position[1], s->position[2]);
             lua_setfield(L, -2, "at");
@@ -668,7 +691,7 @@ void Plugin::save_storage() {
         auto temporary = std::filesystem::path(file) += ".tmp";
         {
             std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
-            const auto text = storage_.dump(2);
+            const auto text = storage_.dump(); // as compact as the quota measures it
             if (!out || !out.write(text.data(), static_cast<std::streamsize>(text.size()))) throw std::runtime_error("cannot write it");
         }
         std::filesystem::rename(temporary, file);

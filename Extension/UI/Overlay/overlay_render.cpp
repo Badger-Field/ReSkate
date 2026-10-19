@@ -3,7 +3,6 @@
 #include "Engine/Core/Profiling/profiler.h"
 #include "overlay_internal.h"
 #include "Extension/Trainer/trainer_page.h"
-#include "Extension/Skater/drone_flight.h"
 #include "Extension/HallOfMeat/hall_of_meat_overlay.h"
 #include "plugin_overlay.h"
 #include "park_previews.h"
@@ -82,6 +81,9 @@ void destroy_graphics() {
     menu_map_pixels_lost();
     s.mod_icon_texture.Reset(); s.mod_icon_upload.Reset();
     mod_icon_lost();
+    for (auto& texture : s.plugin_textures) texture.Reset();
+    for (auto& upload : s.plugin_uploads) upload.Reset();
+    plugin_images_lost();
     s.commands.Reset(); s.rtvs.Reset(); s.srvs.Reset(); s.fence.Reset(); s.device.Reset();
     if (s.fence_event) CloseHandle(s.fence_event);
     s.fence_event = nullptr;
@@ -289,7 +291,9 @@ bool setup_graphics() {
         return false;
     }
     heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heap.NumDescriptors = 4; // ImGui's atlas, the map download card's icon, the menu's map pictures, an item's mod icon (upload_image)
+    // ImGui's atlas, the map download card's icon, the menu's map pictures, an item's mod icon, and
+    // plugins' pictures (upload_image)
+    heap.NumDescriptors = plugin_image_first_slot + plugin_image_slots;
     heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     graphics_result = s.device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&s.srvs));
     if (FAILED(graphics_result)) {
@@ -694,6 +698,22 @@ void upload_mod_icon(State& s) {
     if (const auto id = upload_image(s, pixels, 3, s.mod_icon_texture, s.mod_icon_upload)) mod_icon_uploaded(id, pixels.serial);
 }
 
+// A plugin's picture (plugin_images.cpp), one a frame, into the slot the cache chose.
+void upload_plugin_image(State& s) {
+    if (!s.device || !s.srvs) return;
+    auto next = take_plugin_image();
+    if (!next) return;
+    const auto slot = static_cast<std::size_t>(next->slot);
+    // A texture in the slot may still be sampled by frames on the GPU.
+    if (s.plugin_textures[slot] && s.next_fence && !completed(s.next_fence, render_fence_timeout_ms)) {
+        plugin_image_uploaded(next->path, next->slot, {}, true);
+        return;
+    }
+    const auto id = upload_image(s, next->pixels, plugin_image_first_slot + static_cast<UINT>(slot), s.plugin_textures[slot],
+                                 s.plugin_uploads[slot]);
+    plugin_image_uploaded(next->path, next->slot, id);
+}
+
 void render(IDXGISwapChain* presented, UINT flags) {
     auto& s = state();
     if (flags & DXGI_PRESENT_TEST) return;
@@ -737,7 +757,6 @@ void render(IDXGISwapChain* presented, UINT flags) {
     const bool chat_frame = chat_pending();
     const bool map_download_frame = map_download_pending();
     const bool game_text_frame = game_text_pending();
-    const bool drone_hud_frame = drone_hud_pending();
     const bool skate_hud_frame = skate_hud_pending();
     const bool nametag_frame = nametags_pending();
     const bool meat_frame = hall_of_meat_pending();
@@ -746,7 +765,6 @@ void render(IDXGISwapChain* presented, UINT flags) {
     const bool perf_frame = perf_hud_pending() || trainer_hud_pending();
     const bool hub_frame = hub_page_pending();
     if (trainer_open_requested()) s.visible.store(true);
-    if (dingosdk::drone::menu_flag().load()) s.visible.store(true); // `dronemenu`: the menu opens on its DRONE page
     if (dingosdk::overlay::menu_open_flag().exchange(false)) s.visible.store(true); // `menu`, or its controller bind
     const bool menu_frame = interactive_visible(s);
     if (!menu_frame) {
@@ -763,7 +781,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
             sync_menu_cursor();
         }
         // Hidden, the overlay still draws while a notice or chat line is on screen.
-        if (s.loaded_notice_posted && !notices_pending() && !chat_frame && !game_text_frame && !drone_hud_frame && !skate_hud_frame &&
+        if (s.loaded_notice_posted && !notices_pending() && !chat_frame && !game_text_frame && !skate_hud_frame &&
             !nametag_frame && !meat_frame && !plugins_frame && !item_browser_frame && !perf_frame && !hub_frame && !map_download_frame) return;
     } else if (!s.ui_was_interactive) {
         s.ui_was_interactive = true;
@@ -820,7 +838,6 @@ void render(IDXGISwapChain* presented, UINT flags) {
     draw_plugins();
     draw_nametags();
     draw_game_text();
-    draw_drone_hud();
     draw_skate_hud();
     draw_perf_hud();
     draw_trainer_hud();
@@ -849,6 +866,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     upload_card_image(s);
     upload_menu_map_image(s);
     upload_mod_icon(s);
+    upload_plugin_image(s);
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Transition.pResource = frame.buffer.Get();

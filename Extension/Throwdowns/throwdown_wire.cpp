@@ -60,6 +60,7 @@ bool valid_throwdown(const ThrowdownMessage &m) noexcept {
                m.settings.size() <= max_throwdown_params && m.order.size() <= max_throwdown_order &&
                std::all_of(m.order.begin(), m.order.end(), individual);
     case ThrowdownMessage::Kind::start:
+    case ThrowdownMessage::Kind::invite:
         return !m.order.empty() && m.order.size() <= max_throwdown_order &&
                std::all_of(m.order.begin(), m.order.end(), individual);
     case ThrowdownMessage::Kind::row: return m.board < max_throwdown_boards;
@@ -101,6 +102,7 @@ std::vector<std::uint8_t> encode_throwdown(const ThrowdownMessage &m) {
         w.blob(m.settings, 2);
         [[fallthrough]];
     case ThrowdownMessage::Kind::start:
+    case ThrowdownMessage::Kind::invite:
         w.integer(m.order.size(), 1);
         for (const auto id : m.order) w.integer(id, 8);
         break;
@@ -145,7 +147,7 @@ std::optional<ThrowdownMessage> decode_throwdown(std::span<const std::uint8_t> b
         Reader r{bytes};
         ThrowdownMessage m;
         const auto kind = r.integer(1);
-        if (kind < 1 || kind > 15) return {};
+        if (kind < 1 || kind > 16) return {};
         m.kind = static_cast<ThrowdownMessage::Kind>(kind);
         m.leader = r.integer(8);
         m.id = static_cast<std::uint32_t>(r.integer(4));
@@ -159,7 +161,8 @@ std::optional<ThrowdownMessage> decode_throwdown(std::span<const std::uint8_t> b
             m.settings = r.blob(2, max_throwdown_params);
             [[fallthrough]];
         }
-        case ThrowdownMessage::Kind::start: {
+        case ThrowdownMessage::Kind::start:
+        case ThrowdownMessage::Kind::invite: {
             const auto count = r.integer(1);
             if (!r.ok || count > max_throwdown_order) return {};
             for (std::uint64_t i = 0; i < count; ++i) m.order.push_back(r.integer(8));

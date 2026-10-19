@@ -29,7 +29,10 @@ struct ThrowdownMessage {
         challenge_leave = 14,   // the sender quit its copy
         // Party beacons (analysis/party-re/beacons.md): the sender's beacon in this world, `id` its
         // revision. add = it stands at `location` (placed or moved); else it was removed.
-        beacon = 15
+        beacon = 15,
+        // A drop for chosen players only (a plugin's, reskate.throwdowns.host): order = who may see
+        // and join the leader's drop `id`; sent before each of its offers.
+        invite = 16
     };
     Kind kind = Kind::offer;
     std::uint64_t leader{}; // Steam ID of the player hosting the throwdown

@@ -3,8 +3,9 @@
 A hard slam can break the local skater's board: at the nose, in the middle or at the tail. Half the
 time the grip tape holds the pieces together and the board folds or an end hangs; otherwise a piece
 comes off, flies and lies where it lands, truck and wheels with it. The board is whole again once
-the skater has picked it up, rides again or respawns. Built into ReSkate; the broken pieces
-themselves come from a content mod with the deck shapes in it.
+the skater has picked it up, rides again or respawns. A plugin, [board-break](plugins/board-break)
+(it was built into ReSkate until 2026-10); the broken pieces themselves come from a content mod
+with the deck shapes in it.
 
 Boards also wear: every hard landing, rail hit, grind and slam takes something out of the board of
 the deck in the game, and a worn board steers lazier, wobbles, breaks from less and in the end can
@@ -12,26 +13,25 @@ give way under the rider. A boardslide or darkslide that comes down too hard ont
 the board and throw the rider. A break cracks (and sounds like metal when it happened on metal),
 and the body's hits in a bail are heard where and as hard as they land. The player sets all of it.
 
-Code: [board_break.cpp](../Extension/BoardBreak/board_break.cpp) (client tick, the boards'
-render pose hook, wear, rail snaps), [board_break_model.h](../Extension/BoardBreak/board_break_model.h)
-(the rules and the geometry on their own) and
-[board_break_feel.h](../Extension/BoardBreak/board_break_feel.h) (the settings, what each hit wears,
-what wear does, rail contacts), both with [tests](../Extension/BoardBreak/Test/board_break_tests.cpp),
-[board_break_audio.cpp](../Extension/BoardBreak/board_break_audio.cpp) (the sounds),
-[board_break_commands.cpp](../Extension/BoardBreak/board_break_commands.cpp) (console), and the
-deck's place in the mod list in [mod_catalog.cpp](../Engine/Vfs/mod_catalog.cpp).
+Code: the plugin's Lua in [plugins/board-break/plugin](plugins/board-break/plugin) (the break,
+wear, rail snaps, sounds, its console command and menu), drawn through reskate.board
+([board_pose.cpp](../Extension/Skater/board_pose.cpp)). What every board needs while a deck pack
+is in the game stays in core whichever plugins run:
+[breakable_deck.cpp](../Extension/Skater/breakable_deck.cpp) (which deck, its name and wheel
+spacing, the `boarddeck` command), board_pose.cpp (the deck's stretches kept out of sight, the
+baseplates on the deck, the wheels at the deck's spacing, on every board), and the deck's place in
+the mod list in [mod_catalog.cpp](../Engine/Vfs/mod_catalog.cpp).
 
 ## What the player gets
 
 - A slam of force 10 or more always breaks the board, a lighter one a quarter of the time, rising
   in between (the force is the bail cause's that led to the wipeout). Now and then a board gives way
   while it is ridden: the nose goes.
-- `boardbreak 0|1`, `boardbreak deck [name|number|next]`, `boardbreak snap [nose|mid|tail]` to look
-  at a break (that one stays until `boardbreak mend` or a respawn). The switch and the deck are in
-  the menus beside Road Rash (Mod Options > Player, and the overlay's Skater page). The overlay has
-  a card BOARD BREAK DECK with a button for each deck, on the Mods page and under the switch: a
-  press asks for that deck, the mods are applied and the level loads again with it. The switch is
-  saved with the profile.
+- `boardbreak 0|1`, `boardbreak snap [nose|mid|tail]` to look at a break (that one stays until
+  `boardbreak mend` or a respawn), from the plugin; its settings are on the overlay's ADDONS page,
+  PLUGINS tab. `boarddeck [name|number|next]` (core) and the overlay's BREAKABLE DECK card on the
+  Mods page pick the deck: a press asks for that deck, the mods are applied and the level loads
+  again with it.
 - A break plays back in the replay editor as it happened.
 - **Wear and tear.** Each deck's board wears from 0% (new) to 100% (worn out): a landing coming down
   faster than 3.5 m/s, a hit onto a rail or ledge (harder on a slide than on the trucks), every second

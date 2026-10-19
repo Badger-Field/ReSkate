@@ -1,5 +1,5 @@
 #include "no_bail.h"
-#include "Extension/BoardBreak/board_break.h"
+#include "Extension/Skater/skater_events.h"
 #include "Engine/Core/Hooks/hooks.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Core/Platform/memory.h"
@@ -192,7 +192,9 @@ bool suppress_cause(std::uintptr_t causes, std::int32_t reason, std::uintptr_t c
 }
 void record_cause(std::uintptr_t causes, std::int32_t reason, float magnitude) {
     const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
-    if (causes == state_watch().causes.load(std::memory_order_acquire)) board_break::note_cause(reason, magnitude);
+    if (causes == state_watch().causes.load(std::memory_order_acquire)) {
+        skater_events::note_cause(reason, magnitude);
+    }
     const bool protect = suppress_cause(causes, reason, caller);
     // Do not force the native recovery/stumble predicate (recovery_predicate). Its
     // result is also exported to animation at +0x9e, even without a collision.
@@ -250,7 +252,7 @@ std::uint32_t choose_state(std::uintptr_t selector, std::uint32_t current) {
             w.changes.fetch_add(1, std::memory_order_relaxed);
             if (chosen == wipeout_physics_state) {
                 // Before the count: the tick that sees the new wipeout finds its cause there.
-                board_break::note_wipeout(w.causes.load(std::memory_order_acquire));
+                skater_events::note_wipeout(w.causes.load(std::memory_order_acquire));
                 w.wipeouts.fetch_add(1, std::memory_order_relaxed);
             }
         }

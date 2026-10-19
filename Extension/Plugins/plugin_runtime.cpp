@@ -4,6 +4,7 @@
 #include "plugin_camera.h"
 #include "plugin_http.h"
 #include "plugin_game_runtime.h"
+#include "plugin_wire.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Game/Multiplayer/session_tools.h"
 #include "Extension/Multiplayer/Session/session.h"
@@ -31,14 +32,20 @@ std::uintptr_t base{};
 // What the discovery thread last found of the Mods folder (reskate.mods).
 std::mutex mods_mutex;
 std::vector<ModInfo> found_mods; // under mods_mutex
-// Plugin messages in and out of the session's throwdown packets: a few at a time.
+// Plugin messages in and out of the session's throwdown packets: a few at a time. The server
+// copies' (on a lobby's host) have their own.
 std::mutex messages_mutex;
-std::vector<Environment::Received> inbox;       // under messages_mutex
-std::vector<std::vector<std::uint8_t>> outbox;  // under messages_mutex
+struct Mailbox {
+    std::vector<Environment::Received> inbox;
+    std::vector<std::vector<std::uint8_t>> outbox;
+};
+Mailbox client_mail, server_mail; // under messages_mutex
 
+// The game for the plugins: a player's copies (client), or the server copies a lobby's host runs,
+// which draw nothing and keep their storage apart.
 class GameEnvironment final : public Environment {
 public:
-    explicit GameEnvironment(std::filesystem::path storage) : storage_(std::move(storage)) {}
+    GameEnvironment(std::filesystem::path storage, bool server) : storage_(std::move(storage)), server_(server) {}
     void log(LogLevel level, std::string_view text) override {
         logging::write(level == LogLevel::error ? logging::Level::error : level == LogLevel::warn ? logging::Level::warning : logging::Level::info,
             logging::Channel::plugins, text);
@@ -112,13 +119,14 @@ public:
     }
     bool send_message(std::vector<std::uint8_t> bytes) override {
         std::lock_guard lock(messages_mutex);
+        auto& outbox = mail().outbox;
         if (outbox.size() >= 64) return false;
         outbox.push_back(std::move(bytes));
         return true;
     }
     std::vector<Received> take_messages() override {
         std::lock_guard lock(messages_mutex);
-        return std::exchange(inbox, {});
+        return std::exchange(mail().inbox, {});
     }
     std::optional<Vec3> world_to_screen(const Vec3& p) override {
         const auto display = plugin_ui::display();
@@ -126,12 +134,16 @@ public:
         return projector ? projector->project(p) : std::nullopt;
     }
     std::array<float, 2> display() override { return plugin_ui::display(); }
-    void publish_layers(std::vector<plugin_ui::Layer> layers) override { plugin_ui::publish_layers(std::move(layers)); }
-    bool panels_shown() override { return plugin_ui::panels_shown(); }
-    void publish_panels(std::vector<plugin_ui::Panel> panels) override { plugin_ui::publish_panels(std::move(panels)); }
-    std::vector<plugin_ui::Action> take_actions() override { return plugin_ui::take_actions(); }
+    void publish_layers(std::vector<plugin_ui::Layer> layers) override {
+        if (!server_) plugin_ui::publish_layers(std::move(layers));
+    }
+    bool panels_shown() override { return !server_ && plugin_ui::panels_shown(); }
+    void publish_panels(std::vector<plugin_ui::Panel> panels) override {
+        if (!server_) plugin_ui::publish_panels(std::move(panels));
+    }
+    std::vector<plugin_ui::Action> take_actions() override { return server_ ? std::vector<plugin_ui::Action>{} : plugin_ui::take_actions(); }
     bool http_request(HttpRequest request) override { return http::start(std::move(request)); }
-    Game& game() override { return real_game(base); }
+    Game& game() override { return real_game(base, storage_); }
     std::vector<HttpResponse> take_http_responses() override { return http::take(); }
 
 private:
@@ -139,7 +151,9 @@ private:
     SessionState session_;
 
 private:
+    Mailbox& mail() { return server_ ? server_mail : client_mail; }
     std::filesystem::path storage_;
+    bool server_{};
 };
 
 std::filesystem::path data_root;
@@ -147,6 +161,11 @@ std::filesystem::path data_root;
 // their scripts while the game shuts down.
 GameEnvironment* environment{};
 Host* host{};
+// Plugins' server copies, while this game hosts a lobby: the session's authority.
+GameEnvironment* server_environment{};
+Host* server_host{};
+bool serving{};
+std::uint64_t local_player{};
 std::mutex found_mutex;
 std::vector<Candidate> found;      // under found_mutex
 std::uint64_t found_generation{};  // under found_mutex
@@ -157,6 +176,7 @@ tricks::TrickWatch trick_watch;
 Vec3 started_at{};
 std::chrono::steady_clock::time_point started_time{};
 std::string watched_level;
+std::string last_trick_name; // the score HUD's last sequence header
 
 // The score HUD into the trick watch, and what it saw to the plugins. Client thread.
 void read_tricks() {
@@ -174,7 +194,9 @@ void read_tricks() {
     // A wipeout is physics states 300-399 (as Domination reads it).
     signals.wipeout = skater.skater && skater.physics_state >= 300 && skater.physics_state < 400;
     const auto event = trick_watch.update(signals);
-    environment->score_now = ScoreState{hud->line_score, hud->multiplier, trick_watch.in_trick()};
+    environment->score_now = ScoreState{hud->line_score, hud->multiplier, trick_watch.in_trick(), hud->header, hud->descriptor,
+                                        tricks::names_manual(*hud)};
+    if (!hud->header.empty()) last_trick_name = hud->header;
     const auto now = std::chrono::steady_clock::now();
     TrickNews news;
     switch (event.kind) {
@@ -192,6 +214,7 @@ void read_tricks() {
         news.started_at = started_at;
         news.landed_at = skater.position;
         news.ms = std::chrono::duration<double, std::milli>(now - started_time).count();
+        news.name = last_trick_name;
         break;
     case tricks::TrickEvent::Kind::broken:
         news.kind = TrickNews::Kind::broken;
@@ -244,8 +267,10 @@ bool start(std::uintptr_t image_base) noexcept {
         data_root = std::filesystem::path(std::wstring(path.data(), length)).parent_path();
         auto storage = local_storage();
         if (storage.empty()) storage = data_root / L"ReSkate.Plugins";
-        environment = new GameEnvironment(std::move(storage));
+        server_environment = new GameEnvironment(storage / L"server", true);
+        environment = new GameEnvironment(std::move(storage), false);
         host = new Host(*environment, Side::client);
+        server_host = new Host(*server_environment, Side::server, {}, "@server");
         std::thread(watch).detach();
         logging::write(logging::Level::info, logging::Channel::plugins, "Plugins: looking in Mods for reskate-plugin.json every 2 s.");
         return true;
@@ -270,6 +295,27 @@ void on_client_tick() noexcept {
                 }
             }
             if (changed) host->apply(latest);
+            // The server copies run while this game hosts a lobby (a dedicated server runs its own).
+            const auto session = environment->session();
+            local_player = 0;
+            bool hosting = false;
+            for (const auto& player : session.players)
+                if (player.me) {
+                    local_player = player.id;
+                    hosting = session.active && player.host && !session.dedicated;
+                }
+            if (hosting != serving) {
+                serving = hosting;
+                if (serving) {
+                    std::lock_guard lock(found_mutex);
+                    server_host->apply(found);
+                    logging::write(logging::Level::info, logging::Channel::plugins, "Plugins: hosting a lobby, so server copies run here.");
+                } else {
+                    server_host->apply({});
+                    std::lock_guard lock(messages_mutex);
+                    server_mail = {};
+                }
+            } else if (serving && changed) server_host->apply(latest);
         }
         const auto now = std::chrono::steady_clock::now();
         const double dt = last_tick == std::chrono::steady_clock::time_point{} ? 0
@@ -278,6 +324,7 @@ void on_client_tick() noexcept {
         if (host->wants_tricks()) read_tricks();
         else environment->score_now.reset();
         host->tick(dt);
+        if (serving) server_host->tick(dt);
     } catch (const std::exception& error) {
         logging::log(logging::Level::error, logging::Channel::plugins, "Plugin tick failed: {}", error.what());
     }
@@ -300,28 +347,59 @@ void set_level(std::string_view level) noexcept {
 
 bool run_console(const std::string& text) noexcept {
     if (!host) return false;
-    try { return host->run_console(text); }
+    try { return host->run_console(text) || (serving && server_host->run_console(text)); }
     catch (const std::exception& error) {
         logging::log(logging::Level::error, logging::Channel::plugins, "Plugin command failed: {}", error.what());
         return true;
     }
 }
 
+// Another player's plugin message. On a lobby's host the server copies hear what is for them and
+// what is for everyone; the authority's words come only from the authority (session.cpp checks).
 void receive_message(std::uint64_t sender, const std::vector<std::uint8_t>& bytes) noexcept {
     try {
         std::lock_guard lock(messages_mutex);
-        if (inbox.size() < 256) inbox.push_back({sender, bytes});
+        const auto to = wire::to_of(bytes);
+        const auto put = [&](Mailbox& mail) {
+            if (mail.inbox.size() < 256) mail.inbox.push_back({sender, bytes});
+        };
+        if (serving) {
+            if (wire::from_authority(bytes)) return;
+            if (to == wire::authority || to == 0) put(server_mail);
+            if (to != wire::authority) put(client_mail);
+        } else if (to != wire::authority) put(client_mail);
     } catch (...) {}
 }
 
+// What goes out to the session. On a lobby's host, what its own copies say to the authority stays
+// here, and what the authority says to everyone (or the host) is heard here too.
 std::vector<std::vector<std::uint8_t>> take_outgoing() noexcept {
     std::lock_guard lock(messages_mutex);
-    return std::exchange(outbox, {});
+    auto out = std::exchange(client_mail.outbox, {});
+    if (!serving) return out;
+    std::vector<std::vector<std::uint8_t>> sent;
+    for (auto& bytes : out) {
+        const auto to = wire::to_of(bytes);
+        if ((to == wire::authority || to == 0) && server_mail.inbox.size() < 256) server_mail.inbox.push_back({local_player, bytes});
+        if (to != wire::authority) sent.push_back(std::move(bytes));
+    }
+    for (auto& bytes : std::exchange(server_mail.outbox, {})) {
+        const auto to = wire::to_of(bytes);
+        if ((to == 0 || to == local_player) && client_mail.inbox.size() < 256) client_mail.inbox.push_back({local_player, bytes});
+        if (to != local_player) sent.push_back(std::move(bytes));
+    }
+    return sent;
 }
 
 std::string describe() {
     if (!host) return "error: Plugins did not start.";
-    const auto plugins = host->status();
+    auto plugins = host->status();
+    // While this game hosts a lobby, its server copies too.
+    if (serving)
+        for (auto status : server_host->status()) {
+            status.id += "@server";
+            plugins.push_back(std::move(status));
+        }
     if (plugins.empty()) return "No plugins. A plugin is a mod in Mods with a reskate-plugin.json.";
     std::string text;
     for (const auto& plugin : plugins) {
@@ -338,15 +416,31 @@ std::string describe() {
 std::string list_commands() {
     if (!host) return "error: Plugins did not start.";
     std::string text;
-    for (const auto& plugin : host->status())
-        for (const auto& [name, help] : plugin.commands) {
-            if (!text.empty()) text += '\n';
-            text += std::format("{} - {} ({})", name, help, plugin.id);
-        }
+    const auto add = [&](const std::vector<Status>& all, std::string_view suffix) {
+        for (const auto& plugin : all)
+            for (const auto& [name, help] : plugin.commands) {
+                if (!text.empty()) text += '\n';
+                text += std::format("{} - {} ({}{})", name, help, plugin.id, suffix);
+            }
+    };
+    add(host->status(), "");
+    if (serving) add(server_host->status(), "@server"); // run when no player's copy has the command
     return text.empty() ? "No plugin has a console command." : text;
 }
 
-std::string reload(std::string_view id) { return host ? host->reload(id) : "error: Plugins did not start."; }
-std::string switch_off(std::string_view id) { return host ? host->switch_off(id) : "error: Plugins did not start."; }
-std::string switch_on(std::string_view id) { return host ? host->switch_on(id) : "error: Plugins did not start."; }
+// "<id>@server" names a server copy (on this game while it hosts a lobby); a plain id, the player's copy.
+namespace {
+template <class Do> std::string either(std::string_view id, Do&& act) {
+    if (!host) return "error: Plugins did not start.";
+    constexpr std::string_view server_suffix = "@server";
+    if (id.ends_with(server_suffix)) {
+        if (!serving) return "error: server copies run only while this game hosts a lobby.";
+        return act(*server_host, id.substr(0, id.size() - server_suffix.size()));
+    }
+    return act(*host, id);
+}
+}
+std::string reload(std::string_view id) { return either(id, [](Host& h, std::string_view i) { return h.reload(i); }); }
+std::string switch_off(std::string_view id) { return either(id, [](Host& h, std::string_view i) { return h.switch_off(i); }); }
+std::string switch_on(std::string_view id) { return either(id, [](Host& h, std::string_view i) { return h.switch_on(i); }); }
 }

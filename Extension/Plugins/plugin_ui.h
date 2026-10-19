@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <utility>
 #include <string>
 #include <vector>
@@ -24,11 +25,14 @@ struct Style {
     float rounding{};
     int align{};                       // text: 0 left, 1 centre, 2 right of its point
     bool shadow = true;
+    std::array<float, 4> uv{0, 0, 1, 1}; // pictures: the part of the picture drawn (u0, v0, u1, v1)
 };
 // Screen shapes are in pixels from the top left; world shapes in world metres, projected through
 // the camera as the frame is drawn, and left out behind it.
 struct Shape {
-    enum class Kind { text, rect, line, circle, poly, world_text, world_line, world_circle } kind{Kind::text};
+    // image: `text` is the picture's file, points[0] and [1] its corners; world_image: centred on
+    // points[0], `radius` metres tall.
+    enum class Kind { text, rect, line, circle, poly, world_text, world_line, world_circle, image, world_image } kind{Kind::text};
     std::vector<Vec3> points;
     float radius{};
     std::string text;
@@ -40,7 +44,8 @@ struct Layer {
 };
 
 struct Widget {
-    enum class Kind { heading, label, separator, button, toggle, slider, dropdown } kind{Kind::label};
+    // bar: a read-only gauge, `value` between `minimum` and `maximum` (an axis, a level).
+    enum class Kind { heading, label, separator, button, toggle, slider, dropdown, bar } kind{Kind::label};
     std::string id, text;
     bool on{};
     float value{}, minimum{}, maximum{1};
@@ -54,6 +59,17 @@ struct Panel {
 };
 // The widget a full-screen screen's Esc sends.
 inline constexpr char close_widget[] = "__close";
+// A plugin's bind (reskate.input.bind) as the Binds page lists it: the plugin's own combo, and the
+// one in use (the player's, when they recorded or cleared one; 0 is none).
+struct Bind {
+    std::string plugin, action;
+    std::uint32_t own{}, combo{};
+};
+// The Binds page's change to one: a combo (0 clears it), or nullopt for the plugin's own again.
+struct Rebind {
+    std::string plugin, action;
+    std::optional<std::uint32_t> combo;
+};
 // What the player did to a widget: pressed a button, or set a toggle, slider or dropdown.
 struct Action {
     std::string plugin, panel, widget;
@@ -67,6 +83,8 @@ inline std::mutex mutex;
 inline std::shared_ptr<const std::vector<Layer>> layers = std::make_shared<std::vector<Layer>>();
 inline std::shared_ptr<const std::vector<Panel>> panels = std::make_shared<std::vector<Panel>>();
 inline std::vector<Action> actions;
+inline std::shared_ptr<const std::vector<Bind>> binds = std::make_shared<std::vector<Bind>>();
+inline std::vector<Rebind> rebinds;
 inline std::atomic<std::int64_t> panels_seen_ms{};
 inline std::atomic<float> display_width{1920}, display_height{1080};
 inline std::int64_t now_ms() {
@@ -101,6 +119,25 @@ inline void act(Action action) {
 inline std::vector<Action> take_actions() {
     std::lock_guard lock(detail::mutex);
     return std::exchange(detail::actions, {});
+}
+// Client thread: every plugin's binds, whenever they change.
+inline void publish_binds(std::vector<Bind> value) {
+    auto shared = std::make_shared<const std::vector<Bind>>(std::move(value));
+    std::lock_guard lock(detail::mutex);
+    detail::binds = std::move(shared);
+}
+inline std::shared_ptr<const std::vector<Bind>> latest_binds() {
+    std::lock_guard lock(detail::mutex);
+    return detail::binds;
+}
+// Render thread: the player recorded, cleared or reset a plugin's bind.
+inline void rebind(Rebind change) {
+    std::lock_guard lock(detail::mutex);
+    if (detail::rebinds.size() < 64) detail::rebinds.push_back(std::move(change));
+}
+inline std::vector<Rebind> take_rebinds() {
+    std::lock_guard lock(detail::mutex);
+    return std::exchange(detail::rebinds, {});
 }
 // Render thread, each frame the PLUGINS tab shows: panels are built only while it is open.
 inline void note_panels_shown() { detail::panels_seen_ms.store(detail::now_ms(), std::memory_order_relaxed); }

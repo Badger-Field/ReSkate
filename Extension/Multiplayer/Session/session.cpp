@@ -1,6 +1,5 @@
 #include "session_internal.h"
 #include "Engine/Core/Hooks/hooks.h"
-#include "Extension/Skater/drone_beacon.h"
 #include "Extension/Plugins/plugin_runtime.h"
 #include "Extension/Plugins/plugin_wire.h"
 #include "Extension/Plugins/plugin_session_feed.h"
@@ -87,8 +86,6 @@ void stop(Session &s, std::string reason) {
     s.object_limit = 0;
     s.object_scaling = true;
     s.sync_effects = true;
-    s.sync_drones = true;
-    drone::beacon::server_allows().store(true);
     set_lobby_object_limit(0);
     s.server_admin = false;
     s.role.clear();
@@ -417,7 +414,12 @@ void relay_throwdowns(Session &s, bool in_world) {
     // Plugin messages ride in throwdown packets too, told apart by their first byte
     // (Extension/Plugins/plugin_wire.h); they go to the plugins, never to the relay.
     for (const auto &[sender, message] : s.throwdown_inbox) {
-        if (plugins::wire::is_plugin(message)) plugins::receive_message(sender, message);
+        if (plugins::wire::is_plugin(message)) {
+            // The authority's words (a plugin's server copy) come from the lobby's host or the
+            // server only; a host hears none from its guests.
+            if (plugins::wire::from_authority(message) && (s.mode == Mode::host || sender != s.host_id)) continue;
+            plugins::receive_message(sender, message);
+        }
         else receive_throwdown_relay(sender, message);
     }
     s.throwdown_inbox.clear();
@@ -529,7 +531,6 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
         // Friends only: everyone else keeps their chat bubbles and loses the name and dot.
         tag.nameless = s.nametags_friends && !std::binary_search(s.friend_ids.begin(), s.friend_ids.end(), p.member.id);
         tag.talking = std::any_of(voices.begin(), voices.end(), [&](const auto &v) { return v.id == p.member.id && v.speaking; });
-        tag.flying_drone = drone::beacon::flying(p.member.id);
         if (const auto extra = plugin_feed::tag_of(p.member.id)) {
             tag.extra = extra->text;
             tag.extra_color = extra->colour;
@@ -768,6 +769,15 @@ MultiplayerChat chat() {
     auto &s = session();
     std::lock_guard lock(s.mutex);
     return s.chat_view;
+}
+std::string plugin_chat(std::string_view plugin, std::string_view text, std::uint32_t text_color) {
+    auto &s = session();
+    if (s.mode == Mode::off) return "not in a session";
+    s.chat.push_back({++s.chat_sequence, 0, now_us(), std::string(plugin), std::string(text), false, 0xffd9a441u, "Plugin", {}, false,
+                      text_color});
+    while (s.chat.size() > multiplayer_chat_history) s.chat.pop_front();
+    publish_chat(s);
+    return {};
 }
 void host_map_change(std::string_view destination) {
     auto &s = session();

@@ -57,7 +57,6 @@ void publish_custom_nametags(std::uintptr_t base, std::vector<NametagPlayer> pla
             tag.color = player.color;
             tag.tag = std::move(player.tag);
             tag.talking = player.talking;
-            tag.flying_drone = player.flying_drone;
             tag.extra = player.extra;
             tag.extra_color = player.extra_color;
             tag.bubbles.reserve(player.bubbles.size());

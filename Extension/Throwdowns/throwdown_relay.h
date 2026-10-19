@@ -44,6 +44,17 @@ std::vector<std::vector<std::uint8_t>> tick_throwdown_relay(std::uintptr_t base,
 // One message from another player, as relayed by the session (game thread).
 void receive_throwdown_relay(std::uint64_t sender, std::span<const std::uint8_t> message);
 std::string throwdown_relay_status();
+// A plugin's drop (reskate.throwdowns.host): a `series` queue ("JamSession", "SpotBattle",
+// "ThrowdownSkate") hosted by the local player where the skater stands, shown only to `players`
+// (Steam IDs, others in the session) and joined by them with the game's own Join; it starts once
+// they all have. "" when it is asked for (the spawn follows at the relay's next tick), otherwise why
+// not. Game thread.
+std::string throwdown_relay_host(const std::string &series, std::vector<std::uint64_t> players, std::uint32_t max_players);
+void throwdown_relay_cancel_host() noexcept;
+// What became of the plugin's drop: "", "spawning", "open", "started", or why it failed.
+std::string throwdown_relay_host_status();
+// The lab ran a plugin drop's spawn: its parameters as the stream the offer carries. Any thread.
+void throwdown_relay_host_placement(std::uint64_t token, std::vector<std::uint8_t> placement) noexcept;
 // Lines for the local player's chat since the last call (a linked throwdown ended because
 // everyone else left it). Game thread.
 std::vector<std::string> take_throwdown_relay_notices();

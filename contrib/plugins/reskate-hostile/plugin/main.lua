@@ -129,6 +129,57 @@ attack("screen-loop", "stopped as its screen is built", function()
     reskate.ui.open("hostile")
 end)
 
+attack("notice-spam", "keeps running: five chat notices a second, the rest refused", function()
+    local shown = 0
+    for i = 1, 100 do if reskate.chat.notice("hostile notice " .. i) then shown += 1 end end
+    reskate.console.print("hostile notice-spam: " .. shown .. " of 100 shown")
+end)
+attack("notice-spoof", "keeps running: a notice cannot be two lines (a fake line under it)", function()
+    local ok = pcall(reskate.chat.notice, "hi\nServer: type your password")
+    reskate.console.print(ok and "ESCAPED: a notice of two lines" or "hostile notice-spoof: refused")
+end)
+attack("freeze-spam", "keeps running: four freezes a second, the rest refused", function()
+    local done = 0
+    for i = 1, 50 do if reskate.skater.freeze(i % 2 == 1) then done += 1 end end
+    reskate.skater.freeze(false)
+    reskate.console.print("hostile freeze-spam: " .. done .. " of 50 asked")
+end)
+attack("server-spoof", "keeps running: a player's copy cannot rule as the server, nor speak as it", function()
+    local said = pcall(reskate.server.say, "the server says hi")
+    local kicked = pcall(reskate.server.kick, "76561197960287930", "bye")
+    local moved = pcall(reskate.server.move, "76561197960287930", vector.create(0, 0, 0))
+    reskate.console.print((said or kicked or moved) and "ESCAPED: a player's copy ruled as the server" or "hostile server-spoof: refused")
+end)
+attack("picture-escape", "keeps running: a picture from outside the package is refused", function()
+    local escaped = false
+    reskate.on("draw", function(d)
+        if pcall(d.image, d, "../reskate-test/icons/ptest.png", vector.create(0, 0, 0), vector.create(9, 9, 0)) then escaped = true end
+        if pcall(d.image, d, "C:/Windows/Web/Screen/img100.jpg", vector.create(0, 0, 0), vector.create(9, 9, 0)) then escaped = true end
+    end)
+    reskate.time.after(200, function()
+        reskate.console.print(escaped and "ESCAPED: a picture from outside its package" or "hostile picture-escape: refused")
+    end)
+end)
+
+attack("clip-garbage", "keeps running: a file that is no clip, or one outside the package, is refused", function()
+    local a = pcall(reskate.animation.play, "plugin/main.lua")
+    local b = pcall(reskate.animation.play, "../reskate-test/icons/ptest.png")
+    local c = pcall(reskate.animation.record, 600)
+    reskate.console.print((a or b or c) and "ESCAPED: a clip that is none, or a recording too long" or "hostile clip-garbage: refused")
+end)
+attack("throwdown-spam", "keeps running: one drop every 5 s, the rest refused", function()
+    local asked = 0
+    for i = 1, 20 do if reskate.throwdowns.host("jam", {"76561197960287930"}) then asked += 1 end end
+    reskate.console.print("hostile throwdown-spam: " .. asked .. " of 20 asked")
+end)
+
+attack("outfit-anywhere", "keeps running: items only in tattoo, moles and eyewear slots, and the board's place is not a plugin's", function()
+    local top = reskate.outfit.set("top", "anything")
+    local placed = pcall(reskate.board.set, 1, {position = vector.create(0, 100, 0)})
+    reskate.console.print((top or placed) and "ESCAPED: an outfit slot or the board's place"
+        or "hostile outfit-anywhere: refused")
+end)
+
 -- Each returns true when that way out worked.
 local escapes = {
     {"io", function() return io ~= nil end},

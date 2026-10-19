@@ -31,8 +31,6 @@
 #include "Extension/Boot/offline_boot.h"
 #include "Extension/HallOfMeat/hall_of_meat.h"
 #include "Extension/Plugins/plugin_runtime.h"
-#include "Extension/RoadRash/road_rash.h"
-#include "Extension/BoardBreak/board_break.h"
 #include "Extension/Skater/grind_exit_control.h"
 #include "Extension/Skater/camera_observer.h"
 #include "Extension/Progression/entitlement_request_hook.h"
@@ -449,10 +447,6 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         record("{\"event\":\"plugins_initialized\",\"active\":" + std::string(plugins ? "true" : "false") + "}");
         const bool meat = dingosdk::hall_of_meat::start(r.base);
         record("{\"event\":\"hall_of_meat_initialized\",\"active\":" + std::string(meat ? "true" : "false") + "}");
-        const bool rash = dingosdk::road_rash::start(r.base);
-        record("{\"event\":\"road_rash_initialized\",\"active\":" + std::string(rash ? "true" : "false") + "}");
-        const bool board_break = dingosdk::board_break::start(r.base);
-        record("{\"event\":\"board_break_initialized\",\"active\":" + std::string(board_break ? "true" : "false") + "}");
         const bool grind_control = dingosdk::grind_exit_control::start(r.base);
         record("{\"event\":\"grind_exit_control_initialized\",\"active\":" + std::string(grind_control ? "true" : "false") + "}");
         const bool noclip_velocity = dingosdk::start_client_noclip_velocity(r.base);

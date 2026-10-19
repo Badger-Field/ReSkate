@@ -46,6 +46,11 @@ bool queue_throwdown_spawn(std::uint64_t token, std::uint32_t host, const std::s
     calls.push_back({"spawn", series, host, 0, 0, token});
     return true;
 }
+bool queue_throwdown_host(std::uint64_t token, const std::string &series, const std::array<float, 3> &at, std::uint32_t most_players) noexcept {
+    last_token = token;
+    calls.push_back({"host", series, most_players, 0, static_cast<std::int32_t>(at[0]), token});
+    return true;
+}
 bool queue_throwdown_add(std::uint32_t player, const std::string &series, std::uint32_t mmid) noexcept {
     calls.push_back({"add", series, player, mmid});
     return true;
@@ -763,6 +768,56 @@ void beacon_flow() {
 }
 // A level change takes the event types with it. The relay asks for them again instead of
 // remembering that it once had them, and shows a drop only when they are back.
+// A plugin's drop for chosen players: spawned where the skater stands, shown only to them (an invite
+// before each offer), joined by them alone, and started once they all are in.
+void plugin_host_flow() {
+    ThrowdownRelayInput in{me, {{leader, 3}, {other, 5}}, true, 81};
+    in.position = std::array<float, 3>{12, 0, 0};
+    tick(in);
+    calls.clear();
+    check(throwdown_relay_host("Bowling", {leader}, 0).find("JamSession") != std::string::npos, "A mode that is not linked was taken");
+    check(throwdown_relay_host("JamSession", {leader}, 0).empty(), "A plugin's drop was refused");
+    tick(in);
+    const auto *host = find("host");
+    check(host && host->series == "JamSession" && host->value == 12 && host->id == 2, "The drop was not spawned where the skater stands");
+    check(throwdown_relay_host_status() == "spawning", "The drop's status did not say it is spawning");
+    throwdown_relay_host_placement(last_token, {9, 8, 7});
+    throwdown_relay_spawned(last_token, 0x77, 4);
+    auto out = tick(in);
+    check(out.size() == 2 && out[0].kind == Kind::invite && out[0].order == std::vector<std::uint64_t>{leader} && out[1].kind == Kind::offer &&
+          out[1].placement == std::vector<std::uint8_t>{9, 8, 7} && out[1].id == 0x77,
+          "The drop was not offered after an invite naming its players");
+    check(throwdown_relay_host_status() == "open", "The drop's status did not say it is open");
+    receive(other, make(Kind::join, me, 0x77));
+    tick(in);
+    check(!find("add"), "A player who was not invited joined the drop");
+    receive(leader, make(Kind::join, me, 0x77));
+    tick(in);
+    const auto *add = find("add");
+    check(add && add->id == 0x303 && add->mmid == 0x77, "An invited player's join was not replayed into the drop");
+    tick(in);
+    const auto *started = find("start");
+    check(started && started->mmid == 0x77 && throwdown_relay_host_status() == "started", "The drop did not start once everyone invited joined");
+    end_session();
+    // Another leader's drop for someone else: nothing shows it here.
+    ThrowdownRelayInput guest{me, {{leader, 3}, {other, 5}}, true, 82};
+    tick(guest);
+    calls.clear();
+    auto invite = make(Kind::invite, leader, 0x99);
+    invite.order = {other};
+    receive(leader, invite);
+    receive(leader, offer(leader, 0x99));
+    tick(guest);
+    check(!find("spawn"), "A drop for other players was shown here");
+    invite.id = 0x9a;
+    invite.order = {me};
+    receive(leader, invite);
+    receive(leader, offer(leader, 0x9a));
+    tick(guest);
+    check(find("spawn") != nullptr, "A drop this player was invited to was not shown");
+    end_session();
+}
+
 void level_change_flow() {
     using namespace std::chrono_literals;
     const ThrowdownRelayInput in{me, {{leader, 3}}, true, 77};
@@ -813,7 +868,8 @@ int main() {
         challenge_flow();
         beacon_flow();
         level_change_flow();
-        std::cout << "Throwdown relay: guest, leader, removal, Spot Battle, S.K.A.T.E., last-player, coop challenge, party beacon and level change flows passed.\n";
+        plugin_host_flow();
+        std::cout << "Throwdown relay: guest, leader, removal, Spot Battle, S.K.A.T.E., last-player, coop challenge, party beacon, level change and plugin drop flows passed.\n";
         return 0;
     } catch (const std::exception &e) {
         std::cerr << e.what() << '\n';

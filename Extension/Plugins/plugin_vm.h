@@ -45,6 +45,9 @@ struct Limits {
     int teleports_per_second = 2;
     std::size_t shapes = 4000;          // drawn each frame
     std::size_t shape_text_bytes = 64u << 10;
+    std::size_t images = 32; // different pictures a plugin draws
+    std::size_t clip_bytes = 48u << 20; // the clips a plugin holds, as poses (40 bytes a joint a frame)
+    std::size_t sounds = 32;            // different waves a plugin plays, each at most 30 s
     int toasts = 3;                     // in 5 s
     int sounds_per_second = 10;
     std::size_t message_bytes = 4096 - 14; // a plugin message's payload (plugin_wire.h's header is 14)
@@ -81,16 +84,20 @@ struct TrickNews {
     Vec3 started_at{}, landed_at{};
     double ms{};                  // landed: from its start
     std::string reason;           // broken: "slam" or "wipeout"
+    std::string name;             // landed: the trick the HUD named last (may be empty)
 };
 struct ScoreState {
     float line{}, multiplier{};
     bool in_trick{};
+    std::string trick, detail; // the HUD's sequence header and descriptor ("Manual", "Kickflip"...)
+    bool manual{};             // a manual is going on, as the HUD names it
 };
 // The multiplayer session as plugins see it: who is in it (the local player too).
 struct SessionPlayer {
     std::uint64_t id{}; // SteamID64
     std::string name;
     bool me{}, host{};
+    bool server{}; // the session's authority: a message from a plugin's server copy
     bool operator==(const SessionPlayer&) const = default;
 };
 struct SessionState {
@@ -153,6 +160,9 @@ public:
     virtual bool http(HttpRequest request) = 0;
     // The wider set's game (plugin_game.h).
     virtual Game& game() = 0;
+    // Whether this is the session's authority: plugins' server copies, on the lobby's host or the
+    // dedicated server.
+    virtual bool authority() = 0;
 };
 
 enum class State { loading, running, stopped };
@@ -201,7 +211,9 @@ public:
     void http_done(const HttpResponse& response);
     // The wider set's events, each to a plugin with its permission and a handler for it.
     void skater_changed(const char* state, const char* previous);
-    void bailed(std::uint64_t wipeouts);
+    void bailed(std::uint64_t wipeouts, std::optional<SlamNews> slam);
+    // A game event with plain data (board_landed, body_hit, bail_end), to a plugin with `permission`.
+    void game_event(std::string_view event, std::string_view permission, const Json& data);
     void chat_line(const ChatLine& line);
     void track_changed(const Track& track);
     void throwdown_phase(const char* phase);
@@ -288,7 +300,18 @@ private:
     int teleports_{};
     std::vector<plugin_ui::Shape> shapes_;
     std::size_t shape_text_{};
-    bool drawing_{}, shapes_warned_{};
+    bool drawing_{};
+    double shapes_warned_at_{-1e9}; // the drawing limit is said at most every 10 s
+    std::map<std::string, std::string, std::less<>> image_files_; // a picture's path in the package, and its file
+    // skater.animation: clips by their path in the package, or "rec:<n>" for a recording, and the
+    // bytes they hold (at most limits_.clip_bytes).
+    std::map<std::string, std::shared_ptr<const anim_studio::Clip>, std::less<>> clips_;
+    std::size_t clip_bytes_{};
+    int recordings_{};
+    // reskate.audio: waves by their path in the package, and how many sounds began this second.
+    std::map<std::string, std::shared_ptr<const Wave>, std::less<>> waves_;
+    double wave_second_{};
+    int wave_starts_{};
     int draw_table_{}, ui_table_{};
     struct PanelEntry { std::string title; int function{}; };
     std::vector<PanelEntry> panels_;
@@ -308,12 +331,13 @@ private:
     };
     std::vector<Listener> listeners_;
     int calls_{};
-    double emit_tick_{};
+    std::uint64_t emit_tick_{}, tick_number_{}; // the tick events were emitted in; ticks so far
     std::size_t emitted_{};
     std::map<std::uint64_t, int> http_pending_; // request id: its callback
     double control_second_{}, edit_second_{}, environment_second_{}, voice_second_{}, music_second_{};
     int controls_{}, edits_{}, environments_{}, voices_{}, musics_{};
-    double travel_at_{-1e9}, chat_at_{-1e9};
+    double travel_at_{-1e9}, chat_at_{-1e9}, local_chat_second_{}, server_second_{}, host_at_{-1e9}, wipeout_at_{-1e9};
+    int local_chats_{}, server_calls_{};
     std::optional<std::pair<Vec3, float>> trainer_point_;
     std::set<std::string, std::less<>> binds_;
     std::vector<PanelEntry> screens_;

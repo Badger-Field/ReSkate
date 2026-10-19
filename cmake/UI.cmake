@@ -15,8 +15,6 @@ add_library(dingosdk_overlay STATIC
     Extension/UI/Overlay/message_card.cpp
     Extension/UI/Overlay/hub_page.cpp
     Extension/UI/Overlay/game_text_overlay.cpp
-    Extension/UI/Overlay/drone_hud_overlay.cpp
-    Extension/UI/Overlay/drone_page.cpp
     Extension/UI/Overlay/perf_overlay.cpp
     Extension/UI/Overlay/skate_hud_overlay.cpp
     Extension/UI/Overlay/nametag_overlay.cpp
@@ -28,6 +26,7 @@ add_library(dingosdk_overlay STATIC
     Extension/UI/Overlay/skate_menu_addons.cpp
     Extension/UI/Overlay/plugins_page.cpp
     Extension/UI/Overlay/plugin_overlay.cpp
+    Extension/UI/Overlay/plugin_images.cpp
     Extension/UI/Overlay/menu_map_pictures.cpp
     Extension/UI/Overlay/skate_menu_skater.cpp
     Extension/UI/Overlay/skate_menu_settings.cpp

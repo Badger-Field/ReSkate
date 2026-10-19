@@ -19,6 +19,8 @@ void push_player(lua_State* L, const SessionPlayer& player);
 // A file's bytes when it is a regular file no larger than `most`; otherwise empty, and `error`
 // says why ("not found" when there is none).
 std::string read_package_file(const std::filesystem::path& file, std::size_t most, std::string& error);
+// A file of the plugin's own package by its path there; a Lua error for one outside it.
+std::filesystem::path package_file(lua_State* L, Plugin& plugin, std::string_view path);
 // JSON and Lua values, both ways. Throws std::runtime_error on a value JSON cannot hold.
 Json lua_to_json(lua_State* L, int index);
 void push_json(lua_State* L, const Json& value);

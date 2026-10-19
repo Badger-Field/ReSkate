@@ -1,4 +1,5 @@
 #pragma once
+#include <filesystem>
 #include <set>
 #include <vector>
 #include <string>
@@ -31,5 +32,8 @@ Manifest parse_manifest(std::string_view text);
 // it could leave the package: absolute, a drive or a stream (':'), a backslash, an empty, "." or
 // ".." segment, or a character outside printable ASCII.
 std::string safe_relative_path(std::string_view path);
+// Why a package may not load, from its files alone, or empty. A plugin never ships a program: no
+// Windows executable (by its first bytes, whatever its name) and no script Windows runs.
+std::string check_package_files(const std::filesystem::path& directory);
 const char* side_name(Side side) noexcept;
 }

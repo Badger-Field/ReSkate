@@ -77,7 +77,9 @@ struct Status {
 class Host final : private Services {
 public:
     // A client host runs client plugins and those for both sides; a server host, server ones and both.
-    Host(Environment& environment, Side side, Limits limits = {});
+    // `suffix` follows each plugin's id where it is the game's owner of something, in its logs and
+    // its storage: a lobby host's server copies ("@server") never share what the client copies hold.
+    Host(Environment& environment, Side side, Limits limits = {}, std::string suffix = {});
     ~Host() override;
     Host(const Host&) = delete;
     Host& operator=(const Host&) = delete;
@@ -137,6 +139,7 @@ private:
     bool emit(std::string_view source, std::string_view event, Json data) override;
     bool http(HttpRequest request) override { return environment_.http_request(std::move(request)); }
     Game& game() override { return environment_.game(); }
+    bool authority() override { return side_ == Side::server; }
     // What the game did since the last tick, to the plugins with the permission for it.
     void follow_game();
     void deliver_http();
@@ -152,6 +155,7 @@ private:
     Environment& environment_;
     Side side_;
     Limits limits_;
+    std::string suffix_;
     std::map<std::string, Entry, std::less<>> entries_;
     std::map<std::string, std::string, std::less<>> commands_; // command name: plugin id
     std::string level_;

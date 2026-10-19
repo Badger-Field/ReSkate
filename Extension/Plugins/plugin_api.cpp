@@ -17,12 +17,13 @@ namespace {
 struct Event {
     std::string_view name, permission;
 };
-constexpr std::array<Event, 19> events{{
+constexpr std::array<Event, 22> events{{
     {"load", {}}, {"unload", {}}, {"tick", {}}, {"level_loaded", {}}, {"level_unloading", {}},
     {"trick_started", "events.tricks"}, {"trick_landed", "events.tricks"}, {"line_broken", "events.tricks"},
     {"draw", "overlay"}, {"player_joined", "session.read"}, {"player_left", "session.read"}, {"message", "net.session"},
     {"skater_state", "events.skater"}, {"bail", "events.skater"}, {"chat", "chat.read"}, {"track_changed", "music"},
     {"throwdown", "throwdowns"}, {"action", "input"}, {"screen_closed", "ui.screen"},
+    {"board_landed", "events.skater"}, {"body_hit", "events.skater"}, {"bail_end", "events.skater"},
 }};
 constexpr std::size_t maximum_key = 128;
 constexpr std::size_t maximum_command = 48;
@@ -183,6 +184,8 @@ Vec3 position_of(lua_State* L, int index, const char* what) {
 }
 void push_position(lua_State* L, const Vec3& v) { lua_pushvector(L, v[0], v[1], v[2]); }
 }
+
+std::filesystem::path package_file(lua_State* L, Plugin& plugin, std::string_view path) { return package_path(L, plugin, path, false); }
 
 struct ApiFunctions {
     static int log(lua_State* L) {
@@ -521,6 +524,12 @@ struct ApiFunctions {
         lua_setfield(L, -2, "multiplier");
         lua_pushboolean(L, now->in_trick);
         lua_setfield(L, -2, "in_trick");
+        lua_pushlstring(L, now->trick.data(), now->trick.size());
+        lua_setfield(L, -2, "trick");
+        lua_pushlstring(L, now->detail.data(), now->detail.size());
+        lua_setfield(L, -2, "detail");
+        lua_pushboolean(L, now->manual);
+        lua_setfield(L, -2, "manual");
         return 1;
     }
     // Modules come from the plugin's own package, beside its entry: require("./rules") or
@@ -587,6 +596,9 @@ void Api::install(Plugin& plugin, lua_State* L) {
     lua_setfield(L, -2, "api_version");
     lua_pushlstring(L, plugin.id().data(), plugin.id().size());
     lua_setfield(L, -2, "id");
+    // "client" for the copy on a player's game, "server" for the session authority's copy.
+    lua_pushstring(L, plugin.services_.authority() ? "server" : "client");
+    lua_setfield(L, -2, "side");
     set_function(L, "log", ApiFunctions::log);
     set_function(L, "on", ApiFunctions::on);
 
@@ -682,5 +694,7 @@ void push_player(lua_State* L, const SessionPlayer& player) {
     lua_setfield(L, -2, "me");
     lua_pushboolean(L, player.host);
     lua_setfield(L, -2, "host");
+    lua_pushboolean(L, player.server);
+    lua_setfield(L, -2, "server");
 }
 }

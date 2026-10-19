@@ -1125,6 +1125,12 @@ std::string run_job(const Job& job) {
         if (const auto f = find_field(p->type, field_party_only); f && f->size == 1) *reinterpret_cast<std::uint8_t*>(at + f->offset) = 0;
         if (const auto f = find_field(p->type, field_instance); f && f->kind == kind_string) assign_string(at + f->offset, "");
         e.set_u32(field_number_of_events, 1);
+        // A plugin's drop: its parameters, as the stream other players' copies are spawned from.
+        if (job.token && job.position) {
+            std::vector<std::uint8_t> stream;
+            capture_value(p->type, at, stream, 0);
+            throwdown_relay_host_placement(job.token, std::move(stream));
+        }
         const auto summary = describe_params(p->type, at);
         std::uint32_t player_limit{};
         if (const auto f = find_field(p->type, field_max_players); f && f->size == 4) player_limit = read<std::uint32_t>(at + f->offset);
@@ -2015,6 +2021,17 @@ bool queue_throwdown_spawn(std::uint64_t token, std::uint32_t host, const std::s
     try {
         Job job{Job::Kind::spawn, host};
         job.token = token; job.series = series; job.placement = placement; job.settings = settings;
+        return queue_relay_job(std::move(job), event_debug_spawn);
+    } catch (...) { return false; }
+}
+bool queue_throwdown_host(std::uint64_t token, const std::string& series, const std::array<float, 3>& at, std::uint32_t most_players) noexcept {
+    const auto host = local_native_player_id();
+    if (!token || !host) return false;
+    try {
+        Job job{Job::Kind::spawn, host, most_players};
+        job.token = token;
+        job.series = series;
+        job.position = at;
         return queue_relay_job(std::move(job), event_debug_spawn);
     } catch (...) { return false; }
 }

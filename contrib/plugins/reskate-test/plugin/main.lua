@@ -1,8 +1,15 @@
 -- reskate-test: calls every plugin API and says what worked. Run `ptest all` in the console, or
 -- `ptest <module>` for one (`ptest list` names them). Each API ReSkate adds gets a module here.
+-- The server copy (on a lobby's host, or a dedicated server) is the session's authority: it only
+-- answers `ptest server`.
+if reskate.side == "server" then
+    require("server")
+    return
+end
+
 local harness = require("harness")
 
-for _, name in {"base", "time", "level", "package", "json", "require", "console", "storage", "sandbox", "skater", "tricks", "overlay", "menu", "audio", "mods", "session", "wider"} do
+for _, name in {"base", "time", "level", "package", "json", "require", "console", "storage", "sandbox", "skater", "tricks", "overlay", "menu", "audio", "mods", "session", "wider", "more", "ports"} do
     require("checks/" .. name)
 end
 

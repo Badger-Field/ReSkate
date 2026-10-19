@@ -78,7 +78,6 @@ enum class DebugAction {
     set_first_person_camera_cycle,
     reset_first_person_arm,
     set_free_camera_fov,  // 0 = the game's own FOV
-    set_drone_follow,     // the drone flies itself behind the skater, and the view is its camera
     // Keep the last action in sync with the bound in request_scheduler.h.
 };
 
@@ -111,7 +110,6 @@ struct DebugModel {
     bool ui_available = false;
     bool free_camera = false;
     bool first_person = false;
-    bool drone_follow = false;  // the drone flies itself behind the skater (Skater/drone_follow.h)
     // Vertical degrees applied to the first-person view; 0 keeps the camera's own.
     float first_person_fov = 0;
     float free_camera_fov = 0;  // 0 = the game's own FOV
@@ -223,28 +221,6 @@ struct HallOfMeatModel {
     bool available = false, enabled = false;
 };
 
-// Road Rash's switches (Extension/RoadRash/road_rash.h): started, switched on, and whether its
-// worst wounds bleed. `off`: its official mod is turned off in the launcher, and no menu lists it.
-struct RoadRashModel {
-    bool available = false, enabled = false, blood = false;
-    bool off = false;
-};
-
-// Board Break's switch (Extension/BoardBreak/board_break.h): started, switched on, and which of
-// its decks is the one in the game (none: no deck pack loads, and no board can break). `off`: its
-// official mod is turned off in the launcher, and no menu lists it.
-struct BoardBreakModel {
-    bool available = false, enabled = false, has_deck = false;
-    std::string deck = "None";
-    bool off = false;
-    // Its settings (Extension/BoardBreak/board_break_feel.h) and how worn the board is (0 to 1, and
-    // its word).
-    bool always = false, rails = true, wear = true, crack_sounds = true, body_sounds = true;
-    int sensitivity = 100, joined = 50, wear_rate = 100;
-    float worn = 0;
-    std::string condition = "new";
-};
-
 // Grind exit control's switches (Extension/Skater/grind_exit_control.h): started, switched on,
 // LT/RT toe/heel (else left/right of travel), and the player's stance (0 not set, 1 regular,
 // 2 goofy).
@@ -282,8 +258,6 @@ struct Model {
     ProgressionModel progression;
     PlayerCardModel player_card;
     HallOfMeatModel hall_of_meat;
-    RoadRashModel road_rash;
-    BoardBreakModel board_break;
     GrindExitModel grind_exit;
     KeyframeSmoothingModel keyframe_smoothing;
     ObjectPersistenceModel object_persistence;
@@ -454,7 +428,6 @@ struct Nametag {
     std::string tag;                  // role badge before the name ("Dev", "ReSkate Admin", "Content Creator", "Centrix", "Homie", "Admin", "Host", "Friend")
     float distance{};                 // metres from the local skater
     bool talking{};
-    bool flying_drone{};              // flying the FPV drone: a FLYING DRONE label above the name
     std::string extra;                // a plugin's short tag above the name ("" for none)
     std::uint32_t extra_color{0xffffffffU};
     // Recent chat lines to show as bubbles above the head, oldest first ("" = none).
@@ -566,7 +539,7 @@ extern "C" __declspec(dllexport) bool DingoSDKOverlayStartV3(
 namespace dingosdk::overlay {
 // The first Xbox (XInput) or PlayStation (DualShock 4 / DualSense) controller, read directly.
 // Sticks are -1..1 (up and right positive), triggers 0..1; `buttons` is XInput's wButtons bit mask.
-// Used by the FPV drone's controller selection (Skater/drone_radio.h); safe from any thread.
+// Plugins read it (reskate.input.gamepad); safe from any thread.
 struct Gamepad {
     bool valid = false;
     bool playstation = false;
@@ -598,8 +571,8 @@ inline std::atomic<bool>& menu_open_flag() {
     return value;
 }
 // Reads of a controller between these two calls see the real device even while ReSkate keeps
-// the game from reading it (freecam or drone controller capture). Same thread, paired.
-// The FPV drone reads its controller this way (Skater/drone_radio.h).
+// the game from reading it (freecam, or a plugin's input capture). Same thread, paired.
+// Plugins read controllers this way (Extension/Plugins/plugin_joystick.h).
 void begin_input_access() noexcept;
 void end_input_access() noexcept;
 }

@@ -2,16 +2,17 @@
 #include "Engine/Core/Json/json.h"
 #include <algorithm>
 #include <array>
+#include <fstream>
 #include <stdexcept>
 
 namespace dingosdk::plugins {
 namespace {
-constexpr std::array<std::string_view, 35> permissions{
+constexpr std::array<std::string_view, 40> permissions{
     "console", "storage", "overlay", "menu", "ui.screen", "input", "hud", "events.tricks", "events.skater",
     "skater.read", "skater.teleport", "skater.control", "skater.animation", "trainer", "camera",
     "world.raycast", "world.objects", "world.environment", "world.ai", "travel", "session.read",
     "session.skaters", "session.nametags", "net.session", "net.http", "voice.control", "chat.read",
-    "chat.send", "throwdowns", "replay", "music", "progression.read", "settings.read", "audio.ui", "mods.read"};
+    "chat.send", "chat.local", "server", "throwdowns", "replay", "music", "progression.read", "settings.read", "audio.ui", "audio", "outfit", "board", "mods.read"};
 }
 
 bool known_permission(std::string_view name) noexcept {
@@ -101,4 +102,40 @@ Manifest parse_manifest(std::string_view text) {
     }
     return result;
 }
+
+namespace {
+constexpr std::array<std::string_view, 22> runnable{".exe", ".dll", ".sys", ".scr", ".com", ".cpl", ".msi", ".msp",
+    ".bat", ".cmd", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".lnk", ".pif", ".reg"};
+constexpr std::size_t most_files = 20000;
+
+// path::string() throws on names outside the ANSI code page; a name here is only shown or compared.
+std::string ascii_lowercase(const std::filesystem::path& path) {
+    std::string text;
+    for (const auto c : path.generic_wstring())
+        text += c < 0x80 ? static_cast<char>(c >= L'A' && c <= L'Z' ? c + 32 : c) : '?';
+    return text;
+}
+}
+
+std::string check_package_files(const std::filesystem::path& directory) {
+    std::error_code code;
+    std::size_t files = 0;
+    for (std::filesystem::recursive_directory_iterator it(directory, std::filesystem::directory_options::skip_permission_denied, code), end;
+         !code && it != end; it.increment(code)) {
+        std::error_code entry_code;
+        if (!it->is_regular_file(entry_code)) continue;
+        if (++files > most_files) return "it holds more than 20000 files";
+        const auto shown = ascii_lowercase(std::filesystem::relative(it->path(), directory, entry_code));
+        const auto extension = ascii_lowercase(it->path().extension());
+        bool program = std::find(runnable.begin(), runnable.end(), extension) != runnable.end();
+        if (!program) {
+            std::ifstream in(it->path(), std::ios::binary);
+            char magic[2]{};
+            program = in.read(magic, 2) && magic[0] == 'M' && magic[1] == 'Z';
+        }
+        if (program) return "it holds " + shown + ", a program or a script Windows runs. A plugin never ships one";
+    }
+    return {};
+}
+
 }

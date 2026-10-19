@@ -28,12 +28,16 @@ struct Watched {
     const char* name;
     std::uint32_t hash;
 };
-enum : std::size_t { line_score, is_slam, multiplier, action_active };
-constexpr std::array<Watched, 4> watched{{
+enum : std::size_t { line_score, is_slam, multiplier, action_active, sequence_header, sequence_descriptor, sequence_state };
+constexpr std::array<Watched, 7> watched{{
     {"LineScore", 1086322279u},
     {"IsSlam", 2943226809u},
     {"Multiplier", 1782700230u},
     {"ActionActive", 2058053468u},
+    // LabelViewModels inside the model: each one's Text (a string, the game's text value) first.
+    {"SequenceHeader", 3018447676u},
+    {"SequenceDescriptor", 3894822438u},
+    {"SequenceState", 2134799591u},
 }};
 constexpr std::size_t value_bytes = 16; // read per field
 
@@ -65,6 +69,35 @@ float score_of(const Bound& field) {
     return static_cast<float>(i);
 }
 bool flag_of(const Bound& field) { return field.present && field.read && field.now[0] != 0; }
+// A label's text: the game's text value is a pointer to its characters. Printable text only, so a
+// value that is something else reads as none.
+std::string text_of(const Bound& field) {
+    if (!field.present || !field.read || field.size < 8) return {};
+    Address at{};
+    std::memcpy(&at, field.now.data(), sizeof at);
+    char text[96]{};
+    const auto length = memory::peek_cstring(at, text, sizeof text);
+    if (length <= 0) return {};
+    for (std::ptrdiff_t i = 0; i < length; ++i)
+        if (static_cast<unsigned char>(text[i]) < 0x20) return {};
+    return std::string(text, static_cast<std::size_t>(length));
+}
+std::uint32_t enum_of(const Bound& field) {
+    if (!field.present || !field.read || field.size < 4) return 0;
+    std::uint32_t value{};
+    std::memcpy(&value, field.now.data(), 4);
+    return value;
+}
+// (What the sequence labels say as they change, into the log while manuals are worked out.)
+void trace_sequence(const ScoreHud& now) {
+    static std::string last;
+    static int said{};
+    const auto text = std::format("\"{}\" / \"{}\" state {}", now.header, now.descriptor, now.sequence_state);
+    if (text == last || said >= 200) return;
+    last = text;
+    ++said;
+    logging::write(logging::Level::info, logging::Channel::skater, "Score HUD sequence: " + text);
+}
 
 // Runs `use(context)` on the game's UI model registry under its model lock (as Hall of Meat's
 // HUD code does). False while there is no registry.
@@ -136,6 +169,17 @@ std::optional<ScoreHud> read_score_hud(std::uintptr_t image_base) noexcept {
     }
     if (!ok) return std::nullopt;
     const auto& f = h.fields;
-    return ScoreHud{flag_of(f[action_active]), flag_of(f[is_slam]), score_of(f[line_score]), score_of(f[multiplier])};
+    ScoreHud result{flag_of(f[action_active]), flag_of(f[is_slam]), score_of(f[line_score]), score_of(f[multiplier]),
+                    text_of(f[sequence_header]), text_of(f[sequence_descriptor]), enum_of(f[sequence_state])};
+    trace_sequence(result);
+    return result;
+}
+
+bool names_manual(const ScoreHud& now) {
+    const auto says = [](std::string text) {
+        for (auto& c : text) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c);
+        return text.find("manual") != std::string::npos;
+    };
+    return now.action && (says(now.header) || says(now.descriptor));
 }
 }

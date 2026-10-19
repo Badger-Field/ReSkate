@@ -101,6 +101,9 @@ void draw_plugin_screen() {
                 break;
             case Kind::label: ImGui::TextWrapped("%s", w.text.c_str()); break;
             case Kind::separator: ImGui::Separator(); break;
+            case Kind::bar:
+                ImGui::ProgressBar((w.value - w.minimum) / (w.maximum - w.minimum), ImVec2(480 * k, 0), w.text.c_str());
+                break;
             case Kind::button: acted = ImGui::Button(w.text.c_str(), ImVec2(320 * k, 0)); break;
             case Kind::toggle: {
                 bool on = w.on;
@@ -190,6 +193,25 @@ void draw_plugins() {
                 if (const auto on = camera ? camera->project(p[0]) : std::nullopt)
                     circle(draw, ImVec2((*on)[0], (*on)[1]), std::min(shape.radius * camera->focal / (*on)[2], display.y), style, k);
                 break;
+            case Kind::image: {
+                ImVec2 size;
+                if (const auto id = detail::plugin_image(shape.text, size))
+                    draw->AddImageRounded(id, at(p[0]), at(p[1]), ImVec2(style.uv[0], style.uv[1]), ImVec2(style.uv[2], style.uv[3]), style.colour,
+                                          style.rounding * k);
+                break;
+            }
+            case Kind::world_image: {
+                ImVec2 size;
+                const auto id = detail::plugin_image(shape.text, size);
+                const auto on = camera ? camera->project(p[0]) : std::nullopt;
+                if (!id || !on || size.y <= 0) break;
+                const float span_x = std::abs(style.uv[2] - style.uv[0]), span_y = std::abs(style.uv[3] - style.uv[1]);
+                const float aspect = span_y > 0 ? size.x * span_x / (size.y * span_y) : 1.0f;
+                const float height = std::min(shape.radius * camera->focal / (*on)[2], display.y), width = height * aspect;
+                draw->AddImage(id, ImVec2((*on)[0] - width * .5f, (*on)[1] - height * .5f), ImVec2((*on)[0] + width * .5f, (*on)[1] + height * .5f),
+                               ImVec2(style.uv[0], style.uv[1]), ImVec2(style.uv[2], style.uv[3]), style.colour);
+                break;
+            }
             }
         }
 }

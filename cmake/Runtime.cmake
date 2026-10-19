@@ -13,7 +13,6 @@ add_library(dingosdk_runtime SHARED
     Extension/Console/perf_commands.cpp
     Extension/Console/memory_ledger.cpp
     Extension/Skater/console_commands.cpp
-    Extension/Skater/drone_outfit.cpp
     Extension/Multiplayer/console_commands.cpp
     Extension/Customization/console_commands.cpp
     Extension/Multiplayer/Session/session.cpp
@@ -32,8 +31,6 @@ add_library(dingosdk_runtime SHARED
     Extension/UI/NativeMenu/native_menu_data.cpp
     Extension/Multiplayer/Remote/native_skater.cpp
     Extension/Multiplayer/Remote/native_skater_spawn.cpp
-    Extension/Multiplayer/Remote/native_prop.cpp
-    Extension/Multiplayer/Remote/drone_sound.cpp
     Extension/Multiplayer/Remote/puppet_cost.cpp
     Extension/Multiplayer/Remote/native_cosmetics.cpp
     Extension/Multiplayer/Remote/native_audio.cpp
@@ -126,6 +123,11 @@ add_library(dingosdk_runtime SHARED
     Extension/Plugins/plugin_commands.cpp
     Extension/Plugins/plugin_http.cpp
     Extension/Plugins/plugin_game_runtime.cpp
+    Extension/Skater/skater_animation.cpp
+    Extension/Plugins/plugin_sound.cpp
+    Extension/Skater/skater_events.cpp
+    Extension/Skater/outfit_overlay.cpp
+    Extension/Skater/board_pose.cpp
     Extension/Assets/morph_memory_pool.cpp
     Extension/Assets/native_render_resource_pool.cpp
     Extension/World/native_entity_pages.cpp
@@ -169,11 +171,8 @@ add_library(dingosdk_runtime SHARED
     Extension/HallOfMeat/hall_of_meat_skater.cpp
     Extension/HallOfMeat/hall_of_meat_skeleton.cpp
     Extension/HallOfMeat/hall_of_meat_slow_motion.cpp
-    Extension/RoadRash/road_rash.cpp
-    Extension/RoadRash/road_rash_commands.cpp
-    Extension/BoardBreak/board_break.cpp
-    Extension/BoardBreak/board_break_commands.cpp
-    Extension/BoardBreak/board_break_audio.cpp
+    Extension/Skater/breakable_deck.cpp
+    Extension/Skater/breakable_deck_commands.cpp
     Extension/Trainer/trainer.cpp
     Extension/Trainer/trainer_presets.cpp
     Extension/Trainer/trainer_jump.cpp
@@ -332,8 +331,8 @@ if(EXISTS "${dingosdk_emotes}/emotes.json" AND EXISTS "${dingosdk_emotes}/emotes
     target_sources(dingosdk_runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/emotes.rc")
 endif()
 # Game content ReSkate carries itself (Engine/Vfs/builtin_packs.h), one zip each in assets/builtin:
-# the FPV drone's model (tools/models/build_drone_pack.py; without it other players' drones use a
-# stand-in prop). A missing zip is left out. (Mods that are content for ReSkate's features, such
+# the FPV drone's model (tools/models/build_drone_pack.py), a blueprint plugins may place. A missing
+# zip is left out. (Mods that are content for ReSkate's features, such
 # as Board Break's decks, are official mods the launcher downloads: Launcher/official_mods.h.)
 # Each zip is made into a zstd pack by ReSkateBuiltinPacker as the build goes (again only when the
 # zip changes), which is what the DLL carries: compressed whole, a pack's repeated files cost

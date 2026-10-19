@@ -92,9 +92,9 @@ bool primary_button(SkateMenu& menu, const char* label, bool enabled = true);
 float page_body_height(const SkateMenu& menu);
 // Runs a console command and shows its reply as feedback.
 void send_console(SkateMenu& menu, const CallbacksV3& callbacks, const std::string& command);
-// Board Break's decks, a button for each (modding_menu.cpp): on the Mods page and under the
-// feature's switch on the Skater page. Draws nothing while no deck is installed.
-void board_break_deck_card(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks);
+// The breakable decks, a button for each (modding_menu.cpp), on the Mods page. Draws nothing while
+// no deck is installed.
+void breakable_deck_card(SkateMenu& menu, const CallbacksV3& callbacks);
 void debug_request(SkateMenu& menu, const CallbacksV3& callbacks, DebugRequest request);
 // HOST shows the host form until a session exists, then that session (SESSION).
 inline constexpr int multiplayer_session_tab = 1, multiplayer_voice_tab = 2, multiplayer_bans_tab = 3, multiplayer_chat_tab = 4;
@@ -114,16 +114,12 @@ void graphics_page(SkateMenu&, const Model&, const CallbacksV3&);
 void developer_page(SkateMenu&, const Model&, const CallbacksV3&);
 // Extension/Music/music_page.cpp
 void music_page(SkateMenu&, const Model&, const CallbacksV3&);
-// The FPV drone (drone_page.cpp).
-void drone_page(SkateMenu&, const Model&, const CallbacksV3&);
 // Extension/Trainer/trainer_page.cpp: the SANDBOX page (once the Trainer).
 void trainer_page(SkateMenu&, const Model&, const CallbacksV3&);
 bool trainer_page_wanted();
 // Skater > CHEATS: noclip, No Bail and the boosts (skate_menu_skater.cpp).
 void cheats_tab(SkateMenu&, const Model&, const CallbacksV3&);
 // The addons' own pages (skate_menu_skater.cpp), and the ADDONS page itself (skate_menu_addons.cpp).
-void board_break_addon(SkateMenu&, const Model&, const CallbacksV3&);
-void road_rash_addon(SkateMenu&, const Model&, const CallbacksV3&);
 void hall_of_meat_addon(SkateMenu&, const Model&, const CallbacksV3&);
 void grind_exits_addon(SkateMenu&, const Model&, const CallbacksV3&);
 void addons_page(SkateMenu&, const Model&, const CallbacksV3&);
@@ -147,9 +143,6 @@ enum Page {
     page_home, page_map, page_build, page_skater, page_sandbox, page_addons, page_online, page_progress, page_mods,
     page_settings, page_developer, page_count
 };
-enum Addon { addon_all, addon_drone, addon_board_break, addon_road_rash, addon_hall_of_meat, addon_grind_exits, addon_music, addon_plugins, addon_count };
+enum Addon { addon_all, addon_hall_of_meat, addon_grind_exits, addon_music, addon_plugins, addon_count, addon_first = addon_hall_of_meat };
 void open_page(SkateMenu&, int page, int addon = -1);
-// An addon made from an official mod whose feature did not start (the mod is turned off in the
-// launcher, or this game build cannot run it) is listed nowhere in the menu (skate_menu_addons.cpp).
-bool addon_hidden(const Model&, int addon);
 }
