@@ -313,6 +313,22 @@ struct UiApi {
     }
 
     // ---- menu: panels ----------------------------------------------------------------------
+    // menu.page(title, build): the plugin's own page in the menu's PLUGINS section, `title` its name
+    // there. Its panels show on it as cards, under what the page builds.
+    static int page(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "menu", "reskate.menu.page");
+        const auto title = checked_text(L, 1, 24, "a page's title");
+        luaL_checktype(L, 2, LUA_TFUNCTION);
+        if (title.empty()) luaL_argerror(L, 1, "a page needs a title");
+        if (plugin.page_) luaL_error(L, "a plugin has one page");
+        for (const auto& entry : plugin.panels_)
+            if (entry.title == title) luaL_error(L, "the panel \"%s\" has the page's title", title.c_str());
+        lua_pushvalue(L, 2);
+        plugin.page_ = Plugin::PanelEntry{title, lua_ref(L, -1)};
+        lua_pop(L, 1);
+        return 0;
+    }
     static int panel(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "menu", "reskate.menu.panel");
@@ -320,6 +336,7 @@ struct UiApi {
         luaL_checktype(L, 2, LUA_TFUNCTION);
         if (title.empty()) luaL_argerror(L, 1, "a panel needs a title");
         if (plugin.panels_.size() >= plugin.limits_.panels) luaL_error(L, "more than %d panels", static_cast<int>(plugin.limits_.panels));
+        if (plugin.page_ && plugin.page_->title == title) luaL_error(L, "the page has the title \"%s\"", title.c_str());
         for (const auto& entry : plugin.panels_)
             if (entry.title == title) luaL_error(L, "the panel \"%s\" is there already", title.c_str());
         lua_pushvalue(L, 2);
@@ -329,9 +346,10 @@ struct UiApi {
     }
     static Plugin& building(lua_State* L) {
         auto& plugin = plugin_of(L);
-        if (!plugin.building_) luaL_error(L, "widgets are only made inside a panel's function");
-        if (plugin.building_->widgets.size() >= plugin.limits_.widgets)
-            luaL_error(L, "a panel has at most %d widgets", static_cast<int>(plugin.limits_.widgets));
+        if (!plugin.building_) luaL_error(L, "widgets are only made inside a page's or a panel's function");
+        const auto most = plugin.building_->page ? plugin.limits_.page_widgets : plugin.limits_.widgets;
+        if (plugin.building_->widgets.size() >= most)
+            luaL_error(L, "a %s has at most %d widgets", plugin.building_->page ? "page" : "panel", static_cast<int>(most));
         return plugin;
     }
     static std::string widget_id(lua_State* L, Plugin& plugin, int index) {
@@ -351,6 +369,69 @@ struct UiApi {
     static int heading(lua_State* L) { return plain(L, plugin_ui::Widget::Kind::heading); }
     static int label(lua_State* L) { return plain(L, plugin_ui::Widget::Kind::label); }
     static int separator(lua_State* L) { return plain(L, plugin_ui::Widget::Kind::separator); }
+    static int note(lua_State* L) { return plain(L, plugin_ui::Widget::Kind::note); }
+    static int warn(lua_State* L) { return plain(L, plugin_ui::Widget::Kind::warn); }
+    // ui:card(title, subtitle): a titled tile; the widgets after it go in it, until the next card.
+    static int card(lua_State* L) {
+        auto& plugin = building(L);
+        plugin_ui::Widget widget{plugin_ui::Widget::Kind::card};
+        widget.text = checked_text(L, 2, 60, "a card's title");
+        if (!lua_isnoneornil(L, 3)) widget.help = checked_text(L, 3, 120, "a card's subtitle");
+        plugin.building_->widgets.push_back(std::move(widget));
+        return 0;
+    }
+    // ui:info(label, value): a status line, the label muted and its value beside it.
+    static int info(lua_State* L) {
+        auto& plugin = building(L);
+        plugin_ui::Widget widget{plugin_ui::Widget::Kind::info};
+        widget.text = checked_text(L, 2, 60, "an info line's label");
+        widget.help = checked_text(L, 3, 200, "an info line's value");
+        plugin.building_->widgets.push_back(std::move(widget));
+        return 0;
+    }
+    // ui:tabs(id, names, chosen): the page's tabs; the chosen one's number, from 1. The page builds
+    // that tab's widgets after it.
+    static int tabs(lua_State* L) {
+        auto& plugin = building(L);
+        plugin_ui::Widget widget{plugin_ui::Widget::Kind::tabs, widget_id(L, plugin, 2)};
+        luaL_checktype(L, 3, LUA_TTABLE);
+        const int count = lua_objlen(L, 3);
+        if (count < 1 || count > 8) luaL_argerror(L, 3, "tabs are 1 to 8 names");
+        for (int i = 1; i <= count; ++i) {
+            lua_rawgeti(L, 3, i);
+            widget.choices.push_back(checked_text(L, -1, 24, "a tab's name"));
+            lua_pop(L, 1);
+        }
+        widget.chosen = static_cast<int>(luaL_optinteger(L, 4, 1));
+        if (const auto* action = pending(plugin, plugin.pending_, plugin.building_->title, widget.id)) widget.chosen = action->chosen;
+        widget.chosen = std::clamp(widget.chosen, 1, count);
+        const int chosen = widget.chosen;
+        plugin.building_->widgets.push_back(std::move(widget));
+        lua_pushinteger(L, chosen);
+        return 1;
+    }
+    // A slider's number as shown: one %f (with a precision, "%.1f") or %d among plain text, "%%" a %.
+    static std::string slider_format(lua_State* L, int index) {
+        const auto format = checked_text(L, index, 24, "a slider's format");
+        int conversions = 0;
+        for (std::size_t i = 0; i < format.size(); ++i) {
+            if (format[i] != '%') continue;
+            if (i + 1 < format.size() && format[i + 1] == '%') {
+                ++i;
+                continue;
+            }
+            std::size_t j = i + 1;
+            if (j < format.size() && format[j] == '.') {
+                ++j;
+                if (j < format.size() && format[j] >= '0' && format[j] <= '9') ++j;
+            }
+            if (j >= format.size() || (format[j] != 'f' && format[j] != 'd')) luaL_error(L, "a slider's format has one %%f or %%d");
+            ++conversions;
+            i = j;
+        }
+        if (conversions != 1) luaL_error(L, "a slider's format has one %%f or %%d");
+        return format;
+    }
     // ui:bar(text, value, minimum, maximum): a gauge, read only.
     static int bar(lua_State* L) {
         auto& plugin = building(L);
@@ -367,6 +448,7 @@ struct UiApi {
     static int button(lua_State* L) {
         auto& plugin = building(L);
         plugin_ui::Widget widget{plugin_ui::Widget::Kind::button, widget_id(L, plugin, 2), checked_text(L, 3, 60, "a button's text")};
+        widget.on = lua_toboolean(L, 4) != 0; // the card's main action
         const bool pressed = pending(plugin, plugin.pending_, plugin.building_->title, widget.id) != nullptr;
         plugin.building_->widgets.push_back(std::move(widget));
         lua_pushboolean(L, pressed);
@@ -376,6 +458,7 @@ struct UiApi {
         auto& plugin = building(L);
         plugin_ui::Widget widget{plugin_ui::Widget::Kind::toggle, widget_id(L, plugin, 2), checked_text(L, 3, 60, "a toggle's text")};
         widget.on = lua_toboolean(L, 4) != 0;
+        if (!lua_isnoneornil(L, 5)) widget.help = checked_text(L, 5, 300, "a toggle's help");
         if (const auto* action = pending(plugin, plugin.pending_, plugin.building_->title, widget.id)) widget.on = action->on;
         const bool on = widget.on;
         plugin.building_->widgets.push_back(std::move(widget));
@@ -389,6 +472,11 @@ struct UiApi {
         widget.maximum = finite(L, 6, "the maximum");
         if (!(widget.maximum > widget.minimum)) luaL_argerror(L, 6, "the maximum must be above the minimum");
         widget.value = finite(L, 4, "the value");
+        if (!lua_isnoneornil(L, 7)) {
+            widget.format = slider_format(L, 7);
+            // The integer form shows the value rounded: ImGui's float slider takes "%.0f".
+            if (const auto at = widget.format.find("%d"); at != std::string::npos) widget.format.replace(at, 2, "%.0f");
+        }
         if (const auto* action = pending(plugin, plugin.pending_, plugin.building_->title, widget.id)) widget.value = action->value;
         widget.value = std::clamp(widget.value, widget.minimum, widget.maximum);
         const float value = widget.value;
@@ -408,6 +496,7 @@ struct UiApi {
             lua_pop(L, 1);
         }
         widget.chosen = static_cast<int>(luaL_optinteger(L, 5, 1));
+        if (!lua_isnoneornil(L, 6)) widget.help = checked_text(L, 6, 300, "a dropdown's help");
         if (const auto* action = pending(plugin, plugin.pending_, plugin.building_->title, widget.id)) widget.chosen = action->chosen;
         widget.chosen = std::clamp(widget.chosen, 1, count);
         const int chosen = widget.chosen;
@@ -588,6 +677,11 @@ void UiApi::install(Plugin& plugin, lua_State* L) {
     set_function(L, "slider", UiApi::slider);
     set_function(L, "dropdown", UiApi::dropdown);
     set_function(L, "bar", UiApi::bar);
+    set_function(L, "card", UiApi::card);
+    set_function(L, "note", UiApi::note);
+    set_function(L, "warn", UiApi::warn);
+    set_function(L, "info", UiApi::info);
+    set_function(L, "tabs", UiApi::tabs);
     readonly();
     plugin.ui_table_ = lua_ref(L, -1);
     lua_pop(L, 1);
@@ -599,6 +693,7 @@ void UiApi::install(Plugin& plugin, lua_State* L) {
 
     lua_createtable(L, 0, 1);
     set_function(L, "panel", UiApi::panel);
+    set_function(L, "page", UiApi::page);
     readonly();
     lua_setfield(L, -2, "menu");
 

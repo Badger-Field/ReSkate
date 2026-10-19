@@ -1,4 +1,5 @@
 #include "plugin_host.h"
+#include <cctype>
 #include "plugin_api.h"
 #include "plugin_wire.h"
 #include "Engine/Core/Console/console_core.h"
@@ -411,13 +412,27 @@ void Host::draw_and_build() {
         }
         if (actions_.size() < 256) actions_.push_back(std::move(action));
     }
-    // Panels and screens are built ten times a second: panels only while the PLUGINS tab shows
-    // them, a screen while its plugin has it open.
+    // Pages and screens are built ten times a second: a plugin's page (and its panels) only while the
+    // menu shows it, a screen while its plugin has it open.
     const double now = environment_.now_ms();
     if (now < next_panels_) return;
     next_panels_ = now + 100;
     const bool panels_shown = environment_.panels_shown();
+    const auto shown = environment_.shown_page();
     std::vector<plugin_ui::Panel> panels;
+    std::vector<plugin_ui::PageEntry> pages;
+    for (auto& [id, entry] : entries_)
+        if (entry.plugin)
+            if (auto name = entry.plugin->page_name(); !name.empty()) pages.push_back({id, std::move(name)});
+    // By name, as the rail lists them, whatever their case.
+    std::sort(pages.begin(), pages.end(), [](const auto& a, const auto& b) {
+        return std::lexicographical_compare(a.title.begin(), a.title.end(), b.title.begin(), b.title.end(),
+                                            [](unsigned char x, unsigned char y) { return std::tolower(x) < std::tolower(y); });
+    });
+    if (pages != pages_) {
+        pages_ = pages;
+        environment_.publish_pages(std::move(pages));
+    }
     for (auto& [id, entry] : entries_) {
         if (!entry.plugin) continue;
         std::vector<plugin_ui::Action> mine;
@@ -425,7 +440,7 @@ void Host::draw_and_build() {
             if (action.plugin == id) mine.push_back(action);
         if (auto screen = entry.plugin->build_screen(mine)) panels.push_back(std::move(*screen));
         collect(entry);
-        if (!panels_shown || !entry.plugin) continue;
+        if (!panels_shown || !entry.plugin || (!shown.empty() && shown != id)) continue;
         auto built = entry.plugin->build_panels(mine);
         collect(entry);
         for (auto& panel : built) panels.push_back(std::move(panel));

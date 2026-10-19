@@ -261,6 +261,7 @@ void Plugin::close() {
     save_storage();
     shapes_.clear();
     panels_.clear();
+    page_.reset();
     pending_.clear();
     building_ = nullptr;
     drawing_ = false;
@@ -451,21 +452,29 @@ void Plugin::draw() {
 
 std::vector<plugin_ui::Panel> Plugin::build_panels(const std::vector<plugin_ui::Action>& actions) {
     std::vector<plugin_ui::Panel> result;
-    if (state_ != State::running || !has("menu") || panels_.empty()) return result;
+    if (state_ != State::running || !has("menu") || (panels_.empty() && !page_)) return result;
     pending_ = actions;
-    const auto entries = panels_;
-    for (const auto& entry : entries) {
+    std::vector<std::pair<PanelEntry, bool>> entries;
+    if (page_) entries.emplace_back(*page_, true);
+    for (const auto& entry : panels_) entries.emplace_back(entry, false);
+    for (const auto& [entry, page] : entries) {
         if (state_ != State::running) break;
         plugin_ui::Panel panel{id_, entry.title, {}};
+        panel.page = page;
         building_ = &panel;
         lua_getref(L_, entry.function);
         lua_getref(L_, ui_table_);
-        call(1, "the panel " + entry.title, limits_.call_ms);
+        call(1, (page ? "the page " : "the panel ") + entry.title, limits_.call_ms);
         building_ = nullptr;
         result.push_back(std::move(panel));
     }
     pending_.clear();
     return result;
+}
+std::string Plugin::page_name() const {
+    if (state_ != State::running || !has("menu")) return {};
+    if (page_) return page_->title;
+    return panels_.empty() ? std::string() : id_;
 }
 
 void Plugin::session_changed(const std::vector<SessionPlayer>& joined, const std::vector<SessionPlayer>& left) {

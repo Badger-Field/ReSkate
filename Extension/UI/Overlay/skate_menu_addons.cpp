@@ -8,7 +8,7 @@
 #include <imgui_internal.h>
 #include <string>
 
-// The ADDONS page (what ReSkate adds to skate.: music, and the plugins' panels)
+// The ADDONS page (what ReSkate adds to skate.: music; what plugins add has its own section)
 // and the full screen menu's HOME page.
 namespace dingosdk::overlay::menu {
 using namespace theme;
@@ -53,16 +53,8 @@ void addon_tile(SkateMenu& menu, const char* id, const char* title, const char* 
 }
 
 void all_addons(SkateMenu& menu) {
-    // Two a row full screen.
-    int placed = 1;
-    const auto next = [&] {
-        if (console_style() && placed++ % 2) ImGui::SameLine(0, px(12));
-    };
     addon_tile(menu, "addon-music", "MUSIC", "Spotify, YouTube Music, your own files and online radio through the game's music player.",
                nullptr, 0, addon_music);
-    next();
-    addon_tile(menu, "addon-plugins", "PLUGINS", "What the plugins in your Mods folder add: their panels and settings.", nullptr, 0,
-               addon_plugins);
 }
 }
 
@@ -72,7 +64,7 @@ void addons_page(SkateMenu& menu, const Model& model, const CallbacksV3& callbac
     // A window lists the addons in its side rail; full screen has no rail, so they are tabs here
     // (LT / RT on a controller).
     if (menu.fullscreen_drawn) {
-        static constexpr std::array<const char*, addon_count> names{"ALL ADDONS", "MUSIC", "PLUGINS"};
+        static constexpr std::array<const char*, addon_count> names{"ALL ADDONS", "MUSIC"};
         std::vector<const char*> labels(names.begin(), names.end());
         category_tabs(menu, menu.addon, labels, "addon-tabs");
         menu.addon = std::clamp(menu.addon, 0, static_cast<int>(addon_count) - 1);
@@ -82,8 +74,7 @@ void addons_page(SkateMenu& menu, const Model& model, const CallbacksV3& callbac
     case addon_music: music_page(menu, model, callbacks); break;
     default:
         ImGui::BeginChild("addon", ImVec2(0, page_body_height(menu)), ImGuiChildFlags_NavFlattened);
-        if (menu.addon == addon_plugins) plugins_addon(menu);
-        else all_addons(menu);
+        all_addons(menu);
         ImGui::EndChild();
         break;
     }
@@ -232,7 +223,7 @@ void home_page(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks
         if (home_tile(menu, "##go-map", "MAP", "Travel, parks, time and weather", size, true, false, false, "Pick a map and load it.", false) == 1)
             open_page(menu, page_map);
         place(width, 3);
-        if (home_tile(menu, "##go-addons", "ADDONS", "Music, and your plugins' panels", size, true, false, false,
+        if (home_tile(menu, "##go-addons", "ADDONS", "Music", size, true, false, false,
                       "What ReSkate adds to skate.", false) == 1)
             open_page(menu, page_addons, addon_all);
         place(width, 4);

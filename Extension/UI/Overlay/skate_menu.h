@@ -74,6 +74,7 @@ struct SkateMenu {
     // Selected tab on each page; see the Page list in skate_menu_internal.h.
     int map_tab = 0, build_tab = 0, skater_tab = 0, settings_tab = 0, mods_tab = 0;
     int addon = 0; // the ADDONS page's addon (menu::Addon)
+    std::string plugin_page; // the PLUGINS section's plugin, by its id
     // Window or full screen, as just chosen, until the saved setting comes back through the model.
     std::optional<bool> fullscreen_pending;
     double fullscreen_until = 0;

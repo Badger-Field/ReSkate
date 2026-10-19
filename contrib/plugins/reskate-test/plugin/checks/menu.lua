@@ -2,7 +2,7 @@ local h = require("harness")
 local t = h.module("menu")
 local overlay = require("checks/overlay")
 
--- The ADDONS page's PLUGINS tab shows this panel: it tries every widget.
+-- Its page in the menu's PLUGINS section shows this panel: it tries every widget.
 local presses, size, colour, built, saved_ui = 0, 5, 1, 0, nil
 reskate.menu.panel("reskate-test", function(ui)
     built += 1
@@ -24,6 +24,6 @@ t.check("a panel's title is taken once", function()
     h.refused(reskate.menu.panel, "reskate-test", function() end)
 end)
 t.check("widgets are refused outside a panel's function", function()
-    if saved_ui == nil then return h.skip("the PLUGINS tab has not been opened") end
+    if saved_ui == nil then return h.skip("its page in the menu has not been opened") end
     h.refused(saved_ui.button, saved_ui, "x", "x")
 end)

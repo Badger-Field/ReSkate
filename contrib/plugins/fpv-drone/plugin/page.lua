@@ -1,5 +1,5 @@
--- The drone's menu panels on ADDONS > PLUGINS, as UI/Overlay/drone_page.cpp's DRONE page had them:
--- flying, flight and rates, the display, and the controller with its guided setup. Every change
+-- The drone's page in the menu's PLUGINS section, as UI/Overlay/drone_page.cpp's DRONE page had it: a tab
+-- each for flying, flight, rates, the display, and the controller with its guided setup. Every change
 -- takes effect at once and is saved (settings.set).
 local settings = require("settings")
 local radio = require("radio")
@@ -38,9 +38,9 @@ end
 -- `drone` is main.lua's: mode, armed, state, and what the page asks of it (start, stop, follow,
 -- arm, reset).
 function page.install(drone)
-    reskate.menu.panel("FPV Drone", function(ui)
+    local function fly(ui)
         local flying, following = drone.mode == "fly", drone.mode == "follow"
-        ui:heading("FLY")
+        ui:card("FLY")
         if ui:button("fly", flying and "STOP FLYING" or "START FLYING") then
             if flying then drone.stop() else drone.start("fly") end
         end
@@ -53,7 +53,7 @@ function page.install(drone)
                          or "No gamepad found: flying with the keyboard and mouse. Close the menu to fly.")
             else ui:label("Flying with the controller. Close the menu to fly.") end
         else
-            ui:label("Keyboard: W/S tilt forward/back, A/D roll, E/Q throttle up/down, mouse turns, Shift boosts.")
+            ui:note("Keyboard: W/S tilt forward/back, A/D roll, E/Q throttle up/down, mouse turns, Shift boosts.")
         end
         local wanted = ui:toggle("controller", "Fly with a controller", controller)
         if wanted ~= controller then settings.set_controller(wanted) end
@@ -68,17 +68,17 @@ function page.install(drone)
         end
         toggle(ui, "hideui", "Hide the game's interface while flying or following")
 
-        ui:heading("FOLLOW ME")
+        ui:card("FOLLOW ME")
         if ui:button("follow", following and "STOP FOLLOWING" or "FOLLOW ME") then
             if following then drone.stop() else drone.start("follow") end
         end
-        ui:label(following and "Skate as normal: the drone flies itself behind you, as a pilot would."
+        ui:note(following and "Skate as normal: the drone flies itself behind you, as a pilot would."
                  or "The drone takes off behind you and flies itself, keeping you in shot while you skate. "
                     .. "It uses your drone's settings, flown self-levelling.")
         slider(ui, "followdistance", "Follow distance (m)")
         slider(ui, "followaggression", "Aggressiveness")
 
-        ui:heading("DRONE")
+        ui:card("DRONE")
         local current = settings.matching_preset()
         local names = {"Custom"}
         for _, preset in settings.presets do table.insert(names, preset.name) end
@@ -87,14 +87,14 @@ function page.install(drone)
             settings.apply_preset(picked - 1)
             current = picked - 1
         end
-        ui:label(current and settings.presets[current].description or "Your own settings. Pick a preset to start from one of them.")
+        ui:note(current and settings.presets[current].description or "Your own settings. Pick a preset to start from one of them.")
         local worn = math.clamp(math.round(settings.get("goggles")), 0, 8)
         local goggles = ui:dropdown("goggles", "Goggles", eyewear_labels, worn + 1) - 1
         if goggles ~= worn then settings.set("goggles", goggles) end
         slider(ui, "topspeed", "Top speed")
-        ui:label(string.format("Flat out at about %.0f km/h (a little faster with boost).", settings.get("topspeed") * 4 * 3.6))
+        ui:note(string.format("Flat out at about %.0f km/h (a little faster with boost).", settings.get("topspeed") * 4 * 3.6))
 
-        ui:heading("MOTORS")
+        ui:card("MOTORS")
         local armed = drone.armed
         ui:label("Motors: " .. (armed and "ARMED" or "DISARMED"))
         local s = drone.state
@@ -104,47 +104,47 @@ function page.install(drone)
         if ui:button("arm", armed and "Disarm" or "Arm") then drone.armed = not armed end
         if ui:button("takeoff", "Back to takeoff") then drone.reset = true end
         if ui:button("reset", "Reset settings") then settings.reset() end
-        ui:label("Created by neekgate for ReSkate")
-    end)
+        ui:note("Created by neekgate for ReSkate")
+    end
 
-    reskate.menu.panel("Drone flight", function(ui)
-        ui:heading("FLIGHT MODE")
+    local function flight(ui)
+        ui:card("FLIGHT MODE")
         choice(ui, "mode", "Mode", {"Acro", "Angle (self-levelling)"})
         if settings.on("mode") then
             slider(ui, "maxangle", "Most lean (degrees)")
-            ui:label("The sticks set how far the drone leans; let go and it levels out. Easier to learn on, but no flips.")
+            ui:note("The sticks set how far the drone leans; let go and it levels out. Easier to learn on, but no flips.")
         else
-            ui:label("The sticks set how fast the drone turns, and it stays at whatever angle you leave it: how real FPV pilots fly.")
+            ui:note("The sticks set how fast the drone turns, and it stays at whatever angle you leave it: how real FPV pilots fly.")
         end
         toggle(ui, "althold", "Hold height with a springing throttle")
         slider(ui, "climbrate", "Climb speed (m/s)")
-        ui:label("For gamepads and the keyboard, whose throttle springs back. Off: the middle of the stick is hover power. "
+        ui:note("For gamepads and the keyboard, whose throttle springs back. Off: the middle of the stick is hover power. "
                  .. "On: the middle holds your height, adding throttle as you lean to keep it. An RC radio's throttle is not affected.")
-        ui:heading("FLIGHT")
+        ui:card("FLIGHT")
         slider(ui, "gravity", "Gravity")
         slider(ui, "hover", "Hover throttle")
         slider(ui, "drag", "Air drag")
         slider(ui, "uptilt", "Camera tilt (degrees)")
-        ui:heading("COLLISIONS")
+        ui:card("COLLISIONS")
         toggle(ui, "collide", "Collide with the world")
         slider(ui, "radius", "Collision size (m)")
         slider(ui, "floor", "Invisible floor (m)")
         toggle(ui, "disarmfreeze", "Hang in the air when disarmed")
-        ui:heading("CRASHES")
+        ui:card("CRASHES")
         toggle(ui, "crash", "Crashes")
         if settings.on("crash") then
             slider(ui, "crashspeed", "Hit that cuts the motors (m/s)")
             if settings.get("crashspeed") > 0 then
-                ui:label(string.format("Bumps bounce the drone off and knock it about. Hitting something at %.0f km/h or more cuts the "
+                ui:note(string.format("Bumps bounce the drone off and knock it about. Hitting something at %.0f km/h or more cuts the "
                     .. "motors: it tumbles down, and you arm again to fly on.", settings.get("crashspeed") * 3.6))
             else
-                ui:label("Bumps bounce the drone off and knock it about, but never cut the motors.")
+                ui:note("Bumps bounce the drone off and knock it about, but never cut the motors.")
             end
         else
-            ui:label("Off: the drone just stops against whatever it meets.")
+            ui:note("Off: the drone just stops against whatever it meets.")
         end
         slider(ui, "propwash", "Prop wash shake")
-        ui:heading("RANGE")
+        ui:card("RANGE")
         local limited = settings.get("range") > 0
         local want = ui:toggle("limited", "Limited range", limited)
         if want ~= limited then settings.set("range", want and 300 or 0) end
@@ -153,33 +153,34 @@ function page.install(drone)
             local got = ui:slider("range", "Range (m)", range, 50, 5000)
             if moved(got, range) then settings.set("range", got) end
             range = settings.get("range")
-            ui:label(string.format("Measured from where you took off. The picture starts to break up at %.0f m and is lost at %.0f m. "
+            ui:note(string.format("Measured from where you took off. The picture starts to break up at %.0f m and is lost at %.0f m. "
                 .. "Stay without a picture for 5 seconds, or go past %.0f m, and the motors cut.", range * 0.5, range, range * 1.5))
         else
-            ui:label("Unlimited: fly anywhere on the map.")
+            ui:note("Unlimited: fly anywhere on the map.")
         end
-    end)
+    end
 
-    reskate.menu.panel("Drone rates", function(ui)
-        ui:label("How fast the drone turns, set like Betaflight's \"Actual\" rates. Centre: the speed near the middle of the stick. "
+    local function rates(ui)
+        ui:card("RATES")
+        ui:note("How fast the drone turns, set like Betaflight's \"Actual\" rates. Centre: the speed near the middle of the stick. "
                  .. "Max: the speed at full stick. Expo: how much softer the middle is.")
         for _, axis in {"roll", "pitch", "yaw"} do
-            ui:heading(string.upper(axis))
+            ui:card(string.upper(axis))
             slider(ui, axis .. "center", "Centre sensitivity (deg/s)")
             slider(ui, axis .. "max", "Max rate (deg/s)")
             slider(ui, axis .. "expo", "Expo")
         end
-    end)
+    end
 
-    reskate.menu.panel("Drone display", function(ui)
-        ui:heading("GOGGLE DISPLAY")
+    local function display(ui)
+        ui:card("GOGGLE DISPLAY")
         toggle(ui, "osd", "Show the goggle display")
         slider(ui, "osdscale", "Text size")
         choice(ui, "osdcolor", "Colour", {"White", "Green", "Yellow", "Cyan", "Orange", "Pink"})
         choice(ui, "osdfont", "Font", {"Pixel", "Smooth"})
         slider(ui, "osdmargin", "Distance from the edge")
         toggle(ui, "crosshair", "Crosshair")
-        ui:heading("SHOW")
+        ui:card("SHOW")
         toggle(ui, "osdarmed", "Armed / disarmed")
         toggle(ui, "osdbattery", "Battery")
         toggle(ui, "osdtimer", "Timer")
@@ -188,23 +189,33 @@ function page.install(drone)
         toggle(ui, "osdspeed", "Speed")
         toggle(ui, "sticks", "My sticks on screen")
         slider(ui, "sticksize", "Sticks size")
-        ui:heading("ANALOGUE VIDEO")
+        ui:card("ANALOGUE VIDEO")
         toggle(ui, "analog", "Analogue video look")
         slider(ui, "analognoise", "Static")
         slider(ui, "analogscan", "Scanlines")
         slider(ui, "analogvignette", "Dark corners")
         slider(ui, "analogglitch", "Rolling glitches")
-        ui:heading("SOUND")
+        ui:card("SOUND")
         slider(ui, "volume", "Motor volume")
         slider(ui, "motorpitch", "Motor pitch")
-        ui:heading("OTHER PLAYERS")
+        ui:card("OTHER PLAYERS")
         toggle(ui, "beacon", "Let other players see my drone")
         toggle(ui, "showbeacons", "Show other players' drones")
-        ui:label("Other players see your drone (a marker, FLYING DRONE on your nametag and its motor) if they have this mod too.")
-    end)
+        ui:note("Other players see your drone (a marker, FLYING DRONE on your nametag and its motor) if they have this mod too.")
+    end
 
-    reskate.menu.panel("Drone controller", function(ui)
+    local function controller(ui)
         page.controller(ui, drone)
+    end
+    -- One page in the menu's PLUGINS section, a tab for each part, as the drone's own page had them.
+    local tab = 1
+    reskate.menu.page("FPV Drone", function(ui)
+        tab = ui:tabs("tabs", {"FLY", "FLIGHT", "RATES", "DISPLAY", "CONTROLLER"}, tab)
+        if tab == 1 then fly(ui)
+        elseif tab == 2 then flight(ui)
+        elseif tab == 3 then rates(ui)
+        elseif tab == 4 then display(ui)
+        else controller(ui) end
     end)
 end
 
@@ -254,7 +265,7 @@ function page.wizard(ui, drone, sample)
             if c.throttle_centred and settings.get("deadzone") < 0.12 then settings.set("deadzone", 0.12) end
             saved = true
         end
-        ui:heading("SETUP SAVED: the drone now flies with this controller")
+        ui:card("SETUP SAVED: the drone now flies with this controller")
         local names = {"Roll", "Pitch", "Throttle", "Yaw"}
         for i = 1, 4 do ui:label(names[i] .. ": " .. axis_text(c.map[i])) end
         local function switch_text(axis, button)
@@ -274,7 +285,7 @@ function page.wizard(ui, drone, sample)
     end
     saved = false
     local text = step_text[c.step]
-    ui:heading(text[1])
+    ui:card(text[1])
     ui:label(c.returning and text[3] or text[2])
     if not sample then ui:label("The controller is not connected.")
     else axis_bars(ui, sample.axes, not c.returning and c.candidate or -1) end
@@ -291,7 +302,7 @@ function page.controller(ui, drone)
     if settings.on("gamepad") then
         choice(ui, "gamepad", "Controller", {"RC radio", "Gamepad"})
         local pad = reskate.input.gamepad()
-        ui:heading("GAMEPAD")
+        ui:card("GAMEPAD")
         if not pad then
             ui:label("No gamepad found. Plug in an Xbox or PlayStation controller.")
         else
@@ -306,7 +317,7 @@ function page.controller(ui, drone)
         end
         ui:label("Left stick: throttle up and down, turning left and right. Right stick: tilt (pitch, see Invert below) and roll. "
                  .. "A (cross) arms and disarms, Menu (Options) puts the drone back where it took off.")
-        ui:heading("STICKS")
+        ui:card("STICKS")
         slider(ui, "padrate", "Sensitivity")
         slider(ui, "padexpo", "Softer middle")
         slider(ui, "deadzone", "Stick dead zone")
@@ -322,7 +333,7 @@ function page.controller(ui, drone)
     end
     last_build = nil
     choice(ui, "gamepad", "Controller", {"RC radio", "Gamepad"})
-    ui:heading("CONTROLLER")
+    ui:card("CONTROLLER")
     if not sample then
         ui:label("No controller found. Plug in an RC radio with its USB mode set to Joystick (on EdgeTX radios, pick "
                  .. "\"USB Joystick (HID)\" when you plug it in).")
@@ -331,7 +342,7 @@ function page.controller(ui, drone)
         if ui:button("setup", "SET UP CONTROLLER") then c:start() end
         ui:label("Goes through each stick and switch and saves which is which. The drone holds still meanwhile.")
     end
-    ui:heading("MANUAL SETUP")
+    ui:card("MANUAL SETUP")
     if sample then
         axis_bars(ui, sample.axes, -1)
         local pressed = {}
@@ -358,7 +369,7 @@ function page.controller(ui, drone)
     if changed then settings.set_controller(nil, map) end
     toggle(ui, "throttlecentre", "Throttle springs back to the middle")
     slider(ui, "deadzone", "Stick dead zone")
-    ui:heading("SWITCHES: an axis or button no stick uses; 0 = none")
+    ui:card("SWITCHES", "An axis or button no stick uses; 0 = none")
     whole(ui, "armaxis", "Arm switch axis")
     whole(ui, "armbutton", "Arm button")
     whole(ui, "resetaxis", "Reset switch axis")

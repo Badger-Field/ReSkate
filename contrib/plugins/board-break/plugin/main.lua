@@ -150,35 +150,47 @@ if not pcall(reskate.console.command, name, help, answer(name)) then
     reskate.console.command(name, help, answer(name))
 end
 
--- ---- the menu (the ADDONS page's PLUGINS tab) ----------------------------------------------------
-local function toggle(ui, id, text)
-    local on = ui:toggle(id, text, bb:setting(id) == 1)
+-- ---- the menu: its page in the menu's PLUGINS section -------------------------------------------
+local function toggle(ui, id, text, help)
+    local on = ui:toggle(id, text, bb:setting(id) == 1, help)
     if on ~= (bb:setting(id) == 1) then bb:set_setting(id, if on then 1 else 0) end
 end
 local function slider(ui, id, text, low, high)
-    local value = math.floor(ui:slider(id, text, bb:setting(id), low, high) + 0.5)
+    local value = math.floor(ui:slider(id, text, bb:setting(id), low, high, "%d%%") + 0.5)
     if value ~= bb:setting(id) then bb:set_setting(id, value) end
 end
-reskate.menu.panel("Board Break", function(ui)
-    local on = ui:toggle("on", "Board Break", bb.on)
-    if on ~= bb.on then bb:set_on(on) end
+reskate.menu.page("Board Break", function(ui)
     local feel = require("feel")
-    ui:label(string.format("The board is %s, %d%% worn%s.", feel.condition(bb.wear), math.floor(bb.wear * 100 + 0.5),
-        if bb.broken then ", and broken" else ""))
+    ui:card("BOARD BREAK", "A hard slam can snap your board")
+    local on = ui:toggle("on", "Board Break", bb.on,
+        "A hard slam can snap your board: at the nose, in the middle or at the tail. Whole again once you pick it up. Needs the Board Break deck pack.")
+    if on ~= bb.on then bb:set_on(on) end
+    ui:note("Which deck every board has is on the Mods page (BREAKABLE DECK).")
+
+    ui:card("YOUR BOARD", string.format("%d%% worn (%s)%s", math.floor(bb.wear * 100 + 0.5), feel.condition(bb.wear),
+        if bb.broken then ", broken" else ""))
     ui:bar("Wear", bb.wear * 100, 0, 100)
-    if ui:button("new", "NEW BOARD") then new_board() end
-    ui:separator()
-    toggle(ui, "always", "Every slam breaks it (for clips)")
-    toggle(ui, "rails", "Rail snaps")
-    toggle(ui, "wear", "Wear and tear")
-    slider(ui, "sensitivity", "Sensitivity (%)", feel.sensitivity_min, feel.sensitivity_max)
-    slider(ui, "joined", "Grip tape holds (% of breaks)", 0, 100)
-    slider(ui, "wearrate", "Wear rate (%)", feel.rate_min, feel.rate_max)
-    toggle(ui, "cracks", "Crack sounds")
-    toggle(ui, "bodysounds", "Body hit sounds")
-    ui:separator()
+    if ui:button("new", "NEW BOARD", true) then new_board() end
     if ui:button("snap", "SNAP IT, TO LOOK AT") then snap(nil) end
     if ui:button("mend", "MEND") then bb:mend("asked for") end
+
+    ui:card("BREAKING")
+    if not bb.on then ui:note("Switch Board Break on to change these.") end
+    toggle(ui, "always", "Always break", "Every slam breaks the board, and every slide that comes down onto a rail: for replay clips.")
+    toggle(ui, "rails", "Rail snaps", "A boardslide or darkslide that comes down too hard onto a rail or ledge can snap the board, and you go down with it.")
+    slider(ui, "sensitivity", "Break sensitivity", feel.sensitivity_min, feel.sensitivity_max)
+    ui:note("How easily a board breaks. 200% takes half the force, 50% twice as much.")
+    slider(ui, "joined", "Grip tape holds", 0, 100)
+    ui:note("How many breaks the grip tape holds together instead of a piece coming off.")
+
+    ui:card("WEAR")
+    toggle(ui, "wear", "Wear and tear", "Every hit wears your board. A worn board turns lazier, wobbles and breaks more easily; worn out, it can give way.")
+    slider(ui, "wearrate", "Wear speed", feel.rate_min, feel.rate_max)
+    ui:note("How fast boards wear. 0% keeps a board as it is.")
+
+    ui:card("SOUNDS")
+    toggle(ui, "cracks", "Break sounds", "The crack of a break, and metal when it breaks on metal.")
+    toggle(ui, "bodysounds", "Body hit sounds", "Each hit of your body in a bail, as hard as it hits.")
 end)
 
 reskate.log(string.format("Board Break loaded (%s): %s", name, bb:status()))

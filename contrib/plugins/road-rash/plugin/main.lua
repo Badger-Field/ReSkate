@@ -178,15 +178,21 @@ if not pcall(reskate.console.command, name, help, answer(name)) then
     reskate.console.command(name, help, answer(name))
 end
 
--- ---- the menu ------------------------------------------------------------------------------
+-- ---- the menu: its page in the menu's PLUGINS section ---------------------------------------
 
-reskate.menu.panel("Road Rash", function(ui)
-    set_on(ui:toggle("on", "Road Rash", settings.on))
-    set_blood(ui:toggle("blood", "Fresh blood on the worst wounds", settings.blood))
-    set_covers(ui:toggle("covers", "Wounds cover your own tattoos and moles", settings.covers))
-    ui:label(string.format("%d bail(s) counted: %s", tally.bails, rules.describe(tally)))
-    ui:label(status)
-    if ui:button("heal", "HEAL") then heal() end
+reskate.menu.page("Road Rash", function(ui)
+    ui:card("ROAD RASH", "Bails leave their mark")
+    set_on(ui:toggle("on", "Road Rash", settings.on,
+        "Bails leave marks that build up: dust, scrapes, bruises, wounds. Needs the Road Rash item pack."))
+    set_blood(ui:toggle("blood", "Fresh blood", settings.blood, "Fresh blood on the worst wounds. Off, they are dry and scabbed."))
+    set_covers(ui:toggle("covers", "Wounds cover your tattoos", settings.covers,
+        "Wounds may take the place of your own tattoos and moles; they come back when you heal."))
+
+    ui:card("YOUR SKATER", string.format("%d bail(s) counted", tally.bails))
+    ui:info("Marks", rules.describe(tally))
+    ui:info("Now", status)
+    if ui:button("heal", "HEAL", true) then heal() end
+    ui:note("Healing takes every mark off and starts the count again.")
 end)
 
 reskate.log(string.format("Road Rash %s (blood %s): %s heal takes the marks off", word(settings.on), word(settings.blood), name))

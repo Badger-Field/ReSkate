@@ -96,9 +96,9 @@ end)
 attack("message-flood", "keeps running: refused past 16 KB of messages a second", function()
     for i = 1, 1000 do reskate.net.send("all", string.rep("x", 4000)) end
 end)
-attack("panel-loop", "stopped the next time the PLUGINS tab shows its panel", function()
+attack("panel-loop", "stopped the next time the menu shows its page", function()
     reskate.menu.panel("hostile", function(ui) while true do end end)
-    reskate.console.print("hostile: now open ADDONS > PLUGINS in the menu")
+    reskate.console.print("hostile: now open its page in the menu's PLUGINS section")
 end)
 
 attack("chat-spam", "keeps running: one chat line every 3 s, the rest refused", function()

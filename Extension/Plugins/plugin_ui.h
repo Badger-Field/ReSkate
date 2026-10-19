@@ -12,8 +12,9 @@
 #include <vector>
 
 // What plugins show, handed from the client thread (where plugins run) to the render thread (the
-// overlay draws it): each plugin's shapes for this frame, and its menu panels on the ADDONS page's
-// PLUGINS tab with what the player did in them on the way back. Header only, so the overlay and
+// overlay draws it): each plugin's shapes for this frame, and its own page in the menu's PLUGINS
+// section (reskate.menu.page, and its panels as cards on it) with what the player did there on the
+// way back. Header only, so the overlay and
 // the plugin host share it without depending on each other.
 namespace dingosdk::plugin_ui {
 using Vec3 = std::array<float, 3>;
@@ -64,18 +65,30 @@ struct Layer {
 };
 
 struct Widget {
-    // bar: a read-only gauge, `value` between `minimum` and `maximum` (an axis, a level).
-    enum class Kind { heading, label, separator, button, toggle, slider, dropdown, bar } kind{Kind::label};
+    // bar: a read-only gauge, `value` between `minimum` and `maximum` (an axis, a level). card: a
+    // titled tile the widgets after it go in (`help` its subtitle). note / warn: muted help text, a
+    // warning. info: `text` and its value in `help`. tabs: the page's tabs, `choices` and `chosen`.
+    // toggle and dropdown: `help` says what it does. slider: `format` shows its value ("%.0f %%").
+    // button: `on` makes it the card's main action.
+    enum class Kind { heading, label, separator, button, toggle, slider, dropdown, bar, card, note, warn, info, tabs } kind{Kind::label};
     std::string id, text;
     bool on{};
     float value{}, minimum{}, maximum{1};
     std::vector<std::string> choices;
     int chosen{};
+    std::string help, format;
 };
 struct Panel {
     std::string plugin, title;
     std::vector<Widget> widgets;
-    bool screen{}; // a full-screen screen (reskate.ui.screen), not a PLUGINS tab panel
+    bool screen{}; // a full-screen screen (reskate.ui.screen)
+    bool page{};   // the plugin's page (reskate.menu.page); else a panel, a card on that page
+};
+// A plugin with a page in the menu's PLUGINS section: its id, and the page's name there (its page's
+// title, else the plugin's id when it only has panels).
+struct PageEntry {
+    std::string plugin, title;
+    bool operator==(const PageEntry&) const = default;
 };
 // The widget a full-screen screen's Esc sends.
 inline constexpr char close_widget[] = "__close";
@@ -102,6 +115,8 @@ namespace detail {
 inline std::mutex mutex;
 inline std::shared_ptr<const std::vector<Layer>> layers = std::make_shared<std::vector<Layer>>();
 inline std::shared_ptr<const std::vector<Panel>> panels = std::make_shared<std::vector<Panel>>();
+inline std::shared_ptr<const std::vector<PageEntry>> pages = std::make_shared<std::vector<PageEntry>>();
+inline std::string shown_page; // under mutex: the plugin whose page the menu shows
 inline std::vector<Action> actions;
 inline std::shared_ptr<const std::vector<Bind>> binds = std::make_shared<std::vector<Bind>>();
 inline std::vector<Rebind> rebinds;
@@ -131,6 +146,16 @@ inline std::shared_ptr<const std::vector<Panel>> latest_panels() {
     std::lock_guard lock(detail::mutex);
     return detail::panels;
 }
+// Client thread, whenever they change: the plugins with a page. Render thread: the latest.
+inline void publish_pages(std::vector<PageEntry> value) {
+    auto shared = std::make_shared<const std::vector<PageEntry>>(std::move(value));
+    std::lock_guard lock(detail::mutex);
+    detail::pages = std::move(shared);
+}
+inline std::shared_ptr<const std::vector<PageEntry>> latest_pages() {
+    std::lock_guard lock(detail::mutex);
+    return detail::pages;
+}
 // Render thread: a widget changed. At most 64 wait, so a stuck client thread holds no more.
 inline void act(Action action) {
     std::lock_guard lock(detail::mutex);
@@ -159,9 +184,18 @@ inline std::vector<Rebind> take_rebinds() {
     std::lock_guard lock(detail::mutex);
     return std::exchange(detail::rebinds, {});
 }
-// Render thread, each frame the PLUGINS tab shows: panels are built only while it is open.
-inline void note_panels_shown() { detail::panels_seen_ms.store(detail::now_ms(), std::memory_order_relaxed); }
+// Render thread, each frame a plugin's page shows: pages are built only while one is open, and then
+// only that plugin's.
+inline void note_page_shown(std::string plugin) {
+    detail::panels_seen_ms.store(detail::now_ms(), std::memory_order_relaxed);
+    std::lock_guard lock(detail::mutex);
+    if (detail::shown_page != plugin) detail::shown_page = std::move(plugin);
+}
 inline bool panels_shown() { return detail::now_ms() - detail::panels_seen_ms.load(std::memory_order_relaxed) < 500; }
+inline std::string shown_page() {
+    std::lock_guard lock(detail::mutex);
+    return detail::shown_page;
+}
 // Render thread, each frame: the game window's size, which plugins draw in.
 inline void set_display(float width, float height) {
     detail::display_width.store(width, std::memory_order_relaxed);

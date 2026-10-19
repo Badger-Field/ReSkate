@@ -17,7 +17,7 @@ Both also run without the game, in `dingosdk_plugin_tests` (`DINGOSDK_BUILD_PLUG
 ## Ports
 
 Features that were built into ReSkate, as mods of their own. Each has its own checks (`<command>
-test`) that `dingosdk_plugin_tests` runs too, and its switches on its panel in the PLUGINS tab.
+test`) that `dingosdk_plugin_tests` runs too, and its own page in the ReSkate menu's PLUGINS section.
 
 - **road-rash**: bails leave marks that build up, worn over the outfit with `reskate.outfit`. It
   needs the Road Rash items mod. `roadrash`, `roadrash heal`, `roadrash bails 20`.

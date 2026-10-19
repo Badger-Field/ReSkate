@@ -54,6 +54,7 @@ struct Limits {
     std::size_t message_bytes_per_second = 16u << 10;
     std::size_t panels = 8;
     std::size_t widgets = 64;           // a panel's
+    std::size_t page_widgets = 160;     // its page's (one tab of it, as a page builds only the tab shown)
     std::size_t exposed = 64;           // functions a plugin offers others
     std::size_t listeners = 64;         // on_plugin handlers
     std::size_t event_bytes = 64u << 10; // an emitted event's data, as JSON
@@ -191,8 +192,11 @@ public:
     // Its draw handlers (overlay): what they drew is taken after.
     void draw();
     std::vector<plugin_ui::Shape> take_shapes() { return std::exchange(shapes_, {}); }
-    // Its menu panels, built with what the player did in them since the last build.
+    // Its page and its menu panels, built with what the player did in them since the last build.
     std::vector<plugin_ui::Panel> build_panels(const std::vector<plugin_ui::Action>& actions);
+    // Its name in the menu's PLUGINS section: its page's title, its id when it only has panels, or
+    // empty for none.
+    std::string page_name() const;
     // session.read: players who came and went.
     void session_changed(const std::vector<SessionPlayer>& joined, const std::vector<SessionPlayer>& left);
     // net.session: a message from the same plugin on another player's game.
@@ -315,6 +319,7 @@ private:
     int draw_table_{}, ui_table_{};
     struct PanelEntry { std::string title; int function{}; };
     std::vector<PanelEntry> panels_;
+    std::optional<PanelEntry> page_;        // reskate.menu.page
     plugin_ui::Panel* building_{};          // the panel a build is filling
     std::vector<plugin_ui::Action> pending_; // what the player did, for the build going on
     std::vector<double> toasts_;

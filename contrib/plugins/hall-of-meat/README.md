@@ -17,7 +17,7 @@ ReSkate.
 - **A break.** The screen's edges pulse red and, in single player only, the game slows down for a
   moment. ReSkate never slows the game in a multiplayer session.
 
-On once installed: switch it on or off on the ReSkate menu's ADDONS page, PLUGINS tab, or with the
+On once installed: switch it on or off on its page in the ReSkate menu's PLUGINS section, or with the
 console (`~`): `hallofmeat 0|1`; `hallofmeat` on its own says this map's best and the last bail.
 `hallofmeat test` runs the plugin's own checks. With No Bail on, a wipeout No Bail stops is not a bail,
 so nothing shows.
@@ -32,7 +32,7 @@ so nothing shows.
   the card (`d:game_image`, skate.'s own pictures).
 - `plugin/main.lua`: the wiring to `reskate`, skate.'s HUD corner hidden while the card shows
   (`reskate.hud.corner`), the slow motion (`reskate.time.slow`), each map's best (`reskate.storage`),
-  the console command and the menu panel.
+  the console command and its page in the menu's PLUGINS section.
 
 ReSkate keeps what has to run in the game itself: the skater's physics steps
 (`Extension/Skater/skater_physics.h`), the x-ray's renderer hooks and skeleton mesh

@@ -28,8 +28,8 @@ the mod list in [mod_catalog.cpp](../Engine/Vfs/mod_catalog.cpp).
   in between (the force is the bail cause's that led to the wipeout). Now and then a board gives way
   while it is ridden: the nose goes.
 - `boardbreak 0|1`, `boardbreak snap [nose|mid|tail]` to look at a break (that one stays until
-  `boardbreak mend` or a respawn), from the plugin; its settings are on the overlay's ADDONS page,
-  PLUGINS tab. `boarddeck [name|number|next]` (core) and the overlay's BREAKABLE DECK card on the
+  `boardbreak mend` or a respawn), from the plugin; its settings are on its page in the overlay's PLUGINS
+  section. `boarddeck [name|number|next]` (core) and the overlay's BREAKABLE DECK card on the
   Mods page pick the deck: a press asks for that deck, the mods are applied and the level loads
   again with it.
 - A break plays back in the replay editor as it happened.

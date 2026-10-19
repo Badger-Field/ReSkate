@@ -258,6 +258,10 @@ struct TestEnvironment final : Environment {
     }
     void publish_layers(std::vector<plugin_ui::Layer> value) override { layers = std::move(value); }
     bool panels_shown() override { return panels_open; }
+    std::string shown;
+    std::string shown_page() override { return shown; }
+    std::vector<plugin_ui::PageEntry> pages;
+    void publish_pages(std::vector<plugin_ui::PageEntry> value) override { pages = std::move(value); }
     void publish_panels(std::vector<plugin_ui::Panel> value) override { panels = std::move(value); }
     std::vector<plugin_ui::Action> take_actions() override { return std::exchange(actions, {}); }
     std::vector<HttpRequest> requests;
@@ -852,7 +856,7 @@ void plugins_have_menu_panels() {
     )", R"("console", "menu")")});
     running(host, "panels", environment);
     ticks(host, environment, 2);
-    check(environment.panels.empty(), "Panels are built only while the PLUGINS tab shows them");
+    check(environment.panels.empty(), "Panels are built only while the menu shows them");
     environment.panels_open = true;
     ticks(host, environment, 10);
     check(environment.panels.size() == 1 && environment.panels[0].title == "Settings" && environment.panels[0].widgets.size() == 8 &&
@@ -866,6 +870,58 @@ void plugins_have_menu_panels() {
     check(environment.logged("state 1 true 10.0 3"), "What the player did reaches it, the slider held in its range\n" + environment.all());
     const auto& widgets = environment.panels[0].widgets;
     check(widgets[4].on && widgets[5].value == 10 && widgets[6].chosen == 3 && widgets[6].choices.size() == 3, "and shows in the next build");
+}
+
+// A plugin's own page in the menu's PLUGINS section: named in the section, built only while the menu
+// shows it, page first and its panels after, with cards, tabs, info lines and help.
+void plugins_have_pages() {
+    TestEnvironment environment;
+    Host host(environment, Side::client);
+    host.apply({script("pages", R"(
+        local tab, on, strength = 1, false, 50
+        reskate.menu.page("Tools", function(ui)
+            tab = ui:tabs("tabs", {"MAIN", "MORE"}, tab)
+            ui:card("SWITCHES", "What it does")
+            on = ui:toggle("on", "Switch", on, "Turns it on")
+            strength = ui:slider("strength", "Strength", strength, 10, 100, "%d%%")
+            ui:info("Status", "fine")
+            ui:note("A note")
+            ui:warn("A warning")
+            ui:button("go", "GO", true)
+            assert(not pcall(ui.slider, ui, "bad", "Bad", 1, 0, 2, "%s"), "a slider's format is one number")
+            assert(not pcall(ui.slider, ui, "bad2", "Bad", 1, 0, 2, "%f %f"), "and only one")
+        end)
+        assert(not pcall(reskate.menu.page, "Again", function() end), "one page")
+        assert(not pcall(reskate.menu.panel, "Tools", function() end), "a panel cannot share the page's title")
+        reskate.menu.panel("Extra", function(ui) ui:label("more") end)
+        reskate.console.command("state", "x", function() reskate.log(string.format("state %d %s %.0f", tab, tostring(on), strength)) end)
+    )", R"("console", "menu")"), script("others", R"(
+        reskate.menu.panel("Theirs", function(ui) ui:label("theirs") end)
+    )", R"("menu")")});
+    running(host, "pages", environment);
+    running(host, "others", environment);
+    ticks(host, environment, 10);
+    check(environment.pages.size() == 2 && environment.pages[0] == plugin_ui::PageEntry{"others", "others"} &&
+              environment.pages[1] == plugin_ui::PageEntry{"pages", "Tools"},
+          "The PLUGINS section names each plugin's page: its title, or its id with panels only");
+    check(environment.panels.empty(), "Nothing is built while no page shows");
+    environment.panels_open = true;
+    environment.shown = "pages";
+    ticks(host, environment, 10);
+    check(environment.panels.size() == 2 && environment.panels[0].page && environment.panels[0].title == "Tools" && !environment.panels[1].page &&
+              environment.panels[1].title == "Extra",
+          "The shown plugin's page is built, then its panels, and no other plugin's\n" + environment.all());
+    using K = plugin_ui::Widget::Kind;
+    const auto& w = environment.panels[0].widgets;
+    check(w.size() == 8 && w[0].kind == K::tabs && w[0].choices.size() == 2 && w[1].kind == K::card && w[1].help == "What it does" &&
+              w[2].help == "Turns it on" && w[3].format == "%.0f%%" && w[4].kind == K::info && w[4].help == "fine" && w[5].kind == K::note &&
+              w[6].kind == K::warn && w[7].on,
+          "with its tabs, cards, help, the slider's format, info lines, notes and a main button");
+    using A = plugin_ui::Action;
+    environment.actions = {A{"pages", "Tools", "tabs", false, 0, 2}, A{"pages", "Tools", "on", true}, A{"pages", "Tools", "strength", false, 75}};
+    ticks(host, environment, 10);
+    host.run_console("state");
+    check(environment.logged("state 2 true 75"), "What the player did on it reaches the plugin\n" + environment.all());
 }
 
 // A 16-bit mono WAVE file of `samples` at `rate`.
@@ -1348,7 +1404,7 @@ void the_wider_set_reaches_the_game() {
     check(environment.logged("[wide] physics fine") && game.called("wipeout 2.0"), "The board's motion reads, and a wipeout is asked for\n" + environment.all());
     ticks(host, environment, 10);
     const auto screen = std::find_if(environment.panels.begin(), environment.panels.end(), [](const auto& p) { return p.screen; });
-    check(screen != environment.panels.end() && screen->title == "Big" && screen->widgets.size() == 2, "Its open screen is built, without the PLUGINS tab");
+    check(screen != environment.panels.end() && screen->title == "Big" && screen->widgets.size() == 2, "Its open screen is built, without the menu");
     environment.actions = {plugin_ui::Action{"wide", "Big", "ok"}};
     ticks(host, environment, 10);
     check(environment.logged("[wide] screen ok"), "and answers its widgets");
@@ -1489,11 +1545,11 @@ void reskate_test_passes_its_own_checks() {
     environment.lines.clear();
     check(host.run_console("ptest tricks") && environment.printed("ptest: 3 passed, 0 failed, 1 skipped"),
           "and the tricks checks pass once one landed");
-    // Its panel on the PLUGINS tab, and its test HUD.
+    // Its panel on its page, and its test HUD.
     environment.panels_open = true;
     ticks(host, environment, 10);
     check(environment.panels.size() == 1 && environment.panels[0].title == "reskate-test" && environment.panels[0].widgets.size() == 8,
-          "Its panel is built while the PLUGINS tab shows");
+          "Its panel is built while the menu shows its page");
     environment.actions = {plugin_ui::Action{"reskate-test", "reskate-test", "press"}, plugin_ui::Action{"reskate-test", "reskate-test", "hud", true}};
     ticks(host, environment, 10);
     check(environment.panels[0].widgets[1].text.find("pressed 1 times") != std::string::npos && environment.sounds.size() >= 1,
@@ -1575,8 +1631,9 @@ void road_rash_marks_the_skater_as_it_bails() {
     // Its panel.
     environment.panels_open = true;
     ticks(host, environment, 10);
-    check(environment.panels.size() == 1 && environment.panels[0].title == "Road Rash" && environment.panels[0].widgets.size() == 6,
-          "Its panel is built while the PLUGINS tab shows");
+    check(environment.panels.size() == 1 && environment.panels[0].title == "Road Rash" && environment.panels[0].page &&
+              environment.panels[0].widgets.size() == 9 && environment.panels[0].widgets[0].kind == plugin_ui::Widget::Kind::card,
+          "Its page is built while the menu shows it");
     environment.actions = {plugin_ui::Action{"road-rash", "Road Rash", "on", true}};
     ticks(host, environment, 10);
     environment.lines.clear();
@@ -1623,7 +1680,7 @@ void board_break_snaps_the_board_on_a_slam() {
     // Its panel, whose toggle switches it off; that is kept.
     environment.panels_open = true;
     ticks(host, environment, 10);
-    check(environment.panels.size() == 1 && environment.panels[0].title == "Board Break", "Its panel is built while the PLUGINS tab shows");
+    check(environment.panels.size() == 1 && environment.panels[0].title == "Board Break", "Its panel is built while the menu shows its page");
     environment.actions = {plugin_ui::Action{"board-break", "Board Break", "on", false}};
     ticks(host, environment, 10);
     host.apply({});
@@ -1776,7 +1833,13 @@ void fpv_drone_flies_and_follows() {
     check(game.called("tag fpv-drone 2  ") && game.called("stop sound fpv-drone"), "Not heard from, it is gone\n" + environment.all());
     environment.panels_open = true;
     ticks(host, environment, 5);
-    check(environment.panels.size() == 5, "Its five panels are built while the PLUGINS tab shows: " + std::to_string(environment.panels.size()));
+    check(environment.panels.size() == 1 && environment.panels[0].page && environment.panels[0].widgets[0].kind == plugin_ui::Widget::Kind::tabs &&
+              environment.panels[0].widgets[0].choices.size() == 5,
+          "Its page, with its five tabs, is built while the menu shows it: " + std::to_string(environment.panels.size()));
+    environment.actions = {plugin_ui::Action{"fpv-drone", "FPV Drone", "tabs", false, 0, 4}};
+    ticks(host, environment, 10);
+    check(environment.panels[0].widgets[0].chosen == 4 && environment.panels[0].widgets[1].text == "GOGGLE DISPLAY",
+          "and a tab picked shows its part");
     environment.panels_open = false;
 }
 
@@ -1843,6 +1906,7 @@ int main() {
         plugins_animate_the_skater();
         plugins_play_their_own_sounds();
         plugins_have_menu_panels();
+        plugins_have_pages();
         plugins_play_sounds_and_read_the_mods();
         plugins_follow_the_session_and_message_each_other();
         plugins_call_and_hear_each_other();

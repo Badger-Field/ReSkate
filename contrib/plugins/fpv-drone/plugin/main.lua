@@ -1,7 +1,7 @@
 -- FPV Drone: fly a first-person drone over the map, or let it follow you and film while you skate.
 -- The drone ReSkate had in its core (Extension/Skater/drone_*.h), as a plugin: flight.lua is the
 -- flight model, follow.lua the autopilot, radio.lua the controllers, osd.lua the goggle display,
--- beacon.lua other players' drones, page.lua the menu panels and settings.lua the settings.
+-- beacon.lua other players' drones, page.lua its page in the menu and settings.lua the settings.
 -- Console: fpv (fpv help lists what it does).
 local settings = require("settings")
 local flight = require("flight")
@@ -14,14 +14,14 @@ local page = require("page")
 local V = vector.create
 local len = vector.magnitude
 
--- What the console, the panels and the tick share.
+-- What the console, the page and the tick share.
 local drone = {
     mode = "off",       -- "fly", "follow" or "off"
     state = nil,        -- the flight state (flight.lua)
     pilot = nil,        -- follow mode's autopilot
     armed = true,       -- the pilot's arm switch
     reset = false,      -- asked to go back to takeoff
-    problem = nil,      -- why it could not start, for the panel
+    problem = nil,      -- why it could not start, for the page
     sticks = {},        -- what the sticks did last, for the OSD
     calibration = radio.calibration(),
     calibration_seen = -1e9,
@@ -313,7 +313,7 @@ commands.help = function()
     say("fpv preset <1-3>: Tinywhoop, Toothpick or 5 inch")
     say("fpv controller on|off | axes <roll> <pitch> <throttle> <yaw> | check: the controller")
     say("fpv status | perf | test")
-    say("The panels on ADDONS > PLUGINS have every setting.")
+    say("Its page in the menu's PLUGINS section has every setting.")
 end
 commands.fly = function()
     local ok, why = drone.start("fly")
@@ -418,4 +418,4 @@ end)
 
 settings.load()
 page.install(drone)
-reskate.log("FPV Drone loaded: fpv fly, or ADDONS > PLUGINS")
+reskate.log("FPV Drone loaded: fpv fly, or its page in the menu's PLUGINS section")

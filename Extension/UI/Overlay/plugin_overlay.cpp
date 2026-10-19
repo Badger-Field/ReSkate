@@ -103,6 +103,28 @@ void draw_plugin_screen() {
                 break;
             case Kind::label: ImGui::TextWrapped("%s", w.text.c_str()); break;
             case Kind::separator: ImGui::Separator(); break;
+            case Kind::card:
+                ImGui::Spacing();
+                if (s.menu.heading) ImGui::PushFont(s.menu.heading);
+                ImGui::TextUnformatted(w.text.c_str());
+                if (s.menu.heading) ImGui::PopFont();
+                if (!w.help.empty()) ImGui::TextDisabled("%s", w.help.c_str());
+                break;
+            case Kind::note: ImGui::TextDisabled("%s", w.text.c_str()); break;
+            case Kind::warn: ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s", w.text.c_str()); break;
+            case Kind::info: ImGui::Text("%s: %s", w.text.c_str(), w.help.c_str()); break;
+            case Kind::tabs:
+                for (int i = 0; i < static_cast<int>(w.choices.size()); ++i) {
+                    if (i) ImGui::SameLine();
+                    ImGui::PushID(i);
+                    if (ImGui::Selectable(w.choices[static_cast<std::size_t>(i)].c_str(), i + 1 == w.chosen, 0,
+                                          ImGui::CalcTextSize(w.choices[static_cast<std::size_t>(i)].c_str()))) {
+                        action.chosen = i + 1;
+                        acted = true;
+                    }
+                    ImGui::PopID();
+                }
+                break;
             case Kind::bar:
                 ImGui::ProgressBar((w.value - w.minimum) / (w.maximum - w.minimum), ImVec2(480 * k, 0), w.text.c_str());
                 break;

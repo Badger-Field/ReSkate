@@ -148,33 +148,46 @@ end
 reskate.console.command("grindexit", "Pick the side you pop out of a grind with LT / RT: exits on|off, stance, sides, strength, guard, leanguard",
     answer)
 
-reskate.menu.panel("Grind Exits", function(ui)
-    set_on(ui:toggle("on", "Grind exit triggers", settings.on))
-    ui:label("Press LT or RT while grinding (or up to a second before the grind connects) to pick the side you pop out to, then do any trick out of it. Keep the trigger held until you land.")
-    local mode = ui:dropdown("mode", "Input mode", {"Toe / Heel", "Left / Right"}, settings.toe_heel and 1 or 2)
+-- Its page in the menu's PLUGINS section.
+reskate.menu.page("Grind Exits", function(ui)
+    ui:card("GRIND EXITS", "Choose the side you pop out of a grind using LT/RT")
+    set_on(ui:toggle("on", "Grind exit triggers", settings.on,
+        "Press LT or RT while grinding (or up to a second before the grind connects) to pick the side you pop out to. Keep it held until you land."))
+    local mode = ui:dropdown("mode", "Input mode", {"Toe / Heel", "Left / Right"}, settings.toe_heel and 1 or 2,
+        settings.toe_heel and "LT pops out to your toe side, RT to your heel side." or "LT pops out to the left of your direction of travel, RT to the right.")
     if (mode == 1) ~= settings.toe_heel then save("toe_heel", mode == 1) end
     if settings.toe_heel then
         local stance = ui:dropdown("stance", "Your stance", {"Not set", "Regular", "Goofy"},
-            settings.stance == "regular" and 2 or settings.stance == "goofy" and 3 or 1)
+            settings.stance == "regular" and 2 or settings.stance == "goofy" and 3 or 1, "Your skater's stance in the game's settings.")
         local wanted = stance == 2 and "regular" or stance == 3 and "goofy" or ""
         if wanted ~= settings.stance then
             save("stance", wanted)
             wished = nil
         end
+        if settings.stance == "" then ui:warn("Pick your stance. Until then LT / RT are left / right of travel.") end
     end
-    local strength = math.floor(ui:slider("strength", "Pop-out strength (%)", settings.strength, 10, 100) + 0.5)
+    local strength = math.floor(ui:slider("strength", "Pop-out strength", settings.strength, 10, 100, "%d%%") + 0.5)
     if strength ~= settings.strength then
         save("strength", strength)
         wished = nil
     end
-    ui:label("Lower it for rails next to a wall. 100% is the game's own full exit.")
-    if ui:toggle("guard", "Grab guard: the trigger that picked the side does not grab", settings.guard) ~= settings.guard then
+    ui:note("How far to the side a trigger exit pops. 100% is the full exit; lower it for rails next to a wall.")
+
+    ui:card("GUARDS")
+    if ui:toggle("guard", "Grab guard", settings.guard,
+        "The trigger that picked the side is kept from the game until you let go, so holding it through the pop does not grab.") ~= settings.guard then
         save("guard", not settings.guard)
     end
-    if ui:toggle("lean", "Lean guard: the left stick's left/right waits for the pop", settings.lean_guard) ~= settings.lean_guard then
+    if ui:toggle("lean", "Lean guard", settings.lean_guard,
+        "While the trigger is held in a grind, the left stick's left/right waits for the pop, so the game's lean exit cannot pull the board the other way.")
+        ~= settings.lean_guard then
         save("lean_guard", not settings.lean_guard)
     end
-    ui:label(string.format("Pops out of grinds seen: %d, sides set: %d. Last: %s.", pops, applied, last_pop))
+
+    ui:card("POPS")
+    ui:info("Seen", string.format("%d out of grinds, %d sides set", pops, applied))
+    ui:info("Last", last_pop)
+    if why_not then ui:warn("ReSkate refused: " .. why_not) end
 end)
 
 -- Its pops are heard from the start, before any trigger picks a side.

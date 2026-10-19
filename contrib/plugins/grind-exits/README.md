@@ -8,7 +8,7 @@ side, a kickflip out to whichever side you pick.
 
 ## Using it
 
-On once installed. Its settings are on the ReSkate menu's ADDONS page, PLUGINS tab, and on the console
+On once installed. Its settings are on its page in the ReSkate menu's PLUGINS section, and on the console
 (`~`): `grindexit exits on|off|status`.
 
 - **While grinding, press LT or RT** (or up to 1 s before the grind connects, for example as you ollie
@@ -40,7 +40,7 @@ On once installed. Its settings are on the ReSkate menu's ADDONS page, PLUGINS t
 - `plugin/main.lua`: the wiring to `reskate`: the pad (`reskate.input.gamepad`, which sees the
   triggers even while they are kept from the game), the hiding (`reskate.input.hide`), the side asked
   of the next pop (`reskate.skater.grind_exit`) and each pop as it went (the `grind_exit` event), the
-  console command and the menu panel.
+  console command and its page in the menu's PLUGINS section.
 
 ReSkate does what has to happen in the game's own threads (`Extension/Skater/grind_exit.h`): at the
 pop the game calls its jump-trajectory setter with the launch velocity, which the trainer hooks; for a

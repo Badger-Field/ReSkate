@@ -1,5 +1,7 @@
 #pragma once
 #include "skate_menu.h"
+#include "Extension/Plugins/plugin_ui.h"
+#include <memory>
 #include <initializer_list>
 #include <span>
 #include <string>
@@ -126,8 +128,11 @@ void addons_page(SkateMenu&, const Model&, const CallbacksV3&);
 // leaving the game's reply off the page.
 int time_of_day_shown(const Model&);
 void set_time_of_day(SkateMenu&, const Model&, const CallbacksV3&, int next, bool quiet);
-// The PLUGINS addon: every plugin's menu panels (plugins_page.cpp).
-void plugins_addon(SkateMenu& menu);
+// The PLUGINS section (plugins_page.cpp): the plugins with a page, as last published (held for the
+// frame); the one the menu shows (the first when its choice is gone; nullptr for none); and its page.
+std::shared_ptr<const std::vector<plugin_ui::PageEntry>> plugin_pages();
+const plugin_ui::PageEntry* shown_plugin_page(SkateMenu& menu);
+void plugins_page(SkateMenu& menu);
 // The fullscreen menu's first page: a tile for each part of the menu (skate_menu_addons.cpp).
 void home_page(SkateMenu&, const Model&, const CallbacksV3&);
 // Shuffle, on the Music addon (skate_menu_settings.cpp).
@@ -138,9 +143,9 @@ bool menu_fullscreen(const SkateMenu&, const Model&);
 void set_menu_fullscreen(SkateMenu&, const CallbacksV3&, bool fullscreen);
 // The pages, for the shells and the home tiles (skate_menu.cpp).
 enum Page {
-    page_home, page_map, page_build, page_skater, page_sandbox, page_addons, page_online, page_progress, page_mods,
+    page_home, page_map, page_build, page_skater, page_sandbox, page_addons, page_plugins, page_online, page_progress, page_mods,
     page_settings, page_developer, page_count
 };
-enum Addon { addon_all, addon_music, addon_plugins, addon_count, addon_first = addon_music };
+enum Addon { addon_all, addon_music, addon_count, addon_first = addon_music };
 void open_page(SkateMenu&, int page, int addon = -1);
 }

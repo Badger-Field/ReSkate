@@ -138,6 +138,10 @@ public:
         if (!server_) plugin_ui::publish_layers(std::move(layers));
     }
     bool panels_shown() override { return !server_ && plugin_ui::panels_shown(); }
+    std::string shown_page() override { return plugin_ui::shown_page(); }
+    void publish_pages(std::vector<plugin_ui::PageEntry> pages) override {
+        if (!server_) plugin_ui::publish_pages(std::move(pages));
+    }
     void publish_panels(std::vector<plugin_ui::Panel> panels) override {
         if (!server_) plugin_ui::publish_panels(std::move(panels));
     }

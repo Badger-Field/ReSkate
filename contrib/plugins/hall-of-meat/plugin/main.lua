@@ -141,11 +141,26 @@ local function answer(name)
 end
 reskate.console.command("hallofmeat", "Your bails show the bones they hurt and score a Meat card: 0|1, test", answer("hallofmeat"))
 
-reskate.menu.panel("Hall of Meat", function(ui)
-    set_on(ui:toggle("on", "Hall of Meat", on))
-    ui:label("Your bails show the bones they hurt and score a Meat card. A break slows the game in single player. No Bail stops the bails it scores.")
-    ui:label("This map's best: " .. (best and card.grouped(best) or "no map yet"))
-    ui:label("Last bail: " .. describe(last))
+-- Its page in the menu's PLUGINS section.
+reskate.menu.page("Hall of Meat", function(ui)
+    ui:card("HALL OF MEAT", "Every bone counts")
+    set_on(ui:toggle("on", "Hall of Meat", on,
+        "Your bails show the bones they hurt and score a Meat card. A break slows the game in single player."))
+    ui:note("No Bail (and noclip, which includes it) stops the bails Hall of Meat scores.")
+
+    ui:card("THIS MAP")
+    ui:info("Best Meat", best and card.grouped(best) or "no map yet")
+    ui:card("LAST BAIL")
+    if not last then
+        ui:note("No bail yet.")
+    else
+        local t = last.tally
+        ui:info("Meat", card.grouped(t.score) .. (last.shown and "" or " (hurt nothing, so it did not show)"))
+        ui:info("Hits", string.format("%d, %d broken", t.impacts, t.broken))
+        ui:info("Time", string.format("%.1f s, %.1f s in the air", t.seconds, t.airtime))
+        ui:info("Fall", string.format("%.1f ft, top speed %.1f MPH", t.fallen * card.feet_per_metre, t.top_speed * card.mph_per_metre_per_second))
+        ui:info("Road rash", string.format("%.1f ft, %.1f rotations", t.scraped * card.feet_per_metre, t.rotations))
+    end
 end)
 
 reskate.log("Hall of Meat " .. (on and "on" or "off") .. ": hallofmeat 0|1")

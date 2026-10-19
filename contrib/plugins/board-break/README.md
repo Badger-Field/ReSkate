@@ -15,7 +15,7 @@ size that has one, or the wave files in `sounds/` itself; at most 6 of each are 
 - `plugin/feel.lua`: the settings, the chances, wear, the contact type on a rail.
 - `plugin/breaker.lua`: the rules at play (breaks, mending, wear, drawing), with the game passed
   in, so `plugin/tests.lua` can run them against a fake one.
-- `plugin/main.lua`: the wiring to `reskate`, the console command and the menu panel.
+- `plugin/main.lua`: the wiring to `reskate`, the console command and its page in the menu's PLUGINS section.
 
 ## Install
 
@@ -27,7 +27,7 @@ Copy `reskate-plugin.json` and `plugin/` into the pack's folder in `Mods`, besid
 `0|1`, `status`, `snap [nose|mid|tail]` (to look at a break: it stays until `mend` or a respawn),
 `mend`, `new` (a new board), `worn [percent]`, `test` (its own checks), and the settings
 `always`, `sensitivity`, `joined`, `rails`, `wear`, `wearrate`, `cracks`, `bodysounds`, each with
-a value to set it or none to read it. The same is on the ReSkate menu's PLUGINS tab.
+a value to set it or none to read it. The same is on its page in the ReSkate menu's PLUGINS section.
 
 ## What it leaves out
 

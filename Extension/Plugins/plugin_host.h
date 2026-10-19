@@ -53,7 +53,10 @@ public:
     // What plugins drew this tick, and their panels; the panels are built only while shown.
     virtual void publish_layers(std::vector<plugin_ui::Layer>) {}
     virtual bool panels_shown() { return false; }
+    // The plugin whose page the menu shows (empty: any, as the tests have it).
+    virtual std::string shown_page() { return {}; }
     virtual void publish_panels(std::vector<plugin_ui::Panel>) {}
+    virtual void publish_pages(std::vector<plugin_ui::PageEntry>) {}
     virtual std::vector<plugin_ui::Action> take_actions() { return {}; }
     // net.http, made off the client thread: false when it cannot start; answers come back later.
     virtual bool http_request(HttpRequest) { return false; }
@@ -162,6 +165,7 @@ private:
     double next_save_{};
     SessionState session_;
     double next_panels_{};
+    std::vector<plugin_ui::PageEntry> pages_; // as last published
     std::vector<plugin_ui::Action> actions_; // waiting for the next panel build
     struct Emitted {
         std::string source, event;
