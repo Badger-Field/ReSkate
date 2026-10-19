@@ -1,8 +1,12 @@
 #include "plugin_runtime.h"
 #include "plugin_discovery.h"
 #include "plugin_host.h"
+#include "plugin_camera.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Game/Multiplayer/session_tools.h"
+#include "Extension/Multiplayer/Session/session.h"
+#include "Extension/UI/NativeMenu/ui_sound.h"
+#include "Extension/UI/Overlay/overlay.h"
 #include "Extension/Console/commands.h"
 #include "Extension/Profile/local_profile_runtime.h"
 #include "Extension/Skater/score_hud.h"
@@ -21,6 +25,15 @@
 
 namespace dingosdk::plugins {
 namespace {
+std::uintptr_t base{};
+// What the discovery thread last found of the Mods folder (reskate.mods).
+std::mutex mods_mutex;
+std::vector<ModInfo> found_mods; // under mods_mutex
+// Plugin messages in and out of the session's throwdown packets: a few at a time.
+std::mutex messages_mutex;
+std::vector<Environment::Received> inbox;       // under messages_mutex
+std::vector<std::vector<std::uint8_t>> outbox;  // under messages_mutex
+
 class GameEnvironment final : public Environment {
 public:
     explicit GameEnvironment(std::filesystem::path storage) : storage_(std::move(storage)) {}
@@ -57,6 +70,68 @@ public:
     std::optional<Vec3> raycast(const Vec3& from, const Vec3& to) override { return local_surface_hit(from, to); }
     std::optional<ScoreState> score() override { return score_now; }
     std::optional<ScoreState> score_now; // read each tick while a plugin wants tricks
+    // ReSkate's notices in the top left, titled with the plugin's folder name.
+    void toast(std::string_view plugin, LogLevel level, std::string_view text) override {
+        overlay::notify(level == LogLevel::error ? overlay::NoticeLevel::error
+                        : level == LogLevel::warn ? overlay::NoticeLevel::warning : overlay::NoticeLevel::info,
+                        std::string(plugin), std::string(text));
+    }
+    bool ui_sound(std::string_view name) override {
+        using multiplayer::UiSound;
+        UiSound sound{};
+        if (name == "select") sound = UiSound::select;
+        else if (name == "cancel") sound = UiSound::cancel;
+        else if (name == "navigate") sound = UiSound::navigate;
+        else if (name == "toggle") sound = UiSound::toggle;
+        else if (name == "tab") sound = UiSound::tab;
+        else return false;
+        multiplayer::queue_ui_sound(static_cast<std::uint32_t>(sound));
+        return true;
+    }
+    std::vector<ModInfo> mods() override {
+        std::lock_guard lock(mods_mutex);
+        return found_mods;
+    }
+    // The session's model is large to copy: read four times a second.
+    SessionState session() override {
+        const auto now = std::chrono::steady_clock::now();
+        if (now < next_session_) return session_;
+        next_session_ = now + std::chrono::milliseconds(250);
+        const auto m = multiplayer::model();
+        session_ = {};
+        if (!m.active || !m.connected || !m.local_id || m.echo) return session_;
+        session_.active = true;
+        session_.dedicated = m.dedicated;
+        session_.players.push_back({m.local_id, m.local_name, true, !m.dedicated && m.host_id == m.local_id});
+        for (const auto& p : m.roster)
+            if (p.connected && p.id && p.id != m.local_id)
+                session_.players.push_back({p.id, p.name, false, !m.dedicated && p.id == m.host_id});
+        return session_;
+    }
+    bool send_message(std::vector<std::uint8_t> bytes) override {
+        std::lock_guard lock(messages_mutex);
+        if (outbox.size() >= 64) return false;
+        outbox.push_back(std::move(bytes));
+        return true;
+    }
+    std::vector<Received> take_messages() override {
+        std::lock_guard lock(messages_mutex);
+        return std::exchange(inbox, {});
+    }
+    std::optional<Vec3> world_to_screen(const Vec3& p) override {
+        const auto display = plugin_ui::display();
+        const auto projector = plugin_camera::projector(display[0], display[1]);
+        return projector ? projector->project(p) : std::nullopt;
+    }
+    std::array<float, 2> display() override { return plugin_ui::display(); }
+    void publish_layers(std::vector<plugin_ui::Layer> layers) override { plugin_ui::publish_layers(std::move(layers)); }
+    bool panels_shown() override { return plugin_ui::panels_shown(); }
+    void publish_panels(std::vector<plugin_ui::Panel> panels) override { plugin_ui::publish_panels(std::move(panels)); }
+    std::vector<plugin_ui::Action> take_actions() override { return plugin_ui::take_actions(); }
+
+private:
+    std::chrono::steady_clock::time_point next_session_{};
+    SessionState session_;
 
 private:
     std::filesystem::path storage_;
@@ -72,7 +147,6 @@ std::vector<Candidate> found;      // under found_mutex
 std::uint64_t found_generation{};  // under found_mutex
 std::uint64_t applied_generation{};
 std::chrono::steady_clock::time_point last_tick{};
-std::uintptr_t base{};
 // The local skater's tricks (Extension/Skater/trick_watch.h), and where and when the one going on began.
 tricks::TrickWatch trick_watch;
 Vec3 started_at{};
@@ -126,7 +200,12 @@ void watch() {
     FileChecks checks;
     for (;;) {
         try {
-            auto plugins = discover(data_root, checks);
+            std::vector<ModInfo> mods;
+            auto plugins = discover(data_root, checks, &mods);
+            {
+                std::lock_guard lock(mods_mutex);
+                found_mods = std::move(mods);
+            }
             std::lock_guard lock(found_mutex);
             if (plugins != found || !found_generation) {
                 found = std::move(plugins);
@@ -153,6 +232,7 @@ bool start(std::uintptr_t image_base) noexcept {
     try {
         if (host) return true;
         base = image_base;
+        plugin_camera::image_base().store(image_base);
         std::array<wchar_t, 32768> path{};
         const auto length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
         if (!length || length >= path.size()) return false;
@@ -220,6 +300,18 @@ bool run_console(const std::string& text) noexcept {
         logging::log(logging::Level::error, logging::Channel::plugins, "Plugin command failed: {}", error.what());
         return true;
     }
+}
+
+void receive_message(std::uint64_t sender, const std::vector<std::uint8_t>& bytes) noexcept {
+    try {
+        std::lock_guard lock(messages_mutex);
+        if (inbox.size() < 256) inbox.push_back({sender, bytes});
+    } catch (...) {}
+}
+
+std::vector<std::vector<std::uint8_t>> take_outgoing() noexcept {
+    std::lock_guard lock(messages_mutex);
+    return std::exchange(outbox, {});
 }
 
 std::string describe() {

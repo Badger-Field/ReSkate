@@ -1,5 +1,6 @@
 #pragma once
 #include "plugin_manifest.h"
+#include "plugin_ui.h"
 #include "Engine/Core/Json/json.h"
 #include <array>
 #include <chrono>
@@ -41,6 +42,14 @@ struct Limits {
     int raycasts_per_tick = 64;
     float raycast_metres = 1000;        // the longest ray
     int teleports_per_second = 2;
+    std::size_t shapes = 4000;          // drawn each frame
+    std::size_t shape_text_bytes = 64u << 10;
+    int toasts = 3;                     // in 5 s
+    int sounds_per_second = 10;
+    std::size_t message_bytes = 4096 - 14; // a plugin message's payload (plugin_wire.h's header is 14)
+    std::size_t message_bytes_per_second = 16u << 10;
+    std::size_t panels = 8;
+    std::size_t widgets = 64;           // a panel's
 };
 
 // The game, as plugins see it (Environment, plugin_host.h, gives the host these).
@@ -68,6 +77,22 @@ struct ScoreState {
     float line{}, multiplier{};
     bool in_trick{};
 };
+// The multiplayer session as plugins see it: who is in it (the local player too).
+struct SessionPlayer {
+    std::uint64_t id{}; // SteamID64
+    std::string name;
+    bool me{}, host{};
+    bool operator==(const SessionPlayer&) const = default;
+};
+struct SessionState {
+    bool active{}, dedicated{};
+    std::vector<SessionPlayer> players;
+};
+// A mod in the Mods folder: its folder, the name it gives itself, whether it is on.
+struct ModInfo {
+    std::string folder, title;
+    bool on{};
+};
 
 // What a plugin's VM can reach outside itself. The host implements it.
 class Services {
@@ -87,6 +112,16 @@ public:
     virtual std::optional<Vec3> raycast(const Vec3& from, const Vec3& to) = 0;
     // The score HUD now, or empty without one.
     virtual std::optional<ScoreState> score() = 0;
+    virtual void toast(std::string_view plugin, LogLevel level, std::string_view text) = 0;
+    // One of the game's menu sounds by name; false for a name there is none of.
+    virtual bool ui_sound(std::string_view name) = 0;
+    virtual std::vector<ModInfo> mods() = 0;
+    virtual const SessionState& session() = 0;
+    // A plugin message to the same plugin on other players' games (to 0: everyone). False without a session.
+    virtual bool send(std::uint32_t channel, std::uint64_t to, std::string_view payload) = 0;
+    // A world position on screen (x, y in pixels, z its depth in front of the camera), or empty behind it.
+    virtual std::optional<Vec3> world_to_screen(const Vec3& position) = 0;
+    virtual std::array<float, 2> display() = 0;
 };
 
 enum class State { loading, running, stopped };
@@ -112,6 +147,18 @@ public:
     void level_changed(const std::string& previous, const std::string& current);
     // trick_started, trick_landed or line_broken, to a plugin with events.tricks.
     void trick(const TrickNews& news);
+    // Its draw handlers (overlay): what they drew is taken after.
+    void draw();
+    std::vector<plugin_ui::Shape> take_shapes() { return std::exchange(shapes_, {}); }
+    // Its menu panels, built with what the player did in them since the last build.
+    std::vector<plugin_ui::Panel> build_panels(const std::vector<plugin_ui::Action>& actions);
+    // session.read: players who came and went.
+    void session_changed(const std::vector<SessionPlayer>& joined, const std::vector<SessionPlayer>& left);
+    // net.session: a message from the same plugin on another player's game.
+    void receive(const SessionPlayer& from, const std::string& payload);
+    // The name its messages go under: the same plugin on every game has it (its manifest.json name).
+    void set_channel(std::string channel);
+    std::uint32_t channel() const noexcept { return channel_hash_; }
     // A console command it registered: the words after the command's name.
     void run_command(const std::string& name, const std::vector<std::string>& arguments);
     void save_storage();
@@ -132,6 +179,7 @@ public:
 private:
     friend struct Api;
     friend struct ApiFunctions;
+    friend struct UiApi;
     struct Command { std::string help; int function{}; };
     struct Timer { double due{}, every{}; int function{}; };
     using Clock = std::chrono::steady_clock;
@@ -184,6 +232,21 @@ private:
     int raycasts_{};                    // since the last tick
     double teleport_second_{};
     int teleports_{};
+    std::vector<plugin_ui::Shape> shapes_;
+    std::size_t shape_text_{};
+    bool drawing_{}, shapes_warned_{};
+    int draw_table_{}, ui_table_{};
+    struct PanelEntry { std::string title; int function{}; };
+    std::vector<PanelEntry> panels_;
+    plugin_ui::Panel* building_{};          // the panel a build is filling
+    std::vector<plugin_ui::Action> pending_; // what the player did, for the build going on
+    std::vector<double> toasts_;
+    double sound_second_{};
+    int sounds_{};
+    double message_second_{};
+    std::size_t message_bytes_{};
+    std::string channel_;
+    std::uint32_t channel_hash_{};
 
     std::map<std::string, std::vector<int>, std::less<>> handlers_;
     std::map<int, Timer> timers_;

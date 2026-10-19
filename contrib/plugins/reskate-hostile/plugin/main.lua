@@ -78,6 +78,29 @@ attack("trick-loop", "stopped at the next trick landed", function()
     reskate.console.print("hostile: now land a trick")
 end)
 
+attack("draw-flood", "keeps running: 4000 shapes a frame are drawn, the rest left out", function()
+    reskate.on("draw", function(d)
+        for i = 1, 20000 do d:line(vector.create(0, 0, 0), vector.create(i % 1920, 500, 0)) end
+    end)
+end)
+attack("toast-spam", "keeps running: three toasts, the rest refused", function()
+    local shown = 0
+    for i = 1, 100 do if reskate.ui.toast("hostile toast " .. i) then shown += 1 end end
+    reskate.console.print("hostile toast-spam: " .. shown .. " of 100 shown")
+end)
+attack("sound-spam", "keeps running: ten sounds a second, the rest refused", function()
+    local played = 0
+    for i = 1, 1000 do if reskate.audio.play_ui("select") then played += 1 end end
+    reskate.console.print("hostile sound-spam: " .. played .. " of 1000 played")
+end)
+attack("message-flood", "keeps running: refused past 16 KB of messages a second", function()
+    for i = 1, 1000 do reskate.net.send("all", string.rep("x", 4000)) end
+end)
+attack("panel-loop", "stopped the next time the PLUGINS tab shows its panel", function()
+    reskate.menu.panel("hostile", function(ui) while true do end end)
+    reskate.console.print("hostile: now open ADDONS > PLUGINS in the menu")
+end)
+
 -- Each returns true when that way out worked.
 local escapes = {
     {"io", function() return io ~= nil end},

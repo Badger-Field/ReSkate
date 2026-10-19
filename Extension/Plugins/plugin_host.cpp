@@ -1,5 +1,6 @@
 #include "plugin_host.h"
 #include "plugin_api.h"
+#include "plugin_wire.h"
 #include "Engine/Core/Console/console_core.h"
 #include <algorithm>
 #include <format>
@@ -52,6 +53,19 @@ void Host::load(Entry& entry) {
     for (const auto& permission : manifest.permissions) permissions += (permissions.empty() ? "" : ", ") + permission;
     Services& services = *this;
     entry.plugin = std::make_unique<Plugin>(id, entry.candidate.directory, std::move(manifest), services, limits_);
+    // Its messages go under the name its manifest.json gives it, the same on every player's game
+    // whatever its folder is called; the folder's name when it has none.
+    std::string channel = id;
+    try {
+        std::string error;
+        const auto text = read_package_file(entry.candidate.directory / "manifest.json", maximum_manifest_bytes, error);
+        if (error.empty()) {
+            const auto json = Json::parse(text, {maximum_manifest_bytes, 8, 4096});
+            if (json.is_object() && json.contains("name") && json.at("name").is_string() && !json.at("name").string().empty())
+                channel = json.at("name").string();
+        }
+    } catch (const std::exception&) {}
+    entry.plugin->set_channel(channel);
     if (!entry.plugin->load()) {
         entry.failure = entry.plugin->reason();
         entry.plugin.reset();
@@ -113,12 +127,90 @@ void Host::tick(double dt_ms) {
     const double now = environment_.now_ms();
     const bool save = now >= next_save_;
     if (save) next_save_ = now + 2000;
+    follow_session();
+    deliver_messages();
     for (auto& [id, entry] : entries_) {
         if (!entry.plugin) continue;
         entry.plugin->tick(dt_ms);
         collect(entry);
         if (save && entry.plugin) entry.plugin->save_storage();
     }
+    draw_and_build();
+}
+
+void Host::follow_session() {
+    auto now = environment_.session();
+    if (!now.active) now.players.clear();
+    std::vector<SessionPlayer> joined, left;
+    const auto has = [](const std::vector<SessionPlayer>& list, std::uint64_t id) {
+        return std::any_of(list.begin(), list.end(), [&](const auto& p) { return p.id == id; });
+    };
+    for (const auto& player : now.players)
+        if (!has(session_.players, player.id)) joined.push_back(player);
+    for (const auto& player : session_.players)
+        if (!has(now.players, player.id)) left.push_back(player);
+    session_ = std::move(now);
+    if (joined.empty() && left.empty()) return;
+    for (auto& [id, entry] : entries_) {
+        if (!entry.plugin) continue;
+        entry.plugin->session_changed(joined, left);
+        collect(entry);
+    }
+}
+
+void Host::deliver_messages() {
+    std::uint64_t me = 0;
+    for (const auto& player : session_.players)
+        if (player.me) me = player.id;
+    for (const auto& received : environment_.take_messages()) {
+        const auto message = wire::decode(received.bytes);
+        if (!message || (message->to && message->to != me)) continue;
+        SessionPlayer from{received.from};
+        for (const auto& player : session_.players)
+            if (player.id == received.from) from = player;
+        for (auto& [id, entry] : entries_) {
+            if (!entry.plugin || entry.plugin->channel() != message->channel) continue;
+            entry.plugin->receive(from, message->payload);
+            collect(entry);
+        }
+    }
+}
+
+bool Host::send(std::uint32_t channel, std::uint64_t to, std::string_view payload) {
+    if (!session_.active) return false;
+    return environment_.send_message(wire::encode(channel, to, payload));
+}
+
+void Host::draw_and_build() {
+    std::vector<plugin_ui::Layer> layers;
+    for (auto& [id, entry] : entries_) {
+        if (!entry.plugin) continue;
+        entry.plugin->draw();
+        collect(entry);
+        if (entry.plugin) {
+            auto shapes = entry.plugin->take_shapes();
+            if (!shapes.empty()) layers.push_back({id, std::move(shapes)});
+        }
+    }
+    environment_.publish_layers(std::move(layers));
+    for (auto& action : environment_.take_actions())
+        if (actions_.size() < 256) actions_.push_back(std::move(action));
+    // Panels are built ten times a second, and only while the PLUGINS tab shows them.
+    const double now = environment_.now_ms();
+    if (!environment_.panels_shown() || now < next_panels_) return;
+    next_panels_ = now + 100;
+    std::vector<plugin_ui::Panel> panels;
+    for (auto& [id, entry] : entries_) {
+        if (!entry.plugin) continue;
+        std::vector<plugin_ui::Action> mine;
+        for (const auto& action : actions_)
+            if (action.plugin == id) mine.push_back(action);
+        auto built = entry.plugin->build_panels(mine);
+        collect(entry);
+        for (auto& panel : built) panels.push_back(std::move(panel));
+    }
+    actions_.clear();
+    environment_.publish_panels(std::move(panels));
 }
 
 void Host::set_level(std::string level) {

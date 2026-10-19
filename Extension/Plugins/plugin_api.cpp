@@ -17,9 +17,10 @@ namespace {
 struct Event {
     std::string_view name, permission;
 };
-constexpr std::array<Event, 8> events{{
+constexpr std::array<Event, 12> events{{
     {"load", {}}, {"unload", {}}, {"tick", {}}, {"level_loaded", {}}, {"level_unloading", {}},
     {"trick_started", "events.tricks"}, {"trick_landed", "events.tricks"}, {"line_broken", "events.tricks"},
+    {"draw", "overlay"}, {"player_joined", "session.read"}, {"player_left", "session.read"}, {"message", "net.session"},
 }};
 constexpr std::size_t maximum_key = 128;
 constexpr std::size_t maximum_command = 48;
@@ -657,11 +658,25 @@ void Api::install(Plugin& plugin, lua_State* L) {
     readonly();
     lua_setfield(L, -2, "world");
 
+    install_ui_api(plugin, L);
     readonly();
     lua_setglobal(L, "reskate");
     lua_pushcfunction(L, ApiFunctions::print, "print");
     lua_setglobal(L, "print");
     lua_pushcfunction(L, ApiFunctions::require, "require");
     lua_setglobal(L, "require");
+}
+
+void push_player(lua_State* L, const SessionPlayer& player) {
+    lua_createtable(L, 0, 4);
+    const auto id = std::to_string(player.id);
+    lua_pushlstring(L, id.data(), id.size());
+    lua_setfield(L, -2, "id");
+    lua_pushlstring(L, player.name.data(), player.name.size());
+    lua_setfield(L, -2, "name");
+    lua_pushboolean(L, player.me);
+    lua_setfield(L, -2, "me");
+    lua_pushboolean(L, player.host);
+    lua_setfield(L, -2, "host");
 }
 }

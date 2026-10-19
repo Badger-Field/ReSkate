@@ -1,5 +1,6 @@
 #include "plugin_vm.h"
 #include "plugin_api.h"
+#include "plugin_wire.h"
 #include "lua.h"
 #include "luacode.h"
 #include "lualib.h"
@@ -249,6 +250,12 @@ void Plugin::close_if_stopped() {
 
 void Plugin::close() {
     save_storage();
+    shapes_.clear();
+    panels_.clear();
+    pending_.clear();
+    building_ = nullptr;
+    drawing_ = false;
+    draw_table_ = ui_table_ = 0;
     handlers_.clear();
     timers_.clear();
     commands_.clear();
@@ -410,6 +417,65 @@ void Plugin::run_command(const std::string& name, const std::vector<std::string>
         lua_rawseti(L_, -2, static_cast<int>(i + 1));
     }
     call(1, "the command " + name, limits_.call_ms);
+}
+
+void Plugin::draw() {
+    shapes_.clear();
+    shape_text_ = 0;
+    if (state_ != State::running || !has("overlay") || !handlers_.contains("draw")) return;
+    drawing_ = true;
+    fire_with("draw", [&](lua_State* L) {
+        lua_getref(L, draw_table_);
+        return 1;
+    });
+    drawing_ = false;
+}
+
+std::vector<plugin_ui::Panel> Plugin::build_panels(const std::vector<plugin_ui::Action>& actions) {
+    std::vector<plugin_ui::Panel> result;
+    if (state_ != State::running || !has("menu") || panels_.empty()) return result;
+    pending_ = actions;
+    const auto entries = panels_;
+    for (const auto& entry : entries) {
+        if (state_ != State::running) break;
+        plugin_ui::Panel panel{id_, entry.title, {}};
+        building_ = &panel;
+        lua_getref(L_, entry.function);
+        lua_getref(L_, ui_table_);
+        call(1, "the panel " + entry.title, limits_.call_ms);
+        building_ = nullptr;
+        result.push_back(std::move(panel));
+    }
+    pending_.clear();
+    return result;
+}
+
+void Plugin::session_changed(const std::vector<SessionPlayer>& joined, const std::vector<SessionPlayer>& left) {
+    if (state_ != State::running || !has("session.read")) return;
+    for (const auto& player : joined)
+        fire_with("player_joined", [&](lua_State* L) {
+            push_player(L, player);
+            return 1;
+        });
+    for (const auto& player : left)
+        fire_with("player_left", [&](lua_State* L) {
+            push_player(L, player);
+            return 1;
+        });
+}
+
+void Plugin::receive(const SessionPlayer& from, const std::string& payload) {
+    if (state_ != State::running || !has("net.session")) return;
+    fire_with("message", [&](lua_State* L) {
+        push_player(L, from);
+        lua_pushlstring(L, payload.data(), payload.size());
+        return 2;
+    });
+}
+
+void Plugin::set_channel(std::string channel) {
+    channel_ = std::move(channel);
+    channel_hash_ = wire::channel_of(channel_);
 }
 
 std::vector<std::pair<std::string, std::string>> Plugin::commands() const {

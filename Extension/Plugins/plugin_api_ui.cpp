@@ -1,0 +1,488 @@
+#include "plugin_api.h"
+#include "plugin_wire.h"
+#include "lua.h"
+#include "lualib.h"
+#include <algorithm>
+#include <charconv>
+#include <cmath>
+
+// The parts of the reskate API that reach players and other games: drawing on the overlay
+// (overlay), toasts, menu panels (menu), menu sounds (audio.ui), the mod list (mods.read), the
+// session (session.read) and messages to the same plugin elsewhere (net.session). As in
+// plugin_api.cpp, every value is checked before it leaves the VM.
+namespace dingosdk::plugins {
+namespace {
+Plugin& plugin_of(lua_State* L) {
+    auto& plugin = *static_cast<Plugin*>(lua_callbacks(L)->userdata);
+    if (plugin.halted()) luaL_error(L, "the plugin was stopped");
+    return plugin;
+}
+void need(lua_State* L, Plugin& plugin, const char* permission, const char* what) {
+    if (!plugin.has(permission)) luaL_error(L, "%s needs the \"%s\" permission in reskate-plugin.json", what, permission);
+}
+void set_function(lua_State* L, const char* name, lua_CFunction function) {
+    lua_pushcfunction(L, function, name);
+    lua_setfield(L, -2, name);
+}
+std::string checked_text(lua_State* L, int index, std::size_t most, const char* what) {
+    std::size_t length = 0;
+    const char* text = luaL_checklstring(L, index, &length);
+    if (length > most) luaL_error(L, "%s is longer than %d characters", what, static_cast<int>(most));
+    return std::string(text, length);
+}
+float finite(lua_State* L, int index, const char* what) {
+    const double value = luaL_checknumber(L, index);
+    if (!std::isfinite(value) || std::fabs(value) > 1e6) luaL_error(L, "%s must be a finite number", what);
+    return static_cast<float>(value);
+}
+plugin_ui::Vec3 point(lua_State* L, int index, const char* what) {
+    const float* v = luaL_checkvector(L, index);
+    for (int i = 0; i < 3; ++i)
+        if (!std::isfinite(v[i]) || std::fabs(v[i]) > 1e6f) luaL_error(L, "%s must be a finite position", what);
+    return {v[0], v[1], v[2]};
+}
+
+// "#RRGGBB", "#RRGGBBAA" or 0xRRGGBBAA, as ImGui's 0xAABBGGRR.
+std::uint32_t colour_of(lua_State* L, int index) {
+    std::uint32_t rgba = 0;
+    if (lua_type(L, index) == LUA_TSTRING) {
+        std::size_t length = 0;
+        const char* text = lua_tolstring(L, index, &length);
+        const std::string_view hex(text, length);
+        if ((length != 7 && length != 9) || hex[0] != '#') luaL_error(L, "a colour is \"#RRGGBB\" or \"#RRGGBBAA\"");
+        const auto [end, error] = std::from_chars(hex.data() + 1, hex.data() + length, rgba, 16);
+        if (error != std::errc{} || end != hex.data() + length) luaL_error(L, "a colour is \"#RRGGBB\" or \"#RRGGBBAA\"");
+        if (length == 7) rgba = rgba << 8 | 0xff;
+    } else {
+        const double value = luaL_checknumber(L, index);
+        if (!(value >= 0 && value <= 4294967295.0) || value != std::floor(value)) luaL_error(L, "a colour number is 0xRRGGBBAA");
+        rgba = static_cast<std::uint32_t>(value);
+    }
+    const std::uint32_t r = rgba >> 24, g = (rgba >> 16) & 0xff, b = (rgba >> 8) & 0xff, a = rgba & 0xff;
+    return r | g << 8 | b << 16 | a << 24;
+}
+// A style table: colour, size, thickness, fill, rounding, align ("left", "centre", "right"), shadow.
+plugin_ui::Style style_of(lua_State* L, int index) {
+    plugin_ui::Style style;
+    if (lua_isnoneornil(L, index)) return style;
+    luaL_checktype(L, index, LUA_TTABLE);
+    index = lua_absindex(L, index);
+    const auto field = [&](const char* name) { return lua_getfield(L, index, name) != LUA_TNIL; };
+    if (field("colour") || (lua_pop(L, 1), field("color"))) style.colour = colour_of(L, -1);
+    lua_pop(L, 1);
+    if (field("size")) style.size = std::clamp(finite(L, -1, "size"), 4.0f, 200.0f);
+    lua_pop(L, 1);
+    if (field("thickness")) style.thickness = std::clamp(finite(L, -1, "thickness"), 0.5f, 40.0f);
+    lua_pop(L, 1);
+    if (field("rounding")) style.rounding = std::clamp(finite(L, -1, "rounding"), 0.0f, 200.0f);
+    lua_pop(L, 1);
+    if (field("fill")) style.fill = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    if (field("shadow")) style.shadow = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    if (field("align")) {
+        const std::string align = luaL_checkstring(L, -1);
+        if (align == "left") style.align = 0;
+        else if (align == "centre" || align == "center") style.align = 1;
+        else if (align == "right") style.align = 2;
+        else luaL_error(L, "align is \"left\", \"centre\" or \"right\"");
+    }
+    lua_pop(L, 1);
+    return style;
+}
+const plugin_ui::Action* pending(Plugin& plugin, const std::vector<plugin_ui::Action>& actions, const std::string& panel,
+                                 const std::string& widget) {
+    (void)plugin;
+    const auto found = std::find_if(actions.rbegin(), actions.rend(),
+        [&](const auto& action) { return action.panel == panel && action.widget == widget; });
+    return found == actions.rend() ? nullptr : &*found;
+}
+}
+
+struct UiApi {
+    // ---- overlay: drawing ------------------------------------------------------------------
+    static Plugin& drawing(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        if (!plugin.drawing_) luaL_error(L, "drawing is only inside a draw handler: reskate.on(\"draw\", function(d) ... end)");
+        return plugin;
+    }
+    static void add(lua_State* L, Plugin& plugin, plugin_ui::Shape shape) {
+        plugin.shape_text_ += shape.text.size();
+        if (plugin.shapes_.size() >= plugin.limits_.shapes || plugin.shape_text_ > plugin.limits_.shape_text_bytes) {
+            if (!std::exchange(plugin.shapes_warned_, true))
+                plugin.log(LogLevel::warn, "more than " + std::to_string(plugin.limits_.shapes) + " shapes in a frame: the rest are left out");
+            return;
+        }
+        (void)L;
+        plugin.shapes_.push_back(std::move(shape));
+    }
+    static int text_shape(lua_State* L, plugin_ui::Shape::Kind kind) {
+        auto& plugin = drawing(L);
+        plugin_ui::Shape shape{kind, {point(L, 2, "the text's place")}, 0, checked_text(L, 3, 500, "a drawn text"), style_of(L, 4)};
+        add(L, plugin, std::move(shape));
+        return 0;
+    }
+    static int two_points(lua_State* L, plugin_ui::Shape::Kind kind) {
+        auto& plugin = drawing(L);
+        add(L, plugin, {kind, {point(L, 2, "a shape's first point"), point(L, 3, "a shape's second point")}, 0, {}, style_of(L, 4)});
+        return 0;
+    }
+    static int circle_shape(lua_State* L, plugin_ui::Shape::Kind kind) {
+        auto& plugin = drawing(L);
+        const float radius = finite(L, 3, "the radius");
+        if (radius < 0) luaL_argerror(L, 3, "a radius is 0 or more");
+        add(L, plugin, {kind, {point(L, 2, "the circle's centre")}, radius, {}, style_of(L, 4)});
+        return 0;
+    }
+    static int text(lua_State* L) { return text_shape(L, plugin_ui::Shape::Kind::text); }
+    static int world_text(lua_State* L) { return text_shape(L, plugin_ui::Shape::Kind::world_text); }
+    static int rect(lua_State* L) { return two_points(L, plugin_ui::Shape::Kind::rect); }
+    static int line(lua_State* L) { return two_points(L, plugin_ui::Shape::Kind::line); }
+    static int world_line(lua_State* L) { return two_points(L, plugin_ui::Shape::Kind::world_line); }
+    static int circle(lua_State* L) { return circle_shape(L, plugin_ui::Shape::Kind::circle); }
+    static int world_circle(lua_State* L) { return circle_shape(L, plugin_ui::Shape::Kind::world_circle); }
+    static int poly(lua_State* L) {
+        auto& plugin = drawing(L);
+        luaL_checktype(L, 2, LUA_TTABLE);
+        const int count = lua_objlen(L, 2);
+        if (count < 3 || count > 64) luaL_argerror(L, 2, "a polygon has 3 to 64 points");
+        plugin_ui::Shape shape{plugin_ui::Shape::Kind::poly, {}, 0, {}, style_of(L, 3)};
+        for (int i = 1; i <= count; ++i) {
+            lua_rawgeti(L, 2, i);
+            shape.points.push_back(point(L, -1, "a polygon's point"));
+            lua_pop(L, 1);
+        }
+        add(L, plugin, std::move(shape));
+        return 0;
+    }
+    static int size(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "overlay", "the draw size");
+        const auto display = plugin.services_.display();
+        lua_pushvector(L, display[0], display[1], 0);
+        return 1;
+    }
+    static int world_to_screen(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "overlay", "world_to_screen");
+        const auto on = plugin.services_.world_to_screen(point(L, 2, "the world position"));
+        if (on) lua_pushvector(L, (*on)[0], (*on)[1], (*on)[2]);
+        else lua_pushnil(L);
+        return 1;
+    }
+    // overlay: a toast, ReSkate's notices in the top left. Three in 5 s; false past them.
+    static int toast(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "overlay", "reskate.ui.toast");
+        const auto message = checked_text(L, 1, 200, "a toast");
+        const std::string level = luaL_optstring(L, 2, "info");
+        if (level != "info" && level != "warn" && level != "error") luaL_argerror(L, 2, "the level is \"info\", \"warn\" or \"error\"");
+        const double now = plugin.services_.now_ms();
+        std::erase_if(plugin.toasts_, [&](double at) { return now - at >= 5000; });
+        if (static_cast<int>(plugin.toasts_.size()) >= plugin.limits_.toasts) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        plugin.toasts_.push_back(now);
+        plugin.services_.toast(plugin.id(), level == "error" ? LogLevel::error : level == "warn" ? LogLevel::warn : LogLevel::info, message);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    // ---- menu: panels ----------------------------------------------------------------------
+    static int panel(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "menu", "reskate.menu.panel");
+        const auto title = checked_text(L, 1, 40, "a panel's title");
+        luaL_checktype(L, 2, LUA_TFUNCTION);
+        if (title.empty()) luaL_argerror(L, 1, "a panel needs a title");
+        if (plugin.panels_.size() >= plugin.limits_.panels) luaL_error(L, "more than %d panels", static_cast<int>(plugin.limits_.panels));
+        for (const auto& entry : plugin.panels_)
+            if (entry.title == title) luaL_error(L, "the panel \"%s\" is there already", title.c_str());
+        lua_pushvalue(L, 2);
+        plugin.panels_.push_back({title, lua_ref(L, -1)});
+        lua_pop(L, 1);
+        return 0;
+    }
+    static Plugin& building(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        if (!plugin.building_) luaL_error(L, "widgets are only made inside a panel's function");
+        if (plugin.building_->widgets.size() >= plugin.limits_.widgets)
+            luaL_error(L, "a panel has at most %d widgets", static_cast<int>(plugin.limits_.widgets));
+        return plugin;
+    }
+    static std::string widget_id(lua_State* L, Plugin& plugin, int index) {
+        const auto id = checked_text(L, index, 32, "a widget's id");
+        if (id.empty()) luaL_argerror(L, index, "a widget needs an id");
+        for (const auto& widget : plugin.building_->widgets)
+            if (widget.id == id) luaL_error(L, "two widgets in one panel have the id \"%s\"", id.c_str());
+        return id;
+    }
+    static int plain(lua_State* L, plugin_ui::Widget::Kind kind) {
+        auto& plugin = building(L);
+        plugin_ui::Widget widget{kind};
+        if (kind != plugin_ui::Widget::Kind::separator) widget.text = checked_text(L, 2, 300, "a widget's text");
+        plugin.building_->widgets.push_back(std::move(widget));
+        return 0;
+    }
+    static int heading(lua_State* L) { return plain(L, plugin_ui::Widget::Kind::heading); }
+    static int label(lua_State* L) { return plain(L, plugin_ui::Widget::Kind::label); }
+    static int separator(lua_State* L) { return plain(L, plugin_ui::Widget::Kind::separator); }
+    // Each returns its value: what the player set since the last build, else what it was given.
+    static int button(lua_State* L) {
+        auto& plugin = building(L);
+        plugin_ui::Widget widget{plugin_ui::Widget::Kind::button, widget_id(L, plugin, 2), checked_text(L, 3, 60, "a button's text")};
+        const bool pressed = pending(plugin, plugin.pending_, plugin.building_->title, widget.id) != nullptr;
+        plugin.building_->widgets.push_back(std::move(widget));
+        lua_pushboolean(L, pressed);
+        return 1;
+    }
+    static int toggle(lua_State* L) {
+        auto& plugin = building(L);
+        plugin_ui::Widget widget{plugin_ui::Widget::Kind::toggle, widget_id(L, plugin, 2), checked_text(L, 3, 60, "a toggle's text")};
+        widget.on = lua_toboolean(L, 4) != 0;
+        if (const auto* action = pending(plugin, plugin.pending_, plugin.building_->title, widget.id)) widget.on = action->on;
+        const bool on = widget.on;
+        plugin.building_->widgets.push_back(std::move(widget));
+        lua_pushboolean(L, on);
+        return 1;
+    }
+    static int slider(lua_State* L) {
+        auto& plugin = building(L);
+        plugin_ui::Widget widget{plugin_ui::Widget::Kind::slider, widget_id(L, plugin, 2), checked_text(L, 3, 60, "a slider's text")};
+        widget.minimum = finite(L, 5, "the minimum");
+        widget.maximum = finite(L, 6, "the maximum");
+        if (!(widget.maximum > widget.minimum)) luaL_argerror(L, 6, "the maximum must be above the minimum");
+        widget.value = finite(L, 4, "the value");
+        if (const auto* action = pending(plugin, plugin.pending_, plugin.building_->title, widget.id)) widget.value = action->value;
+        widget.value = std::clamp(widget.value, widget.minimum, widget.maximum);
+        const float value = widget.value;
+        plugin.building_->widgets.push_back(std::move(widget));
+        lua_pushnumber(L, value);
+        return 1;
+    }
+    static int dropdown(lua_State* L) {
+        auto& plugin = building(L);
+        plugin_ui::Widget widget{plugin_ui::Widget::Kind::dropdown, widget_id(L, plugin, 2), checked_text(L, 3, 60, "a dropdown's text")};
+        luaL_checktype(L, 4, LUA_TTABLE);
+        const int count = lua_objlen(L, 4);
+        if (count < 1 || count > 32) luaL_argerror(L, 4, "a dropdown has 1 to 32 choices");
+        for (int i = 1; i <= count; ++i) {
+            lua_rawgeti(L, 4, i);
+            widget.choices.push_back(checked_text(L, -1, 60, "a choice"));
+            lua_pop(L, 1);
+        }
+        widget.chosen = static_cast<int>(luaL_optinteger(L, 5, 1));
+        if (const auto* action = pending(plugin, plugin.pending_, plugin.building_->title, widget.id)) widget.chosen = action->chosen;
+        widget.chosen = std::clamp(widget.chosen, 1, count);
+        const int chosen = widget.chosen;
+        plugin.building_->widgets.push_back(std::move(widget));
+        lua_pushinteger(L, chosen);
+        return 1;
+    }
+
+    // ---- audio.ui ----------------------------------------------------------------------------
+    static int play_ui(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "audio.ui", "reskate.audio.play_ui");
+        const std::string name = luaL_checkstring(L, 1);
+        const double now = plugin.services_.now_ms();
+        if (now - plugin.sound_second_ >= 1000) {
+            plugin.sound_second_ = now;
+            plugin.sounds_ = 0;
+        }
+        if (++plugin.sounds_ > plugin.limits_.sounds_per_second) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        if (!plugin.services_.ui_sound(name))
+            luaL_error(L, "there is no menu sound \"%s\": select, cancel, navigate, toggle or tab", name.c_str());
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    // ---- mods.read ---------------------------------------------------------------------------
+    static int installed(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "mods.read", "reskate.mods.installed");
+        std::string wanted = luaL_checkstring(L, 1);
+        const auto lower = [](std::string text) {
+            for (auto& c : text) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+            return text;
+        };
+        wanted = lower(wanted);
+        for (const auto& mod : plugin.services_.mods())
+            if (lower(mod.folder) == wanted || lower(mod.title) == wanted) {
+                lua_pushstring(L, mod.on ? "on" : "off");
+                return 1;
+            }
+        lua_pushnil(L);
+        return 1;
+    }
+    static int mods_list(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "mods.read", "reskate.mods.list");
+        const auto mods = plugin.services_.mods();
+        lua_createtable(L, static_cast<int>(mods.size()), 0);
+        for (std::size_t i = 0; i < mods.size(); ++i) {
+            lua_createtable(L, 0, 3);
+            lua_pushlstring(L, mods[i].folder.data(), mods[i].folder.size());
+            lua_setfield(L, -2, "folder");
+            lua_pushlstring(L, mods[i].title.data(), mods[i].title.size());
+            lua_setfield(L, -2, "title");
+            lua_pushboolean(L, mods[i].on);
+            lua_setfield(L, -2, "on");
+            lua_rawseti(L, -2, static_cast<int>(i + 1));
+        }
+        return 1;
+    }
+
+    // ---- session.read --------------------------------------------------------------------------
+    static const SessionState& session(lua_State* L, const char* what) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "session.read", what);
+        return plugin.services_.session();
+    }
+    static int active(lua_State* L) {
+        lua_pushboolean(L, session(L, "reskate.session.active").active);
+        return 1;
+    }
+    static int dedicated(lua_State* L) {
+        lua_pushboolean(L, session(L, "reskate.session.is_dedicated").dedicated);
+        return 1;
+    }
+    static int players(lua_State* L) {
+        const auto& s = session(L, "reskate.session.players");
+        lua_createtable(L, static_cast<int>(s.players.size()), 0);
+        for (std::size_t i = 0; i < s.players.size(); ++i) {
+            push_player(L, s.players[i]);
+            lua_rawseti(L, -2, static_cast<int>(i + 1));
+        }
+        return 1;
+    }
+    static int find_player(lua_State* L, const char* what, bool SessionPlayer::*flag) {
+        const auto& s = session(L, what);
+        for (const auto& player : s.players)
+            if (player.*flag) {
+                push_player(L, player);
+                return 1;
+            }
+        lua_pushnil(L);
+        return 1;
+    }
+    static int me(lua_State* L) { return find_player(L, "reskate.session.me", &SessionPlayer::me); }
+    static int host(lua_State* L) { return find_player(L, "reskate.session.host", &SessionPlayer::host); }
+
+    // ---- net.session ---------------------------------------------------------------------------
+    // send(to, message): to is "all", a player's id, or a player; the message a string or buffer.
+    static int send(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "net.session", "reskate.net.send");
+        std::uint64_t to = 0;
+        if (lua_istable(L, 1)) {
+            lua_getfield(L, 1, "id");
+            const std::string id = luaL_checkstring(L, -1);
+            lua_pop(L, 1);
+            if (std::from_chars(id.data(), id.data() + id.size(), to).ec != std::errc{} || !to) luaL_argerror(L, 1, "not a player");
+        } else {
+            const std::string text = luaL_checkstring(L, 1);
+            if (text != "all" && (std::from_chars(text.data(), text.data() + text.size(), to).ec != std::errc{} || !to))
+                luaL_argerror(L, 1, "send to \"all\", a player's id, or a player");
+        }
+        std::string payload;
+        if (lua_isbuffer(L, 2)) {
+            std::size_t length = 0;
+            const void* bytes = lua_tobuffer(L, 2, &length);
+            payload.assign(static_cast<const char*>(bytes), length);
+        } else {
+            std::size_t length = 0;
+            const char* text = luaL_checklstring(L, 2, &length);
+            payload.assign(text, length);
+        }
+        if (payload.size() > plugin.limits_.message_bytes)
+            luaL_error(L, "a message is at most %d bytes", static_cast<int>(plugin.limits_.message_bytes));
+        const double now = plugin.services_.now_ms();
+        if (now - plugin.message_second_ >= 1000) {
+            plugin.message_second_ = now;
+            plugin.message_bytes_ = 0;
+        }
+        plugin.message_bytes_ += payload.size() + wire::header;
+        if (plugin.message_bytes_ > plugin.limits_.message_bytes_per_second)
+            luaL_error(L, "more than %d KB of messages in a second", static_cast<int>(plugin.limits_.message_bytes_per_second >> 10));
+        lua_pushboolean(L, plugin.services_.send(plugin.channel(), to, payload));
+        return 1;
+    }
+    static void install(Plugin& plugin, lua_State* L);
+};
+
+void install_ui_api(Plugin& plugin, lua_State* L) { UiApi::install(plugin, L); }
+
+void UiApi::install(Plugin& plugin, lua_State* L) {
+    // The reskate table is on top of the stack.
+    const auto readonly = [&] { lua_setreadonly(L, -1, true); };
+
+    lua_createtable(L, 0, 10);
+    set_function(L, "text", UiApi::text);
+    set_function(L, "rect", UiApi::rect);
+    set_function(L, "line", UiApi::line);
+    set_function(L, "circle", UiApi::circle);
+    set_function(L, "poly", UiApi::poly);
+    set_function(L, "world_text", UiApi::world_text);
+    set_function(L, "world_line", UiApi::world_line);
+    set_function(L, "world_circle", UiApi::world_circle);
+    set_function(L, "size", UiApi::size);
+    set_function(L, "world_to_screen", UiApi::world_to_screen);
+    readonly();
+    plugin.draw_table_ = lua_ref(L, -1);
+    lua_pop(L, 1);
+
+    lua_createtable(L, 0, 8);
+    set_function(L, "heading", UiApi::heading);
+    set_function(L, "label", UiApi::label);
+    set_function(L, "separator", UiApi::separator);
+    set_function(L, "button", UiApi::button);
+    set_function(L, "toggle", UiApi::toggle);
+    set_function(L, "slider", UiApi::slider);
+    set_function(L, "dropdown", UiApi::dropdown);
+    readonly();
+    plugin.ui_table_ = lua_ref(L, -1);
+    lua_pop(L, 1);
+
+    lua_createtable(L, 0, 1);
+    set_function(L, "toast", UiApi::toast);
+    readonly();
+    lua_setfield(L, -2, "ui");
+
+    lua_createtable(L, 0, 1);
+    set_function(L, "panel", UiApi::panel);
+    readonly();
+    lua_setfield(L, -2, "menu");
+
+    lua_createtable(L, 0, 1);
+    set_function(L, "play_ui", UiApi::play_ui);
+    readonly();
+    lua_setfield(L, -2, "audio");
+
+    lua_createtable(L, 0, 2);
+    set_function(L, "installed", UiApi::installed);
+    lua_pushcfunction(L, UiApi::mods_list, "list");
+    lua_setfield(L, -2, "list");
+    readonly();
+    lua_setfield(L, -2, "mods");
+
+    lua_createtable(L, 0, 5);
+    set_function(L, "active", UiApi::active);
+    lua_pushcfunction(L, UiApi::dedicated, "is_dedicated");
+    lua_setfield(L, -2, "is_dedicated");
+    set_function(L, "players", UiApi::players);
+    set_function(L, "me", UiApi::me);
+    set_function(L, "host", UiApi::host);
+    readonly();
+    lua_setfield(L, -2, "session");
+
+    lua_createtable(L, 0, 1);
+    set_function(L, "send", UiApi::send);
+    readonly();
+    lua_setfield(L, -2, "net");
+}
+}

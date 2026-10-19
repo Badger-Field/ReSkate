@@ -41,12 +41,16 @@ std::string check_package_files(const std::filesystem::path& directory) {
     return {};
 }
 
-std::vector<Candidate> discover(const std::filesystem::path& data_root, FileChecks& checks) {
+std::vector<Candidate> discover(const std::filesystem::path& data_root, FileChecks& checks, std::vector<ModInfo>* mods) {
     std::vector<Candidate> result;
     const auto list = mods::scan_mods(data_root);
     // A mods.json the game cannot read loads no mod at all, plugins included.
     if (!list.present || !list.issue.empty()) return result;
     FileChecks seen;
+    if (mods) {
+        mods->clear();
+        for (const auto& entry : list.entries) mods->push_back({entry.mod.name, entry.mod.title, entry.enabled});
+    }
     for (const auto& entry : list.entries) {
         if (!entry.enabled) continue;
         const auto& directory = entry.mod.directory;

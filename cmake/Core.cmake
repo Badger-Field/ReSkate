@@ -141,6 +141,7 @@ add_library(dingosdk_plugins STATIC
     Extension/Plugins/plugin_manifest.cpp
     Extension/Plugins/plugin_vm.cpp
     Extension/Plugins/plugin_api.cpp
+    Extension/Plugins/plugin_api_ui.cpp
     Extension/Plugins/plugin_host.cpp)
 target_link_libraries(dingosdk_plugins PUBLIC dingosdk_json dingosdk_console_core PRIVATE dingosdk_luau)
 if(WIN32)

@@ -86,6 +86,9 @@ void all_addons(SkateMenu& menu, const Model& model) {
     next();
     addon_tile(menu, "addon-music", "MUSIC", "Spotify, YouTube Music, your own files and online radio through the game's music player.",
                nullptr, 0, addon_music);
+    next();
+    addon_tile(menu, "addon-plugins", "PLUGINS", "What the plugins in your Mods folder add: their panels and settings.", nullptr, 0,
+               addon_plugins);
 }
 }
 
@@ -100,7 +103,7 @@ void addons_page(SkateMenu& menu, const Model& model, const CallbacksV3& callbac
     // (LT / RT on a controller), without the hidden ones.
     if (menu.fullscreen_drawn) {
         static constexpr std::array<const char*, addon_count> names{"ALL ADDONS", "DRONE", "BOARD BREAK", "ROAD RASH", "HALL OF MEAT",
-                                                                    "GRIND EXITS", "MUSIC"};
+                                                                    "GRIND EXITS", "MUSIC", "PLUGINS"};
         std::vector<const char*> labels;
         std::vector<int> shown;
         for (int a = 0; a < addon_count; ++a)
@@ -119,6 +122,7 @@ void addons_page(SkateMenu& menu, const Model& model, const CallbacksV3& callbac
         else if (menu.addon == addon_road_rash) road_rash_addon(menu, model, callbacks);
         else if (menu.addon == addon_hall_of_meat) hall_of_meat_addon(menu, model, callbacks);
         else if (menu.addon == addon_grind_exits) grind_exits_addon(menu, model, callbacks);
+        else if (menu.addon == addon_plugins) plugins_addon(menu);
         else all_addons(menu, model);
         ImGui::EndChild();
         break;

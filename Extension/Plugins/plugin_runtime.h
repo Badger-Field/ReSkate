@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // Plugins in the game (Extension/Plugins): Luau scripts in mods, each in its own sandboxed VM
 // (plugin_vm.h), run on the client tick. A thread looks for plugins every 2 s, so a mod switched
@@ -18,6 +19,10 @@ void set_level(std::string_view level) noexcept;
 // Runs a plugin's console command when the text starts with one. False when none matched, and
 // the text goes to ReSkate's own commands.
 bool run_console(const std::string& text) noexcept;
+// The session's throwdown packets that are plugin messages (plugin_wire.h), and those plugins send.
+// Client thread, from the session's tick.
+void receive_message(std::uint64_t sender, const std::vector<std::uint8_t>& bytes) noexcept;
+std::vector<std::vector<std::uint8_t>> take_outgoing() noexcept;
 // The `plugin` console commands.
 std::string describe();
 std::string list_commands();

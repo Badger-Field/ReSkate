@@ -132,6 +132,8 @@ void addons_page(SkateMenu&, const Model&, const CallbacksV3&);
 // leaving the game's reply off the page.
 int time_of_day_shown(const Model&);
 void set_time_of_day(SkateMenu&, const Model&, const CallbacksV3&, int next, bool quiet);
+// The PLUGINS addon: every plugin's menu panels (plugins_page.cpp).
+void plugins_addon(SkateMenu& menu);
 // The fullscreen menu's first page: a tile for each part of the menu (skate_menu_addons.cpp).
 void home_page(SkateMenu&, const Model&, const CallbacksV3&);
 // Shuffle, on the Music addon (skate_menu_settings.cpp).
@@ -145,7 +147,7 @@ enum Page {
     page_home, page_map, page_build, page_skater, page_sandbox, page_addons, page_online, page_progress, page_mods,
     page_settings, page_developer, page_count
 };
-enum Addon { addon_all, addon_drone, addon_board_break, addon_road_rash, addon_hall_of_meat, addon_grind_exits, addon_music, addon_count };
+enum Addon { addon_all, addon_drone, addon_board_break, addon_road_rash, addon_hall_of_meat, addon_grind_exits, addon_music, addon_plugins, addon_count };
 void open_page(SkateMenu&, int page, int addon = -1);
 // An addon made from an official mod whose feature did not start (the mod is turned off in the
 // launcher, or this game build cannot run it) is listed nowhere in the menu (skate_menu_addons.cpp).

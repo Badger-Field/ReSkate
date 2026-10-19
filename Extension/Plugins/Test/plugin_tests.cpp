@@ -3,6 +3,7 @@
 #include "Extension/Plugins/plugin_discovery.h"
 #include "Extension/Plugins/plugin_host.h"
 #include "Extension/Plugins/plugin_manifest.h"
+#include "Extension/Plugins/plugin_wire.h"
 #include "Engine/Vfs/mod_list.h"
 #include <algorithm>
 #include <chrono>
@@ -12,6 +13,7 @@
 #include <stdexcept>
 
 using namespace dingosdk::plugins;
+namespace plugin_ui = dingosdk::plugin_ui;
 namespace {
 void check(bool value, const std::string& message) { if (!value) throw std::runtime_error(message); }
 
@@ -33,6 +35,38 @@ struct TestEnvironment final : Environment {
     std::optional<SkaterState> skater() override { return local_skater; }
     std::optional<ScoreState> score_now;
     std::optional<ScoreState> score() override { return score_now; }
+    std::vector<std::string> toasts, sounds;
+    std::vector<ModInfo> mod_list;
+    SessionState session_now;
+    std::vector<std::vector<std::uint8_t>> sent;
+    std::vector<Received> incoming;
+    std::vector<plugin_ui::Layer> layers;
+    std::vector<plugin_ui::Panel> panels;
+    std::vector<plugin_ui::Action> actions;
+    bool panels_open{};
+    void toast(std::string_view plugin, LogLevel, std::string_view text) override { toasts.push_back(std::string(plugin) + ": " + std::string(text)); }
+    bool ui_sound(std::string_view name) override {
+        if (name != "select" && name != "cancel" && name != "navigate" && name != "toggle" && name != "tab") return false;
+        sounds.emplace_back(name);
+        return true;
+    }
+    std::vector<ModInfo> mods() override { return mod_list; }
+    SessionState session() override { return session_now; }
+    bool send_message(std::vector<std::uint8_t> bytes) override {
+        sent.push_back(std::move(bytes));
+        return true;
+    }
+    std::vector<Received> take_messages() override { return std::exchange(incoming, {}); }
+    // A camera at the origin looking down -Z, as the game's matrix has it: rows right, up, back.
+    std::optional<Vec3> world_to_screen(const Vec3& p) override {
+        if (p[2] >= -0.05f) return std::nullopt;
+        const float depth = -p[2];
+        return Vec3{960 + p[0] * 1000 / depth, 540 - p[1] * 1000 / depth, depth};
+    }
+    void publish_layers(std::vector<plugin_ui::Layer> value) override { layers = std::move(value); }
+    bool panels_shown() override { return panels_open; }
+    void publish_panels(std::vector<plugin_ui::Panel> value) override { panels = std::move(value); }
+    std::vector<plugin_ui::Action> take_actions() override { return std::exchange(actions, {}); }
     Teleport teleport(const Vec3& position, float heading) override {
         if (teleport_forbidden) return Teleport::forbidden;
         if (teleport_unavailable || !local_skater) return Teleport::unavailable;
@@ -504,6 +538,190 @@ void tricks_reach_plugins_that_ask_for_them() {
     running(host, "tricks", environment);
 }
 
+void plugins_draw_on_the_overlay() {
+    TestEnvironment environment;
+    Host host(environment, Side::client);
+    host.apply({script("painter", R"(
+        local saved = nil
+        reskate.on("draw", function(d)
+            saved = d
+            d:text(vector.create(10, 20, 0), "hello", {colour = "#ff8000", size = 24, align = "centre"})
+            d:rect(vector.create(0, 0, 0), vector.create(100, 50, 0), {colour = 0x00ff00ff, fill = true, rounding = 4})
+            d:line(vector.create(0, 0, 0), vector.create(5, 5, 0))
+            d:circle(vector.create(50, 50, 0), 10)
+            d:poly({vector.create(0, 0, 0), vector.create(10, 0, 0), vector.create(0, 10, 0)}, {fill = true})
+            d:world_text(vector.create(0, 1, -10), "over there")
+            d:world_line(vector.create(0, 0, -5), vector.create(1, 0, -5), {thickness = 3})
+            d:world_circle(vector.create(0, 0, -5), 2)
+            local on = d:world_to_screen(vector.create(1, 0, -10))
+            assert(on and math.abs(on.x - 1060) < 0.01 and math.abs(on.z - 10) < 0.01, "world_to_screen")
+            assert(d:world_to_screen(vector.create(0, 0, 5)) == nil, "behind the camera")
+            assert(d:size().x == 1920 and d:size().y == 1080)
+            assert(not pcall(d.text, d, vector.create(0, 0, 0), "x", {colour = "red"}), "a colour by name")
+            assert(not pcall(d.text, d, vector.create(0 / 0, 0, 0), "x"), "NaN")
+            assert(not pcall(d.poly, d, {vector.create(0, 0, 0)}), "a polygon of one point")
+            assert(not pcall(d.text, d, vector.create(0, 0, 0), string.rep("x", 600)), "a long text")
+        end)
+        reskate.console.command("outside", "x", function()
+            local ok, err = pcall(saved.text, saved, vector.create(0, 0, 0), "x")
+            reskate.log("outside " .. tostring(ok) .. " " .. tostring(err):match("only inside a draw handler"))
+        end)
+        reskate.console.command("toasts", "x", function()
+            local shown = 0
+            for i = 1, 10 do if reskate.ui.toast("toast " .. i) then shown += 1 end end
+            reskate.log("toasts " .. shown)
+        end)
+    )", R"("console", "overlay")"), script("unseen", R"(
+        local ok, err = pcall(reskate.on, "draw", function() end)
+        assert(not ok and err:find("overlay"), err)
+        ok, err = pcall(reskate.ui.toast, "x")
+        assert(not ok and err:find("overlay"), err)
+        reskate.log("unseen refused")
+    )")});
+    running(host, "painter", environment);
+    check(environment.logged("unseen refused"), "Drawing needs overlay\n" + environment.all());
+    ticks(host, environment, 1);
+    running(host, "painter", environment);
+    check(environment.layers.size() == 1 && environment.layers[0].plugin == "painter" && environment.layers[0].shapes.size() == 8,
+          "Its shapes are handed to the overlay each tick\n" + environment.all());
+    const auto& first = environment.layers[0].shapes[0];
+    check(first.kind == plugin_ui::Shape::Kind::text && first.text == "hello" && first.style.colour == 0xff0080ff &&
+          first.style.size == 24 && first.style.align == 1, "with their style (colours as ImGui keeps them)");
+    check(environment.layers[0].shapes[1].style.colour == 0xff00ff00 && environment.layers[0].shapes[1].style.fill, "a colour number too");
+    host.run_console("outside");
+    check(environment.logged("outside false only inside a draw handler"), "Drawing outside a draw handler is refused\n" + environment.all());
+    host.run_console("toasts");
+    check(environment.logged("toasts 3") && environment.toasts.size() == 3 && environment.toasts[0] == "painter: toast 1", "Three toasts in 5 s");
+    environment.now += 5000;
+    host.run_console("toasts");
+    check(environment.toasts.size() == 6, "and three more after");
+}
+
+void plugins_have_menu_panels() {
+    TestEnvironment environment;
+    Host host(environment, Side::client);
+    host.apply({script("panels", R"(
+        local state = {on = false, speed = 5, mode = 1, presses = 0}
+        reskate.menu.panel("Settings", function(ui)
+            ui:heading("Settings")
+            ui:label("Some words")
+            ui:separator()
+            if ui:button("go", "Go") then state.presses += 1 end
+            state.on = ui:toggle("on", "Switch", state.on)
+            state.speed = ui:slider("speed", "Speed", state.speed, 0, 10)
+            state.mode = ui:dropdown("mode", "Mode", {"one", "two", "three"}, state.mode)
+            assert(not pcall(ui.button, ui, "go", "Again"), "two widgets with one id")
+        end)
+        assert(not pcall(reskate.menu.panel, "Settings", function() end), "two panels with one title")
+        reskate.console.command("state", "x", function()
+            reskate.log(string.format("state %d %s %.1f %d", state.presses, tostring(state.on), state.speed, state.mode))
+        end)
+    )", R"("console", "menu")")});
+    running(host, "panels", environment);
+    ticks(host, environment, 2);
+    check(environment.panels.empty(), "Panels are built only while the PLUGINS tab shows them");
+    environment.panels_open = true;
+    ticks(host, environment, 10);
+    check(environment.panels.size() == 1 && environment.panels[0].title == "Settings" && environment.panels[0].widgets.size() == 7,
+          "Then its panel is built\n" + environment.all());
+    using A = plugin_ui::Action;
+    environment.actions = {A{"panels", "Settings", "go"}, A{"panels", "Settings", "on", true}, A{"panels", "Settings", "speed", false, 99},
+                           A{"panels", "Settings", "mode", false, 0, 3}, A{"someone", "Settings", "go"}};
+    ticks(host, environment, 10);
+    host.run_console("state");
+    check(environment.logged("state 1 true 10.0 3"), "What the player did reaches it, the slider held in its range\n" + environment.all());
+    const auto& widgets = environment.panels[0].widgets;
+    check(widgets[4].on && widgets[5].value == 10 && widgets[6].chosen == 3 && widgets[6].choices.size() == 3, "and shows in the next build");
+}
+
+void plugins_play_sounds_and_read_the_mods() {
+    TestEnvironment environment;
+    environment.mod_list = {{"Owner-Map", "A Map", true}, {"OldThing", "Old Thing", false}};
+    Host host(environment, Side::client);
+    host.apply({script("listener", R"(
+        reskate.console.command("sounds", "x", function()
+            local played = 0
+            for i = 1, 20 do if reskate.audio.play_ui("select") then played += 1 end end
+            reskate.log("played " .. played)
+            assert(not pcall(reskate.audio.play_ui, "explosion"), "a sound there is not")
+        end)
+        reskate.console.command("mods", "x", function()
+            reskate.log(string.format("mods %s %s %s %s %d", tostring(reskate.mods.installed("a map")), tostring(reskate.mods.installed("OWNER-MAP")),
+                tostring(reskate.mods.installed("Old Thing")), tostring(reskate.mods.installed("nothing")), #reskate.mods.list()))
+        end)
+    )", R"("console", "audio.ui", "mods.read")")});
+    host.run_console("sounds");
+    check(environment.logged("played 10") && environment.sounds.size() == 10, "Ten sounds a second\n" + environment.all());
+    host.run_console("mods");
+    check(environment.logged("mods on on off nil 2"), "Mods by folder or title, on or off\n" + environment.all());
+}
+
+// Two games in one session, each with the same plugin, passing messages through their hosts.
+void plugins_follow_the_session_and_message_each_other() {
+    TestEnvironment a, b;
+    a.session_now = {true, false, {{1, "Ann", true, true}, {2, "Bob", false, false}}};
+    b.session_now = {true, false, {{2, "Bob", true, false}, {1, "Ann", false, true}}};
+    const auto main = R"(
+        reskate.on("player_joined", function(p) reskate.log("joined " .. p.name .. " " .. p.id .. (p.me and " me" or "") .. (p.host and " host" or "")) end)
+        reskate.on("player_left", function(p) reskate.log("left " .. p.name) end)
+        reskate.on("message", function(from, text) reskate.log("from " .. from.name .. ": " .. text) end)
+        reskate.console.command("hello", "x", function(args)
+            local s = reskate.session
+            reskate.log(string.format("session %s %s %d me %s host %s", tostring(s.active()), tostring(s.is_dedicated()), #s.players(),
+                s.me().name, s.host().name))
+            assert(reskate.net.send(args[1] or "all", "hi from " .. s.me().name))
+        end)
+        reskate.console.command("alone", "x", function()
+            reskate.log("alone " .. tostring(reskate.net.send("all", "x")) .. " " .. tostring(reskate.session.active()) .. " " .. #reskate.session.players())
+        end)
+        reskate.console.command("flood", "x", function()
+            local ok, err = pcall(function() for i = 1, 10 do reskate.net.send("all", string.rep("x", 4000)) end end)
+            reskate.log("flood " .. tostring(err):match("more than %d+ KB") )
+            assert(not pcall(reskate.net.send, "all", string.rep("x", 5000)), "too big")
+            assert(not pcall(reskate.net.send, "nobody", "x"), "not a player")
+        end)
+    )";
+    // Each game's folder for it is named differently: the messages go by its manifest.json name.
+    auto first = package("chat-a", {{manifest_file, manifest(R"("console", "session.read", "net.session")")}, {"manifest.json", R"({"name": "Chatter"})"}, {"plugin/main.lua", main}});
+    auto second = package("chat-b", {{manifest_file, manifest(R"("console", "session.read", "net.session")")}, {"manifest.json", R"({"name": "Chatter"})"}, {"plugin/main.lua", main}});
+    auto other = package("other", {{manifest_file, manifest(R"("net.session")")}, {"manifest.json", R"({"name": "Other"})"}, {"plugin/main.lua",
+        R"(reskate.on("message", function(from, text) reskate.log("other heard " .. text) end))"}});
+    Host host_a(a, Side::client), host_b(b, Side::client);
+    host_a.apply({first});
+    host_b.apply({second, other});
+    ticks(host_a, a, 1);
+    ticks(host_b, b, 1);
+    check(a.logged("[chat-a] joined Ann 1 me host") && a.logged("[chat-a] joined Bob 2"), "Players in the session are heard\n" + a.all());
+    host_a.run_console("hello");
+    check(a.logged("session true false 2 me Ann host Ann"), "The session reads\n" + a.all());
+    check(a.sent.size() == 1 && wire::is_plugin(a.sent[0]), "A message goes out as a plugin message");
+    for (auto& bytes : a.sent) b.incoming.push_back({1, bytes});
+    a.sent.clear();
+    ticks(host_b, b, 1);
+    check(b.logged("[chat-b] from Ann: hi from Ann") && !b.logged("other heard"), "and reaches the same plugin only\n" + b.all());
+    host_a.run_console("hello 3");
+    for (auto& bytes : a.sent) b.incoming.push_back({1, bytes});
+    a.sent.clear();
+    ticks(host_b, b, 1);
+    check(std::count_if(b.logs.begin(), b.logs.end(), [](const auto& l) { return l.find("from Ann") != std::string::npos; }) == 1,
+          "A message for another player is not delivered here");
+    b.incoming.push_back({1, {0xD1, 1, 1, 2}});
+    b.incoming.push_back({1, {7, 7, 7}});
+    ticks(host_b, b, 1);
+    running(host_b, "chat-b", b);
+    host_a.run_console("flood");
+    check(a.logged("flood more than 16 KB"), "16 KB a second\n" + a.all());
+    a.session_now.players.pop_back();
+    ticks(host_a, a, 1);
+    check(a.logged("[chat-a] left Bob"), "A player who leaves is heard");
+    a.session_now = {};
+    ticks(host_a, a, 1);
+    a.now += 1000; // past the flood's second
+    host_a.run_console("alone");
+    check(a.logged("alone false false 0"), "Without a session nothing is sent\n" + a.all());
+    running(host_a, "chat-a", a);
+}
+
 void level_events_reach_plugins() {
     TestEnvironment environment;
     Host host(environment, Side::client);
@@ -596,6 +814,7 @@ std::string printed_lines(const TestEnvironment& environment) {
 void reskate_test_passes_its_own_checks() {
     TestEnvironment environment;
     std::filesystem::remove_all(scratch / "storage" / "reskate-test");
+    environment.mod_list = {{"reskate-test", "ReSkate_Test", true}};
     Host host(environment, Side::client);
     host.apply({contributed("reskate-test")});
     running(host, "reskate-test", environment);
@@ -603,7 +822,7 @@ void reskate_test_passes_its_own_checks() {
     check(host.run_console("ptest all"), "ptest is its command");
     ticks(host, environment, 120); // its later checks run on timers
     const auto output = printed_lines(environment);
-    check(output.find("ptest: 47 passed, 0 failed, 7 skipped") != std::string::npos &&
+    check(output.find("ptest: 55 passed, 0 failed, 9 skipped") != std::string::npos &&
           output.find("FAIL") == std::string::npos, "Every reskate-test check passes:\n" + output + environment.all());
     check(host.run_console("ptest echo a b") && environment.printed("ptest echo: a b"), "and its echo command answers");
     // With a skater on the ground, its skater checks run too.
@@ -622,6 +841,17 @@ void reskate_test_passes_its_own_checks() {
     environment.lines.clear();
     check(host.run_console("ptest tricks") && environment.printed("ptest: 3 passed, 0 failed, 1 skipped"),
           "and the tricks checks pass once one landed");
+    // Its panel on the PLUGINS tab, and its test HUD.
+    environment.panels_open = true;
+    ticks(host, environment, 10);
+    check(environment.panels.size() == 1 && environment.panels[0].title == "reskate-test" && environment.panels[0].widgets.size() == 8,
+          "Its panel is built while the PLUGINS tab shows");
+    environment.actions = {plugin_ui::Action{"reskate-test", "reskate-test", "press"}, plugin_ui::Action{"reskate-test", "reskate-test", "hud", true}};
+    ticks(host, environment, 10);
+    check(environment.panels[0].widgets[1].text.find("pressed 1 times") != std::string::npos && environment.sounds.size() >= 1,
+          "and answers its button with a sound");
+    check(!environment.layers.empty() && environment.layers[0].shapes.size() >= 6, "Its HUD toggle draws the test HUD");
+    check(host.run_console("ptest hud") && environment.printed("ptest hud: off"), "and ptest hud switches it");
     running(host, "reskate-test", environment);
 }
 
@@ -630,18 +860,24 @@ void reskate_hostile_is_stopped_or_refused_every_time() {
     Host host(environment, Side::client);
     host.apply({contributed("reskate-hostile")});
     running(host, "reskate-hostile", environment);
-    struct Case { const char* attack; bool stops; int ticks; bool trick = false; };
+    struct Case { const char* attack; bool stops; int ticks; bool trick = false; bool panels = false; };
     const Case cases[] = {
         {"loop", true, 0}, {"caught-loop", true, 0}, {"tick-loop", true, 1}, {"memory", true, 0},
         {"caught-memory", true, 0}, {"huge-string", true, 0}, {"buffer", true, 0}, {"coroutines", true, 0},
         {"errors", true, 10}, {"slow", true, 60 * 5}, {"log-flood", false, 1}, {"timers", false, 1},
-        {"recursion", false, 1}, {"escapes", false, 1}, {"teleport-spam", false, 1}, {"raycast-flood", false, 1}, {"trick-loop", true, 0, true},
+        {"recursion", false, 1}, {"escapes", false, 1}, {"teleport-spam", false, 1}, {"raycast-flood", false, 1}, {"trick-loop", true, 0, true}, {"draw-flood", false, 2}, {"toast-spam", false, 1},
+        {"sound-spam", false, 1}, {"message-flood", false, 1}, {"panel-loop", true, 2, false, true},
     };
     for (const auto& item : cases) {
         check(host.reload("reskate-hostile").find("reloaded") != std::string::npos, std::string("reloads before ") + item.attack);
         check(host.run_console(std::string("hostile ") + item.attack), item.attack);
         ticks(host, environment, item.ticks);
         if (item.trick) host.trick({TrickNews::Kind::landed, 100, 1});
+        if (item.panels) {
+            environment.panels_open = true;
+            ticks(host, environment, item.ticks);
+            environment.panels_open = false;
+        }
         const auto state = status_of(host, "reskate-hostile").state;
         check((state == "stopped") == item.stops, std::string(item.attack) + " left it " + state + "\n" + environment.all());
     }
@@ -672,6 +908,10 @@ int main() {
         a_plugin_reloads_when_its_files_change();
         the_skater_can_be_read_moved_and_the_world_probed();
         tricks_reach_plugins_that_ask_for_them();
+        plugins_draw_on_the_overlay();
+        plugins_have_menu_panels();
+        plugins_play_sounds_and_read_the_mods();
+        plugins_follow_the_session_and_message_each_other();
         level_events_reach_plugins();
         timers_run_when_due();
         a_package_with_a_program_or_on_the_wrong_side_is_not_loaded();
