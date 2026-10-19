@@ -2,14 +2,19 @@
 #include "plugin_discovery.h"
 #include "plugin_host.h"
 #include "Engine/Core/Log/logging.h"
+#include "Engine/Game/Multiplayer/session_tools.h"
 #include "Extension/Console/commands.h"
+#include "Extension/Profile/local_profile_runtime.h"
+#include "Extension/Trainer/trainer.h"
 #include <Windows.h>
 #include <ShlObj.h>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <format>
 #include <mutex>
+#include <numbers>
 #include <thread>
 
 namespace dingosdk::plugins {
@@ -34,6 +39,20 @@ public:
         const auto& commands = console::game_commands();
         return commands.find(word) || !commands.under(word).empty();
     }
+    // The trainer's telemetry of the local skater, published each tick. Its heading is 0 to 360
+    // degrees the same way round; plugins get -pi to pi.
+    std::optional<SkaterState> skater() override {
+        const auto t = trainer::telemetry();
+        if (!t.skater) return std::nullopt;
+        const float heading = std::remainder(t.heading * std::numbers::pi_v<float> / 180, 2 * std::numbers::pi_v<float>);
+        return SkaterState{t.position, heading, t.speed, t.vertical, t.airborne, t.air_time};
+    }
+    // As the console's tp: refused in a session whose host has turned teleporting (and noclip) off.
+    Teleport teleport(const Vec3& position, float heading) override {
+        if (!session_noclip_allowed()) return Teleport::forbidden;
+        return teleport_local_skater_heading(position, heading) ? Teleport::sent : Teleport::unavailable;
+    }
+    std::optional<Vec3> raycast(const Vec3& from, const Vec3& to) override { return local_surface_hit(from, to); }
 
 private:
     std::filesystem::path storage_;

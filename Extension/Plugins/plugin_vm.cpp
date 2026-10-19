@@ -296,6 +296,7 @@ void Plugin::fire(std::string_view event, const std::vector<std::string>& argume
 
 void Plugin::tick(double dt_ms) {
     if (state_ != State::running) return;
+    raycasts_ = 0;
     const double now = services_.now_ms();
     std::vector<int> due;
     for (const auto& [id, timer] : timers_)

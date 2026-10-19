@@ -1,6 +1,7 @@
 -- The test runner: each file in checks/ is a module of checks, and `ptest` runs them. A check
--- passes when its function returns without an error; a later check passes when it calls done(true)
--- in time. Only failures and the summary are printed, to stay under the 50 lines a second a plugin has.
+-- passes when its function returns without an error, and is skipped when it returns h.skip(why)
+-- (it needs something there is not now, such as a skater); a later check passes when it calls
+-- done(true) in time. Only failures and the summary are printed, to stay under the 50 lines a second a plugin has.
 local harness = {}
 local modules, order = {}, {}
 local running = nil
@@ -29,6 +30,11 @@ function harness.refused(fn, ...)
     return tostring(err)
 end
 
+local skip_mark = {}
+function harness.skip(why)
+    return {[skip_mark] = true, why = why}
+end
+
 function harness.names()
     return table.clone(order)
 end
@@ -53,7 +59,8 @@ local function finish(run)
         local tally = run.per[name]
         table.insert(parts, name .. " " .. tally.passed .. "/" .. tally.total)
     end
-    reskate.console.print("ptest: " .. run.passed .. " passed, " .. run.failed .. " failed (" .. table.concat(parts, ", ") .. ")")
+    local skipped = run.skipped > 0 and (", " .. run.skipped .. " skipped (" .. table.concat(run.skips, "; ") .. ")") or ""
+    reskate.console.print("ptest: " .. run.passed .. " passed, " .. run.failed .. " failed" .. skipped .. " (" .. table.concat(parts, ", ") .. ")")
 end
 
 local function record(run, name, title, ok, why)
@@ -72,7 +79,7 @@ function harness.run(names)
         reskate.console.print("ptest: a run is still going on")
         return
     end
-    local run = {names = names, passed = 0, failed = 0, pending = 0, failures = {}, per = {}}
+    local run = {names = names, passed = 0, failed = 0, skipped = 0, pending = 0, failures = {}, skips = {}, per = {}}
     running = run
     for _, name in names do
         run.per[name] = {passed = 0, total = #modules[name]}
@@ -94,7 +101,13 @@ function harness.run(names)
                 if not ok then done(false, err) end
             else
                 local ok, err = pcall(item.fn)
-                record(run, name, item.title, ok, err)
+                if ok and type(err) == "table" and err[skip_mark] then
+                    run.skipped += 1
+                    run.per[name].total -= 1
+                    table.insert(run.skips, name .. ": " .. item.title .. ": " .. err.why)
+                else
+                    record(run, name, item.title, ok, err)
+                end
             end
         end
     end

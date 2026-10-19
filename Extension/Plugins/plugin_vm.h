@@ -1,10 +1,12 @@
 #pragma once
 #include "plugin_manifest.h"
 #include "Engine/Core/Json/json.h"
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -35,7 +37,24 @@ struct Limits {
     std::size_t handlers = 256;         // per event
     std::size_t timers = 1024;
     std::size_t commands = 64;
+    int raycasts_per_tick = 64;
+    float raycast_metres = 1000;        // the longest ray
+    int teleports_per_second = 2;
 };
+
+// The game, as plugins see it (Environment, plugin_host.h, gives the host these).
+using Vec3 = std::array<float, 3>;
+struct SkaterState {
+    Vec3 position{};
+    // Radians about world up, -pi to pi: 0 faces +Z, pi/2 faces +X, and a higher heading is turned
+    // to the skater's left (checked in game). Teleports take it the same way.
+    float heading{};
+    float speed{};        // metres per second over the ground
+    float vertical{};     // metres per second, up
+    bool airborne{};
+    float air_time{};     // seconds into the jump going on
+};
+enum class Teleport { sent, unavailable, forbidden };
 
 // What a plugin's VM can reach outside itself. The host implements it.
 class Services {
@@ -48,6 +67,11 @@ public:
     virtual std::filesystem::path storage_file(std::string_view plugin) = 0;
     // Empty when the plugin may have the console command; otherwise why not.
     virtual std::string claim_command(std::string_view plugin, std::string_view name) = 0;
+    // The local skater, or empty without one (the menu, a load).
+    virtual std::optional<SkaterState> skater() = 0;
+    virtual Teleport teleport(const Vec3& position, float heading) = 0;
+    // Where the line first meets the world's collision, or empty when it is clear (or not loaded).
+    virtual std::optional<Vec3> raycast(const Vec3& from, const Vec3& to) = 0;
 };
 
 enum class State { loading, running, stopped };
@@ -138,6 +162,9 @@ private:
     std::vector<double> errors_;
     double log_second_{};
     int log_lines_{};
+    int raycasts_{};                    // since the last tick
+    double teleport_second_{};
+    int teleports_{};
 
     std::map<std::string, std::vector<int>, std::less<>> handlers_;
     std::map<int, Timer> timers_;

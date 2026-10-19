@@ -62,6 +62,17 @@ attack("slow-unload", "an unload handler that never ends: cut off at 20 ms when 
     reskate.console.print("hostile: now switch it off: plugin off reskate-hostile")
 end)
 
+attack("teleport-spam", "keeps running: two teleports a second, the rest refused", function()
+    local sent = 0
+    for i = 1, 1000 do
+        if reskate.skater.teleport(vector.create(0, 0, 0)) then sent += 1 end
+    end
+    reskate.console.print("hostile teleport-spam: " .. sent .. " of 1000 sent")
+end)
+attack("raycast-flood", "keeps running: refused past 64 raycasts a tick", function()
+    for i = 1, 100000 do reskate.world.raycast(vector.create(0, 100, 0), vector.create(0, -100, 0)) end
+end)
+
 -- Each returns true when that way out worked.
 local escapes = {
     {"io", function() return io ~= nil end},

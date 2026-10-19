@@ -25,6 +25,24 @@ struct TestEnvironment final : Environment {
     double now_ms() override { return now; }
     std::filesystem::path storage_root() override { return scratch / "storage"; }
     bool builtin_command(std::string_view word) override { return word == "perf" || word == "load"; }
+    // A skater, when there is one, on flat ground at y = 0.
+    std::optional<SkaterState> local_skater;
+    bool teleport_forbidden{}, teleport_unavailable{};
+    std::vector<std::pair<Vec3, float>> teleports;
+    int rays{};
+    std::optional<SkaterState> skater() override { return local_skater; }
+    Teleport teleport(const Vec3& position, float heading) override {
+        if (teleport_forbidden) return Teleport::forbidden;
+        if (teleport_unavailable || !local_skater) return Teleport::unavailable;
+        teleports.emplace_back(position, heading);
+        return Teleport::sent;
+    }
+    std::optional<Vec3> raycast(const Vec3& from, const Vec3& to) override {
+        ++rays;
+        if ((from[1] > 0) == (to[1] > 0)) return std::nullopt;
+        const float f = from[1] / (from[1] - to[1]);
+        return Vec3{from[0] + (to[0] - from[0]) * f, 0, from[2] + (to[2] - from[2]) * f};
+    }
     bool logged(std::string_view part) const {
         return std::any_of(logs.begin(), logs.end(), [&](const auto& line) { return line.find(part) != std::string::npos; });
     }
@@ -361,6 +379,82 @@ void a_plugin_reloads_when_its_files_change() {
     check(host.reload("nobody").starts_with("error: "), "A plugin that is not there cannot be");
 }
 
+void the_skater_can_be_read_moved_and_the_world_probed() {
+    TestEnvironment environment;
+    Host host(environment, Side::client);
+    host.apply({script("bare", R"(
+        local ok, err = pcall(reskate.skater.get)
+        assert(not ok and err:find("skater.read"), err)
+        ok, err = pcall(reskate.skater.teleport, vector.create(0, 0, 0))
+        assert(not ok and err:find("skater.teleport"), err)
+        ok, err = pcall(reskate.world.raycast, vector.create(0, 1, 0), vector.create(0, -1, 0))
+        assert(not ok and err:find("world.raycast"), err)
+        reskate.log("bare refused")
+    )"), script("mover", R"(
+        reskate.console.command("probe", "x", function()
+            local s = reskate.skater.get()
+            if not s then reskate.log("no skater") return end
+            reskate.log(string.format("at %.1f %.1f %.1f facing %.2f speed %.1f up %.1f air %s %.1f", s.position.x, s.position.y,
+                s.position.z, s.heading, s.speed, s.vertical_speed, tostring(s.airborne), s.air_time))
+            assert(reskate.skater.position() == s.position and reskate.skater.heading() == s.heading)
+            assert(reskate.skater.speed() == s.speed and reskate.skater.on_ground() == not s.airborne)
+            local hit = reskate.world.raycast(s.position + vector.create(0, 2, 0), s.position - vector.create(0, 5, 0))
+            assert(hit and math.abs(hit.y) < 0.01, "the ground under the skater")
+            assert(reskate.world.raycast(vector.create(0, 5, 0), vector.create(0, 1, 0)) == nil, "a clear ray")
+        end)
+        reskate.console.command("move", "x", function(args)
+            local ok, why = reskate.skater.teleport(vector.create(10, 0, 20), args[1] and tonumber(args[1]) or nil)
+            reskate.log("teleport " .. tostring(ok) .. " " .. tostring(why))
+        end)
+        reskate.console.command("bad", "x", function()
+            assert(not pcall(reskate.skater.teleport, vector.create(0 / 0, 0, 0)), "NaN")
+            assert(not pcall(reskate.skater.teleport, vector.create(1e7, 0, 0)), "far away")
+            assert(not pcall(reskate.skater.teleport, {1, 2, 3}), "a table is not a vector")
+            assert(not pcall(reskate.skater.teleport, vector.create(0, 0, 0), 0 / 0), "a NaN heading")
+            assert(not pcall(reskate.world.raycast, vector.create(0, 0, 0), vector.create(2000, 0, 0)), "too long")
+            reskate.log("bad refused")
+        end)
+        reskate.console.command("rays", "x", function()
+            local count = 0
+            local ok, err = pcall(function()
+                for i = 1, 100 do reskate.world.raycast(vector.create(0, 1, 0), vector.create(0, -1, 0)) count += 1 end
+            end)
+            reskate.log("rays " .. count .. " " .. tostring(err):match("more than %d+ raycasts") or "")
+        end)
+    )", R"("console", "skater.read", "skater.teleport", "world.raycast")")});
+    running(host, "bare", environment);
+    check(environment.logged("bare refused"), "Each needs its permission\n" + environment.all());
+    host.run_console("probe");
+    check(environment.logged("[mover] no skater"), "Without a skater there is nothing to read");
+    host.run_console("move");
+    check(environment.logged("teleport false teleporting is unavailable"), "nor to move");
+    environment.local_skater = SkaterState{{1, 0, 2}, 1.5f, 4, 0.5f, true, 0.25f};
+    host.run_console("probe");
+    check(environment.logged("at 1.0 0.0 2.0 facing 1.50 speed 4.0 up 0.5 air true 0.2"), "The skater is read\n" + environment.all());
+    running(host, "mover", environment);
+    host.run_console("move 0.5");
+    check(environment.teleports.size() == 1 && environment.teleports[0].first == Vec3{10, 0, 20} &&
+          std::abs(environment.teleports[0].second - 0.5f) < 1e-6f, "A teleport is sent where it was asked");
+    environment.now += 1000;
+    host.run_console("move");
+    check(environment.teleports.size() == 2 && std::abs(environment.teleports[1].second - 1.5f) < 1e-6f, "facing as the skater does by default");
+    host.run_console("move");
+    host.run_console("move");
+    check(environment.teleports.size() == 3 && environment.logged("asked more than twice in a second"), "Two a second");
+    environment.now += 1000;
+    environment.teleport_forbidden = true;
+    host.run_console("move");
+    check(environment.logged("the host has turned teleporting off"), "and none when the host says no");
+    host.run_console("bad");
+    check(environment.logged("bad refused"), "Bad positions are refused\n" + environment.all());
+    ticks(host, environment, 1); // the count is per tick: the probes above used two
+    host.run_console("rays");
+    check(environment.logged("rays 64 more than 64 raycasts"), "64 raycasts a tick\n" + environment.all());
+    ticks(host, environment, 1);
+    host.run_console("probe");
+    running(host, "mover", environment);
+}
+
 void level_events_reach_plugins() {
     TestEnvironment environment;
     Host host(environment, Side::client);
@@ -460,9 +554,15 @@ void reskate_test_passes_its_own_checks() {
     check(host.run_console("ptest all"), "ptest is its command");
     ticks(host, environment, 120); // its later checks run on timers
     const auto output = printed_lines(environment);
-    check(output.find("ptest: 45 passed, 0 failed") != std::string::npos &&
+    check(output.find("ptest: 46 passed, 0 failed, 4 skipped") != std::string::npos &&
           output.find("FAIL") == std::string::npos, "Every reskate-test check passes:\n" + output + environment.all());
     check(host.run_console("ptest echo a b") && environment.printed("ptest echo: a b"), "and its echo command answers");
+    // With a skater on the ground, its skater checks run too.
+    environment.local_skater = SkaterState{{5, 0, 5}, 0.3f, 2, 0, false, 0};
+    environment.lines.clear();
+    check(host.run_console("ptest skater"), "ptest skater");
+    check(environment.printed("ptest: 5 passed, 0 failed (skater 5/5)"), "The skater checks pass with a skater:\n" + printed_lines(environment));
+    check(host.run_console("ptest tp") && environment.teleports.size() == 1, "and ptest tp teleports it");
     running(host, "reskate-test", environment);
 }
 
@@ -476,7 +576,7 @@ void reskate_hostile_is_stopped_or_refused_every_time() {
         {"loop", true, 0}, {"caught-loop", true, 0}, {"tick-loop", true, 1}, {"memory", true, 0},
         {"caught-memory", true, 0}, {"huge-string", true, 0}, {"buffer", true, 0}, {"coroutines", true, 0},
         {"errors", true, 10}, {"slow", true, 60 * 5}, {"log-flood", false, 1}, {"timers", false, 1},
-        {"recursion", false, 1}, {"escapes", false, 1},
+        {"recursion", false, 1}, {"escapes", false, 1}, {"teleport-spam", false, 1}, {"raycast-flood", false, 1},
     };
     for (const auto& item : cases) {
         check(host.reload("reskate-hostile").find("reloaded") != std::string::npos, std::string("reloads before ") + item.attack);
@@ -510,6 +610,7 @@ int main() {
         a_runaway_plugin_is_stopped_and_the_rest_go_on();
         a_plugin_over_its_time_budget_is_stopped();
         a_plugin_reloads_when_its_files_change();
+        the_skater_can_be_read_moved_and_the_world_probed();
         level_events_reach_plugins();
         timers_run_when_due();
         a_package_with_a_program_or_on_the_wrong_side_is_not_loaded();

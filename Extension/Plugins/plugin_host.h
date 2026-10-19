@@ -31,6 +31,10 @@ public:
     virtual std::filesystem::path storage_root() = 0;
     // Whether ReSkate has a console command starting with this word.
     virtual bool builtin_command(std::string_view word) = 0;
+    // The game (Services, plugin_vm.h). Where there is none, there is no skater and nothing to hit.
+    virtual std::optional<SkaterState> skater() { return std::nullopt; }
+    virtual Teleport teleport(const Vec3&, float) { return Teleport::unavailable; }
+    virtual std::optional<Vec3> raycast(const Vec3&, const Vec3&) { return std::nullopt; }
 };
 
 struct Status {
@@ -84,6 +88,9 @@ private:
     std::string level() override;
     std::filesystem::path storage_file(std::string_view plugin) override;
     std::string claim_command(std::string_view plugin, std::string_view name) override;
+    std::optional<SkaterState> skater() override { return environment_.skater(); }
+    Teleport teleport(const Vec3& position, float heading) override { return environment_.teleport(position, heading); }
+    std::optional<Vec3> raycast(const Vec3& from, const Vec3& to) override { return environment_.raycast(from, to); }
 
     Environment& environment_;
     Side side_;

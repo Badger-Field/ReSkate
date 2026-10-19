@@ -163,6 +163,15 @@ std::filesystem::path package_path(lua_State* L, Plugin& plugin, std::string_vie
     if (code || (!relative.empty() && (inside.empty() || *inside.begin() == ".."))) luaL_error(L, "that path leads outside the package");
     return full;
 }
+
+// A position a plugin passes: a vector, finite and within 100 km of the map's centre.
+Vec3 position_of(lua_State* L, int index, const char* what) {
+    const float* v = luaL_checkvector(L, index);
+    for (int i = 0; i < 3; ++i)
+        if (!std::isfinite(v[i]) || std::fabs(v[i]) > 1e5f) luaL_error(L, "%s must be a finite position within 100 km", what);
+    return {v[0], v[1], v[2]};
+}
+void push_position(lua_State* L, const Vec3& v) { lua_pushvector(L, v[0], v[1], v[2]); }
 }
 
 struct ApiFunctions {
@@ -386,6 +395,104 @@ struct ApiFunctions {
         }
         return 1;
     }
+    // skater.read: the local skater as the game has it this tick, or nil without one.
+    static std::optional<SkaterState> skater(lua_State* L, const char* what) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "skater.read", what);
+        return plugin.services_.skater();
+    }
+    static int skater_get(lua_State* L) {
+        const auto s = skater(L, "reskate.skater.get");
+        if (!s) {
+            lua_pushnil(L);
+            return 1;
+        }
+        lua_createtable(L, 0, 6);
+        push_position(L, s->position);
+        lua_setfield(L, -2, "position");
+        lua_pushnumber(L, s->heading);
+        lua_setfield(L, -2, "heading");
+        lua_pushnumber(L, s->speed);
+        lua_setfield(L, -2, "speed");
+        lua_pushnumber(L, s->vertical);
+        lua_setfield(L, -2, "vertical_speed");
+        lua_pushboolean(L, s->airborne);
+        lua_setfield(L, -2, "airborne");
+        lua_pushnumber(L, s->air_time);
+        lua_setfield(L, -2, "air_time");
+        return 1;
+    }
+    static int skater_position(lua_State* L) {
+        const auto s = skater(L, "reskate.skater.position");
+        if (s) push_position(L, s->position);
+        else lua_pushnil(L);
+        return 1;
+    }
+    static int skater_heading(lua_State* L) {
+        const auto s = skater(L, "reskate.skater.heading");
+        if (s) lua_pushnumber(L, s->heading);
+        else lua_pushnil(L);
+        return 1;
+    }
+    static int skater_speed(lua_State* L) {
+        const auto s = skater(L, "reskate.skater.speed");
+        if (s) lua_pushnumber(L, s->speed);
+        else lua_pushnil(L);
+        return 1;
+    }
+    static int skater_on_ground(lua_State* L) {
+        const auto s = skater(L, "reskate.skater.on_ground");
+        if (s) lua_pushboolean(L, !s->airborne);
+        else lua_pushnil(L);
+        return 1;
+    }
+    // skater.teleport: true when the teleport was sent (it happens within a few seconds); false
+    // and why when the host has turned teleporting off, it cannot be done now, or it is asked too often.
+    static int skater_teleport(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "skater.teleport", "reskate.skater.teleport");
+        const auto at = position_of(L, 1, "the teleport's position");
+        float heading = 0;
+        if (lua_isnoneornil(L, 2)) {
+            if (const auto s = plugin.services_.skater()) heading = s->heading;
+        } else {
+            const double given = luaL_checknumber(L, 2);
+            if (!std::isfinite(given)) luaL_argerror(L, 2, "the heading must be a finite number of radians");
+            heading = static_cast<float>(std::remainder(given, 2 * 3.14159265358979323846));
+        }
+        const double now = plugin.services_.now_ms();
+        if (now - plugin.teleport_second_ >= 1000) {
+            plugin.teleport_second_ = now;
+            plugin.teleports_ = 0;
+        }
+        const char* refusal = nullptr;
+        if (++plugin.teleports_ > plugin.limits_.teleports_per_second) refusal = "asked more than twice in a second";
+        else switch (plugin.services_.teleport(at, heading)) {
+        case Teleport::sent: break;
+        case Teleport::forbidden: refusal = "the host has turned teleporting off"; break;
+        case Teleport::unavailable: refusal = "teleporting is unavailable now (no skater, or a load)"; break;
+        }
+        lua_pushboolean(L, refusal == nullptr);
+        if (!refusal) return 1;
+        lua_pushstring(L, refusal);
+        return 2;
+    }
+    // world.raycast: where the line from `from` to `to` first meets the world's collision, or nil
+    // when it is clear. Collision is loaded only near the skater: far off, a ray meets nothing.
+    static int raycast(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "world.raycast", "reskate.world.raycast");
+        const auto from = position_of(L, 1, "the ray's start");
+        const auto to = position_of(L, 2, "the ray's end");
+        const float dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
+        if (std::sqrt(dx * dx + dy * dy + dz * dz) > plugin.limits_.raycast_metres)
+            luaL_error(L, "a ray is at most %d m long", static_cast<int>(plugin.limits_.raycast_metres));
+        if (++plugin.raycasts_ > plugin.limits_.raycasts_per_tick)
+            luaL_error(L, "more than %d raycasts in one tick", plugin.limits_.raycasts_per_tick);
+        if (const auto hit = plugin.services_.raycast(from, to)) push_position(L, *hit);
+        else lua_pushnil(L);
+        return 1;
+    }
     // Modules come from the plugin's own package, beside its entry: require("./rules") or
     // require("rules") is <entry folder>/rules.luau or rules.lua. Each runs once.
     static int require(lua_State* L) {
@@ -497,6 +604,26 @@ void Api::install(Plugin& plugin, lua_State* L) {
     lua_setfield(L, -2, "keys");
     readonly();
     lua_setfield(L, -2, "storage");
+
+    lua_createtable(L, 0, 6);
+    set_function(L, "get", ApiFunctions::skater_get);
+    lua_pushcfunction(L, ApiFunctions::skater_position, "position");
+    lua_setfield(L, -2, "position");
+    lua_pushcfunction(L, ApiFunctions::skater_heading, "heading");
+    lua_setfield(L, -2, "heading");
+    lua_pushcfunction(L, ApiFunctions::skater_speed, "speed");
+    lua_setfield(L, -2, "speed");
+    lua_pushcfunction(L, ApiFunctions::skater_on_ground, "on_ground");
+    lua_setfield(L, -2, "on_ground");
+    lua_pushcfunction(L, ApiFunctions::skater_teleport, "teleport");
+    lua_setfield(L, -2, "teleport");
+    readonly();
+    lua_setfield(L, -2, "skater");
+
+    lua_createtable(L, 0, 1);
+    set_function(L, "raycast", ApiFunctions::raycast);
+    readonly();
+    lua_setfield(L, -2, "world");
 
     readonly();
     lua_setglobal(L, "reskate");
