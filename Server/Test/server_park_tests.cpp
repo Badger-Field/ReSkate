@@ -519,10 +519,14 @@ int run(const std::filesystem::path &fixtures) {
     }
     // Poll answers: the same /2 in two polls back to back is an answer in each (chat turns
     // repeats away, answers not), twice in one poll it is still one; a chat line said twice is
-    // still turned away.
+    // still turned away. The card shows the question and the result, so chat names neither; the
+    // log has the result.
     {
         const auto said = [&](std::string_view text) {
             return std::count_if(a.chat.begin(), a.chat.end(), [&](const std::string &line) { return line.find(text) != std::string::npos; });
+        };
+        const auto logged = [&](std::string_view text) {
+            return std::count_if(log.begin(), log.end(), [&](const std::string &line) { return line.find(text) != std::string::npos; });
         };
         auto &c = games.at(76561198000000003ULL);
         command("poll First? | yes | no");
@@ -534,13 +538,14 @@ int run(const std::filesystem::path &fixtures) {
         check(said("You already answered no.") == 1, "A second answer in the same poll was not answered as one");
         command("poll end");
         run_for(1000000);
-        check(said("Poll \"First?\" ended: yes 0, no 2 (no wins).") == 1, "A poll counted an answer given twice twice");
+        check(logged("Poll \"First?\" ended: yes 0, no 2 (no wins).") == 1, "A poll counted an answer given twice twice");
+        check(!said("First?"), "A poll's question or result was repeated in chat");
         command("poll Second? | yes | no");
         a.say("/2", now);
         run_for(1000000);
         command("poll end");
         run_for(1000000);
-        check(said("Poll \"Second?\" ended: yes 0, no 1 (no wins).") == 1, "The same answer in the next poll was turned away");
+        check(logged("Poll \"Second?\" ended: yes 0, no 1 (no wins).") == 1, "The same answer in the next poll was turned away");
         c.say("hello again", now);
         run_for(1000000);
         c.say("hello again", now);
