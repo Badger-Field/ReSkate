@@ -181,6 +181,8 @@ add_library(dingosdk_runtime SHARED
     Extension/Trainer/trainer_waypoint.cpp
     Extension/Skater/offboard_flight.cpp
     Extension/Skater/camera_observer.cpp
+    Extension/Skater/trick_watch.cpp
+    Extension/Skater/score_hud.cpp
     Extension/Boot/offline_boot.cpp
     Extension/Progression/progression_service_guard.cpp
     Extension/Progression/mission_progression_override.cpp

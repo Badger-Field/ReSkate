@@ -412,7 +412,13 @@ if(DINGOSDK_BUILD_PLUGIN_TESTS AND WIN32)
     add_executable(dingosdk_plugin_tests Extension/Plugins/Test/plugin_tests.cpp)
     target_include_directories(dingosdk_plugin_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     target_link_libraries(dingosdk_plugin_tests PRIVATE dingosdk_plugins)
+    # It also runs the test plugins in contrib/plugins.
+    target_compile_definitions(dingosdk_plugin_tests PRIVATE "RESKATE_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
     add_test(NAME plugins COMMAND dingosdk_plugin_tests)
+    # Tricks read from the score HUD's values (Extension/Skater/trick_watch.h), what plugins hear.
+    add_executable(dingosdk_trick_watch_tests Extension/Skater/Test/trick_watch_tests.cpp Extension/Skater/trick_watch.cpp)
+    target_include_directories(dingosdk_trick_watch_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    add_test(NAME trick_watch COMMAND dingosdk_trick_watch_tests)
 endif()
 get_property(project_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(target IN LISTS project_targets)

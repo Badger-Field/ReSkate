@@ -438,6 +438,62 @@ void discovery_finds_the_plugins_among_the_mods_left_on() {
     std::sort(again.begin(), again.end(), [](const auto& a, const auto& b) { return a.id < b.id; });
     check(again[0].fingerprint != before, "A changed file changes the fingerprint, which reloads it");
 }
+
+// contrib/plugins, as they are in the repository.
+Candidate contributed(const std::string& id) {
+    const auto directory = std::filesystem::path(RESKATE_SOURCE_DIR) / "contrib" / "plugins" / id;
+    return {id, directory, "1", check_package_files(directory)};
+}
+std::string printed_lines(const TestEnvironment& environment) {
+    std::string text;
+    for (const auto& line : environment.lines) text += line + "\n";
+    return text;
+}
+
+void reskate_test_passes_its_own_checks() {
+    TestEnvironment environment;
+    std::filesystem::remove_all(scratch / "storage" / "reskate-test");
+    Host host(environment, Side::client);
+    host.apply({contributed("reskate-test")});
+    running(host, "reskate-test", environment);
+    ticks(host, environment, 5);
+    check(host.run_console("ptest all"), "ptest is its command");
+    ticks(host, environment, 120); // its later checks run on timers
+    const auto output = printed_lines(environment);
+    check(output.find("ptest: 45 passed, 0 failed") != std::string::npos &&
+          output.find("FAIL") == std::string::npos, "Every reskate-test check passes:\n" + output + environment.all());
+    check(host.run_console("ptest echo a b") && environment.printed("ptest echo: a b"), "and its echo command answers");
+    running(host, "reskate-test", environment);
+}
+
+void reskate_hostile_is_stopped_or_refused_every_time() {
+    TestEnvironment environment;
+    Host host(environment, Side::client);
+    host.apply({contributed("reskate-hostile")});
+    running(host, "reskate-hostile", environment);
+    struct Case { const char* attack; bool stops; int ticks; };
+    const Case cases[] = {
+        {"loop", true, 0}, {"caught-loop", true, 0}, {"tick-loop", true, 1}, {"memory", true, 0},
+        {"caught-memory", true, 0}, {"huge-string", true, 0}, {"buffer", true, 0}, {"coroutines", true, 0},
+        {"errors", true, 10}, {"slow", true, 60 * 5}, {"log-flood", false, 1}, {"timers", false, 1},
+        {"recursion", false, 1}, {"escapes", false, 1},
+    };
+    for (const auto& item : cases) {
+        check(host.reload("reskate-hostile").find("reloaded") != std::string::npos, std::string("reloads before ") + item.attack);
+        check(host.run_console(std::string("hostile ") + item.attack), item.attack);
+        ticks(host, environment, item.ticks);
+        const auto state = status_of(host, "reskate-hostile").state;
+        check((state == "stopped") == item.stops, std::string(item.attack) + " left it " + state + "\n" + environment.all());
+    }
+    check(!environment.printed("ESCAPED"), "No attack got out:\n" + printed_lines(environment));
+    check(environment.printed("hostile escapes: 17 of 17 refused"), "and every escape was tried\n" + printed_lines(environment));
+    host.reload("reskate-hostile");
+    host.run_console("hostile slow-unload");
+    const auto start = std::chrono::steady_clock::now();
+    host.switch_off("reskate-hostile");
+    const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    check(ms < 500, "An unload handler that never ends is cut off: " + std::to_string(ms) + " ms");
+}
 }
 
 int main() {
@@ -458,6 +514,8 @@ int main() {
         timers_run_when_due();
         a_package_with_a_program_or_on_the_wrong_side_is_not_loaded();
         discovery_finds_the_plugins_among_the_mods_left_on();
+        reskate_test_passes_its_own_checks();
+        reskate_hostile_is_stopped_or_refused_every_time();
         std::filesystem::remove_all(scratch);
         std::cout << "plugin tests passed\n";
         return 0;
