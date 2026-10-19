@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -36,6 +37,7 @@ template<class Model> class OwnedMenuModels {
     std::vector<Model> models_;
 public:
     bool empty() const { return models_.empty(); }
+    std::size_t checkpoint() const noexcept { return models_.size(); }
     void track(Model value) {
         if (std::none_of(models_.begin(), models_.end(), [&](const auto& existing) {
                 return existing.handle == value.handle && existing.type == value.type;
@@ -47,6 +49,16 @@ public:
         while (!models_.empty()) {
             destroy(models_.back());
             models_.pop_back(); // Keep unfinished cleanup available on failure.
+        }
+    }
+    // An unmounted build gives back only the roots made since `checkpoint`.
+    // The caller detaches any published references first. Each pops only once
+    // destroyed, so an interrupted rollback can be retried.
+    template<class Destroy> void rollback(std::size_t checkpoint, Destroy&& destroy) {
+        if (checkpoint > models_.size()) throw std::out_of_range("Native menu model checkpoint is no longer valid.");
+        while (models_.size() > checkpoint) {
+            destroy(models_.back());
+            models_.pop_back();
         }
     }
     // Use only after the native manager itself has been replaced.

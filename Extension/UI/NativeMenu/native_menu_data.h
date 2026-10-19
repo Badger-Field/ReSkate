@@ -1,5 +1,6 @@
 #pragma once
 #include "Engine/Game/Abi/native_data.h"
+#include <cstring>
 #include <map>
 #include <span>
 #include <string>
@@ -34,6 +35,9 @@ public:
     Value path(Value value, std::initializer_list<std::uint32_t> hashes) const;
     Value element(Value array, unsigned index) const;
     Value create(Schema schema, std::uint64_t id) const;
+    // Gives every null CString in an owned copy an engine-owned empty string:
+    // the VM's typed read calls strlen even for empty optional text.
+    void initialize_text(Value value) const;
     void destroy(Value owned_root) const;
     void publish(Value target, const void* bytes) const;
     void copy(Value target, Address source) const;
@@ -41,6 +45,13 @@ public:
         static_assert(std::is_trivially_copyable_v<T>);
         if (size(target.type) != sizeof(T)) throw std::runtime_error("Native menu value size differs.");
         publish(target, &value);
+    }
+    template<class T> void set_if_changed(Value target, const T& value) const {
+        static_assert(std::is_trivially_copyable_v<T>);
+        if (size(target.type) != sizeof(T)) throw std::runtime_error("Native menu value size differs.");
+        T current{};
+        if (!memory::peek_bytes(address(target), &current, sizeof(T))) throw std::runtime_error("Native menu value is unavailable.");
+        if (std::memcmp(&current, &value, sizeof(T))) publish(target, &value);
     }
     void text(Value target, const std::string& text) const;
     std::string text(Value value, std::size_t maximum = 128) const;
@@ -72,4 +83,6 @@ Address named_asset(const Context& context, Address anchor, const char* name);
 bool publish_tab_icons(const Context& context, Value tab, std::string_view idle, std::string_view focused);
 // Publishes one loaded texture or image asset, by name, into an asset reference field.
 bool publish_texture(const Context& context, Value target, std::string_view name);
+// The same texture into several fields, each written only when it differs.
+bool publish_texture(const Context& context, std::span<const Value> targets, std::string_view name);
 } // namespace dingosdk::multiplayer::menu_data

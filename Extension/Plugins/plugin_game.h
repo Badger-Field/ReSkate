@@ -3,6 +3,7 @@
 #include "Extension/AnimationStudio/anim_core.h"
 #include <array>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -155,6 +156,30 @@ struct ThrowdownState {
     };
     std::vector<Player> skate; // S.K.A.T.E.'s players and letters, while one is shown
 };
+// A throwdown mode on the game's Throwdowns page: a card on its picker, the game's own setup
+// page with these rows, and the game's start flag. The plugin runs the mode itself.
+struct ThrowdownRow {
+    std::string id, kind, caption, text; // kind "slider", "choice" or "button"; text: a button's label
+    int minimum{}, maximum{}, step{1}, value{};
+    std::vector<std::string> options; // a choice's; its value is the option's index (from 0)
+};
+struct ThrowdownMode {
+    std::string id, name, description;
+    std::string art;  // the logo: a texture or image asset the plugin's mod adds, by path; empty: Spot Battle's
+    std::string flag; // the mod's own flag (InstanceId ReSkate.<flag>); empty: Spot Battle's
+    int min_players = 1, max_players = 6, players = 4;
+    std::optional<ThrowdownRow> timer;
+    std::vector<ThrowdownRow> rows;
+};
+// "opened", "setting", "button", "placed", "start", "leave" or "cancelled" for one of the
+// plugin's modes, with every setting (players, timer and the rows by id).
+struct ThrowdownModeNews {
+    std::string mode, action, row;
+    int value{};
+    std::map<std::string, int> settings;
+    std::optional<Vec3> at;
+    float heading{}; // degrees
+};
 struct Progress {
     bool available{};
     struct District {
@@ -223,6 +248,12 @@ public:
     }
     virtual void cancel_throwdown(std::string_view /*plugin*/) {}
     virtual std::string throwdown_status(std::string_view /*plugin*/) { return {}; }
+    // Adds the mode to the Throwdowns page, or updates it (by id).
+    virtual std::string set_throwdown_mode(std::string_view /*plugin*/, const ThrowdownMode&) { return unavailable; }
+    virtual void remove_throwdown_mode(std::string_view /*plugin*/, std::string_view /*id*/) {}
+    // Takes the plugin's start flag down: its lobby is over.
+    virtual void release_throwdown_flag(std::string_view /*plugin*/) {}
+    virtual std::vector<ThrowdownModeNews> take_throwdown_news(std::string_view /*plugin*/) { return {}; }
     // ---- the rest ----------------------------------------------------------------------------------
     // The music an outside player (Spotify and the like) is playing, and "play", "pause",
     // "next" or "previous" for it.

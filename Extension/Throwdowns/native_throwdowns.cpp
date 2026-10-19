@@ -1,4 +1,5 @@
 #include "native_throwdowns.h"
+#include "custom_placement.h"
 #include "grouped_number.h"
 #include "throwdown_lab.h"
 #include "throwdown_relay.h"
@@ -181,8 +182,10 @@ void send_event_hook(Address signature, Address output, const Address* arguments
                 const auto name = throwdown_event(hash);
                 const auto current_realm = realm();
                 if (current_realm == client_realm) observe_throwdown_send(hash, read<Address>(arguments[0]), arguments[1]);
-                // CreateThrowdownQueue: the local player now hosts a throwdown.
-                if (hash == 0x7fac81bb && !state().throwdown_active.exchange(true))
+                if (current_realm == client_realm && consume_custom_throwdown_send(hash, read<Address>(arguments[0]), arguments[1])) return;
+                // CreateThrowdownQueue: the local player now hosts a throwdown
+                // (a plugin mode's flag is not one).
+                if (hash == 0x7fac81bb && !custom_throwdowns::registration_owned() && !state().throwdown_active.exchange(true))
                     logging::log(logging::Level::info, logging::Channel::progression, "Throwdown: local player is hosting one.");
                 // AddParticipantToCommunityEvent (the Join button): in one someone else placed,
                 // which the Quit action must also leave. RemoveParticipant: left its queue.
@@ -263,7 +266,8 @@ void debug_variable(const char* const* name, const std::uint32_t* fallback, std:
         std::array<char, wanted.size() + 1> value{};
         if (!memory::peek(text, value) || value[wanted.size()] != 0 ||
             std::string_view(value.data(), wanted.size()) != wanted) return;
-        *out = 1;
+        // A plugin mode's flag queue must never count down and start alone.
+        *out = custom_throwdowns::registration_owned() ? 0U : 1U;
         static std::atomic<bool> logged{};
         if (!logged.exchange(true))
             logging::write(logging::Level::info, logging::Channel::progression,
@@ -412,6 +416,39 @@ bool local_throwdown_host() noexcept { return state().throwdown_active.load(std:
 
 void complete_native_throwdown_parameters(Address vm) noexcept {
     pump_throwdown_lab(vm);
+    if (custom_throwdowns::registration_owned()) {
+        profile_runtime::PreserveError preserve;
+        try {
+            const auto resource = vm ? read<Address>(vm + 0x38) : 0;
+            const auto instance = vm ? read<Address>(vm + 0x30) : 0;
+            const auto hash = resource ? read<std::uint32_t>(resource + 0x10) : 0;
+            if (resource && realm() == client_realm && custom_throwdowns::placement_active())
+                custom_throwdowns::observe_graph(hash);
+            // Authored predicate outputs (page 1 of the graph's registers): the
+            // waiting queue normally locks the Toolbox, and Start waits for a
+            // full queue. A plugin mode's flag is neither: its host starts it.
+            constexpr std::array<std::uint32_t, 10> disabled_layout{64, 104, 44, 177, 3, 0, 2, 14, 720896, 66560};
+            constexpr std::array<std::uint32_t, 10> start_layout{144, 1360, 1565, 1445, 18, 0, 7, 2293833, 5832773, 17434624};
+            if (instance && read<Address>(instance) == resource && realm() == client_realm &&
+                ((hash == 0xc3999b06 && read<std::array<std::uint32_t, 10>>(resource + 0x20) == disabled_layout) ||
+                 (hash == 0x1a0c8c31 && read<std::array<std::uint32_t, 10>>(resource + 0x20) == start_layout))) {
+                const auto frame = read<std::uint32_t>(resource + 0x20);
+                const auto arguments = read<Address>(instance + ((frame + 15U) & ~15U) + 8);
+                if (arguments) {
+                    const bool result = hash == 0x1a0c8c31 && custom_throwdowns::flag_down();
+                    // Both return through opcode 0x32's borrowed output pointer.
+                    const auto output = read<Address>(arguments + (hash == 0xc3999b06 ? 8 : 96));
+                    SIZE_T written{};
+                    const bool wrote = output && WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(output), &result,
+                                                                    sizeof(result), &written) && written == sizeof(result);
+                    static std::atomic<unsigned> reports{};
+                    if (hash == 0x1a0c8c31 && reports.fetch_add(1) < 40)
+                        logging::log(logging::Level::info, logging::Channel::progression,
+                            "Custom throwdown: waiting card Start {} (written {}).", result ? "offered" : "held back", wrote);
+                }
+            }
+        } catch (...) {}
+    }
     // The throwdown is over once a client throwdown enters its end state or
     // leaves in progress. (Starting the round destroys the registration point
     // through MPThrowdownCoordinator.OnRequestThrowdownDestroy, so neither that

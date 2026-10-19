@@ -1,4 +1,5 @@
 #include "throwdown_lab.h"
+#include "custom_placement.h"
 #include "native_type_scan.h"
 #include "Engine/Core/Hooks/hooks.h"
 #include "Engine/Core/Log/logging.h"
@@ -1336,6 +1337,7 @@ std::string run_job(const Job& job) {
         Instance e(type_of(event_destroy));
         e.set_u32(field_mmid, mmid);
         e.send();
+        custom_throwdowns::observe_destroyed(mmid);
         return std::format("RequestThrowdownDestroyGlobal sent for MMID {:#x}", mmid);
     }
     }
@@ -1561,6 +1563,8 @@ void observe_throwdown_send(std::uint32_t hash, Address type, Address payload) n
             ThrowdownLocalAction action{ThrowdownLocalAction::Kind::exited};
             if (const auto f = find_field(type, field_is_cancelling); f && f->size == 1)
                 action.cancelling = read<std::uint8_t>(payload + f->offset) != 0;
+            // Leaving a plugin mode's flag placement: not a drop to relay.
+            if (custom_throwdowns::placement_active()) { custom_throwdowns::observe_exit(action.cancelling); return; }
             {
                 std::lock_guard lock(l.mutex);
                 action.series = l.series; action.mmid = l.hosted_mmid;
@@ -1642,6 +1646,8 @@ void observe_throwdown_send(std::uint32_t hash, Address type, Address payload) n
         std::string series; std::uint32_t mmid{};
         std::vector<std::uint8_t> params; std::string note;
         bool placed{};
+        std::optional<std::array<float, 3>> selected_spawn;
+        float selected_yaw{};
         if (const auto f = find_field(type, field_mmid); f && f->size == 4) mmid = read<std::uint32_t>(payload + f->offset);
         if (const auto f = find_field(type, field_series); f && f->kind == kind_string) series = read_string(payload + f->offset);
         if (const auto p = find_field(type, field_params); p && p->kind == kind_struct) {
@@ -1650,7 +1656,16 @@ void observe_throwdown_send(std::uint32_t hash, Address type, Address payload) n
             if (const auto f = find_field(p->type, field_series); f && f->kind == kind_string)
                 series = read_string(payload + p->offset + f->offset);
             std::array<float, 3> spawn{};
-            if (const auto f = find_field(p->type, field_spawn); f && f->size >= 12) memory::read(payload + p->offset + f->offset, spawn);
+            if (const auto f = find_field(p->type, field_spawn); f && f->size >= 12 && memory::read(payload + p->offset + f->offset, spawn)) {
+                selected_spawn = spawn;
+                // CreateThrowdownQueueParams.SpawnPoint is XYZ and a yaw in radians.
+                std::array<float, 4> pose{};
+                if (f->size == 16 && memory::read(payload + p->offset + f->offset, pose)) selected_yaw = pose[3];
+                else if (const auto t = find_field(p->type, field_teleport); t && t->size == 64) {
+                    std::array<float, 16> transform{};
+                    if (memory::read(payload + p->offset + t->offset, transform)) selected_yaw = std::atan2(transform[8], transform[10]);
+                }
+            }
             placed = spawn[0] != 0 || spawn[1] != 0 || spawn[2] != 0;
         }
         {
@@ -1670,6 +1685,13 @@ void observe_throwdown_send(std::uint32_t hash, Address type, Address payload) n
             logging::log(logging::Level::info, logging::Channel::progression,
                 "Throwdown lab: local client sent {:#x}; series {} MMID {:#x}{}{}.", hash, l.series, l.mmid,
                 note.empty() ? "" : "; ", note);
+        }
+        if (custom_throwdowns::registration_owned()) {
+            // A plugin mode's temporary flag: its own news, never a drop to relay.
+            custom_throwdowns::observe_queue(mmid);
+            if (hash == event_create) custom_throwdowns::observe_created();
+            if (hash == event_update && selected_spawn) custom_throwdowns::observe_position(mmid, *selected_spawn, selected_yaw);
+            return;
         }
         using Kind = ThrowdownLocalAction::Kind;
         const auto kind = hash == event_create ? Kind::created : hash == event_add_participant ? Kind::joined
@@ -1939,12 +1961,55 @@ void throwdown_lab_before_level_transition(unsigned next) noexcept {
     // 14, 22 and 3 leave a level or sublevel, 24 shuts down: the level's bundles are unloaded,
     // and the events' types with them.
     if (next != 14 && next != 22 && next != 3 && next != 24) return;
+    custom_throwdowns::abandon();
     try {
         auto& l = lab();
         std::lock_guard lock(l.mutex);
         l.world.fetch_add(1, std::memory_order_acq_rel);
         l.types.clear();
     } catch (...) {}
+}
+
+bool consume_custom_throwdown_send(std::uint32_t hash, Address type, Address payload) noexcept {
+    if (injecting || !type || !payload || !custom_throwdowns::registration_owned()) return false;
+    try {
+        const auto mmid_field = find_field(type, field_mmid);
+        const auto mmid = mmid_field && mmid_field->size == 4 ? read<std::uint32_t>(payload + mmid_field->offset) : 0;
+        const bool owned = hash == event_create || custom_throwdowns::owns_registration(mmid);
+        if (!owned) return false;
+        if (hash == event_create || hash == event_update || hash == event_host_set) {
+            const auto params = find_field(type, field_params);
+            if (params && params->kind == kind_struct) {
+                // The native registry picks RegistrationPrefab by Series and
+                // InstanceId: keep Spot Battle's protocol with the mode's flag.
+                const auto instance = find_field(params->type, field_instance);
+                const auto series = find_field(params->type, field_series);
+                const auto flag = custom_throwdowns::flag_key();
+                if (!flag.empty() && instance && instance->kind == kind_string && series && series->kind == kind_string &&
+                    read_string(payload + params->offset + series->offset) == "SpotBattle") {
+                    assign_string(payload + params->offset + instance->offset, "ReSkate." + flag);
+                    if (hash == event_create)
+                        logging::log(logging::Level::info, logging::Channel::ui, "Custom throwdown: the ReSkate.{} flag.", flag);
+                }
+                // The registration only carries the flag and the waiting card:
+                // never let its queue fill and start a Spot Battle. The mode's
+                // own player count stays with the plugin.
+                if (const auto limit = find_field(params->type, field_max_players); hash == event_host_set && limit && limit->size == 4) {
+                    const std::uint32_t held = 10;
+                    SIZE_T written{};
+                    WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(payload + params->offset + limit->offset),
+                                       &held, sizeof(held), &written);
+                }
+            }
+            return false;
+        }
+        if (hash == event_force_start) {
+            custom_throwdowns::waiting_start(); // the host held Start: the plugin starts its mode
+            return true;
+        }
+        if (hash == event_destroy) custom_throwdowns::waiting_left();
+    } catch (...) {}
+    return false;
 }
 
 bool throwdown_lab_player(std::uint32_t player_id) noexcept {

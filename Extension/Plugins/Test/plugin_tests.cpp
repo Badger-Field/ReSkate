@@ -180,6 +180,17 @@ struct FakeGame final : Game {
         return {};
     }
     std::string throwdown_status(std::string_view) override { return "open"; }
+    std::vector<ThrowdownMode> modes;
+    std::vector<ThrowdownModeNews> mode_news;
+    std::string set_throwdown_mode(std::string_view plugin, const ThrowdownMode& mode) override {
+        calls.push_back(std::format("mode {} {} {} rows {}{}", plugin, mode.id, mode.name, mode.rows.size(), mode.timer ? " timer" : ""));
+        std::erase_if(modes, [&](const auto& m) { return m.id == mode.id; });
+        modes.push_back(mode);
+        return {};
+    }
+    void remove_throwdown_mode(std::string_view plugin, std::string_view id) override { calls.push_back(std::format("remove mode {} {}", plugin, id)); }
+    void release_throwdown_flag(std::string_view plugin) override { calls.push_back(std::format("release flag {}", plugin)); }
+    std::vector<ThrowdownModeNews> take_throwdown_news(std::string_view) override { return std::exchange(mode_news, {}); }
     std::string kick(std::uint64_t player, std::string_view why) override { calls.push_back(std::format("kick {} {}", player, why)); return {}; }
     std::string announce(std::string_view plugin, std::string_view text) override {
         calls.push_back(std::format("announce {} {}", plugin, text));
@@ -1730,6 +1741,46 @@ void hall_of_meat_scores_a_bail() {
 }
 // Grind exits as a mod (contrib/plugins/grind-exits): its own checks pass, and RT held in a grind asks
 // for the heel side and keeps RT and the stick's lean from the game.
+void plugins_add_throwdown_modes() {
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    host.apply({script("modes", R"(
+        assert(reskate.throwdowns.mode{id = "oneup", name = "1-UP", description = "Beat the last total.", art = "OneUp", flag = "oneup",
+            players = {min = 1, max = 6, default = 2}, timer = {caption = "Turn", min = 10, max = 120, step = 10, default = 20},
+            rows = {{id = "letters", caption = "Letters", min = 1, max = 7, default = 3},
+                    {id = "tricks", kind = "choice", caption = "Tricks", options = {"All", "Flips"}, default = 2},
+                    {id = "area", kind = "button", caption = "Area", text = "Set area"}}})
+        assert(not pcall(reskate.throwdowns.mode, {id = "x", name = "X", rows = {{id = "r", kind = "dial"}}}), "a row kind")
+        assert(not pcall(reskate.throwdowns.mode, {id = "x", name = "X", flag = "two words"}), "a flag name")
+        reskate.on("throwdown_mode", function(e)
+            reskate.log(e.mode .. " " .. e.action .. " " .. tostring(e.settings.players) .. " " .. tostring(e.settings.tricks)
+                .. (e.position and string.format(" at %.0f %.0f %.0f facing %.0f", e.position[1], e.position[2], e.position[3], e.heading) or ""))
+            if e.action == "start" then reskate.throwdowns.release_flag() end
+        end)
+        reskate.console.command("tdgone", "Removes the mode", function() reskate.throwdowns.remove_mode("oneup") end)
+    )", R"("throwdowns", "console")")});
+    running(host, "modes", environment);
+    check(game.called("mode modes oneup 1-UP rows 3 timer") && game.modes.size() == 1, "The mode reaches the game\n" + environment.all());
+    const auto& mode = game.modes.front();
+    check(mode.players == 2 && mode.min_players == 1 && mode.max_players == 6 && mode.flag == "oneup" && mode.art == "OneUp",
+          "with its players, flag and art");
+    check(mode.timer && mode.timer->caption == "Turn" && mode.timer->step == 10 && mode.timer->value == 20, "its timer");
+    check(mode.rows[0].kind == "slider" && mode.rows[0].maximum == 7 && mode.rows[0].value == 3, "a slider row");
+    check(mode.rows[1].kind == "choice" && mode.rows[1].options.size() == 2 && mode.rows[1].value == 1, "a choice, counted from 0");
+    check(mode.rows[2].kind == "button" && mode.rows[2].text == "Set area", "a button");
+    game.mode_news.push_back({"oneup", "placed", "", 0, {{"players", 2}, {"tricks", 1}}, Vec3{1, 2, 3}, 90});
+    game.mode_news.push_back({"oneup", "start", "", 0, {{"players", 2}, {"tricks", 1}}});
+    ticks(host, environment, 1);
+    check(environment.logged("[modes] oneup placed 2 1 at 1 2 3 facing 90"), "The flag's place reaches the plugin\n" + environment.all());
+    check(environment.logged("[modes] oneup start 2 1") && game.called("release flag modes"), "and its Start, and it takes the flag down");
+    check(host.run_console("tdgone") && game.called("remove mode modes oneup"), "A mode can go");
+    host.apply({contributed("throwdown-modes-test")});
+    running(host, "throwdown-modes-test", environment);
+    check(game.called("mode throwdown-modes-test oneup 1-UP rows 0 timer") && game.called("mode throwdown-modes-test race Deathrace rows 3 timer"),
+          "The test plugin's two modes register\n" + environment.all());
+}
+
 void grind_exits_pick_the_side() {
     TestEnvironment environment;
     std::filesystem::remove_all(scratch / "storage" / "grind-exits");
@@ -1923,6 +1974,7 @@ int main() {
         fpv_drone_flies_and_follows();
         hall_of_meat_scores_a_bail();
         grind_exits_pick_the_side();
+        plugins_add_throwdown_modes();
         reskate_hostile_is_stopped_or_refused_every_time();
         std::filesystem::remove_all(scratch);
         std::cout << "plugin tests passed\n";

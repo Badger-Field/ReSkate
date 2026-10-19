@@ -17,14 +17,14 @@ namespace {
 struct Event {
     std::string_view name, permission;
 };
-constexpr std::array<Event, 24> events{{
+constexpr std::array<Event, 25> events{{
     {"load", {}}, {"unload", {}}, {"tick", {}}, {"level_loaded", {}}, {"level_unloading", {}},
     {"trick_started", "events.tricks"}, {"trick_landed", "events.tricks"}, {"line_broken", "events.tricks"},
     {"draw", "overlay"}, {"player_joined", "session.read"}, {"player_left", "session.read"}, {"message", "net.session"},
     {"skater_state", "events.skater"}, {"bail", "events.skater"}, {"chat", "chat.read"}, {"track_changed", "music"},
     {"throwdown", "throwdowns"}, {"action", "input"}, {"screen_closed", "ui.screen"},
     {"board_landed", "events.skater"}, {"body_hit", "events.skater"}, {"bail_end", "events.skater"},
-    {"physics_step", "events.physics"}, {"grind_exit", "events.skater"},
+    {"physics_step", "events.physics"}, {"grind_exit", "events.skater"}, {"throwdown_mode", "throwdowns"},
 }};
 constexpr std::size_t maximum_key = 128;
 constexpr std::size_t maximum_command = 48;

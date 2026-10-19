@@ -140,6 +140,10 @@ if(DINGOSDK_BUILD_LAUNCHER_TESTS AND WIN32)
     add_executable(dingosdk_mod_mesh_check Engine/Vfs/Test/mod_mesh_check.cpp)
     target_link_libraries(dingosdk_mod_mesh_check PRIVATE dingosdk_mods dingosdk_frostbite dingosdk_game_archives)
     target_include_directories(dingosdk_mod_mesh_check PRIVATE "${PROJECT_SOURCE_DIR}")
+    # A tool: an asset list edit cut down to some of its records (Engine/Vfs/Test/ebx_pick.cpp).
+    add_executable(dingosdk_ebx_pick Engine/Vfs/Test/ebx_pick.cpp)
+    target_link_libraries(dingosdk_ebx_pick PRIVATE dingosdk_frostbite)
+    target_include_directories(dingosdk_ebx_pick PRIVATE "${PROJECT_SOURCE_DIR}")
 endif()
 
 if(WIN32)

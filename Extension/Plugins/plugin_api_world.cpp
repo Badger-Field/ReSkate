@@ -3,6 +3,7 @@
 #include "lua.h"
 #include "lualib.h"
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstring>
@@ -1053,6 +1054,110 @@ struct WorldApi {
         else lua_pushlstring(L, status.data(), status.size());
         return 1;
     }
+    // mode{id, name, description, art, flag, players = {min, max, default},
+    // timer = {caption, min, max, step, default}, rows = {{id, kind, caption, ...}}}: the mode's card on
+    // the Throwdowns page, its setup page and its start flag. Again with the same id updates it.
+    static int int_field(lua_State* L, int table, const char* name, int fallback) {
+        lua_getfield(L, table, name);
+        const int value = lua_isnil(L, -1) ? fallback : static_cast<int>(luaL_checkinteger(L, -1));
+        lua_pop(L, 1);
+        return value;
+    }
+    static std::string text_field(lua_State* L, int table, const char* name) {
+        lua_getfield(L, table, name);
+        std::string value;
+        if (!lua_isnil(L, -1)) {
+            if (!lua_isstring(L, -1)) luaL_error(L, "%s is a string", name);
+            value = lua_tostring(L, -1);
+        }
+        lua_pop(L, 1);
+        return value;
+    }
+    static ThrowdownRow row_of(lua_State* L, int table, const char* fallback_kind) {
+        ThrowdownRow row;
+        row.id = text_field(L, table, "id");
+        row.kind = text_field(L, table, "kind");
+        if (row.kind.empty()) row.kind = fallback_kind;
+        if (row.kind != "slider" && row.kind != "choice" && row.kind != "button")
+            luaL_error(L, "a row's kind is \"slider\", \"choice\" or \"button\"");
+        row.caption = text_field(L, table, "caption");
+        row.text = text_field(L, table, "text");
+        row.minimum = int_field(L, table, "min", 0);
+        row.maximum = int_field(L, table, "max", 0);
+        row.step = int_field(L, table, "step", 1);
+        row.value = int_field(L, table, "default", row.minimum);
+        lua_getfield(L, table, "options");
+        if (!lua_isnil(L, -1)) {
+            luaL_checktype(L, -1, LUA_TTABLE);
+            const int count = lua_objlen(L, -1);
+            for (int i = 1; i <= count && i <= 16; ++i) {
+                lua_rawgeti(L, -1, i);
+                if (!lua_isstring(L, -1)) luaL_error(L, "a choice's options are strings");
+                row.options.emplace_back(lua_tostring(L, -1));
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+        // A choice's default is its option's number, from 1 as Lua counts.
+        if (row.kind == "choice") row.value = int_field(L, table, "default", 1) - 1;
+        return row;
+    }
+    static int throwdown_mode(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "throwdowns", "reskate.throwdowns.mode");
+        luaL_checktype(L, 1, LUA_TTABLE);
+        ThrowdownMode mode;
+        mode.id = text_field(L, 1, "id");
+        mode.name = text_field(L, 1, "name");
+        mode.description = text_field(L, 1, "description");
+        mode.art = text_field(L, 1, "art");
+        mode.flag = text_field(L, 1, "flag");
+        for (const char c : mode.flag)
+            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') luaL_argerror(L, 1, "flag is letters, digits and _");
+        lua_getfield(L, 1, "players");
+        if (!lua_isnil(L, -1)) {
+            luaL_checktype(L, -1, LUA_TTABLE);
+            const int at = lua_gettop(L);
+            mode.min_players = int_field(L, at, "min", 1);
+            mode.max_players = int_field(L, at, "max", 6);
+            mode.players = int_field(L, at, "default", std::min(4, mode.max_players));
+        }
+        lua_pop(L, 1);
+        lua_getfield(L, 1, "timer");
+        if (!lua_isnil(L, -1)) {
+            luaL_checktype(L, -1, LUA_TTABLE);
+            auto timer = row_of(L, lua_gettop(L), "slider");
+            if (timer.caption.empty()) timer.caption = "Timer";
+            timer.id = "timer";
+            mode.timer = std::move(timer);
+        }
+        lua_pop(L, 1);
+        lua_getfield(L, 1, "rows");
+        if (!lua_isnil(L, -1)) {
+            luaL_checktype(L, -1, LUA_TTABLE);
+            const int count = lua_objlen(L, -1);
+            for (int i = 1; i <= count && i <= 16; ++i) {
+                lua_rawgeti(L, -1, i);
+                luaL_checktype(L, -1, LUA_TTABLE);
+                mode.rows.push_back(row_of(L, lua_gettop(L), "slider"));
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+        return result(L, game(plugin).set_throwdown_mode(plugin.id(), mode));
+    }
+    static int throwdown_remove_mode(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "throwdowns", "reskate.throwdowns.remove_mode");
+        game(plugin).remove_throwdown_mode(plugin.id(), luaL_checkstring(L, 1));
+        return 0;
+    }
+    static int throwdown_release_flag(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "throwdowns", "reskate.throwdowns.release_flag");
+        game(plugin).release_throwdown_flag(plugin.id());
+        return 0;
+    }
     static int throwdown_state(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "throwdowns", "reskate.throwdowns.state");
@@ -1393,7 +1498,8 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     into(L, "outfit", {{"set", outfit_set}, {"clear", outfit_clear}, {"find", outfit_find}, {"slots", outfit_slots}, {"status", outfit_status}});
     into(L, "audio", {{"play", audio_play}, {"set", audio_set}, {"stop", audio_stop}, {"playing", audio_playing}});
     into(L, "server", {{"kick", server_kick}, {"say", server_say}, {"tell", server_tell}, {"move", server_move}});
-    into(L, "throwdowns", {{"state", throwdown_state}, {"host", throwdown_host}, {"cancel", throwdown_cancel}, {"hosting", throwdown_hosting}});
+    into(L, "throwdowns", {{"state", throwdown_state}, {"host", throwdown_host}, {"cancel", throwdown_cancel}, {"hosting", throwdown_hosting},
+                           {"mode", throwdown_mode}, {"remove_mode", throwdown_remove_mode}, {"release_flag", throwdown_release_flag}});
     into(L, "music", {{"current", current}, {"play", play}, {"pause", pause}, {"next", next}, {"previous", previous},
                       {"game", game_current}, {"game_next", game_next}});
     into(L, "progression", {{"get", progress}});

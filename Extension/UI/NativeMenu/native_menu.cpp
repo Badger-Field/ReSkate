@@ -2,6 +2,7 @@
 #include "native_menu_internal.h"
 #include "native_menu_dump.h"
 #include "ui_sound.h"
+#include "throwdown_menu.h"
 #include "Extension/Multiplayer/Session/session.h"
 #include "Extension/Multiplayer/Hud/game_ui_state.h"
 #include "Engine/Core/Log/logging.h"
@@ -626,6 +627,7 @@ void tick_page(std::uintptr_t base, bool loading) noexcept {
     s.next_render = 0;
 }
 bool prepare_native_menu_level_load(std::uintptr_t base) noexcept {
+    if (!release_native_throwdown_menu(base)) return false;
     if (std::all_of(page_slots.begin(), page_slots.end(), [](unsigned slot) { return page_state(slot).owned_models.empty(); }))
         return true;
     try {
@@ -720,6 +722,7 @@ void tick_native_menu(std::uintptr_t base, bool loading) noexcept {
     // (Read here: it takes the UI model's lock, which a page's tick then holds.)
     game_in_menu.store(!loading && sample_game_ui_state(base).in_menu, std::memory_order_relaxed);
     if (lifetime.blocked()) return;
+    tick_native_throwdown_menu(base, loading);
     for (unsigned slot = 0; slot < page_count; ++slot) {
         current_state = &page_state(slot);
         current_state->slot = slot;

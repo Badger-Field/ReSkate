@@ -23,6 +23,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Multiplayer/Session/session_party.cpp
     Extension/Multiplayer/Session/party_book.cpp
     Extension/UI/NativeMenu/native_menu.cpp
+    Extension/UI/NativeMenu/throwdown_menu.cpp
     Extension/UI/NativeMenu/native_menu_rows.cpp
     Extension/UI/NativeMenu/native_menu_multiplayer.cpp
     Extension/UI/NativeMenu/ui_sound.cpp
@@ -47,6 +48,8 @@ add_library(dingosdk_runtime SHARED
     Extension/Throwdowns/native_throwdowns.cpp
     Extension/Throwdowns/native_type_scan.cpp
     Extension/Throwdowns/throwdown_lab.cpp
+    Extension/Throwdowns/custom_modes.cpp
+    Extension/Throwdowns/custom_placement.cpp
     Extension/Throwdowns/throwdown_relay.cpp
     Extension/Throwdowns/throwdown_debug_text.cpp
     Extension/Throwdowns/skate_trick_rule.cpp
@@ -327,15 +330,15 @@ if(EXISTS "${dingosdk_emotes}/emotes.json" AND EXISTS "${dingosdk_emotes}/emotes
     target_sources(dingosdk_runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/emotes.rc")
 endif()
 # Game content ReSkate carries itself (Engine/Vfs/builtin_packs.h), one zip each in assets/builtin:
-# the FPV drone's model (tools/models/build_drone_pack.py), a blueprint plugins may place. A missing
-# zip is left out. (Mods that are content for ReSkate's features, such
+# the Throwdowns page's logo grid (tools/builtin/build_throwdown_menu_pack.py). A missing zip is
+# left out. (Mods that are content for ReSkate's features, such
 # as Board Break's decks, are official mods the launcher downloads: Launcher/official_mods.h.)
 # Each zip is made into a zstd pack by ReSkateBuiltinPacker as the build goes (again only when the
 # zip changes), which is what the DLL carries: compressed whole, a pack's repeated files cost
 # next to nothing.
 set(dingosdk_builtin_rc "")
 set(dingosdk_builtin_packs "")
-foreach(pack IN ITEMS "FPV_DRONE fpv_drone")
+foreach(pack IN ITEMS "THROWDOWN_MENU throwdown_menu")
     separate_arguments(pack)
     list(GET pack 0 pack_resource)
     list(GET pack 1 pack_file)

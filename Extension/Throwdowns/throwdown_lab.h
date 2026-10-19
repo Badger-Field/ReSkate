@@ -22,6 +22,9 @@ void pump_throwdown_lab(std::uintptr_t vm) noexcept;
 void throwdown_lab_before_level_transition(unsigned next) noexcept;
 // Called by the SendNetworkedEvent hook for every event the local client sends.
 void observe_throwdown_send(std::uint32_t hash, std::uintptr_t type, std::uintptr_t payload) noexcept;
+// After observe_throwdown_send: true when the event belongs to a plugin mode's
+// flag and must not be sent (its waiting card's Start goes to the plugin).
+bool consume_custom_throwdown_send(std::uint32_t hash, std::uintptr_t type, std::uintptr_t payload) noexcept;
 // True for ids the lab put into a throwdown; the UI player lookups answer them with
 // the local player's record so rows and host lookups resolve.
 bool throwdown_lab_player(std::uint32_t player_id) noexcept;

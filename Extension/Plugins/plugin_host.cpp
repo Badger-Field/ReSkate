@@ -348,6 +348,25 @@ void Host::follow_game() {
         }
     }
     if (wants("throwdowns")) {
+        each([&](Plugin& plugin, const std::string& id) {
+            for (const auto& news : game.take_throwdown_news(id)) {
+                auto data = Json::object();
+                data["mode"] = news.mode;
+                data["action"] = news.action;
+                if (!news.row.empty()) {
+                    data["row"] = news.row;
+                    data["value"] = news.value;
+                }
+                auto settings = Json::object();
+                for (const auto& [row, value] : news.settings) settings[row] = value;
+                data["settings"] = std::move(settings);
+                if (news.at) {
+                    data["position"] = Json::array({(*news.at)[0], (*news.at)[1], (*news.at)[2]});
+                    data["heading"] = news.heading;
+                }
+                plugin.game_event("throwdown_mode", "throwdowns", data);
+            }
+        });
         const bool active = game.throwdowns().active;
         if (active != throwdown_active_) {
             throwdown_active_ = active;

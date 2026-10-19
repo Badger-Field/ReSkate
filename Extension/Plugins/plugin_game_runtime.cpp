@@ -21,6 +21,8 @@
 #include "Extension/Skater/grind_exit.h"
 #include "Extension/Skater/xray.h"
 #include "Extension/UI/hud_corner.h"
+#include "Extension/Throwdowns/custom_modes.h"
+#include "Extension/Throwdowns/custom_placement.h"
 #include "plugin_camera.h"
 #include "Extension/Multiplayer/Session/session.h"
 #include "Extension/Music/external_player.h"
@@ -389,6 +391,40 @@ public:
         }
         return grind_exit::wish(plugin, w);
     }
+    std::string set_throwdown_mode(std::string_view plugin, const ThrowdownMode& m) override {
+        using multiplayer::custom_throwdowns::Row;
+        const auto row_of = [](const ThrowdownRow& r) {
+            return Row{r.kind == "choice" ? Row::Kind::choice : r.kind == "button" ? Row::Kind::button : Row::Kind::slider,
+                       r.id, r.caption, r.minimum, r.maximum, r.step, r.value, r.options, r.text};
+        };
+        multiplayer::custom_throwdowns::Mode mode;
+        mode.plugin = plugin;
+        mode.id = m.id;
+        mode.name = m.name;
+        mode.description = m.description;
+        mode.art = m.art;
+        mode.flag = m.flag;
+        mode.min_players = m.min_players;
+        mode.max_players = m.max_players;
+        mode.players = m.players;
+        if (m.timer) mode.timer = row_of(*m.timer);
+        for (const auto& r : m.rows) mode.rows.push_back(row_of(r));
+        return multiplayer::custom_throwdowns::set_mode(std::move(mode));
+    }
+    void remove_throwdown_mode(std::string_view plugin, std::string_view id) override {
+        multiplayer::custom_throwdowns::remove_mode(plugin, id);
+    }
+    void release_throwdown_flag(std::string_view plugin) override { multiplayer::custom_throwdowns::release(plugin); }
+    std::vector<ThrowdownModeNews> take_throwdown_news(std::string_view plugin) override {
+        std::vector<ThrowdownModeNews> out;
+        for (auto& n : multiplayer::custom_throwdowns::take(plugin)) {
+            ThrowdownModeNews news{std::move(n.mode), std::move(n.action), std::move(n.row), n.value, std::move(n.settings)};
+            if (n.at) news.at = Vec3{(*n.at)[0], (*n.at)[1], (*n.at)[2]};
+            news.heading = n.heading;
+            out.push_back(std::move(news));
+        }
+        return out;
+    }
     std::vector<GrindPop> take_grind_pops(std::string_view plugin) override {
         std::vector<GrindPop> out;
         for (auto& p : grind_exit::take_pops(plugin)) out.push_back({p.applied, std::move(p.reason), std::move(p.basis), p.toward, p.before, p.after});
@@ -624,6 +660,8 @@ public:
         board_pose::clear(plugin);
         board_pose::park(plugin, {});
         cancel_throwdown(plugin);
+        multiplayer::custom_throwdowns::release(plugin);
+        multiplayer::custom_throwdowns::remove_plugin(plugin);
         if (capturer_ == plugin) capturer_.clear();
         if (std::erase_if(replacements_, [&](const auto& r) { return r.second.first == plugin; })) publish_replacements();
         if (recorder_ == plugin) recorder_.clear();

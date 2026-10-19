@@ -5,7 +5,7 @@
 #include <vector>
 
 // Game content ReSkate carries itself: packs of game assets built by ReSkate Studio, zipped into
-// ReSkate.dll (the FPV drone's model, tools/models/build_drone_pack.py). Nobody installs or sees
+// ReSkate.dll (the Throwdowns logo grid, tools/builtin/build_throwdown_menu_pack.py). Nobody installs or sees
 // them. Official mods (below) are the other content ReSkate keeps for every player. Before a merge each is unpacked under Mods/.reskate-builtin/<name> (a dot folder,
 // which no mod list shows) when the one embedded differs from what is there, and the catalogue
 // merges it after every installed mod, always on (mod_catalog.cpp).
