@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.8.1 - not released yet
+## v0.8.1 - 2026-10-18
 
 Built on ReSkate 2.1.0, like 0.8.0.
 
