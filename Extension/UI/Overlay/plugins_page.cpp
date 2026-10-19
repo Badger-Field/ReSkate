@@ -39,6 +39,14 @@ void draw_widgets(SkateMenu& menu, const plugin_ui::Panel& panel, double now) {
     }
     int item = 0;
     for (const auto& w : panel.widgets) {
+        // A card opens here and closes at the next one: outside any widget's own ID, each its own.
+        if (w.kind == plugin_ui::Widget::Kind::card) {
+            if (in_card) end_card();
+            const auto id = "plugin-card-" + std::to_string(item++);
+            begin_card(menu, id.c_str(), w.text.c_str(), w.help.empty() ? nullptr : w.help.c_str());
+            in_card = true;
+            continue;
+        }
         ImGui::PushID(item++);
         const auto key = panel.plugin + '\n' + panel.title + '\n' + w.id;
         auto& all = edits();
@@ -54,11 +62,7 @@ void draw_widgets(SkateMenu& menu, const plugin_ui::Panel& panel, double now) {
         const char* help = w.help.empty() ? "" : w.help.c_str();
         using Kind = plugin_ui::Widget::Kind;
         switch (w.kind) {
-        case Kind::card:
-            if (in_card) end_card();
-            begin_card(menu, "plugin-card", w.text.c_str(), w.help.empty() ? nullptr : w.help.c_str());
-            in_card = true;
-            break;
+        case Kind::card: break; // above
         case Kind::tabs: {
             int selected = (edit != all.end() ? edit->second.chosen : w.chosen) - 1;
             if (edit != all.end() && edit->second.chosen == w.chosen) all.erase(edit);
