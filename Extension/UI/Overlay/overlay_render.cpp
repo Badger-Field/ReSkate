@@ -3,7 +3,7 @@
 #include "Engine/Core/Profiling/profiler.h"
 #include "overlay_internal.h"
 #include "Extension/Trainer/trainer_page.h"
-#include "Extension/HallOfMeat/hall_of_meat_overlay.h"
+#include "Extension/UI/Overlay/game_images.h"
 #include "plugin_overlay.h"
 #include "park_previews.h"
 #include "chat_emotes.h"
@@ -383,10 +383,10 @@ bool setup_graphics() {
             std::chrono::duration_cast<std::chrono::milliseconds>(waited_until - std::chrono::steady_clock::now()));
     };
     const auto emote_count = reserve_chat_emotes(*ImGui::GetIO().Fonts, left());
-    reserve_hall_of_meat_images(*ImGui::GetIO().Fonts, left());
+    reserve_game_images(*ImGui::GetIO().Fonts, left());
     const auto preview_count = load_park_previews(*ImGui::GetIO().Fonts, left());
     fill_chat_emotes(*ImGui::GetIO().Fonts);
-    fill_hall_of_meat_images(*ImGui::GetIO().Fonts);
+    fill_game_images(*ImGui::GetIO().Fonts);
     if (emote_count)
         dingosdk::logging::printf(dingosdk::logging::Level::info, dingosdk::logging::Channel::graphics,
             "Chat emotes: %zu ready.", emote_count);
@@ -759,7 +759,6 @@ void render(IDXGISwapChain* presented, UINT flags) {
     const bool game_text_frame = game_text_pending();
     const bool skate_hud_frame = skate_hud_pending();
     const bool nametag_frame = nametags_pending();
-    const bool meat_frame = hall_of_meat_pending();
     const bool plugins_frame = plugins_pending();
     const bool item_browser_frame = item_browser_pending();
     const bool perf_frame = perf_hud_pending() || trainer_hud_pending();
@@ -782,7 +781,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
         }
         // Hidden, the overlay still draws while a notice or chat line is on screen.
         if (s.loaded_notice_posted && !notices_pending() && !chat_frame && !game_text_frame && !skate_hud_frame &&
-            !nametag_frame && !meat_frame && !plugins_frame && !item_browser_frame && !perf_frame && !hub_frame && !map_download_frame) return;
+            !nametag_frame && !plugins_frame && !item_browser_frame && !perf_frame && !hub_frame && !map_download_frame) return;
     } else if (!s.ui_was_interactive) {
         s.ui_was_interactive = true;
         s.last_model = {}; // Reopening immediately reads fresh state.
@@ -834,7 +833,6 @@ void render(IDXGISwapChain* presented, UINT flags) {
         draw_perf_window();
     }
     draw_hub_page();
-    draw_hall_of_meat();
     draw_plugins();
     draw_nametags();
     draw_game_text();

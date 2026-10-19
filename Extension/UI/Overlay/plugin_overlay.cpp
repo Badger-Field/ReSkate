@@ -1,7 +1,9 @@
 #include "plugin_overlay.h"
 #include "Extension/Plugins/plugin_camera.h"
 #include "Extension/Plugins/plugin_ui.h"
+#include "Extension/UI/Overlay/game_images.h"
 #include "Extension/UI/Overlay/overlay_internal.h"
+#include "Extension/UI/Overlay/xray_overlay.h"
 #include <algorithm>
 #include <imgui_internal.h>
 #include <memory>
@@ -157,7 +159,9 @@ void draw_plugins() {
     if (display.x <= 0 || display.y <= 0) return;
     const float k = display.y / 1080.0f;
     auto& s = detail::state();
-    auto* font = s.menu.bold ? s.menu.bold : ImGui::GetFont();
+    auto* fallback = ImGui::GetFont();
+    const std::array<ImFont*, 4> fonts{s.menu.bold ? s.menu.bold : fallback, s.menu.body ? s.menu.body : fallback,
+                                       s.menu.heading ? s.menu.heading : fallback, s.menu.title ? s.menu.title : fallback};
     auto* draw = ImGui::GetBackgroundDrawList();
     const auto camera = plugin_camera::projector(display.x, display.y);
     using Kind = plugin_ui::Shape::Kind;
@@ -165,6 +169,7 @@ void draw_plugins() {
         for (const auto& shape : layer.shapes) {
             const auto& style = shape.style;
             const auto& p = shape.points;
+            auto* font = fonts[static_cast<std::size_t>(std::clamp(style.font, 0, 3))];
             switch (shape.kind) {
             case Kind::text: text(draw, font, k, at(p[0]), shape); break;
             case Kind::rect:
@@ -210,6 +215,21 @@ void draw_plugins() {
                 const float height = std::min(shape.radius * camera->focal / (*on)[2], display.y), width = height * aspect;
                 draw->AddImage(id, ImVec2((*on)[0] - width * .5f, (*on)[1] - height * .5f), ImVec2((*on)[0] + width * .5f, (*on)[1] + height * .5f),
                                ImVec2(style.uv[0], style.uv[1]), ImVec2(style.uv[2], style.uv[3]), style.colour);
+                break;
+            }
+            case Kind::game_image:
+                (void)draw_game_image(draw, shape.text, at(p[0]), at(p[1]), style.colour, static_cast<GameImageFit>(std::clamp(shape.fit, 0, 2)),
+                                      shape.edge * k);
+                break;
+            case Kind::gradient:
+                if (shape.colours.size() == 4)
+                    draw->AddRectFilledMultiColor(at(p[0]), at(p[1]), shape.colours[0], shape.colours[1], shape.colours[2], shape.colours[3]);
+                break;
+            case Kind::skeleton: {
+                if (shape.colours.size() != skater_body::count) break;
+                std::array<ImU32, skater_body::count> paint{};
+                std::copy(shape.colours.begin(), shape.colours.end(), paint.begin());
+                draw_xray(draw, paint, static_cast<float>(style.colour >> IM_COL32_A_SHIFT & 0xff) / 255.0f);
                 break;
             }
             }

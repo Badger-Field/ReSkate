@@ -228,9 +228,7 @@ const Commands &game_commands() {
         register_perf_commands(*result);
         register_item_commands(*result);
         register_trainer_commands(*result);
-        register_hall_of_meat_commands(*result);
         register_breakable_deck_commands(*result);
-        register_grind_exit_commands(*result);
         register_replay_keyframes_commands(*result);
         register_plugin_commands(*result);
         return result;

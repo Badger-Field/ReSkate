@@ -64,6 +64,30 @@ struct FakeGame final : Game {
     }
     SkaterNews news;
     SkaterNews take_skater_news() override { return std::exchange(news, {}); }
+    std::vector<PhysicsStep> steps;
+    std::vector<PhysicsStep> take_physics_steps() override { return std::exchange(steps, {}); }
+    std::string xray(std::string_view plugin, bool on) override {
+        calls.push_back(std::format("xray {} {}", plugin, on ? "on" : "off"));
+        return {};
+    }
+    std::string hud_corner(std::string_view plugin, bool hidden) override {
+        calls.push_back(std::format("corner {} {}", plugin, hidden ? "on" : "off"));
+        return {};
+    }
+    std::string game_speed(std::string_view plugin, float speed) override {
+        calls.push_back(std::format("slow {} {:.2f}", plugin, speed));
+        return {};
+    }
+    std::string grind_exit(std::string_view plugin, std::optional<GrindExitWish> wish) override {
+        calls.push_back(wish ? std::format("grind {} {} {} {:.2f}", plugin, wish->side, wish->stance, wish->strength) : std::format("grind {} none", plugin));
+        return {};
+    }
+    std::vector<GrindPop> pops;
+    std::vector<GrindPop> take_grind_pops(std::string_view) override { return std::exchange(pops, {}); }
+    std::string hide_pad(std::string_view plugin, bool lt, bool rt, bool left_x) override {
+        calls.push_back(std::format("hide {} {} {} {}", plugin, lt, rt, left_x));
+        return {};
+    }
     std::optional<Vec3> board_velocity() override { return Vec3{1, -2, 3}; }
     std::optional<SlamNews> last_slam() override { return SlamNews{7.5f, 12, 100}; }
     std::string wipeout(float force) override {
@@ -125,7 +149,8 @@ struct FakeGame final : Game {
     ClipRef take_recording(std::string_view) override { return std::exchange(recorded, nullptr); }
     std::string current_trick() override { return "kickflip"; }
     std::optional<FlightInput> flight_input(std::string_view) override { return FlightInput{1, 0, 0.5f, 3, 4, true}; }
-    std::optional<PadInput> gamepad() override { return PadInput{0.25f, 0, 0, 0, 0, 1, 0x1000, false}; }
+    std::optional<PadInput> pad = PadInput{0.25f, 0, 0, 0, 0, 1, 0x1000, false};
+    std::optional<PadInput> gamepad() override { return pad; }
     std::optional<StickInput> joystick() override {
         StickInput stick;
         stick.axes = {0, -1, 0.5f, 0, 0, 0};
@@ -1611,6 +1636,73 @@ void board_break_snaps_the_board_on_a_slam() {
 // The FPV drone as a mod (contrib/plugins/fpv-drone): its own tests of the flight maths pass, and
 // over the fake world (flat ground at y = 0) it flies the camera, keeps the game off the input,
 // plays its motor, follows the skater and tells the session where it is, within its 2 ms a tick.
+// Hall of Meat as a mod (contrib/plugins/hall-of-meat): its own checks pass, and a bail fed through
+// physics_step shows the x-ray, hides the HUD corner, slows the game at a break and keeps the map's best.
+void hall_of_meat_scores_a_bail() {
+    TestEnvironment environment;
+    std::filesystem::remove_all(scratch / "storage" / "hall-of-meat");
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    host.apply({contributed("hall-of-meat")});
+    running(host, "hall-of-meat", environment);
+    check(host.run_console("hallofmeat test"), "hallofmeat test");
+    check(environment.printed("hallofmeat: 19 passed, 0 failed") && !environment.printed("FAIL"),
+          "Hall of Meat's own checks pass:\n" + printed_lines(environment) + environment.all());
+    check(game.called("xray hall-of-meat on") && game.called("corner hall-of-meat off"), "It gets the x-ray and the HUD corner ready\n" + environment.all());
+    host.set_level("sanvan");
+    // A wipeout that breaks the head, then the body lying for two seconds.
+    const auto step = [&](bool wipeout, std::optional<bool> ragdoll, std::vector<PhysicsStep::Body> bodies) {
+        game.steps.push_back({environment.now, 1.0f / 60, wipeout, false, ragdoll, Vec3{0, 0, 0}, 0.0f, std::move(bodies)});
+        ticks(host, environment, 1);
+    };
+    step(true, true, {{"Head", 20, 0, false, false, true}});
+    for (int i = 0; i < 120; ++i) step(false, true, {});
+    check(game.called("corner hall-of-meat on"), "The card takes the HUD corner\n" + environment.all());
+    check(game.called("slow hall-of-meat 0.30"), "A break slows the game\n" + environment.all());
+    const auto& shapes = environment.layers.empty() ? std::vector<plugin_ui::Shape>{} : environment.layers[0].shapes;
+    check(std::any_of(shapes.begin(), shapes.end(), [](const auto& s) { return s.kind == plugin_ui::Shape::Kind::skeleton && s.colours[1] != 0; }) &&
+              std::any_of(shapes.begin(), shapes.end(), [](const auto& s) { return s.kind == plugin_ui::Shape::Kind::game_image && s.text == "thrasher"; }),
+          "The broken head shows on the x-ray, and the card with skate.'s wordmark");
+    // Standing up ends it; it is the map's first, so its best.
+    step(false, false, {});
+    ticks(host, environment, 200);
+    check(game.called("corner hall-of-meat off") && game.called("slow hall-of-meat 1.00"), "The corner and the speed are given back\n" + environment.all());
+    environment.lines.clear();
+    check(host.run_console("hallofmeat") && environment.printed("hallofmeat: on; this map's best ") && environment.printed("Meat (1 hits, 1 broken"),
+          "It says the map's best and the last bail:\n" + printed_lines(environment));
+}
+// Grind exits as a mod (contrib/plugins/grind-exits): its own checks pass, and RT held in a grind asks
+// for the heel side and keeps RT and the stick's lean from the game.
+void grind_exits_pick_the_side() {
+    TestEnvironment environment;
+    std::filesystem::remove_all(scratch / "storage" / "grind-exits");
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    host.apply({contributed("grind-exits")});
+    running(host, "grind-exits", environment);
+    check(host.run_console("grindexit test"), "grindexit test");
+    check(environment.printed("grindexit: 7 passed, 0 failed") && !environment.printed("FAIL"),
+          "Grind exits' own checks pass:\n" + printed_lines(environment) + environment.all());
+    check(game.called("grind grind-exits none"), "It hears its pops from the start");
+    check(host.run_console("grindexit stance goofy"), "grindexit stance");
+    game.pad = PadInput{};
+    game.state = 100;
+    ticks(host, environment, 2);
+    game.state = 400; // grinding
+    ticks(host, environment, 2);
+    game.pad->right_trigger = 1;
+    ticks(host, environment, 2);
+    check(game.called("grind grind-exits heel 2 1.00"), "RT asks for the heel side\n" + environment.all());
+    check(game.called("hide grind-exits false true true"), "and keeps RT and the stick's lean from the game\n" + environment.all());
+    game.pops.push_back({true, "applied", "toe_heel", -1, 1.5f, -1.5f});
+    ticks(host, environment, 1);
+    game.pad->right_trigger = 0;
+    ticks(host, environment, 10);
+    check(game.called("grind grind-exits none") && game.called("hide grind-exits false false false"), "Let go, the game's own again");
+    environment.lines.clear();
+    check(host.run_console("grindexit") && environment.printed("sides set: 1. Last: right of travel (toe_heel)"),
+          "It counts the pop:\n" + printed_lines(environment));
+}
 void fpv_drone_flies_and_follows() {
     TestEnvironment environment;
     std::filesystem::remove_all(scratch / "storage" / "fpv-drone");
@@ -1765,6 +1857,8 @@ int main() {
         road_rash_marks_the_skater_as_it_bails();
         board_break_snaps_the_board_on_a_slam();
         fpv_drone_flies_and_follows();
+        hall_of_meat_scores_a_bail();
+        grind_exits_pick_the_side();
         reskate_hostile_is_stopped_or_refused_every_time();
         std::filesystem::remove_all(scratch);
         std::cout << "plugin tests passed\n";

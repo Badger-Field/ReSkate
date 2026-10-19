@@ -26,9 +26,7 @@ void register_perf_commands(Commands &);
 void start_memory_trace_from_environment() noexcept;
 void register_item_commands(Commands &);
 void register_trainer_commands(Commands &);
-void register_hall_of_meat_commands(Commands &);
 void register_breakable_deck_commands(Commands &);
-void register_grind_exit_commands(Commands &);
 void register_replay_keyframes_commands(Commands &);
 void register_plugin_commands(Commands &);
 // Runtime adapters. Invoked only by the verified game-thread dispatcher.

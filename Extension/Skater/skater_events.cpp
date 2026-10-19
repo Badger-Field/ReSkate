@@ -3,11 +3,12 @@
 #include "Engine/Core/Platform/memory.h"
 #include "Engine/Game/Build/addresses.h"
 #include "Engine/Game/Build/20260929/skater_state.h"
-#include "Extension/HallOfMeat/hall_of_meat_skater.h"
+#include "Extension/Skater/skater_physics.h"
 #include "Extension/Skater/no_bail.h"
 #include <Windows.h>
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <deque>
 #include <mutex>
@@ -19,12 +20,15 @@ constexpr std::size_t most_kept = 32;
 constexpr std::size_t cause_count = 35;
 constexpr float heard_hit = 3.0f; // m/s: lighter touches are not news (Board Break's body_hit)
 constexpr float fall_at_least = 0.4f, fall_at_most = 3.0f;
+constexpr std::size_t most_steps = 512;
+std::atomic<bool> steps_wanted{};
 
 struct Shared {
     std::mutex mutex;
     std::deque<Landing> landings;
     std::deque<BodyHit> hits;
     std::deque<Fall> falls;
+    std::deque<StepNews> steps;
     std::array<float, 3> velocity{};
     std::uint64_t velocity_at{};
 };
@@ -119,8 +123,14 @@ void on_step(const NoBailSkater& skater, float seconds, bool wipeout) noexcept {
             }
             w.was_wipeout = wiping;
         }
-        if (hall_of_meat::skater_available()) {
-            const auto step = hall_of_meat::read_step(skater, seconds, wipeout);
+        if (skater_physics::available()) {
+            const auto step = skater_physics::read_step(skater, seconds, wipeout);
+            if (steps_wanted.load(std::memory_order_acquire)) {
+                const double at = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+                std::lock_guard lock(s.mutex);
+                if (s.steps.size() >= most_steps) s.steps.pop_front();
+                s.steps.push_back({at, step});
+            }
             const bool ragdoll = step.ragdoll.value_or(false);
             if (ragdoll) {
                 std::optional<BodyHit> heard;
@@ -169,6 +179,17 @@ void want() noexcept {
                        "Plugins' skater events: No Bail has no room for another physics step listener.");
         listening.store(false);
     }
+}
+void want_steps() noexcept {
+    want();
+    steps_wanted.store(true, std::memory_order_release);
+}
+std::vector<StepNews> take_steps() {
+    auto& s = shared();
+    std::lock_guard lock(s.mutex);
+    std::vector<StepNews> out(s.steps.begin(), s.steps.end());
+    s.steps.clear();
+    return out;
 }
 std::vector<Landing> take_landings() {
     auto& s = shared();

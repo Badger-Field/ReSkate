@@ -7,12 +7,13 @@
 
 namespace dingosdk::plugins {
 namespace {
-constexpr std::array<std::string_view, 40> permissions{
+constexpr std::array<std::string_view, 42> permissions{
     "console", "storage", "overlay", "menu", "ui.screen", "input", "hud", "events.tricks", "events.skater",
     "skater.read", "skater.teleport", "skater.control", "skater.animation", "trainer", "camera",
     "world.raycast", "world.objects", "world.environment", "world.ai", "travel", "session.read",
     "session.skaters", "session.nametags", "net.session", "net.http", "voice.control", "chat.read",
-    "chat.send", "chat.local", "server", "throwdowns", "replay", "music", "progression.read", "settings.read", "audio.ui", "audio", "outfit", "board", "mods.read"};
+    "chat.send", "chat.local", "server", "throwdowns", "replay", "music", "progression.read", "settings.read", "audio.ui", "audio", "outfit", "board", "mods.read",
+    "events.physics", "game.speed"};
 }
 
 bool known_permission(std::string_view name) noexcept {

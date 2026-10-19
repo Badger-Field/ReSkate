@@ -29,9 +29,12 @@
 #include "Engine/Vfs/mod_catalog.h"
 #include "Extension/Assets/map_download.h"
 #include "Extension/Boot/offline_boot.h"
-#include "Extension/HallOfMeat/hall_of_meat.h"
+#include "Extension/Skater/skater_physics.h"
+#include "Extension/Skater/xray.h"
+#include "Extension/UI/hud_corner.h"
+#include "Extension/UI/Overlay/game_images.h"
 #include "Extension/Plugins/plugin_runtime.h"
-#include "Extension/Skater/grind_exit_control.h"
+#include "Extension/Skater/grind_exit.h"
 #include "Extension/Skater/camera_observer.h"
 #include "Extension/Progression/entitlement_request_hook.h"
 #include "Extension/Skater/skater_observer.h"
@@ -445,10 +448,16 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         (void)dingosdk::start_no_bail(r.base);
         const bool plugins = dingosdk::plugins::start(r.base);
         record("{\"event\":\"plugins_initialized\",\"active\":" + std::string(plugins ? "true" : "false") + "}");
-        const bool meat = dingosdk::hall_of_meat::start(r.base);
-        record("{\"event\":\"hall_of_meat_initialized\",\"active\":" + std::string(meat ? "true" : "false") + "}");
-        const bool grind_control = dingosdk::grind_exit_control::start(r.base);
-        record("{\"event\":\"grind_exit_control_initialized\",\"active\":" + std::string(grind_control ? "true" : "false") + "}");
+        // What plugins reach of the skater's physics, its x-ray and skate.'s HUD corner; the game's
+        // pictures are read now, as the overlay builds its atlas once.
+        const bool physics = dingosdk::skater_physics::start(r.base);
+        const bool xray = dingosdk::xray::start(r.base);
+        dingosdk::hud_corner::start_hud(r.base);
+        dingosdk::overlay::prepare_game_images();
+        record("{\"event\":\"skater_physics_initialized\",\"active\":" + std::string(physics ? "true" : "false") + ",\"xray\":" +
+               std::string(xray ? "true" : "false") + "}");
+        const bool grind_exits = dingosdk::grind_exit::start(r.base);
+        record("{\"event\":\"grind_exit_initialized\",\"active\":" + std::string(grind_exits ? "true" : "false") + "}");
         const bool noclip_velocity = dingosdk::start_client_noclip_velocity(r.base);
         record("{\"event\":\"noclip_velocity_initialized\",\"active\":" + std::string(noclip_velocity ? "true" : "false") + "}");
         const bool loading_screens = dingosdk::loading_screen::start(r.base);

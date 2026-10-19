@@ -8,7 +8,7 @@
 #include <imgui_internal.h>
 #include <string>
 
-// The ADDONS page (what ReSkate adds to skate.: Hall of Meat, grind exits, music, the plugins' panels)
+// The ADDONS page (what ReSkate adds to skate.: music, and the plugins' panels)
 // and the full screen menu's HOME page.
 namespace dingosdk::overlay::menu {
 using namespace theme;
@@ -52,22 +52,12 @@ void addon_tile(SkateMenu& menu, const char* id, const char* title, const char* 
     end_card();
 }
 
-void all_addons(SkateMenu& menu, const Model& model) {
-    const auto on_off = [](bool available, bool on) -> const char* { return !available ? "NOT AVAILABLE" : on ? "ON" : "OFF"; };
-    const auto colour = [](bool available, bool on) { return !available ? skate_theme::tile_light : on ? skate_theme::good : skate_theme::tile_light; };
+void all_addons(SkateMenu& menu) {
     // Two a row full screen.
     int placed = 1;
     const auto next = [&] {
         if (console_style() && placed++ % 2) ImGui::SameLine(0, px(12));
     };
-    const auto& meat = model.hall_of_meat;
-    addon_tile(menu, "addon-hall-of-meat", "HALL OF MEAT", "Your bails show the bones they hurt and score a Meat card.",
-               on_off(meat.available, meat.enabled), colour(meat.available, meat.enabled), addon_hall_of_meat);
-    const auto& grind = model.grind_exit;
-    next();
-    addon_tile(menu, "addon-grind-exits", "GRIND EXITS", "Press LT or RT while grinding to pick the side you pop out to.",
-               on_off(grind.available, grind.enabled), colour(grind.available, grind.enabled), addon_grind_exits);
-    next();
     addon_tile(menu, "addon-music", "MUSIC", "Spotify, YouTube Music, your own files and online radio through the game's music player.",
                nullptr, 0, addon_music);
     next();
@@ -82,7 +72,7 @@ void addons_page(SkateMenu& menu, const Model& model, const CallbacksV3& callbac
     // A window lists the addons in its side rail; full screen has no rail, so they are tabs here
     // (LT / RT on a controller).
     if (menu.fullscreen_drawn) {
-        static constexpr std::array<const char*, addon_count> names{"ALL ADDONS", "HALL OF MEAT", "GRIND EXITS", "MUSIC", "PLUGINS"};
+        static constexpr std::array<const char*, addon_count> names{"ALL ADDONS", "MUSIC", "PLUGINS"};
         std::vector<const char*> labels(names.begin(), names.end());
         category_tabs(menu, menu.addon, labels, "addon-tabs");
         menu.addon = std::clamp(menu.addon, 0, static_cast<int>(addon_count) - 1);
@@ -92,10 +82,8 @@ void addons_page(SkateMenu& menu, const Model& model, const CallbacksV3& callbac
     case addon_music: music_page(menu, model, callbacks); break;
     default:
         ImGui::BeginChild("addon", ImVec2(0, page_body_height(menu)), ImGuiChildFlags_NavFlattened);
-        if (menu.addon == addon_hall_of_meat) hall_of_meat_addon(menu, model, callbacks);
-        else if (menu.addon == addon_grind_exits) grind_exits_addon(menu, model, callbacks);
-        else if (menu.addon == addon_plugins) plugins_addon(menu);
-        else all_addons(menu, model);
+        if (menu.addon == addon_plugins) plugins_addon(menu);
+        else all_addons(menu);
         ImGui::EndChild();
         break;
     }
@@ -223,11 +211,6 @@ void home_page(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks
         if (home_tile(menu, "##freecam", "FREECAM", on_off(debug.free_camera), size, debug.camera_available && callbacks.queue_debug,
                       debug.free_camera, false, "Leave your skater and fly the camera.") == 1)
             request(DebugAction::set_free_camera, !debug.free_camera);
-        place(width, 1);
-        const auto& meat = model.hall_of_meat;
-        if (home_tile(menu, "##hall-of-meat", "HALL OF MEAT", on_off(meat.enabled), size, meat.available && callbacks.queue_console_command,
-                      meat.enabled, false, "Your bails show the bones they hurt and score a Meat card.") == 1)
-            quietly(callbacks, meat.enabled ? "hallofmeat 0" : "hallofmeat 1");
     }
     ImGui::Dummy(ImVec2(0, px(18)));
 
@@ -249,7 +232,7 @@ void home_page(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks
         if (home_tile(menu, "##go-map", "MAP", "Travel, parks, time and weather", size, true, false, false, "Pick a map and load it.", false) == 1)
             open_page(menu, page_map);
         place(width, 3);
-        if (home_tile(menu, "##go-addons", "ADDONS", "Hall of Meat, grind exits, music, plugins", size, true, false, false,
+        if (home_tile(menu, "##go-addons", "ADDONS", "Music, and your plugins' panels", size, true, false, false,
                       "What ReSkate adds to skate.", false) == 1)
             open_page(menu, page_addons, addon_all);
         place(width, 4);

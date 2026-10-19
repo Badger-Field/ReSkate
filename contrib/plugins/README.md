@@ -16,9 +16,18 @@ Both also run without the game, in `dingosdk_plugin_tests` (`DINGOSDK_BUILD_PLUG
 
 ## Ports
 
-- **road-rash** is Road Rash (`Extension/RoadRash`) as a mod: bails leave marks that build up,
-  worn over the outfit with `reskate.outfit`. It needs the Road Rash items mod, and the built-in
-  Road Rash switched off (`roadrash 0`), since ReSkate refuses outfit changes while that one is on.
-  While the built-in one exists it owns the `roadrash` command, so this one answers to `road rash`
-  (`road rash heal`, `road rash bails 20`, `road rash blood 0`, `road rash tattoos 1`,
-  `road rash test` for its own checks). Its switches are on its panel in the PLUGINS tab too.
+Features that were built into ReSkate, as mods of their own. Each has its own checks (`<command>
+test`) that `dingosdk_plugin_tests` runs too, and its switches on its panel in the PLUGINS tab.
+
+- **road-rash**: bails leave marks that build up, worn over the outfit with `reskate.outfit`. It
+  needs the Road Rash items mod. `roadrash`, `roadrash heal`, `roadrash bails 20`.
+- **board-break**: a hard slam can snap the board, drawn with `reskate.board`. It ships inside the
+  Board Break deck pack. `boardbreak`, `boardbreak snap mid`. Which deck every board has stays in
+  ReSkate (`boarddeck`).
+- **fpv-drone**: the FPV drone, flown from the free camera with the keyboard, a pad or a radio.
+  `fpv fly`, `fpv follow`.
+- **hall-of-meat**: skate. 3's Hall of Meat: bails show the bones they hurt on an x-ray of the
+  skater (`reskate.skater.xray`, `d:skeleton`) and score a Meat card drawn with skate.'s own
+  pictures (`d:game_image`). `hallofmeat 0|1`.
+- **grind-exits**: LT / RT in a grind pick the side of the pop (`reskate.skater.grind_exit`,
+  `reskate.input.hide`). `grindexit status`.

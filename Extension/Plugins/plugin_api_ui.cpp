@@ -81,6 +81,15 @@ plugin_ui::Style style_of(lua_State* L, int index) {
     lua_pop(L, 1);
     if (field("shadow")) style.shadow = lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);
+    if (field("font")) {
+        const std::string font = luaL_checkstring(L, -1);
+        if (font == "bold") style.font = 0;
+        else if (font == "body") style.font = 1;
+        else if (font == "heading") style.font = 2;
+        else if (font == "title") style.font = 3;
+        else luaL_error(L, "font is \"bold\", \"body\", \"heading\" or \"title\"");
+    }
+    lua_pop(L, 1);
     // A picture's source rectangle, {u0, v0, u1, v1} from 0 to 1: one glyph of a font atlas, a tile.
     if (field("uv")) {
         luaL_checktype(L, -1, LUA_TTABLE);
@@ -182,6 +191,70 @@ struct UiApi {
         const float height = finite(L, 4, "the picture's height");
         if (!(height > 0 && height <= 1000)) luaL_argerror(L, 4, "a height is more than 0 and at most 1000 metres");
         add(L, plugin, {plugin_ui::Shape::Kind::world_image, {point(L, 3, "the picture's place")}, height, std::move(file), style_of(L, 5)});
+        return 0;
+    }
+    // d:game_image(name, top_left, bottom_right, style): one of the game's own pictures; style.fit
+    // "contain" (the default), "shape" or "panel", style.edge a panel's corner size in pixels.
+    static int game_image(lua_State* L) {
+        auto& plugin = drawing(L);
+        auto name = checked_text(L, 2, 40, "a game picture's name");
+        if (std::find(plugin_ui::game_images.begin(), plugin_ui::game_images.end(), name) == plugin_ui::game_images.end()) {
+            std::string known;
+            for (const auto one : plugin_ui::game_images) known += (known.empty() ? "" : ", ") + std::string(one);
+            luaL_error(L, "the game's pictures are %s", known.c_str());
+        }
+        plugin_ui::Shape shape{plugin_ui::Shape::Kind::game_image, {point(L, 3, "a picture's top left"), point(L, 4, "a picture's bottom right")}, 0,
+                               std::move(name), style_of(L, 5)};
+        if (lua_istable(L, 5)) {
+            if (lua_getfield(L, 5, "fit") != LUA_TNIL) {
+                const std::string fit = luaL_checkstring(L, -1);
+                if (fit == "contain") shape.fit = 0;
+                else if (fit == "shape") shape.fit = 1;
+                else if (fit == "panel") shape.fit = 2;
+                else luaL_error(L, "fit is \"contain\", \"shape\" or \"panel\"");
+            }
+            lua_pop(L, 1);
+            if (lua_getfield(L, 5, "edge") != LUA_TNIL) shape.edge = std::clamp(finite(L, -1, "edge"), 0.0f, 400.0f);
+            lua_pop(L, 1);
+        }
+        add(L, plugin, std::move(shape));
+        return 0;
+    }
+    // d:gradient(top_left, bottom_right, {top_left, top_right, bottom_right, bottom_left}): a box
+    // shading between the colours of its corners.
+    static int gradient(lua_State* L) {
+        auto& plugin = drawing(L);
+        plugin_ui::Shape shape{plugin_ui::Shape::Kind::gradient, {point(L, 2, "a box's top left"), point(L, 3, "a box's bottom right")}};
+        luaL_checktype(L, 4, LUA_TTABLE);
+        for (int i = 1; i <= 4; ++i) {
+            lua_rawgeti(L, 4, i);
+            if (lua_isnil(L, -1)) luaL_argerror(L, 4, "a gradient has four colours: top left, top right, bottom right, bottom left");
+            shape.colours.push_back(colour_of(L, -1));
+            lua_pop(L, 1);
+        }
+        add(L, plugin, std::move(shape));
+        return 0;
+    }
+    // d:skeleton(paint, alpha): the local skater's x-ray (reskate.skater.xray has it ready), each body
+    // named in `paint` in its colour, the rest left out; `alpha` (0 to 1) fades it all.
+    static int skeleton(lua_State* L) {
+        auto& plugin = drawing(L);
+        luaL_checktype(L, 2, LUA_TTABLE);
+        const double alpha = luaL_optnumber(L, 3, 1.0);
+        if (!(alpha >= 0 && alpha <= 1)) luaL_argerror(L, 3, "alpha is 0 to 1");
+        plugin_ui::Shape shape{plugin_ui::Shape::Kind::skeleton};
+        shape.colours.assign(plugin_ui::body_names.size(), 0);
+        shape.style.colour = 0x00ffffffu | static_cast<std::uint32_t>(alpha * 255.0 + 0.5) << 24;
+        lua_pushnil(L);
+        while (lua_next(L, 2)) {
+            if (lua_type(L, -2) != LUA_TSTRING) luaL_error(L, "the skeleton's paint is by body name");
+            const std::string name = lua_tostring(L, -2);
+            const auto found = std::find(plugin_ui::body_names.begin() + 1, plugin_ui::body_names.end(), name);
+            if (found == plugin_ui::body_names.end()) luaL_error(L, "\"%s\" is not a body: the bodies are body_hit's names", name.c_str());
+            shape.colours[static_cast<std::size_t>(found - plugin_ui::body_names.begin())] = colour_of(L, -1);
+            lua_pop(L, 1);
+        }
+        add(L, plugin, std::move(shape));
         return 0;
     }
     static int text(lua_State* L) { return text_shape(L, plugin_ui::Shape::Kind::text); }
@@ -497,6 +570,9 @@ void UiApi::install(Plugin& plugin, lua_State* L) {
     set_function(L, "world_circle", UiApi::world_circle);
     set_function(L, "image", UiApi::image);
     set_function(L, "world_image", UiApi::world_image);
+    set_function(L, "game_image", UiApi::game_image);
+    set_function(L, "gradient", UiApi::gradient);
+    set_function(L, "skeleton", UiApi::skeleton);
     set_function(L, "size", UiApi::size);
     set_function(L, "world_to_screen", UiApi::world_to_screen);
     readonly();

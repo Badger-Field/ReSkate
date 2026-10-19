@@ -8,6 +8,7 @@
 #include <optional>
 #include <utility>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // What plugins show, handed from the client thread (where plugins run) to the render thread (the
@@ -26,17 +27,36 @@ struct Style {
     int align{};                       // text: 0 left, 1 centre, 2 right of its point
     bool shadow = true;
     std::array<float, 4> uv{0, 0, 1, 1}; // pictures: the part of the picture drawn (u0, v0, u1, v1)
+    int font{};                          // text: 0 bold, 1 body, 2 heading, 3 title (the menus' fonts)
 };
+// The skater's bodies by the ragdoll's order (Engine/Game/Skater/skater_body.h's names): d:skeleton's paint.
+inline constexpr std::array<std::string_view, 24> body_names{
+    "Board", "Head", "Neck", "Left hand", "Left forearm", "Left upper arm", "Left collarbone",
+    "Right hand", "Right forearm", "Right upper arm", "Right collarbone", "Upper chest", "Chest",
+    "Lower back", "Spine", "Left toes", "Left foot", "Left shin", "Left thigh",
+    "Right toes", "Right foot", "Right shin", "Right thigh", "Pelvis"};
+// The game's own pictures a plugin draws by name (game_image; Extension/UI/Overlay/game_images.h).
+inline constexpr std::array<std::string_view, 13> game_images{
+    "stopwatch", "wipeout", "wipeout_broken", "spread_eagle", "airtime", "gap_height", "flaming_wheel", "roll",
+    "thrasher", "brush_bar", "rough_tile", "scratches", "streak"};
 // Screen shapes are in pixels from the top left; world shapes in world metres, projected through
 // the camera as the frame is drawn, and left out behind it.
 struct Shape {
     // image: `text` is the picture's file, points[0] and [1] its corners; world_image: centred on
-    // points[0], `radius` metres tall.
-    enum class Kind { text, rect, line, circle, poly, world_text, world_line, world_circle, image, world_image } kind{Kind::text};
+    // points[0], `radius` metres tall. game_image: `text` names one of game_images, `fit` 0 contain,
+    // 1 shape, 2 panel (its corners `edge` pixels). gradient: points[0] and [1] the corners, `colours`
+    // the top left, top right, bottom right and bottom left. skeleton: the local skater's x-ray, a
+    // colour for each body in `colours` (body_names' order; 0 leaves it out), the style's alpha
+    // fading the whole.
+    enum class Kind { text, rect, line, circle, poly, world_text, world_line, world_circle, image, world_image, game_image, gradient, skeleton } kind{
+        Kind::text};
     std::vector<Vec3> points;
     float radius{};
     std::string text;
     Style style;
+    std::vector<std::uint32_t> colours;
+    int fit{};
+    float edge{};
 };
 struct Layer {
     std::string plugin;

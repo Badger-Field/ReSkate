@@ -75,6 +75,36 @@ struct SkaterNews {
     std::vector<Hit> hits;
     std::vector<Fall> falls;
 };
+// One physics step of the local skater (events.physics): when (the steady clock, ms, as
+// reskate.time.now), how long it simulated, and what the body did; only the bodies touching something.
+struct PhysicsStep {
+    double at{};
+    float seconds{};
+    bool wipeout{}, airborne{};
+    std::optional<bool> ragdoll;
+    std::optional<Vec3> velocity;
+    std::optional<float> spin;
+    struct Body {
+        std::string name; // as body_hit names it
+        float impact{}, slide{};
+        bool board{}, vehicle{}, world{}; // world: anything but the board and vehicles
+    };
+    std::vector<Body> bodies;
+};
+// What a plugin asks of the next pop out of a grind: "toe", "heel", "left" or "right" (of travel),
+// the player's stance (0 not set, 1 regular, 2 goofy: what toe and heel need), and 0.1 to 1 of the
+// full sideways speed. And a pop as it went (Extension/Skater/grind_exit.h).
+struct GrindExitWish {
+    std::string side;
+    int stance{};
+    float strength{1};
+};
+struct GrindPop {
+    bool applied{};
+    std::string reason, basis;
+    int toward{}; // +1 the left of travel, -1 the right, 0 the game's own
+    float before{}, after{};
+};
 // The last slam: its force and the game's cause number, and how long ago (ms).
 struct SlamNews {
     float force{};
@@ -268,6 +298,23 @@ public:
     virtual SkaterNews take_skater_news() { return {}; }
     virtual std::optional<Vec3> board_velocity() { return std::nullopt; }
     virtual std::optional<SlamNews> last_slam() { return std::nullopt; }
+    // Every physics step since the last tick (kept once asked for: at most 512).
+    virtual std::vector<PhysicsStep> take_physics_steps() { return {}; }
+    // The skater's x-ray ready while any plugin asks (Extension/Skater/xray.h); d:skeleton draws it.
+    virtual std::string xray(std::string_view /*plugin*/, bool) { return unavailable; }
+    // skate.'s bottom left HUD hidden while any plugin asks; false keeps the plugin ready to hide it.
+    virtual std::string hud_corner(std::string_view /*plugin*/, bool) { return unavailable; }
+    // The game run at `speed` (0.05 to 1; 1 drops the ask) while it is the slowest asked; never in a
+    // multiplayer session. And the speed it runs at for plugins now.
+    virtual std::string game_speed(std::string_view /*plugin*/, float) { return unavailable; }
+    virtual float game_speed_now() { return 1; }
+    // The next pop out of a grind (Extension/Skater/grind_exit.h); empty: the game's own exit. One
+    // plugin at a time. Its pops come back from take_grind_pops.
+    virtual std::string grind_exit(std::string_view /*plugin*/, std::optional<GrindExitWish>) { return unavailable; }
+    virtual std::vector<GrindPop> take_grind_pops(std::string_view /*plugin*/) { return {}; }
+    // Pad controls kept from the game while any plugin asks: the triggers, and the left stick's
+    // left/right while the skater grinds.
+    virtual std::string hide_pad(std::string_view /*plugin*/, bool /*lt*/, bool /*rt*/, bool /*left_x while grinding*/) { return unavailable; }
     // The skater bails as from a slam of `force` (0.5 to 3); not in a throwdown. While No Bail protects
     // the skater the wipeout is dropped, as any other is.
     virtual std::string wipeout(float /*force*/) { return unavailable; }

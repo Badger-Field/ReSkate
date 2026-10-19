@@ -1,5 +1,6 @@
 #pragma once
 #include "Engine/Game/Skater/skater_body.h"
+#include "Extension/Skater/skater_physics.h"
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -33,8 +34,17 @@ struct Slam {
     std::int32_t cause{-1};
     std::uint64_t at{};
 };
+// Every physics step as it was read (the physics_step event): when, on the steady clock in
+// milliseconds (as reskate.time.now), and what it read.
+struct StepNews {
+    double at{};
+    skater_physics::Step step;
+};
 // Client thread: starts reading the steps (once).
 void want() noexcept;
+// Client thread: from now on every step is kept for take_steps too (at most the last 512).
+void want_steps() noexcept;
+std::vector<StepNews> take_steps();
 std::vector<Landing> take_landings();
 std::vector<BodyHit> take_hits();
 std::vector<Fall> take_falls();

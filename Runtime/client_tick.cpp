@@ -15,11 +15,9 @@
 #include "Extension/Settings/job_spin.h"
 #include "Extension/Settings/replay_drafts.h"
 #include "Engine/Game/World/client_state.h"
-#include "Extension/HallOfMeat/hall_of_meat.h"
 #include "Extension/Plugins/plugin_runtime.h"
 #include "Extension/Plugins/plugin_game_runtime.h"
 #include "Extension/ReplayKeyframes/replay_keyframes.h"
-#include "Extension/Skater/grind_exit_control.h"
 #include "Extension/Skater/camera_observer.h"
 #include "Extension/UI/NativeMenu/native_menu.h"
 #include "Extension/Multiplayer/Hud/native_party.h"
@@ -1092,9 +1090,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
         DINGO_PROFILE_ZONE("tick/item browser");
         dingosdk::update_local_item_browser();
     }
-    dingosdk::hall_of_meat::on_client_tick();
     dingosdk::breakable_deck::tick();
-    dingosdk::grind_exit_control::on_client_tick(client);
     {
         DINGO_PROFILE_ZONE("tick/plugins");
         dingosdk::plugins::on_client_tick();
@@ -1106,7 +1102,6 @@ void update_model(std::uintptr_t client, TickState& frame) {
     r.multiplayer_map = description.level.empty() ? std::string{} : description.level + "|" + description.lm_level;
     const auto& current_level = description.lm_level.empty() ? description.level : description.lm_level;
     dingosdk::live_mods::set_current_level(current_level);
-    dingosdk::hall_of_meat::set_level(current_level);
     dingosdk::plugins::set_level(current_level);
     dingosdk::replay_drafts::on_client_tick(r.base, state);
     // A live mod apply hands over the destinations its mods declare. A map
@@ -1237,10 +1232,6 @@ void update_model(std::uintptr_t client, TickState& frame) {
     const auto missions_model = dingosdk::local_profile_missions();
     model.progression = dingosdk::local_profile_progression();
     model.player_card = dingosdk::local_profile_player_card();
-    model.hall_of_meat = {dingosdk::hall_of_meat::available(), dingosdk::hall_of_meat::enabled()};
-    model.grind_exit = {dingosdk::grind_exit_control::available(), dingosdk::grind_exit_control::enabled(),
-                        dingosdk::grind_exit_control::toe_heel(), dingosdk::grind_exit_control::stance(),
-                        dingosdk::grind_exit_control::strength()};
     model.keyframe_smoothing = {dingosdk::replay_keyframes::available(), dingosdk::replay_keyframes::on(),
                                 dingosdk::replay_keyframes::smoothness()};
     model.bindings = dingosdk::local_profile_controller_bindings();

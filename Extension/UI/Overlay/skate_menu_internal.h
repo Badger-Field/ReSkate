@@ -120,8 +120,6 @@ bool trainer_page_wanted();
 // Skater > CHEATS: noclip, No Bail and the boosts (skate_menu_skater.cpp).
 void cheats_tab(SkateMenu&, const Model&, const CallbacksV3&);
 // The addons' own pages (skate_menu_skater.cpp), and the ADDONS page itself (skate_menu_addons.cpp).
-void hall_of_meat_addon(SkateMenu&, const Model&, const CallbacksV3&);
-void grind_exits_addon(SkateMenu&, const Model&, const CallbacksV3&);
 void addons_page(SkateMenu&, const Model&, const CallbacksV3&);
 // The time of day the menu shows: the one last asked for while the game is still changing to it
 // (skate_menu_world.cpp). Setting it from a menu control goes through set_time_of_day, `quiet`
@@ -143,6 +141,6 @@ enum Page {
     page_home, page_map, page_build, page_skater, page_sandbox, page_addons, page_online, page_progress, page_mods,
     page_settings, page_developer, page_count
 };
-enum Addon { addon_all, addon_hall_of_meat, addon_grind_exits, addon_music, addon_plugins, addon_count, addon_first = addon_hall_of_meat };
+enum Addon { addon_all, addon_music, addon_plugins, addon_count, addon_first = addon_music };
 void open_page(SkateMenu&, int page, int addon = -1);
 }

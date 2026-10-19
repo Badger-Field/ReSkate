@@ -17,6 +17,10 @@
 #include "Extension/Skater/skater_events.h"
 #include "Extension/Skater/outfit_overlay.h"
 #include "Extension/Skater/board_pose.h"
+#include "Extension/Skater/game_speed.h"
+#include "Extension/Skater/grind_exit.h"
+#include "Extension/Skater/xray.h"
+#include "Extension/UI/hud_corner.h"
 #include "plugin_camera.h"
 #include "Extension/Multiplayer/Session/session.h"
 #include "Extension/Music/external_player.h"
@@ -343,6 +347,58 @@ public:
         }
         return news;
     }
+    std::vector<PhysicsStep> take_physics_steps() override {
+        skater_events::want_steps();
+        std::vector<PhysicsStep> out;
+        for (const auto& news : skater_events::take_steps()) {
+            const auto& s = news.step;
+            PhysicsStep step{news.at, s.seconds, s.wipeout, s.airborne, s.ragdoll, std::nullopt, s.spin, {}};
+            if (s.velocity) step.velocity = Vec3{(*s.velocity)[0], (*s.velocity)[1], (*s.velocity)[2]};
+            for (std::size_t i = 1; i < skater_body::count; ++i) {
+                const auto& c = s.body.bodies[i];
+                if (!c.touching) continue;
+                const float slide = std::sqrt(c.slide[0] * c.slide[0] + c.slide[1] * c.slide[1] + c.slide[2] * c.slide[2]);
+                step.bodies.push_back({skater_body::names[i], c.impact, std::isfinite(slide) ? slide : 0.0f, c.hit.board, c.hit.vehicle,
+                                      c.hit.world || c.hit.kind_5 || c.hit.kind_11});
+            }
+            out.push_back(std::move(step));
+        }
+        return out;
+    }
+    std::string xray(std::string_view plugin, bool on) override {
+        if (!xray::available()) return "the x-ray is unavailable for this game build";
+        xray::prepare(plugin, on);
+        return {};
+    }
+    std::string hud_corner(std::string_view plugin, bool hidden) override {
+        hud_corner::ask(plugin, hidden);
+        return {};
+    }
+    std::string game_speed(std::string_view plugin, float speed) override {
+        if (speed < 1.0f && multiplayer_session_active()) return "never in a multiplayer session";
+        game_speed::ask(plugin, speed);
+        return {};
+    }
+    float game_speed_now() override { return game_speed::current(); }
+    std::string grind_exit(std::string_view plugin, std::optional<GrindExitWish> wish) override {
+        std::optional<grind_exit::Wish> w;
+        if (wish) {
+            using Side = grind_exit::Wish::Side;
+            w = grind_exit::Wish{wish->side == "toe" ? Side::toe : wish->side == "heel" ? Side::heel : wish->side == "right" ? Side::right : Side::left,
+                                 wish->stance, wish->strength};
+        }
+        return grind_exit::wish(plugin, w);
+    }
+    std::vector<GrindPop> take_grind_pops(std::string_view plugin) override {
+        std::vector<GrindPop> out;
+        for (auto& p : grind_exit::take_pops(plugin)) out.push_back({p.applied, std::move(p.reason), std::move(p.basis), p.toward, p.before, p.after});
+        return out;
+    }
+    std::string hide_pad(std::string_view plugin, bool lt, bool rt, bool left_x) override {
+        if (!grind_exit::available()) return "hiding pad controls is unavailable for this game build";
+        grind_exit::hide(plugin, {lt, rt, left_x});
+        return {};
+    }
     std::optional<Vec3> board_velocity() override {
         skater_events::want();
         return skater_events::board_velocity();
@@ -469,6 +525,10 @@ public:
     }
     std::string current_trick() override { return skater_animation::current_trick(); }
     void tick_animation(std::uintptr_t base, std::uintptr_t client) {
+        xray::tick();
+        hud_corner::tick();
+        game_speed::tick();
+        grind_exit::tick(client);
         outfit_overlay::tick();
         board_pose::tick(base, local_skater_component(base, client));
         const bool allowed = !multiplayer::local_throwdown_active();
@@ -570,6 +630,10 @@ public:
         release_camera(plugin);
         (void)freeze(plugin, false);
         hide_hud(plugin, false);
+        xray::prepare(plugin, false);
+        hud_corner::release(plugin);
+        game_speed::ask(plugin, 1.0f);
+        grind_exit::release(plugin);
         plugin_feed::release_tags(std::string(plugin));
         if (std::erase_if(binds_, [&](const auto& item) { return item.first.first == plugin; })) publish_binds();
     }

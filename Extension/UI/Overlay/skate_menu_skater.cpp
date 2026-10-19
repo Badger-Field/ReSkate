@@ -206,68 +206,7 @@ void cheats_tab(SkateMenu& menu, const Model& model, const CallbacksV3& callback
     end_card();
 }
 
-// Addons > HALL OF MEAT: bails show the bones they hurt and score a Meat card.
-void hall_of_meat_addon(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) {
-    const auto& debug = model.debug;
-    begin_card(menu, "hall-of-meat", "HALL OF MEAT");
-    bool hall_of_meat = model.hall_of_meat.enabled;
-    // No Bail (and noclip, which includes it) stops the bails Hall of Meat scores.
-    const bool bails_off = debug.no_bail || debug.no_bail_active;
-    const char* meat_help = hall_of_meat && bails_off
-        ? "On, but No Bail is stopping your bails, so nothing shows. Turn No Bail (and noclip) off in Skater > Cheats."
-        : bails_off
-        ? "Your bails show the bones they hurt and score a Meat card. Needs No Bail (and noclip) off."
-        : "Your bails show the bones they hurt and score a Meat card. A break slows the game in single player.";
-    if (toggle_row(menu, "Hall of Meat", meat_help, hall_of_meat, model.hall_of_meat.available && callbacks.queue_console_command))
-        send_console(menu, callbacks, hall_of_meat ? "hallofmeat 1" : "hallofmeat 0");
-    end_card();
-}
-
-// Addons > GRIND EXITS: grind exit control (Extension/Skater/grind_exit_control.h).
-void grind_exits_addon(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) {
-    const auto& grind = model.grind_exit;
-    const bool grind_console = grind.available && callbacks.queue_console_command;
-    begin_card(menu, "grind-exits", "GRIND EXITS", "Choose the side you pop out of a grind using LT/RT");
-    bool grind_on = grind.enabled;
-    if (toggle_row(menu, "Grind exit triggers", "Press LT or RT while grinding to pick the side you pop out to.",
-            grind_on, grind_console))
-        send_console(menu, callbacks, grind_on ? "grindexit exits on" : "grindexit exits off");
-    field(menu, "Input Mode");
-    int grind_sides = grind.toe_heel ? 0 : 1;
-    if (choice(menu, "grind-sides", grind_sides, {"Toe / Heel", "Left / Right"}, grind_console, 0.0f,
-            {"Direction is based on your skater's toe/heel side", "Direction is based on left or right of your direction of travel"}))
-        send_console(menu, callbacks, grind_sides == 0 ? "grindexit sides toeheel" : "grindexit sides travel");
-    if (grind.toe_heel) {
-        field(menu, "Your stance");
-        int grind_stance = grind.stance == 2 ? 1 : grind.stance == 1 ? 0 : -1;
-        if (choice(menu, "grind-stance", grind_stance, {"Regular", "Goofy"}, grind_console))
-            send_console(menu, callbacks, grind_stance == 1 ? "grindexit stance goofy" : "grindexit stance regular");
-        if (grind.stance == 0) warn("Pick your stance. Until then LT / RT are left / right of travel.");
-    }
-    {
-        // Sent once the slider is let go (not every frame of a drag); the dragged value shows
-        // until the setting comes back, in steps of 5.
-        static int edited = -1;
-        static double edited_at = 0;
-        int strength = edited >= 0 ? edited : grind.strength;
-        field(menu, "Pop-out strength", "How far to the side a trigger exit pops. 100% is the full exit; lower it for rails next to a wall.");
-        ImGui::BeginDisabled(!grind_console);
-        if (slider_int("##grind-strength", &strength, 10, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp)) {
-            edited = std::clamp((strength + 2) / 5 * 5, 10, 100);
-            edited_at = ImGui::GetTime();
-        }
-        if (ImGui::IsItemDeactivatedAfterEdit() && edited >= 0) {
-            send_console(menu, callbacks, "grindexit strength " + std::to_string(edited));
-            edited_at = ImGui::GetTime();
-        }
-        if (edited >= 0 && !ImGui::IsItemActive() && (grind.strength == edited || ImGui::GetTime() - edited_at > 2.0)) edited = -1;
-        ImGui::EndDisabled();
-    }
-    end_card();
-}
-
 void skater_page(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) {
-    // (Grind exits are an addon: Addons > Grind Exits.)
     category_tabs(menu, menu.skater_tab, {"FREECAM", "FIRST PERSON", "CHEATS"}, "skater-tabs");
     ImGui::PushID(menu.skater_tab);
     ImGui::BeginChild("skater-tab", ImVec2(0, page_body_height(menu)), ImGuiChildFlags_NavFlattened);

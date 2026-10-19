@@ -128,6 +128,13 @@ add_library(dingosdk_runtime SHARED
     Extension/Skater/skater_events.cpp
     Extension/Skater/outfit_overlay.cpp
     Extension/Skater/board_pose.cpp
+    Extension/Skater/skater_physics.cpp
+    Extension/Skater/xray.cpp
+    Extension/Skater/xray_render.cpp
+    Extension/Skater/xray_skeleton.cpp
+    Extension/Skater/game_speed.cpp
+    Extension/Skater/grind_exit.cpp
+    Extension/UI/hud_corner.cpp
     Extension/Assets/morph_memory_pool.cpp
     Extension/Assets/native_render_resource_pool.cpp
     Extension/World/native_entity_pages.cpp
@@ -157,20 +164,9 @@ add_library(dingosdk_runtime SHARED
     Extension/Skater/client_debug.cpp
     Extension/Skater/ai_skaters.cpp
     Extension/Skater/no_bail.cpp
-    Extension/Skater/grind_exit_commands.cpp
-    Extension/Skater/grind_exit_control.cpp
     Extension/Skater/physics_tuning.cpp
     Extension/Multiplayer/Remote/remote_collision.cpp
     Extension/Skater/physics_tuning_model.cpp
-    Extension/HallOfMeat/hall_of_meat.cpp
-    Extension/HallOfMeat/hall_of_meat_card.cpp
-    Extension/HallOfMeat/hall_of_meat_commands.cpp
-    Extension/HallOfMeat/hall_of_meat_hud.cpp
-    Extension/HallOfMeat/hall_of_meat_model.cpp
-    Extension/HallOfMeat/hall_of_meat_render.cpp
-    Extension/HallOfMeat/hall_of_meat_skater.cpp
-    Extension/HallOfMeat/hall_of_meat_skeleton.cpp
-    Extension/HallOfMeat/hall_of_meat_slow_motion.cpp
     Extension/Skater/breakable_deck.cpp
     Extension/Skater/breakable_deck_commands.cpp
     Extension/Trainer/trainer.cpp

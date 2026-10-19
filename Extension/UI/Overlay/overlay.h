@@ -96,7 +96,7 @@ struct FlightInput {
 
 // May change what the GAME reads from an XInput pad (never what ReSkate itself reads). `user` is
 // the XInput slot. Called on whatever thread the game polls from, once per poll that returns a
-// pad. The grind exit control's grab and lean guards (grind_exit_control.h).
+// pad. Plugins' hidden pad controls (Extension/Skater/grind_exit.h, reskate.input.hide).
 struct GamepadValues {
     std::uint16_t buttons = 0;
     std::uint8_t left_trigger = 0, right_trigger = 0;
@@ -216,20 +216,6 @@ struct MissionRow {
     int completed = -1;
 };
 
-// Hall of Meat's switch (Extension/HallOfMeat/hall_of_meat.h): started, and switched on.
-struct HallOfMeatModel {
-    bool available = false, enabled = false;
-};
-
-// Grind exit control's switches (Extension/Skater/grind_exit_control.h): started, switched on,
-// LT/RT toe/heel (else left/right of travel), and the player's stance (0 not set, 1 regular,
-// 2 goofy).
-struct GrindExitModel {
-    bool available = false, enabled = false, toe_heel = true;
-    int stance = 0;
-    int strength = 100; // pop-out strength, percent (10-100)
-};
-
 // Keyframe smoothing (Extension/ReplayKeyframes/replay_keyframes.h): started, switched on, and how
 // smooth (0..1) when on.
 struct KeyframeSmoothingModel {
@@ -257,8 +243,6 @@ struct Model {
     WorldControlsModel world_controls;
     ProgressionModel progression;
     PlayerCardModel player_card;
-    HallOfMeatModel hall_of_meat;
-    GrindExitModel grind_exit;
     KeyframeSmoothingModel keyframe_smoothing;
     ObjectPersistenceModel object_persistence;
     ParkEditorModel editor;

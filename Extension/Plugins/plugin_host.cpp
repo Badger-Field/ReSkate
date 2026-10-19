@@ -287,6 +287,42 @@ void Host::follow_game() {
             each([&](Plugin& plugin, const std::string&) { plugin.game_event("bail_end", "events.skater", data); });
         }
     }
+    if (wants("events.physics"))
+        for (const auto& step : game.take_physics_steps()) {
+            auto data = Json::object();
+            data["at"] = step.at;
+            data["seconds"] = step.seconds;
+            data["wipeout"] = step.wipeout;
+            data["airborne"] = step.airborne;
+            if (step.ragdoll) data["ragdoll"] = *step.ragdoll;
+            if (step.velocity) data["velocity"] = Json::array({(*step.velocity)[0], (*step.velocity)[1], (*step.velocity)[2]});
+            if (step.spin) data["spin"] = *step.spin;
+            auto bodies = Json::object();
+            for (const auto& b : step.bodies) {
+                auto body = Json::object();
+                body["impact"] = b.impact;
+                body["slide"] = b.slide;
+                body["board"] = b.board;
+                body["vehicle"] = b.vehicle;
+                body["world"] = b.world;
+                bodies[b.name] = std::move(body);
+            }
+            data["bodies"] = std::move(bodies);
+            each([&](Plugin& plugin, const std::string&) { plugin.game_event("physics_step", "events.physics", data); });
+        }
+    if (wants("skater.control"))
+        each([&](Plugin& plugin, const std::string& id) {
+            for (const auto& pop : game.take_grind_pops(id)) {
+                auto data = Json::object();
+                data["applied"] = pop.applied;
+                data["reason"] = pop.reason;
+                if (!pop.basis.empty()) data["basis"] = pop.basis;
+                data["side"] = pop.toward > 0 ? "left" : pop.toward < 0 ? "right" : "";
+                data["before"] = pop.before;
+                data["after"] = pop.after;
+                plugin.game_event("grind_exit", "events.skater", data);
+            }
+        });
     if (wants("chat.read")) {
         auto lines = game.chat_since(chat_seen_);
         // Lines from before the first plugin listened are not news.

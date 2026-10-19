@@ -200,20 +200,6 @@ inline void activate(State& s, const overlay::Model& m, const overlay::Callbacks
         const overlay::OfflineFeatureRequest request{overlay::OfflineFeatureGroup::board_wear, !wear.effective};
         report(wear.available && cb.queue_offline_feature &&
                cb.queue_offline_feature(cb.user, request, result.data(), result.size()));
-    } else if (command == "hall-of-meat") {
-        console(m.hall_of_meat.enabled ? "hallofmeat 0" : "hallofmeat 1", m.hall_of_meat.available);
-    } else if (command == "grind-exits") {
-        console(m.grind_exit.enabled ? "grindexit exits off" : "grindexit exits on", m.grind_exit.available);
-    } else if (command == "grind-exit-sides") {
-        console(m.grind_exit.toe_heel ? "grindexit sides travel" : "grindexit sides toeheel", m.grind_exit.available);
-    } else if (command == "grind-exit-stance") {
-        // Not set or regular -> goofy -> regular.
-        console(m.grind_exit.stance == 2 ? "grindexit stance regular" : "grindexit stance goofy", m.grind_exit.available);
-    } else if (command == "grind-exit-strength") {
-        // 100 -> 75 -> 50 -> 25 -> 100 (the ReSkate menu's slider sets any value from 10 to 100).
-        const int strength = m.grind_exit.strength;
-        const int next = strength > 75 ? 75 : strength > 50 ? 50 : strength > 25 ? 25 : 100;
-        console("grindexit strength " + std::to_string(next), m.grind_exit.available);
     } else if (command == "keyframe-smoothing") {
         console(m.keyframe_smoothing.enabled ? "keysmooth off" : "keysmooth on", m.keyframe_smoothing.available);
     } else if (command == "keyframe-smoothness") {
@@ -316,18 +302,6 @@ inline Page render(State& s, const overlay::Model& m, const overlay::CallbacksV3
         toggle(p.main, "noclip", "Noclip", m.debug.noclip, (m.debug.noclip_available || m.debug.noclip) && cb.queue_debug);
         toggle(p.main, "no-bail", "No bail", m.debug.no_bail, (m.debug.no_bail_available || m.debug.no_bail) && cb.queue_debug);
         toggle(p.main, "freecam", "Freecam", m.debug.free_camera, m.debug.available && m.debug.camera_available && cb.queue_debug);
-        toggle(p.main, "hall-of-meat", "Hall of Meat", m.hall_of_meat.enabled, m.hall_of_meat.available && cb.queue_console_command);
-        const auto& grind = m.grind_exit;
-        const bool grind_console = grind.available && cb.queue_console_command;
-        toggle(p.main, "grind-exits", "Grind exit triggers", grind.enabled, grind_console);
-        button(p.main, "grind-exit-sides", std::string("Input Mode: ") + (grind.toe_heel ? "Toe / Heel" : "Left / Right"),
-            "grind-exit-sides", grind_console);
-        if (grind.toe_heel)
-            button(p.main, "grind-exit-stance",
-                std::string("Your stance: ") + (grind.stance == 2 ? "Goofy" : grind.stance == 1 ? "Regular" : "Not set"),
-                "grind-exit-stance", grind_console);
-        button(p.main, "grind-exit-strength", "Pop-out strength: " + std::to_string(grind.strength) + "%", "grind-exit-strength",
-            grind_console);
         toggle(p.main, "board-wear", "Board wear", m.offline.board_wear.effective,
             m.offline.board_wear.available && cb.queue_offline_feature);
         button(p.main, "board-wear-reset", "Reset board wear", "board-wear-reset",

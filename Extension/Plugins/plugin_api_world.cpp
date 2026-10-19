@@ -120,6 +120,42 @@ struct WorldApi {
         plugin.wipeout_at_ = now;
         return result(L, game(plugin).wipeout(static_cast<float>(force)));
     }
+    // skater.xray(on): the x-ray ready (the renderer followed) while on; d:skeleton draws it.
+    static int xray(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "overlay", "reskate.skater.xray");
+        return result(L, game(plugin).xray(plugin.id(), lua_toboolean(L, 1) != 0));
+    }
+    // skater.grind_exit(wish): the next pop out of a grind, {side = "toe"|"heel"|"left"|"right",
+    // stance = "regular"|"goofy", strength = 0.1 to 1}; nil the game's own exit.
+    static int grind_exit(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "skater.control", "reskate.skater.grind_exit");
+        if (lua_isnoneornil(L, 1)) return result(L, game(plugin).grind_exit(plugin.id(), std::nullopt));
+        luaL_checktype(L, 1, LUA_TTABLE);
+        GrindExitWish wish;
+        lua_getfield(L, 1, "side");
+        wish.side = luaL_checkstring(L, -1);
+        lua_pop(L, 1);
+        if (wish.side != "toe" && wish.side != "heel" && wish.side != "left" && wish.side != "right")
+            luaL_error(L, "a grind exit's side is \"toe\", \"heel\", \"left\" or \"right\"");
+        lua_getfield(L, 1, "stance");
+        if (!lua_isnil(L, -1)) {
+            const std::string stance = luaL_checkstring(L, -1);
+            if (stance == "regular") wish.stance = 1;
+            else if (stance == "goofy") wish.stance = 2;
+            else luaL_error(L, "a stance is \"regular\" or \"goofy\"");
+        }
+        lua_pop(L, 1);
+        lua_getfield(L, 1, "strength");
+        if (!lua_isnil(L, -1)) {
+            const double strength = luaL_checknumber(L, -1);
+            if (!(strength >= 0.1 && strength <= 1)) luaL_error(L, "a grind exit's strength is 0.1 to 1");
+            wish.strength = static_cast<float>(strength);
+        }
+        lua_pop(L, 1);
+        return result(L, game(plugin).grind_exit(plugin.id(), std::move(wish)));
+    }
     // board.motion(): the board's velocity in the last physics step, or nil.
     static int board_motion(lua_State* L) {
         auto& plugin = plugin_of(L);
@@ -248,6 +284,26 @@ struct WorldApi {
         need(L, plugin, "hud", "reskate.hud.hide");
         game(plugin).hide_hud(plugin.id(), lua_toboolean(L, 1) != 0);
         return 0;
+    }
+    // hud.corner(hidden): skate.'s bottom left HUD hidden while true; false keeps it ready to hide.
+    static int hud_corner(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "hud", "reskate.hud.corner");
+        return result(L, game(plugin).hud_corner(plugin.id(), lua_toboolean(L, 1) != 0));
+    }
+    // time.slow(speed): the game at `speed` (0.05 to 1; 1 or nil gives it back); single player only.
+    static int slow(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "game.speed", "reskate.time.slow");
+        const double speed = luaL_optnumber(L, 1, 1.0);
+        if (!(speed >= 0.05 && speed <= 1)) luaL_argerror(L, 1, "a game speed is 0.05 to 1");
+        return result(L, game(plugin).game_speed(plugin.id(), static_cast<float>(speed)));
+    }
+    static int speed(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "game.speed", "reskate.time.speed");
+        lua_pushnumber(L, game(plugin).game_speed_now());
+        return 1;
     }
     // ---- world.objects -----------------------------------------------------------------------------
     static int catalog(lua_State* L) {
@@ -1234,6 +1290,28 @@ struct WorldApi {
         need(L, plugin, "input", "reskate.input.capture");
         return result(L, game(plugin).capture_input(plugin.id(), lua_toboolean(L, 1) != 0));
     }
+    // input.hide({left_trigger = true, right_trigger = true, left_x = "grinding"}): those kept from the
+    // game while asked; nil or {} gives them back.
+    static int input_hide(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "input", "reskate.input.hide");
+        bool lt{}, rt{}, left_x{};
+        if (!lua_isnoneornil(L, 1)) {
+            luaL_checktype(L, 1, LUA_TTABLE);
+            lua_getfield(L, 1, "left_trigger");
+            lt = lua_toboolean(L, -1) != 0;
+            lua_getfield(L, 1, "right_trigger");
+            rt = lua_toboolean(L, -1) != 0;
+            lua_getfield(L, 1, "left_x");
+            if (!lua_isnil(L, -1)) {
+                if (lua_type(L, -1) != LUA_TSTRING || std::string_view(lua_tostring(L, -1)) != "grinding")
+                    luaL_error(L, "left_x is hidden only while grinding: left_x = \"grinding\"");
+                left_x = true;
+            }
+            lua_pop(L, 3);
+        }
+        return result(L, game(plugin).hide_pad(plugin.id(), lt, rt, left_x));
+    }
     // ---- ui.screen ---------------------------------------------------------------------------------------
     // screen(title, build): a full-screen screen, drawn while open() has it open; Esc closes it.
     static int screen(lua_State* L) {
@@ -1295,12 +1373,14 @@ static void into(lua_State* L, const char* field, std::initializer_list<std::pai
 
 void WorldApi::install(Plugin& plugin, lua_State* L) {
     (void)plugin;
-    into(L, "skater", {{"state", state}, {"noclip", noclip}, {"boost", boost}, {"freeze", freeze}, {"wipeout", wipeout}});
+    into(L, "skater", {{"state", state}, {"noclip", noclip}, {"boost", boost}, {"freeze", freeze}, {"wipeout", wipeout}, {"xray", xray},
+                        {"grind_exit", grind_exit}});
     into(L, "board", {{"motion", board_motion}, {"bones", board_bones}, {"set", board_set}, {"hide", board_hide}, {"clear", board_clear},
                        {"park", board_park}, {"toss", board_toss}});
     into(L, "camera", {{"look", camera_look}, {"set", camera_set}, {"follow", camera_follow}, {"release", camera_release}, {"held", camera_held}, {"get", camera_get}});
     into(L, "trainer", {{"set_point", set_point}, {"back", back}});
-    into(L, "hud", {{"hide", hide_hud}});
+    into(L, "hud", {{"hide", hide_hud}, {"corner", hud_corner}});
+    into(L, "time", {{"slow", slow}, {"speed", speed}});
     into(L, "objects", {{"catalog", catalog}, {"list", objects}, {"place", place}, {"move", move}, {"remove", remove}});
     into(L, "world", {{"set_time", set_time}, {"set_control", set_control}, {"set_park", set_park}});
     into(L, "travel", {{"locations", locations}, {"levels", levels}, {"go", go}, {"load", load}});
@@ -1318,7 +1398,8 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
                       {"game", game_current}, {"game_next", game_next}});
     into(L, "progression", {{"get", progress}});
     into(L, "settings", {{"game", setting}, {"names", setting_names}});
-    into(L, "input", {{"bind", bind}, {"flight", input_flight}, {"gamepad", input_gamepad}, {"joystick", input_joystick}, {"capture", input_capture}});
+    into(L, "input", {{"bind", bind}, {"flight", input_flight}, {"gamepad", input_gamepad}, {"joystick", input_joystick}, {"capture", input_capture},
+                      {"hide", input_hide}});
     into(L, "ui", {{"screen", screen}, {"open", open}, {"close", close}});
 }
 
