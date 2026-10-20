@@ -85,6 +85,19 @@ struct FakeGame final : Game {
         if (words.empty()) return "game";
         return words.front() == "ringing" ? "1" : "";
     }
+    std::vector<ContentFile> content_files;
+    std::map<std::string, std::string> content_texts;
+    std::string content_list(std::string_view folder, std::vector<ContentFile>& out) override {
+        calls.push_back(std::format("content list {}", folder));
+        out = content_files;
+        return {};
+    }
+    std::string content_read(std::string_view mod, std::string_view folder, std::string_view path, std::string& text) override {
+        const auto found = content_texts.find(std::format("{}/{}/{}", mod, folder, path));
+        if (found == content_texts.end()) return "not found";
+        text = found->second;
+        return {};
+    }
     std::string trick_label(std::string_view plugin, std::string_view from, std::string_view to) override {
         calls.push_back(std::format("trick label {} {}={}", plugin, from, to));
         return {};
@@ -544,6 +557,8 @@ void a_permission_must_be_declared() {
         assert(not ok and err:find("needs the \"hud\" permission"), err)
         ok, err = pcall(reskate.tricks.record_as, {9}, 187, 100)
         assert(not ok and err:find("needs the \"skater.control\" permission"), err)
+        ok, err = pcall(reskate.mods.content, "parks")
+        assert(not ok and err:find("needs the \"mods.read\" permission"), err)
         reskate.console.print("never")
     )")});
     stopped(host, "bare", "raised an error");
@@ -1902,6 +1917,42 @@ void rock_to_fakie_relabels_and_records_the_stall() {
     check(!game.called("trick record"), "B outside a stall asks nothing\n" + environment.all());
 }
 
+// Shared content: a plugin names a folder in its manifest's "content" and reads it in every enabled
+// mod; other folders, and the field without mods.read, are refused.
+void a_plugin_reads_the_content_folder_it_names() {
+    for (const auto* bad : {R"({"api": 1, "entry": "a.lua", "content": ["parks"]})",
+                            R"({"api": 1, "entry": "a.lua", "permissions": ["mods.read"], "content": ["../up"]})",
+                            R"({"api": 1, "entry": "a.lua", "permissions": ["mods.read"], "content": "parks"})"}) {
+        bool refused = false;
+        try { parse_manifest(bad); } catch (const std::exception&) { refused = true; }
+        check(refused, std::string("A bad content field is refused: ") + bad);
+    }
+    check(parse_manifest(R"({"api": 1, "entry": "a.lua", "permissions": ["mods.read"], "content": ["Parks", "parks", "routes"]})").content ==
+              std::vector<std::string>{"parks", "routes"},
+          "Content names are lower-case, each once");
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    game.content_files = {{"Someone-Park_Pack", "Park Pack", "sanvan/bridge.json", 12}, {"Map_Mod", "Map Mod", "red.json", 7}};
+    game.content_texts["Someone-Park_Pack/parks/sanvan/bridge.json"] = R"({"id":"bridge"})";
+    Host host(environment, Side::client);
+    host.apply({package("reader", {{manifest_file, R"({"api": 1, "entry": "plugin/main.lua", "permissions": ["console", "mods.read"], "content": ["parks"]})"},
+                                   {"plugin/main.lua", R"(
+        local files = assert(reskate.mods.content("Parks"))
+        assert(#files == 2 and files[1].mod == "Someone-Park_Pack" and files[1].path == "sanvan/bridge.json" and files[1].size == 12
+               and files[2].title == "Map Mod", "listed")
+        assert(reskate.mods.read_content("Someone-Park_Pack", "parks", "sanvan/bridge.json") == '{"id":"bridge"}', "read")
+        local text, why = reskate.mods.read_content("Map_Mod", "parks", "missing.json")
+        assert(text == nil and why == "not found", "a missing file")
+        local ok, err = pcall(reskate.mods.content, "routes")
+        assert(not ok and err:find("in the manifest's \"content\""), err)
+        ok, err = pcall(reskate.mods.read_content, "Map_Mod", "parks", "../../secret.txt")
+        assert(not ok and err:find("a path inside"), err)
+        reskate.console.print("content ok")
+    )"}})});
+    running(host, "reader", environment);
+    check(environment.printed("content ok") && game.called("content list parks"), "The plugin reads its content folder\n" + environment.all());
+}
+
 void board_break_snaps_the_board_on_a_slam() {
     TestEnvironment environment;
     std::filesystem::remove_all(scratch / "storage" / "board-break");
@@ -2644,6 +2695,7 @@ int main() {
         road_rash_marks_the_skater_as_it_bails();
         dual_stick_edits_the_companions_settings();
         rock_to_fakie_relabels_and_records_the_stall();
+        a_plugin_reads_the_content_folder_it_names();
         board_break_snaps_the_board_on_a_slam();
         fpv_drone_flies_and_follows();
         hall_of_meat_scores_a_bail();

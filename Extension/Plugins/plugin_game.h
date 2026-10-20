@@ -366,6 +366,18 @@ public:
     // the ticker's label `from` shown as `to` (empty: that label is the game's again), and the next
     // trick with one of `from`'s ids, within `within_ms`, recorded as `to`. Empty when done, else why not.
     virtual std::string trick_label(std::string_view /*plugin*/, std::string_view /*from*/, std::string_view /*to*/) { return unavailable; }
+    // ---- content: a folder of every enabled mod, as the plugin's manifest names it ("content") -------
+    struct ContentFile {
+        std::string mod, title; // the mod's folder name and its own name
+        std::string path;       // under <mod>/<folder>/, with / between folders
+        std::uint64_t size{};
+    };
+    // The files there, mod by mod in load order; `folder` is checked against the manifest already.
+    virtual std::string content_list(std::string_view /*folder*/, std::vector<ContentFile>& /*files*/) { return unavailable; }
+    // One of them: `path` is checked already (safe_relative_path). Empty when read, else why not.
+    virtual std::string content_read(std::string_view /*mod*/, std::string_view /*folder*/, std::string_view /*path*/, std::string& /*text*/) {
+        return unavailable;
+    }
     virtual std::string trick_record_as(std::string_view /*plugin*/, std::vector<std::uint32_t> /*from*/, std::uint32_t /*to*/, int /*within_ms*/) {
         return unavailable;
     }

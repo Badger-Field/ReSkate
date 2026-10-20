@@ -310,6 +310,61 @@ int record_as(lua_State* L) {
     return result(L, game_of(plugin).trick_record_as(plugin.id(), std::move(from), to, static_cast<int>(within)));
 }
 
+// mods.content(folder): every file under <mod>/<folder>/ of every enabled mod, `folder` one the
+// manifest's "content" names: {{mod, title, path, size}, ...}, mod by mod in load order; nil, why.
+std::string content_folder(lua_State* L, Plugin& plugin, int index, const char* what) {
+    std::size_t length = 0;
+    const char* text = luaL_checklstring(L, index, &length);
+    std::string folder(text, std::min<std::size_t>(length, 64));
+    for (auto& c : folder) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+    const auto& declared = plugin.manifest().content;
+    if (std::find(declared.begin(), declared.end(), folder) == declared.end())
+        luaL_error(L, "%s(\"%s\"): name \"%s\" in the manifest's \"content\" first", what, folder.c_str(), folder.c_str());
+    return folder;
+}
+int content(lua_State* L) {
+    auto& plugin = allowed(L, "mods.read", "reskate.mods.content");
+    const auto folder = content_folder(L, plugin, 1, "reskate.mods.content");
+    std::vector<Game::ContentFile> files;
+    if (const auto why = game_of(plugin).content_list(folder, files); !why.empty()) {
+        lua_pushnil(L);
+        lua_pushlstring(L, why.data(), why.size());
+        return 2;
+    }
+    lua_createtable(L, static_cast<int>(files.size()), 0);
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        lua_createtable(L, 0, 4);
+        lua_pushlstring(L, files[i].mod.data(), files[i].mod.size());
+        lua_setfield(L, -2, "mod");
+        lua_pushlstring(L, files[i].title.data(), files[i].title.size());
+        lua_setfield(L, -2, "title");
+        lua_pushlstring(L, files[i].path.data(), files[i].path.size());
+        lua_setfield(L, -2, "path");
+        lua_pushnumber(L, static_cast<double>(files[i].size));
+        lua_setfield(L, -2, "size");
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    return 1;
+}
+// mods.read_content(mod, folder, path): that file's text, at most 1 MB; nil, why ("not found" for none).
+int read_content(lua_State* L) {
+    auto& plugin = allowed(L, "mods.read", "reskate.mods.read_content");
+    std::size_t mod_length = 0;
+    const char* mod = luaL_checklstring(L, 1, &mod_length);
+    if (!mod_length || mod_length > 64) luaL_argerror(L, 1, "a mod's folder name, 1 to 64 characters");
+    const auto folder = content_folder(L, plugin, 2, "reskate.mods.read_content");
+    const auto path = safe_relative_path(luaL_checkstring(L, 3));
+    if (path.empty()) luaL_argerror(L, 3, "a path inside the mod's folder (use / between folders, no ..)");
+    std::string text;
+    if (const auto why = game_of(plugin).content_read(std::string_view(mod, mod_length), folder, path, text); !why.empty()) {
+        lua_pushnil(L);
+        lua_pushlstring(L, why.data(), why.size());
+        return 2;
+    }
+    lua_pushlstring(L, text.data(), text.size());
+    return 1;
+}
+
 } // namespace
 
 void install_services_api(Plugin&, lua_State* L) {
@@ -319,5 +374,6 @@ void install_services_api(Plugin&, lua_State* L) {
     add_functions(L, "camera", {{"free", free_camera}, {"pad_flight", pad_flight}});
     add_functions(L, "physics", {{"competition", competition}, {"stock_ready", stock_ready}, {"prepare", prepare}});
     add_functions(L, "tricks", {{"feed", trick_feed}, {"gesture", gesture}, {"label", label}, {"record_as", record_as}});
+    add_functions(L, "mods", {{"content", content}, {"read_content", read_content}});
 }
 } // namespace dingosdk::plugins
