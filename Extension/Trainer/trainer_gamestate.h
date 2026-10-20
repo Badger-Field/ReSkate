@@ -21,6 +21,11 @@ struct FlipState {
     // The impossible's clips (and only they) play at Float.Anim.TrickFlipSpeedClamped instead: 0 when not found.
     std::uintptr_t clamped_at{};
     float clamped{};
+    // Bool.Anim.Is.Underflip, Bool.State.Is.Underflip, Bool.Anim.IsInUnderflipWindow: 1 or 0, -1 when not found.
+    std::int8_t underflip_anim{-1}, underflip_state{-1}, underflip_window{-1};
+    // Float.Anim.UnderflipTimeScale, what the underflip clips play at: 0 when not found.
+    std::uintptr_t underflip_timescale_at{};
+    float underflip_timescale{};
     explicit operator bool() const noexcept { return speed_at != 0; }
 };
 FlipState read_flip_state(std::uintptr_t base, std::uintptr_t entity) noexcept;
@@ -67,13 +72,15 @@ GrindControl read_grind_control(std::uintptr_t base, std::uintptr_t entity) noex
 std::int32_t read_manual_intent(std::uintptr_t base, std::uintptr_t entity) noexcept;
 
 // The tricks that have a speed of their own under "Advanced trick speed". A nollie turns at
-// its regular trick's speed, but for the impossibles, which are different tricks. Underflips, held flips, hospital and
-// flower flips have none: their clips play at no speed state.
+// its regular trick's speed, but for the impossibles, which are different tricks. Held flips have none: their clips play
+// at no speed state. Underflips turn at Underflip speed times a speed of their own (the last eight): CurrentFlipTrick
+// stays the flipped trick through an underflip, so the kickflip's underflip is told apart from the heelflip's by it
+// (nollies share their regular trick's, but for the impossibles).
 struct FlipTrick {
     std::string_view key;   // the option and preset name
     std::string_view label; // in the menu
 };
-inline constexpr std::array<FlipTrick, 20> flip_tricks{{
+inline constexpr std::array<FlipTrick, 28> flip_tricks{{
     {"flip.kickflip", "Kickflip"},
     {"flip.heelflip", "Heelflip"},
     {"flip.popshuvit", "Pop shuvit"},
@@ -94,9 +101,21 @@ inline constexpr std::array<FlipTrick, 20> flip_tricks{{
     {"flip.nollieimpossible", "Nollie impossible"},
     {"flip.nolliebackfootimpossible", "Nollie back foot impossible"},
     {"flip.lateflip", "Late flip"},
+    {"flip.kickflipunderflip", "Kickflip underflip"},
+    {"flip.heelflipunderflip", "Heelflip underflip"},
+    {"flip.popshuvitunderflip", "Pop shuvit underflip"},
+    {"flip.fspopshuvitunderflip", "FS pop shuvit underflip"},
+    {"flip.impossibleunderflip", "Impossible underflip"},
+    {"flip.frontfootimpossibleunderflip", "Front foot impossible underflip"},
+    {"flip.nollieimpossibleunderflip", "Nollie impossible underflip"},
+    {"flip.nolliebackfootimpossibleunderflip", "Nollie back foot impossible underflip"},
 }};
-// Which of those a CurrentFlipTrick value belongs to; -1: none (an ollie, a wallie, an underflip).
+inline constexpr std::size_t late_flip_slot = 19, first_underflip_slot = 20;
+static_assert(flip_tricks[late_flip_slot].key == "flip.lateflip" && flip_tricks[first_underflip_slot].key == "flip.kickflipunderflip");
+// Which of those a CurrentFlipTrick value belongs to; -1: none (a wallie, a held flip).
 int flip_trick_index(std::uint32_t trick) noexcept;
+// Which underflip slot of those a CurrentFlipTrick value turns into when it is underflipped; -1: none.
+int underflip_trick_index(std::uint32_t trick) noexcept;
 // The name the game gives a CurrentFlipTrick value ("Kickflip", "N_360Flip"); empty when unknown.
 std::string_view flip_trick_name(std::uint32_t trick) noexcept;
 
@@ -283,5 +302,21 @@ void grind_switch_asked(std::size_t index, std::uint32_t &asked, std::uint32_t &
 // Why a switch reads nothing: 0 its state object is not found, 1 found but its handle is not valid, 2 found but the
 // skater has no page or no value for it, 3 it has a value. `handle` is the object's handle word.
 int grind_switch_status(std::uintptr_t base, std::uintptr_t entity, std::size_t index, std::uint32_t &handle) noexcept;
+// Underflip speed: the local skater's UnderflipTimeScale at `at` is scaled by `factor` at every lookup of it (the hook
+// above), since the game sets it every tick before its clips read it. `at` 0 lets go and puts the game's number back.
+// False while the hook is not running.
+bool hold_underflip_timescale(std::uintptr_t at, float factor) noexcept;
+// Underflip speed: while `at` (the local skater's TrickFlipSpeed) is armed, the game's own set of it, which starts an
+// underflip, is scaled by `factor` as the game makes it. `at` 0 disarms.
+void arm_underflip_flip_speed(std::uintptr_t at, float factor) noexcept;
+// The underflip's playback rate band (MinScale, MaxScale of its two rate controllers): the game's own times `factor`, on
+// every copy found by the memory search. Returns how many copies there are (0: not found yet).
+int scale_underflip_bands(float low_factor, float high_factor) noexcept;
+// The rate of every animation rate controller the game updates while it is set (0: off): the under part of an underflip.
+void scale_under_part(float factor) noexcept;
+// The game's own last UnderflipTimeScale, as the hold saw it.
+float underflip_timescale_game() noexcept;
+// Who looked UnderflipTimeScale up since last asked: "offset xcount, ..." (offsets in the game).
+std::string underflip_timescale_callers() noexcept;
 void hold_grind_switches(std::uintptr_t base, std::uintptr_t entity, const std::int8_t *modes, std::int8_t *live) noexcept;
 }

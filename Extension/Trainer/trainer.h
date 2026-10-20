@@ -141,7 +141,9 @@ struct View {
     bool pump_blocked{};  // set, but this session's rules keep the game's own pumping
     RevertTuning revert;  // what counts as a revert and what it is worth
     float offboard_height{1}; // a jump on foot
-    float flip_speed{1};      // board flip tricks: x of the game's own speed
+    float flip_speed{1};
+    float underflip_speed{1}; // while an underflip turns, times the flip speed      // board flip tricks: x of the game's own speed
+    bool underflip_split{};   // Underflip speed for the under part only; the underflip's flip at Flip trick speed
     bool flip_advanced{};     // each flip trick also has a speed of its own
     bool flip_pop{};          // a slowed flip trick pops higher
     bool flip_flick{};        // a slow flick turns the board as fast as a full one

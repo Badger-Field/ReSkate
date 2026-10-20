@@ -44,7 +44,7 @@ struct Page {
     std::array<char, 49> preset_name{};
     std::array<float, 3> teleport{};
     double speed_edit{-1}, speed_until{};
-    float manual_edit{1}, hippy_edit{1}, nocomply_edit{1}, boneless_edit{1}, offboard_edit{1}, flip_edit{1}, pump_edit{1};
+    float manual_edit{1}, hippy_edit{1}, nocomply_edit{1}, boneless_edit{1}, offboard_edit{1}, flip_edit{1}, pump_edit{1}, underflip_edit{1};
     std::array<float, trainer::flip_tricks.size()> trick_edit{}; // the speed of each flip trick
     std::array<bool, trainer::flip_tricks.size()> trick_editing{};
     float grind_side_edit{1}, grind_push_edit{};
@@ -57,7 +57,7 @@ struct Page {
     // Rows of the value table that cards show by name, for one snapshot (place_rows).
     std::array<std::vector<std::size_t>, 4> trick_rows;
     std::array<std::vector<std::size_t>, 6> transition_rows;
-    bool manual_editing{}, hippy_editing{}, nocomply_editing{}, boneless_editing{}, offboard_editing{}, flip_editing{}, pump_editing{};
+    bool manual_editing{}, hippy_editing{}, nocomply_editing{}, boneless_editing{}, offboard_editing{}, flip_editing{}, pump_editing{}, underflip_editing{};
     std::uint64_t open_serial{}; // the last `trainer open` acted on
     std::uint64_t share_serial{}; // the last `preset export` put on the clipboard
     bool share_seen{};
@@ -99,7 +99,8 @@ void card_end(Page &p) {
 // A slider shows what the player is dragging until the trainer's own number catches up; after a reset there is nothing
 // to catch up with.
 void clear_edits(Page &p) {
-    p.manual_editing = p.hippy_editing = p.nocomply_editing = p.boneless_editing = p.offboard_editing = p.flip_editing = p.pump_editing = p.revert_editing = false;
+    p.manual_editing = p.hippy_editing = p.nocomply_editing = p.boneless_editing = p.offboard_editing = p.flip_editing = p.pump_editing = p.revert_editing =
+        p.underflip_editing = false;
     p.grind_side_editing = p.grind_push_editing = p.grind_range_editing = p.gravity_editing = false;
     p.trick_editing = {};
     p.active.clear();
@@ -350,7 +351,8 @@ void dial_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const trai
         const auto hint = std::format("{} 1 is the game's own; \"{}\" is x {}.", preset.note, preset.name, number(preset.amount));
         field(menu, std::abs(preset.factor - 1.0) > 1e-4 ? (preset.title + "  *").c_str() : preset.title.c_str(), hint.c_str());
         double value = preset.factor;
-        const double low = preset.amount < 1 ? 0.05 : 0.2, high = preset.amount < 1 ? 3.0 : 10.0;
+        // From 0: Grind lock-on at 0 is no lock-on (the owner's ask, 2026-10-19).
+        const double low = 0.0, high = preset.amount < 1 ? 3.0 : 10.0;
         if (slider_double("##dial", &value, low, high, "x %.2f", ImGuiSliderFlags_Logarithmic) && value >= 0)
             trainer_command(menu, callbacks, std::format("dial {} {}", number(value), preset.name));
         ImGui::PopID();
@@ -371,11 +373,11 @@ void dial_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const trai
     const float reset = ImGui::CalcTextSize("Reset").x + ImGui::GetStyle().FramePadding.x * 2;
     const auto id = "dial:" + preset.name;
     double value = p.active == id ? p.active_value : preset.factor;
-    // A preset that turns its value down gets a dial with more room below 1.
-    const double low = preset.amount < 1 ? 0.05 : 0.2, high = preset.amount < 1 ? 3.0 : 10.0;
+    // A preset that turns its value down gets a dial with less room above 1.
+    const double low = 0.0, high = preset.amount < 1 ? 3.0 : 10.0; // from 0, as the console menu's dial
     const float box = px(64);
     ImGui::SetNextItemWidth(std::max(px(70), ImGui::GetContentRegionAvail().x - box - button - reset - ImGui::GetStyle().ItemSpacing.x * 3));
-    if (ImGui::SliderScalar("##dial", ImGuiDataType_Double, &value, &low, &high, "x %.2f", ImGuiSliderFlags_Logarithmic) && value > 0)
+    if (ImGui::SliderScalar("##dial", ImGuiDataType_Double, &value, &low, &high, "x %.2f", ImGuiSliderFlags_Logarithmic) && value >= 0)
         trainer_command(menu, callbacks, std::format("dial {} {}", number(value), preset.name));
     if (ImGui::IsItemActive()) {
         p.active = id;
@@ -1195,7 +1197,7 @@ void tune_tab(SkateMenu &menu, const Model &model, const CallbacksV3 &callbacks,
 // jump on foot (ON FOOT). Pump power is on PUMPING and the board bending boost on TRICKLINING.
 void trick_heights(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const trainer::View &view, const std::string &words, int part) {
     static constexpr const char *advanced_label = "Advanced trick speed (a speed for each flip trick: kickflip, heelflip, 360 flip, varial, shuvit, hardflip, laser flip, impossible)";
-    static constexpr const char *labels[]{"Gravity", "Flip trick speed", advanced_label, "Pump power (pumping transitions)", "Manual pop height", "No comply height", "Boneless height", "Hippy jump height", "Off-board jump height",
+    static constexpr const char *labels[]{"Gravity", "Flip trick speed", "Underflip speed", "Late flip speed", advanced_label, "Pump power (pumping transitions)", "Manual pop height", "No comply height", "Boneless height", "Hippy jump height", "Off-board jump height",
                                            "Board bending boost (revert speed)"};
     const auto wanted = [&](const char *label) {
         const std::string_view name(label);
@@ -1208,7 +1210,9 @@ void trick_heights(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const
     // `limited`: the game itself stops at the slider's end, so a typed number is held to it too.
     const auto slider = [&](const char *label, const char *option, float value, float &edit, bool &editing, const char *help, float high = 50.0f, bool limited = false, bool always = false) {
         if (!always && !wanted(label)) return false;
-        field(menu, label, help);
+        // A value that is not the game's own (1) is marked, like a moved dial.
+        const auto shown_label = std::abs(value - 1.0f) > 1e-4f ? std::string(label) + "  *" : std::string(label);
+        field(menu, shown_label.c_str(), help);
         ImGui::PushID(option);
         if (console_style()) {
             float shown = editing ? edit : value;
@@ -1256,6 +1260,27 @@ void trick_heights(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const
            "flip is slow from the start and is not hurried round before you land: with too little air you land on a board that is still turning. "
            "It takes about 15 seconds to take hold after every level load: the trainer has to find the game's flip animations again first.",
            3.0f);
+    if (slider("Underflip speed", "underflip_speed", view.underflip_speed, p.underflip_edit, p.underflip_editing,
+               "How fast the board turns in an underflip (the kickflip, heelflip, shuvit and impossible underflips, the hospital and flower "
+               "flips). You flick and trigger the underflip as always. 1 is the game's own. By itself it sets the whole underflip, its flip "
+               "too, and Flip trick speed does not reach it; with 'Underflip part only' below the flip turns at Flip trick speed and this "
+               "sets the part where the board turns back.",
+               3.0f)) {
+        bool split = view.underflip_split;
+        if (ImGui::Checkbox("Underflip part only (the flip at Flip trick speed)", &split))
+            trainer_command(menu, callbacks, std::format("option underflip_split {}", split ? 1 : 0));
+        if (ImGui::IsItemHovered())
+            wrapped_tooltip("%s", "Off: Underflip speed sets the whole underflip. On: the underflip's flip turns at Flip trick speed (and the "
+                                  "trick's own speed under Advanced trick speed), and Underflip speed takes over where the board starts to "
+                                  "turn back. The trainer sees that from the board itself, so it starts a tick or two after the turn back.");
+    }
+    {
+        constexpr std::size_t late = trainer::late_flip_slot;
+        slider("Late flip speed", "flip.lateflip", view.flip_trick[late], p.trick_edit[late], p.trick_editing[late],
+               "How fast the board turns in a late flip (a flick after the pop, in the air), times the flip trick speed. 1 is the game's own. "
+               "It counts with or without Advanced trick speed.",
+               3.0f);
+    }
     if (!view.flip_live && (view.flip_speed != 1.0f || view.flip_advanced || view.flip_flick) && wanted("Flip trick speed"))
         ImGui::TextDisabled("Finding the flip animations: flip speeds take hold about 15 seconds after a level loads.");
     if (wanted("Flip trick speed") || wanted("Slow flips pop higher") || wanted("Flick tricks at full speed")) {
@@ -1280,17 +1305,33 @@ void trick_heights(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const
         bool on = view.flip_advanced;
         if (ImGui::Checkbox("Advanced trick speed", &on)) trainer_command(menu, callbacks, std::format("option flip_advanced {}", on ? 1 : 0));
         tip("Gives every flip trick a speed of its own, on top of the flip trick speed above: a kickflip at 1.0 and a 360 flip at 0.6, say. "
-            "A trick turns at the speed above times its own. Nollie tricks use their regular trick's speed (the nollie impossibles have their own). The ollie's speed only acts "
+            "A trick turns at the speed above times its own. Nollie tricks use their regular trick's speed (the nollie impossibles have their own). Each underflip has a speed of its own at the bottom, times Underflip speed above. The ollie's speed only acts "
             "with 'Slow flips pop higher' on. Pop height is not changed. "
             "Unticked, the speeds below are kept but not used. Like the speed above, they take hold about 15 seconds after every level load.");
         if (view.flip_advanced_blocked) ImGui::TextDisabled("Off in this multiplayer game: the host's rules apply here.");
         if (on && ImGui::TreeNodeEx("Speed of each flip trick", ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen)) {
-            for (std::size_t i = 0; i < trainer::flip_tricks.size(); ++i) {
+            for (std::size_t i = 0; i < trainer::late_flip_slot; ++i) { // the Late flip has its slider above
                 const auto &trick = trainer::flip_tricks[i];
                 const std::string label(trick.label), option(trick.key);
                 slider(label.c_str(), option.c_str(), view.flip_trick[i], p.trick_edit[i], p.trick_editing[i],
                        "How fast the board turns in this trick, times the flip trick speed above. 1 leaves it at that speed.", 3.0f, false, true);
             }
+            ImGui::SeparatorText("Underflips");
+            for (std::size_t i = trainer::first_underflip_slot; i < trainer::flip_tricks.size(); ++i) {
+                const auto &trick = trainer::flip_tricks[i];
+                const std::string label(trick.label), option(trick.key);
+                slider(label.c_str(), option.c_str(), view.flip_trick[i], p.trick_edit[i], p.trick_editing[i],
+                       "How fast the board turns in this underflip, times Underflip speed above (with 'Underflip part only', the part where "
+                       "the board turns back). Nollie underflips use their regular trick's speed, but for the nollie impossibles. 1 leaves "
+                       "it at Underflip speed.",
+                       3.0f, false, true);
+            }
+            ImGui::SeparatorText("Late flips");
+            slider("Late flip", "flip.lateflip", view.flip_trick[trainer::late_flip_slot], p.trick_edit[trainer::late_flip_slot],
+                   p.trick_editing[trainer::late_flip_slot],
+                   "How fast the board turns in a late flip, times the flip trick speed above: the same setting as Late flip speed above. "
+                   "The game tells every late flip apart only as 'a late flip', so they share this one speed.",
+                   3.0f, false, true);
             ImGui::TreePop();
         }
     }
@@ -2122,6 +2163,10 @@ void trainer_page(SkateMenu &menu, const Model &model, const CallbacksV3 &callba
                                                                       {trainer::topic_pumping, "pumping settings"}, {trainer::topic_foot, "on-foot jump"}};
         for (const auto &[topic, name] : kinds)
             if (view->settings[topic]) add(name);
+        // Named on its own: it changes the underflips the game scores, which "trick settings" does not say.
+        if (std::abs(view->underflip_speed - 1.0f) > 1e-4f)
+            add(std::format("underflip speed x{:.2f}{}", view->underflip_speed, view->underflip_split ? " (under part)" : ""));
+        else if (view->underflip_split) add("underflip flip at flip trick speed");
     }
     const auto cheats = cheat_lines(model);
     for (const auto &line : cheats) add(line.name);

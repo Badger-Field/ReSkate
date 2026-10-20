@@ -25,6 +25,11 @@ struct SessionExtras {
     float flip_speed{1}, hippy_height{1}, nocomply_height{1}, boneless_height{1}, offboard_height{1};
     // Auto push: the speed a rolling skater is carried up to, m/s; 0: off.
     float cruise{};
+    // x of the game's own while an underflip turns, and whether only its under part does (its flip then at the flip
+    // speed). Sent only when not the game's own (version 2), so a guest on an older trainer still reads a host who
+    // leaves them alone.
+    float underflip_speed{1};
+    bool underflip_split{};
     // Values of the game's tuning classes that are not the game's own: an index into
     // class_fields (trainer_classes.h) and the value, by ascending index.
     std::vector<std::pair<std::uint16_t, float>> classes;

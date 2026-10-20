@@ -140,6 +140,11 @@ struct State {
     float offboard_height{1};
     // Board flip tricks: a multiplier on the game's flip speed curves (trainer_classes.h).
     float flip_speed{1};
+    float underflip_speed{1}; // the board while the game says an underflip is turning, times the flip speed
+    // Off: the whole underflip (its flip too) turns at Underflip speed. On: the flip turns at Flip trick speed and only
+    // the under part, from where the board turns back, at Underflip speed.
+    bool underflip_split{};
+    std::array<float, 3> board_spin{}; // the board's angular velocity at the last tick in the air, deg/s
     // "Advanced trick speed": each flip trick also turns at a speed of its own (flip_tricks, trainer_gamestate.h).
     bool flip_advanced{};
     bool flip_pop{}; // a slowed flip trick pops higher, so it has the air time it needs
@@ -158,7 +163,21 @@ struct State {
         float clamped{}; // the impossible's own speed state as the flight began
         float factor{1}; // the flip speed times the turning trick's own
         std::uint32_t trick{}; // the trick it was last driven for
+        std::int8_t underflip_anim{-1}, underflip_state{-1}, underflip_window{-1}; // as last logged
+        // UnderflipTimeScale, which the underflip clips play at: the game's own number and what the trainer made of it.
+        bool timescale_active{};
+        bool window_closed{}; // the flick's underflip window opened and closed in this flight: an underflip may start
+        float timescale_game{}, timescale_written{};
+        int timescale_sets{}; // how often the game set its own number this flight (logged up to 8)
+        // "Underflip part only": the way the board turned in the underflip's flip (summed while it turned), how many
+        // ticks went into it, and how many ticks in a row it has turned back against it. Two back and the under part
+        // has started.
+        float flip_way[3]{};
+        int flip_way_ticks{}, turned_back{};
+        bool under_part{};
+        int underflip_ticks{}; // ticks since the underflip started (for the log)
     } flip_drive;
+    int underflip_bands{}; // copies of the underflip's rate controllers found
     float flip_game_seen{}; // the game's own number in the last driven flight (for the flight log)
     float flip_clamped_seen{-1}; // and what the impossible's own speed state read (-1: not found)
     bool flip_live{};
@@ -425,6 +444,8 @@ void load_store() {
                 s.foot_setting[i] = static_cast<std::int8_t>(std::clamp(o.value("foot.set." + std::string(foot_settings[i].key), -1), -1, 1));
             s.offboard_height = std::clamp(o.value("offboard_height", 1.0f), height_low, height_high);
             s.flip_speed = std::clamp(o.value("flip_speed", 1.0f), flip_low, flip_high);
+            s.underflip_speed = std::clamp(o.value("underflip_speed", 1.0f), flip_low, flip_high);
+            s.underflip_split = o.value("underflip_split", false);
             s.flip_advanced = o.value("flip_advanced", false);
             s.flip_pop = o.value("flip_pop", false);
             s.flip_flick = o.value("flip_flick", false);
@@ -522,6 +543,8 @@ void save_store() {
             if (s.foot_setting[i] >= 0) options["foot.set." + std::string(foot_settings[i].key)] = static_cast<int>(s.foot_setting[i]);
         options["offboard_height"] = s.offboard_height;
         options["flip_speed"] = s.flip_speed;
+        options["underflip_speed"] = s.underflip_speed;
+        options["underflip_split"] = s.underflip_split;
         options["flip_advanced"] = s.flip_advanced;
         options["flip_pop"] = s.flip_pop;
         options["flip_flick"] = s.flip_flick;
@@ -664,13 +687,17 @@ bool extras_blocked();
 // so the flip speed the trainer gives other flips never reaches it (measured 2026-10-15: x0.5, 1 and 2 all turned a late kickflip
 // about 260 deg at 1155 deg/s). Those two ends follow the flip speed and the Late flip per-trick speed instead.
 bool late_flip_speed(std::string_view key) { return key == "lateflip.maxspeed" || key == "lateflip.minspeed"; }
+// The Late flip's own speed sits beside Flip trick speed and always counts; the other tricks' own speeds count with
+// Advanced trick speed ticked.
+float own_trick_speed(int index) {
+    auto &s = state();
+    if (index < 0 || (!s.flip_advanced && static_cast<std::size_t>(index) != late_flip_slot)) return 1.0f;
+    return s.flip_trick[static_cast<std::size_t>(index)];
+}
 float late_flip_factor() {
     auto &s = state();
     if (extras_blocked()) return 1.0f;
-    float factor = s.boosts.flip;
-    if (s.flip_advanced)
-        if (const auto index = flip_trick_index(40); index >= 0) factor *= s.flip_trick[static_cast<std::size_t>(index)]; // LateFlipTrick
-    return factor;
+    return s.boosts.flip * own_trick_speed(flip_trick_index(40)); // LateFlipTrick
 }
 bool slowed_catch_time(std::string_view key) {
     return key.starts_with("heldflip.") && key.ends_with("catchtime");
@@ -915,6 +942,19 @@ Boosts boosts_in_force() {
     if (multiplayer_session_active() && !session_boosts_allowed()) return {};
     return {s.flip_speed, s.hippy_height, s.nocomply_height, s.boneless_height, s.offboard_height, own_cruise()};
 }
+// Underflip speed as it acts now: the host's in a session where the host sets the physics, 1 where the player's own
+// extras do not count, otherwise the player's.
+float underflip_in_force() {
+    auto &s = state();
+    if (s.enforced) return s.host.underflip_speed;
+    return extras_blocked() ? 1.0f : s.underflip_speed;
+}
+// "Underflip part only", the same way.
+bool underflip_split_in_force() {
+    auto &s = state();
+    if (s.enforced) return s.host.underflip_split;
+    return !extras_blocked() && s.underflip_split;
+}
 // The player's own, for a session they host to share with its guests.
 void publish_extras() {
     auto &s = state();
@@ -926,6 +966,8 @@ void publish_extras() {
     own.boneless_height = s.boneless_height;
     own.offboard_height = s.offboard_height;
     own.cruise = own_cruise();
+    own.underflip_speed = s.underflip_speed;
+    own.underflip_split = s.underflip_split;
     for (const auto index : s.class_entries)
         if (const auto &e = s.entries[index]; e.touched)
             own.classes.emplace_back(static_cast<std::uint16_t>(e.class_field), static_cast<float>(e.value));
@@ -1095,7 +1137,7 @@ float *trick_option(std::string_view name) {
     auto &s = state();
     for (std::size_t i = 0; i < flip_tricks.size(); ++i)
         if (name == flip_tricks[i].key) return &s.flip_trick[i];
-    return name == "flip_speed" ? &s.flip_speed : name == "hippy_height" ? &s.hippy_height : name == "nocomply_height" ? &s.nocomply_height
+    return name == "flip_speed" ? &s.flip_speed : name == "underflip_speed" ? &s.underflip_speed : name == "hippy_height" ? &s.hippy_height : name == "nocomply_height" ? &s.nocomply_height
          : name == "boneless_height" ? &s.boneless_height : name == "offboard_height" ? &s.offboard_height
          : name == "revert_boost" ? &s.revert_boost : name == "pump_power" ? &s.pump_power : name == "manual_height" ? &s.manual_height : nullptr;
 }
@@ -1136,6 +1178,7 @@ const std::vector<Setup> &setups() {
             all->back().high = 1;
         };
         real("trick.flip_speed", topic_pop, &s.flip_speed, 1.0f, flip_low, flip_high);
+        real("trick.underflip_speed", topic_pop, &s.underflip_speed, 1.0f, flip_low, flip_high);
         real("trick.manual_height", topic_pop, &s.manual_height, 1.0f, height_low, height_high);
         real("trick.gravity", topic_pop, &s.gravity, 1.0f, gravity_low, gravity_high);
         real("trick.nocomply_height", topic_pop, &s.nocomply_height, 1.0f, height_low, height_high);
@@ -1147,10 +1190,11 @@ const std::vector<Setup> &setups() {
         toggle("trick.flip_advanced", topic_pop, &s.flip_advanced);
         toggle("trick.flip_pop", topic_pop, &s.flip_pop);
         toggle("trick.flip_flick", topic_pop, &s.flip_flick);
+        toggle("trick.underflip_split", topic_pop, &s.underflip_split);
         for (std::size_t i = 0; i < flip_tricks.size(); ++i) {
             real("trick." + std::string(flip_tricks[i].key), topic_pop, &s.flip_trick[i], 1.0f, flip_low, flip_high);
-            all->back().title = std::string(flip_tricks[i].label) + ": flip speed";
-            all->back().in_force = [&s] { return s.flip_advanced; };
+            all->back().title = std::string(flip_tricks[i].label) + (i >= first_underflip_slot ? ": underflip speed" : ": flip speed");
+            if (i != late_flip_slot) all->back().in_force = [&s] { return s.flip_advanced; };
         }
         real("grind.side", topic_grinds, &s.grind_side, 1.0f, 0.0f, 1.0e6f);
         real("grind.push", topic_grinds, &s.grind_push, 0.0f, -1.0e6f, 1.0e6f);
@@ -1193,10 +1237,11 @@ const std::vector<Setup> &setups() {
             all->back().high = high;
         }
         constexpr std::pair<std::string_view, std::string_view> titles[]{
-            {"trick.flip_speed", "Flip trick speed"}, {"trick.manual_height", "Manual pop height"}, {"trick.gravity", "Gravity"},
+            {"trick.flip_speed", "Flip trick speed"}, {"trick.underflip_speed", "Underflip speed"}, {"trick.manual_height", "Manual pop height"}, {"trick.gravity", "Gravity"},
             {"trick.nocomply_height", "No comply height"}, {"trick.boneless_height", "Boneless height"}, {"trick.hippy_height", "Hippy jump height"},
             {"trick.offboard_height", "Off-board jump height"}, {"trick.pump_power", "Pump power"}, {"trick.revert_boost", "Board bending boost"},
             {"trick.flip_advanced", "Advanced trick speed"}, {"trick.flip_pop", "Slow flips pop higher"}, {"trick.flip_flick", "Flick tricks at full speed"},
+            {"trick.underflip_split", "Underflip speed: under part only"},
             {"grind.side", "Grind pop: side force"}, {"grind.push", "Grind pop: push with stick (m/s)"}, {"grind.range", "Grinds: left stick turn range (deg)"},
             {"transition.lean", "Transition: lean into the ramp"}, {"transition.carry", "Transition: roll off at your angle"},
             {"transition.drop", "Transition: roll-off drop speed (m/s)"}, {"transition.unstick", "Transition: no hang-ups"},
@@ -1698,6 +1743,20 @@ void drive_flip_speed(std::uintptr_t base, bool airborne, float to_landing) {
     auto &drive = s.flip_drive;
     const auto now = read_flip_state(base, static_cast<std::uintptr_t>(s.entity));
     s.flip_live = static_cast<bool>(now);
+    // The underflip's rate band follows the speed the underflip should turn at: without it the game holds every underflip
+    // to 1 to 1.2.
+    // Underflip speed times the underflipped trick's own (Advanced trick speed).
+    const float underflip = underflip_in_force() * (now && !extras_blocked() ? own_trick_speed(underflip_trick_index(now.trick)) : 1.0f);
+    const bool split = underflip_split_in_force();
+    // The band is copied into each controller as it is made (0x10d9e40), so with "Underflip part only" it spans both the
+    // flip's speed and the under part's from the start.
+    const auto band = [&s, split, underflip](float factor) {
+        const float low = split ? std::min(factor, underflip) : factor, high = split ? std::max(factor, underflip) : factor;
+        if (const int bands = scale_underflip_bands(low, high); bands != s.underflip_bands) {
+            s.underflip_bands = bands;
+            say(logging::Level::info, std::format("Trainer: {} underflip rate controller(s) found.", bands));
+        }
+    };
     set_launch_trick(now ? now.trick : 0xffu, now ? now.trick_at : 0); // for the launch hook: the trick the game has in mind this tick
     // A plain ollie (trick 1) plays the same clip and reads the same number: slowed, it hangs in
     // the air (measured: 0.60 s of air at 1, 0.65 s at 0.5, 0.77 to 0.88 s at 0.25). Only a flip
@@ -1708,13 +1767,74 @@ void drive_flip_speed(std::uintptr_t base, bool airborne, float to_landing) {
             (void)write_flip_speed(now, drive.game);
             if (now.clamped_at) (void)write_state_number(now.clamped_at, drive.clamped);
         }
+        if (now && drive.timescale_active && now.underflip_timescale == drive.timescale_written)
+            (void)write_state_number(now.underflip_timescale_at, drive.timescale_game);
+        (void)hold_underflip_timescale(0, 1.0f);
+        arm_underflip_flip_speed(0, 1.0f);
+        scale_under_part(0);
+        band(split ? (extras_blocked() ? 1.0f : s.boosts.flip) : underflip);
+        if (s.logging && drive.window_closed)
+            say(logging::Level::info, std::format("Trainer underflip flight ended: {}.", underflip_timescale_callers()));
         drive = {};
         return;
     }
     if (now.trick) s.flip_trick_seen = now.trick;
     float factor = s.boosts.flip;
-    if (s.flip_advanced && !extras_blocked())
-        if (const auto index = flip_trick_index(now.trick); index >= 0) factor *= s.flip_trick[static_cast<std::size_t>(index)];
+    if (!extras_blocked()) factor *= own_trick_speed(flip_trick_index(now.trick));
+    if (s.logging && (now.underflip_anim != drive.underflip_anim || now.underflip_state != drive.underflip_state ||
+                      now.underflip_window != drive.underflip_window))
+        say(logging::Level::info, std::format("Trainer underflip states: trick {} ({}), Is.Underflip anim {} state {}, window {}, game's speed {:.3f}, "
+                                              "timescale {:.3f} (game's {:.3f}), factor {:.2f}.",
+                                              now.trick, flip_trick_name(now.trick), now.underflip_anim, now.underflip_state, now.underflip_window, now.speed,
+                                              now.underflip_timescale_at ? now.underflip_timescale : -1.0f, drive.timescale_game,
+                                              factor));
+    if (s.logging && drive.underflip_anim == 1 && now.underflip_anim == 0)
+        say(logging::Level::info, std::format("Trainer underflip timescale asked by: {}.", underflip_timescale_callers()));
+    if (drive.underflip_window == 1 && now.underflip_window == 0) drive.window_closed = true;
+    const bool in_underflip = now.underflip_anim == 1 || now.underflip_state == 1;
+    // "Underflip part only": the underflip's own flip turns one way, the under part back the other. The way it turned
+    // is summed from the third tick of the underflip (the first two read a jolt as the clip changes, measured
+    // 2026-10-19), and two ticks in a row against it start the under part.
+    if (split && in_underflip && !drive.under_part) {
+        const auto &w = s.board_spin;
+        const float rate = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+        if (++drive.underflip_ticks > 2 && rate > 200.0f) {
+            const float way = std::sqrt(drive.flip_way[0] * drive.flip_way[0] + drive.flip_way[1] * drive.flip_way[1] + drive.flip_way[2] * drive.flip_way[2]);
+            const float along = way > 0 ? (w[0] * drive.flip_way[0] + w[1] * drive.flip_way[1] + w[2] * drive.flip_way[2]) / way : 0.0f;
+            if (drive.flip_way_ticks >= 4 && along < -150.0f) {
+                if (++drive.turned_back >= 2) drive.under_part = true;
+            } else {
+                drive.turned_back = 0;
+                if (along >= 0 || drive.flip_way_ticks < 4) {
+                    for (std::size_t k = 0; k < 3; ++k) drive.flip_way[k] += w[k];
+                    ++drive.flip_way_ticks;
+                }
+            }
+        }
+        if (drive.under_part) {
+            // The copy that started the underflip was scaled by the flip's factor: from here the under part's.
+            const float to = std::clamp(now.speed / std::max(factor, flip_low) * underflip, 0.0f, 1000.0f);
+            if (s.logging)
+                say(logging::Level::info, std::format("Trainer underflip: under part from tick {} of the underflip, speed {:.3f} -> {:.3f} (x{:.2f}).",
+                                                      drive.underflip_ticks, now.speed, to, underflip));
+            (void)write_flip_speed(now, to);
+        }
+    }
+    // The under part plays on rate controllers that took their rate as the underflip started: each one's rate is scaled
+    // from here to the landing.
+    scale_under_part(split && in_underflip && drive.under_part ? underflip : 0.0f);
+    // What the underflip turns at: Underflip speed for all of it, or the flip's own speed until the under part.
+    const float underflip_rate = split && !drive.under_part ? factor : underflip;
+    band(underflip_rate);
+    // The game sets TrickFlipSpeed afresh as the underflip starts, a tick after the window closes: that set is scaled.
+    if (drive.window_closed && underflip_rate != 1.0f) arm_underflip_flip_speed(now.speed_at, underflip_rate);
+    else arm_underflip_flip_speed(0, 1.0f);
+    drive.underflip_anim = now.underflip_anim;
+    drive.underflip_state = now.underflip_state;
+    drive.underflip_window = now.underflip_window;
+    // The underflip itself turns at the game's speed times that factor alone (the game's copy that starts it was scaled
+    // as it was made): the trainer leaves it there.
+    if (in_underflip) return;
     // "Slow flips pop higher" for a trick the game chose after the pop (seen out of manuals and grinds).
     if (s.flip_pop && !extras_blocked() && (!drive.active || drive.trick != now.trick)) {
         float was{}, time{};
@@ -1730,11 +1850,32 @@ void drive_flip_speed(std::uintptr_t base, bool airborne, float to_landing) {
     if (!drive.active) drive.clamped = now.clamped;
     drive.active = true;
     drive.factor = factor;
-    const bool held_up = s.flip_flick && !extras_blocked();
+    const bool held_up = s.flip_flick && !extras_blocked() && !in_underflip; // the floor would undo Underflip speed
     s.flip_game_seen = drive.game;
     s.flip_clamped_seen = now.clamped_at ? now.clamped : -1.0f;
     drive.written = std::clamp((held_up ? std::max(drive.game, flip_least_game) : drive.game) * factor, 0.0f, 1000.0f);
     if (now.speed != drive.written || (now.clamped_at && now.clamped != drive.written)) (void)write_flip_speed(now, drive.written);
+    // The underflip does not turn at that speed but at UnderflipTimeScale: Underflip speed (times the flip speed) goes there
+    // for the whole flight, so the number is in place whenever the game's underflip reads it, and the flip before it is
+    // left alone.
+    if (now.underflip_timescale_at) {
+        const float timescale = factor * underflip;
+        if (hold_underflip_timescale(now.underflip_timescale_at, 1.0f)) { // read and logged only: it is not the underflip's rate
+            // Held in the game's lookup: what the tick reads is already the trainer's.
+            if (s.logging && now.underflip_anim == 1 && ++drive.timescale_sets <= 12)
+                say(logging::Level::info, std::format("Trainer underflip timescale: game's {:.3f}, read {:.3f}, held x{:.2f}.", underflip_timescale_game(),
+                                                      now.underflip_timescale, timescale));
+            drive.timescale_active = false;
+        } else if (!drive.timescale_active || now.underflip_timescale != drive.timescale_written) {
+            if (s.logging && drive.timescale_active && ++drive.timescale_sets <= 8)
+                say(logging::Level::info, std::format("Trainer underflip timescale: the game set {:.3f} (the trainer had {:.3f}), Is.Underflip {}, window {}.",
+                                                      now.underflip_timescale, drive.timescale_written, now.underflip_anim, now.underflip_window));
+            drive.timescale_game = now.underflip_timescale;
+        }
+        drive.timescale_active = true;
+        drive.timescale_written = std::clamp(drive.timescale_game * timescale, 0.0f, 1000.0f);
+        if (now.underflip_timescale != drive.timescale_written) (void)write_state_number(now.underflip_timescale_at, drive.timescale_written);
+    }
 }
 void observe(std::uintptr_t base, std::uintptr_t client, std::uint64_t now) {
     auto &s = state();
@@ -1885,10 +2026,13 @@ void observe(std::uintptr_t base, std::uintptr_t client, std::uint64_t now) {
             if (!bodies.parts.empty() && memory::peek(bodies.parts[0] + 0x90, spin)) {
                 board_turn = std::sqrt(spin[0] * spin[0] + spin[1] * spin[1] + spin[2] * spin[2]) * 180.0f / std::numbers::pi_v<float>;
                 if (!std::isfinite(board_turn) || board_turn > 1.0e5f) board_turn = 0;
+                else
+                    for (std::size_t k = 0; k < 3; ++k) s.board_spin[k] = spin[k] * 180.0f / std::numbers::pi_v<float>;
             }
         } catch (...) {}
         if (m.airborne) m.board_turn = std::max(m.board_turn, board_turn);
     }
+    if (!m.airborne) s.board_spin = {};
     if (s.logging && s.log) {
         s.log << std::format("{:.4f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.1f},{},{},{:.0f}\n", clock_seconds(stamp - s.log_start), position[0],
                              position[1], position[2], t.speed, t.vertical, t.heading, t.airborne ? 1 : 0, t.physics_state, board_turn);
@@ -2328,6 +2472,8 @@ void build_view() {
     next->tr_option = s.tr_option;
     next->offboard_height = s.offboard_height;
     next->flip_speed = s.flip_speed;
+    next->underflip_speed = s.underflip_speed;
+    next->underflip_split = s.underflip_split;
     next->flip_advanced = s.flip_advanced;
     next->flip_pop = s.flip_pop;
     next->flip_flick = s.flip_flick;
@@ -2566,7 +2712,8 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool playing, const std::s
                 find_classes();
             }
         }
-        flip_speed_in_use(s.boosts.flip != 1.0f || s.flip_advanced || s.flip_flick);
+        flip_speed_in_use(s.boosts.flip != 1.0f || s.flip_advanced || s.flip_trick[late_flip_slot] != 1.0f || s.flip_flick || underflip_in_force() != 1.0f ||
+                          underflip_split_in_force());
         // The speed itself goes straight to the trick in the air (drive_flip_speed); the flip curves
         // are only scaled where that number cannot be reached.
         want_flip_speed(s.flip_live ? 1.0f : s.boosts.flip);
@@ -2635,10 +2782,7 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool playing, const std::s
         for (std::uint32_t trick = 0; trick < 64; ++trick) {
             float up = 0;
             if (s.flip_pop && !extras_blocked() && (!plain_pop(trick) || ollie_pop(trick))) {
-                float factor = s.boosts.flip;
-                if (s.flip_advanced)
-                    if (const auto index = flip_trick_index(trick); index >= 0) factor *= s.flip_trick[static_cast<std::size_t>(index)];
-                up = slow_flip_up(trick, factor);
+                up = slow_flip_up(trick, s.boosts.flip * own_trick_speed(flip_trick_index(trick)));
             }
             set_flip_launch(trick, up);
         }
@@ -3286,7 +3430,7 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
         const auto name = lower(arg(0));
         bool on{};
         std::string why;
-        if (name == "flip_speed" || name.starts_with("flip.")) {
+        if (name == "flip_speed" || name == "underflip_speed" || name.starts_with("flip.")) {
             const auto value = number(arg(1));
             auto *option = trick_option(name);
             if (!option) return "error: no such flip trick. flip_speed is all of them; flip.kickflip, flip.360flip ... are one each.";
@@ -3322,7 +3466,7 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
             if (!value) return "error: return_delay needs seconds.";
             s.return_delay = std::clamp(static_cast<float>(*value), 0.0f, 3600.0f);
         } else if (!flag(arg(1), on)) {
-            return "error: usage: trainer option hud|hud_jump|auto_return|pad|flip_advanced|flip_pop|flip_flick|log 0|1";
+            return "error: usage: trainer option hud|hud_jump|auto_return|pad|flip_advanced|flip_pop|flip_flick|underflip_split|log 0|1";
         } else if (name == "hud") s.hud = on;
         else if (name == "hud_jump") s.hud_jump = on;
         else if (name == "auto_return") s.auto_return = on;
@@ -3339,6 +3483,9 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
         } else if (name == "flip_advanced") {
             if (on && !editable(&why)) return "error: " + why;
             s.flip_advanced = on;
+        } else if (name == "underflip_split") {
+            if (on && !editable(&why)) return "error: " + why;
+            s.underflip_split = on;
         }
         else if (name == "log") {
             set_logging(on);

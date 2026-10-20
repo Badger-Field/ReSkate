@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.8.2 - 2026-10-19
+
+Built on ReSkate 2.1.0, like 0.8.0.
+
+- **Underflip speed.** A slider under Flip trick speed (POP AND TRICKS > TRICKS) for every underflip. You flick and the
+  underflip triggers as always. The game held underflips to 1 to 1.2 times its speed whatever the flip speed was; the
+  trainer moves that range with the slider. By itself it sets the whole underflip, and Flip trick speed does not reach
+  it. `trainer option underflip_speed <x>`; presets carry it (`trick.underflip_speed`) and RESET EVERYTHING puts it back.
+  A session's host shares it with the other physics.
+- **Underflip part only.** A switch under Underflip speed: the underflip's flip turns at Flip trick speed and Underflip
+  speed takes over where the board starts to turn back. The game sets the rate of the clips playing the turn back as
+  the underflip starts, so from that point the trainer scales the rate the game plays them at every tick, until the
+  landing. `trainer option underflip_split 1`, preset key `trick.underflip_split`.
+- **A speed for each underflip.** At the bottom of Advanced trick speed: kickflip, heelflip, pop shuvit, FS pop shuvit,
+  impossible, front foot impossible, nollie impossible and nollie back foot impossible underflips each have a speed,
+  times Underflip speed (nollie underflips use their regular trick's, but for the impossibles). The Late flip slider is
+  there too (the same setting as Late flip speed). Presets carry them like the other trick speeds.
+- **Late flip speed in the TRICKS card.** The late flip's own speed has a slider beside Flip trick speed and counts
+  without Advanced trick speed ticked (it moved out of the Advanced list).
+- **Dial sliders reach 0.** Grind lock-on and the other dials go down to 0 on the slider.
+
 ## v0.8.1 - 2026-10-18
 
 Built on ReSkate 2.1.0, like 0.8.0.
