@@ -1809,6 +1809,48 @@ void road_rash_marks_the_skater_as_it_bails() {
 // Board Break as a mod (contrib/plugins/board-break), in a copy with one crack among its sounds as
 // the deck pack brings them: its own checks pass, the stretches are kept off every board, a slam
 // breaks the board (the real deck goes away, the crack sounds) and riding again makes it whole.
+// Dual Stick as a mod (contrib/plugins/dual-stick): the companion's settings in its own data folder.
+// Its own checks pass; without the companion's file it creates none; with it, a preset changes the
+// preset's keys and keeps every other line.
+void dual_stick_edits_the_companions_settings() {
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    host.apply({contributed("dual-stick")});
+    running(host, "dual-stick", environment);
+    check(host.run_console("dualstick test"), "dualstick test");
+    check(environment.printed("dualstick: 12 passed, 0 failed") && !environment.printed("FAIL"),
+          "Dual Stick's own checks pass:\n" + printed_lines(environment) + environment.all());
+    environment.lines.clear();
+    check(host.run_console("dualstick preset xl") && environment.printed("session_controls.ini is not in"),
+          "Without the companion's file nothing is set:\n" + printed_lines(environment));
+    check(game.files.empty(), "and no file is made");
+    game.files["dual-stick/session_controls.ini"] = "; companion\r\n[SessionControls]\r\nControllerIndex = 2\r\nPopOnRelease=0\r\n\r\n[Menu]\r\nHotkey=End\r\n";
+    environment.lines.clear();
+    check(host.run_console("dualstick preset xl") && environment.printed("dualstick: saved."), "dualstick preset xl:\n" + printed_lines(environment));
+    const auto& text = game.files["dual-stick/session_controls.ini"];
+    check(text.starts_with("; companion\r\n[SessionControls]\r\nControllerIndex = 2\r\nPopOnRelease=1\r\n") &&
+              text.find("StickSteering=2\r\n") != std::string::npos && text.ends_with("\r\n\r\n[Menu]\r\nHotkey=End\r\n"),
+          "The XL preset's keys are written, every other line kept:\n" + text);
+    environment.lines.clear();
+    check(host.run_console("dualstick save 2") && host.run_console("dualstick status") && environment.printed("XL-style controls"),
+          "Saved to a slot, and read back:\n" + printed_lines(environment));
+    check(game.files["dual-stick/session_controls.ini"].find("[CustomPreset2]\r\n") != std::string::npos, "The slot is in the file");
+    // Its page builds, and picking Goofy there writes the stance.
+    environment.panels_open = true;
+    environment.shown = "dual-stick";
+    ticks(host, environment, 10);
+    running(host, "dual-stick", environment);
+    check(environment.panels.size() == 1 && environment.panels[0].page && environment.panels[0].title == "Dual Stick" &&
+              environment.panels[0].widgets.size() > 30,
+          "Dual Stick's page is built:\n" + environment.all());
+    environment.actions = {plugin_ui::Action{"dual-stick", "Dual Stick", "stance", false, 0, 3}};
+    ticks(host, environment, 10);
+    const auto& after = game.files["dual-stick/session_controls.ini"];
+    check(after.find("AutoStance=0\r\n") != std::string::npos && after.find("Stance=goofy\r\n") != std::string::npos,
+          "Goofy picked on the page is written:\n" + after + environment.all());
+}
+
 void board_break_snaps_the_board_on_a_slam() {
     TestEnvironment environment;
     std::filesystem::remove_all(scratch / "storage" / "board-break");
@@ -2549,6 +2591,7 @@ int main() {
         discovery_finds_the_plugins_among_the_mods_left_on();
         reskate_test_passes_its_own_checks();
         road_rash_marks_the_skater_as_it_bails();
+        dual_stick_edits_the_companions_settings();
         board_break_snaps_the_board_on_a_slam();
         fpv_drone_flies_and_follows();
         hall_of_meat_scores_a_bail();

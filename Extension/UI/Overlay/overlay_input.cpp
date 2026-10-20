@@ -629,3 +629,15 @@ extern "C" void DingoSDKOverlayReadFlightInput(dingosdk::overlay::FlightInput* o
         }
     } else looking = false;
 }
+
+// For native tools that run beside the game (a controller translator, say): whether ReSkate's menu,
+// a free camera on the pad or a prompt has the input now, so they hold their own input back while it
+// does. 1 or 0. Versioned: a later meaning gets a new name. Any thread; the caller's last error is kept.
+extern "C" __declspec(dllexport) unsigned long WINAPI ReSkateOverlayOwnsInputV1() {
+    const auto error = GetLastError();
+    const auto& s = state();
+    const bool owns = owns_menu_cursor(s) || s.freecam_controller_active.load(std::memory_order_relaxed) ||
+                      s.prompt_input_active.load(std::memory_order_relaxed);
+    SetLastError(error);
+    return owns ? 1ul : 0ul;
+}
