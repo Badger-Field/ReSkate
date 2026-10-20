@@ -608,11 +608,19 @@ local function begin_leave()
         loading = {what = "leaving", since = t, until_ = t + 0.8, close = true}
     end
 end
+local last_bail = -1e9 -- now() of the skater's last bail
+reskate.on("bail", function() last_bail = now() end)
 local function open_studio()
     if studio.open then return end
     local s = reskate.skater.get()
     if not s then
         reskate.ui.toast("The studio needs a skater.", "warn")
+        return
+    end
+    -- Held still in the middle of a bail, the skater is lost when the game takes the hold away, and he
+    -- goes on bailing behind the studio. A bail lasts about 3.5 s.
+    if reskate.skater.state() == "wipeout" or now() - last_bail < 4 then
+        reskate.ui.toast("Get back on your board first: the studio opens once the bail is over.", "warn")
         return
     end
     anchor = {s.position.x, s.position.y + 0.9, s.position.z}

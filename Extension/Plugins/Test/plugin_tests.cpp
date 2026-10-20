@@ -2352,6 +2352,14 @@ void animator_studio_records_and_saves() {
     running(host, "animator-studio", environment);
     check(host.run_console("studio status") && environment.printed("studio: closed; nothing recorded; 0 saved"),
           "It starts closed:\n" + printed_lines(environment) + environment.all());
+    // Not in the middle of a bail: the game would take the studio's hold of the skater away.
+    environment.local_skater = SkaterState{{1, 0, 2}, 0, 0, 0, false, 0};
+    game.state = 301;
+    environment.lines.clear();
+    check(host.run_console("studio open") && host.run_console("studio status") && environment.printed("studio: closed") &&
+              !game.called("freeze animator-studio on"),
+          "It does not open during a bail:\n" + printed_lines(environment) + environment.all());
+    game.state.reset();
     environment.local_skater = SkaterState{{1, 0, 2}, 0, 0, 0, false, 0};
     check(host.run_console("studio record") && game.called("record animator-studio 10.0"), "It records\n" + environment.all());
     ticks(host, environment, 3);
