@@ -109,6 +109,7 @@ struct SkateMenu {
     ImFont* bold = nullptr;
     ImFont* title = nullptr;    // brushed page titles
     ImFont* heading = nullptr;  // tile and section headers
+    ImFont* countdown = nullptr; // full-resolution fallback countdown digits
     ImFont* mono = nullptr;
     // The same faces drawn larger (large_font_ratio times), swapped in while the menu is full
     // screen, where everything is scaled up: text stays sharp instead of stretched.

@@ -575,6 +575,11 @@ void update_physics_tuning(Session &s, const NativeFrame &local, std::uint64_t n
     set_session_tuning_enforced(enforced);
     if (enforced && s.host_extras && !dedicated_host(s)) set_host_physics_extras(*s.host_extras);
     else set_host_physics_extras({});
+    if (competition_stock_physics()) {
+        physics_tuning::prepare();
+        if (world_playing(s,local)) physics_tuning::enforce(s.base,local.entity,{});
+        return;
+    }
     if (s.mode == Mode::host) {
         physics_tuning::release(s.base);
         if (!s.enforce_tuning) {

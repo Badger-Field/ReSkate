@@ -7,13 +7,20 @@
 
 namespace dingosdk::plugins {
 namespace {
-constexpr std::array<std::string_view, 42> permissions{
+// What each permission opens, where it is not plain from its name: "skater.control" the skater's
+// push (with push_wait / push_reset), hold and the competition's stock physics (reskate.physics);
+// "camera" the free and pad-flown cameras and the Bone Cam (reskate.skater.bone_cam);
+// "session.read" spectating and the session's world (reskate.session.world); "events.tricks" the
+// trick events, the trick list's feed and flick diagrams (reskate.tricks); "throwdowns" the
+// throwdown kit (modes, documents, the native flag). A manifest's "resident" list is the merge's
+// (Engine/Vfs/mod_list.h ResidentAssets), not the plugin host's.
+constexpr std::array<std::string_view, 44> permissions{
     "console", "storage", "overlay", "menu", "ui.screen", "input", "hud", "events.tricks", "events.skater",
     "skater.read", "skater.teleport", "skater.control", "skater.animation", "trainer", "camera",
-    "world.raycast", "world.objects", "world.environment", "world.ai", "travel", "session.read",
+    "world.raycast", "world.objects", "world.entities", "world.environment", "world.ai", "travel", "session.read",
     "session.skaters", "session.nametags", "net.session", "net.http", "voice.control", "chat.read",
     "chat.send", "chat.local", "server", "throwdowns", "replay", "music", "progression.read", "settings.read", "audio.ui", "audio", "outfit", "board", "mods.read",
-    "events.physics", "game.speed"};
+    "events.physics", "game.speed", "files"};
 }
 
 bool known_permission(std::string_view name) noexcept {

@@ -20,6 +20,11 @@ local standing = nil   -- where the last finished bail that showed stands agains
 local last = nil       -- the last finished bail's summary
 local speed_asked = 1  -- the game speed last asked for
 local corner_hidden = false
+-- A game mode's Meat (SmokeyDawg58's Throwdown Hall of Meat games): Hall of Meat held on while one is
+-- played, whatever the player's own switch says, and each finished bail's Meat, read once.
+local forced = false
+local unread = nil
+local function live() return on or forced end
 
 local function best_key(name) return "best." .. string.lower(name) end
 local function set_level(name)
@@ -32,6 +37,7 @@ end
 local function finished(summary)
     if not summary then return end
     last = summary
+    unread = {shown = summary.shown == true, meat = summary.tally.score}
     standing = summary.shown and best and model.standing(best, summary.tally.score) or nil
     if standing and standing.new_best then
         best = standing.best
@@ -39,21 +45,44 @@ local function finished(summary)
     end
 end
 
-local function set_on(value)
-    if value == on then return end
-    on = value
-    reskate.storage.set("on", on)
-    reskate.skater.xray(on)
+local function set_live(was)
+    if live() == was then return end
+    reskate.skater.xray(live())
     reskate.hud.corner(false)
-    if not on then
+    corner_hidden = false
+    if not live() then
         tracker:reset()
         speed_asked = 1
         reskate.time.slow(1)
     end
 end
+local function set_on(value)
+    if value == on then return end
+    local was = live()
+    on = value
+    reskate.storage.set("on", on)
+    set_live(was)
+end
+local function set_forced(value)
+    if value == forced then return end
+    local was = live()
+    forced = value
+    set_live(was)
+end
+reskate.expose({
+    available = function() return true end,
+    switched_on = function() return on end,
+    set_enabled = function(value) set_on(value == true) end,
+    set_forced = function(value) set_forced(value == true) end,
+    take_finished_bail = function()
+        local bail = unread
+        unread = nil
+        return bail
+    end,
+})
 
 reskate.on("load", function()
-    reskate.skater.xray(on)
+    reskate.skater.xray(live())
     reskate.hud.corner(false) -- ready to hide it the moment a card shows
     local current = reskate.level.current()
     if current then set_level(current.name) end
@@ -69,12 +98,12 @@ reskate.on("skater_state", function(state)
 end)
 
 reskate.on("physics_step", function(step)
-    if not on then return end
+    if not live() then return end
     finished(tracker:step(step.at, step))
 end)
 
 reskate.on("tick", function()
-    if not on then return end
+    if not live() then return end
     local now = reskate.time.now()
     local showing = tracker:view(now).phase ~= "riding"
     -- The card takes the place of skate.'s bottom left HUD while it shows: the bail is what counts.
@@ -91,7 +120,7 @@ reskate.on("tick", function()
 end)
 
 reskate.on("draw", function(d)
-    if not on then return end
+    if not live() then return end
     local now = reskate.time.now()
     local view = tracker:view(now)
     draw.break_pulse(d, view.break_pulse)

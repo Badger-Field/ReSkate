@@ -15,6 +15,7 @@
 #include "Extension/Skater/score_hud.h"
 #include "Extension/Skater/trick_watch.h"
 #include "Extension/Trainer/trainer.h"
+#include "Extension/Throwdowns/throwdown_kit.h"
 #include <Windows.h>
 #include <ShlObj.h>
 #include <array>
@@ -73,7 +74,9 @@ public:
     }
     // As the console's tp: refused in a session whose host has turned teleporting (and noclip) off.
     Teleport teleport(const Vec3& position, float heading) override {
-        if (!session_noclip_allowed()) return Teleport::forbidden;
+        // A throwdown mode's own moves (line-ups, recoveries, returns to the start) are the game's:
+        // allowed wherever its match runs and asks for them (the kit's `match.teleports`).
+        if (!session_noclip_allowed() && !throwdowns::kit::match().teleports) return Teleport::forbidden;
         return teleport_local_skater_heading(position, heading) ? Teleport::sent : Teleport::unavailable;
     }
     std::optional<Vec3> raycast(const Vec3& from, const Vec3& to) override { return local_surface_hit(from, to); }
@@ -93,6 +96,8 @@ public:
         else if (name == "navigate") sound = UiSound::navigate;
         else if (name == "toggle") sound = UiSound::toggle;
         else if (name == "tab") sound = UiSound::tab;
+        else if (name == "countdown") sound = UiSound::countdown;
+        else if (name == "go") sound = UiSound::go;
         else return false;
         multiplayer::queue_ui_sound(static_cast<std::uint32_t>(sound));
         return true;
@@ -195,7 +200,7 @@ void read_tricks() {
     signals.line_score = hud->line_score;
     signals.multiplier = hud->multiplier;
     signals.slam = hud->slam;
-    // A wipeout is physics states 300-399 (as Domination reads it).
+    // A wipeout is physics states 300-399.
     signals.wipeout = skater.skater && skater.physics_state >= 300 && skater.physics_state < 400;
     const auto event = trick_watch.update(signals);
     environment->score_now = ScoreState{hud->line_score, hud->multiplier, trick_watch.in_trick(), hud->header, hud->descriptor,

@@ -17,6 +17,7 @@
 #include "Engine/Game/World/client_state.h"
 #include "Extension/Plugins/plugin_runtime.h"
 #include "Extension/Plugins/plugin_game_runtime.h"
+#include "Engine/Game/World/load_completion.h"
 #include "Extension/ReplayKeyframes/replay_keyframes.h"
 #include "Extension/Skater/camera_observer.h"
 #include "Extension/UI/NativeMenu/native_menu.h"
@@ -40,10 +41,13 @@
 #include "Engine/Vfs/mod_list.h"
 #include "Engine/Vfs/mod_merge.h"
 #include "Extension/Skater/ai_skaters.h"
+#include "Extension/World/world_entities.h"
 #include "Extension/Skater/client_source_spawn.h"
 #include "Extension/Skater/skater_slot_override.h"
 #include "Extension/Skater/breakable_deck.h"
 #include "Extension/Throwdowns/native_throwdowns.h"
+#include "Extension/Skater/bone_cam.h"
+#include "Extension/Skater/pad_flight.h"
 #include "Extension/Trainer/trainer.h"
 #include "Extension/World/level_loading.h"
 #include "Extension/World/loading_screen.h"
@@ -692,7 +696,8 @@ void update_model(std::uintptr_t client, TickState& frame) {
     }
     DingoSDKOverlaySetPromptInputCapture(map_prompt || map_vote || message_up || prompt_held);
     const unsigned poll_answers = dingosdk::multiplayer::server_poll_answers();
-    bool freecam_controller = dingosdk::local_freecam_controller();
+    const bool placement_flight = dingosdk::pad_flight::requested();
+    bool freecam_controller = dingosdk::local_freecam_controller() || placement_flight;
     {
         std::lock_guard lock(r.mutex);
         debug_busy = r.requests.loading();
@@ -713,6 +718,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
             dingosdk::map_download::set_binds(r.model.bindings.vote_yes_combo, r.model.bindings.vote_no_combo);
         debug_request = r.requests.take<dingosdk::overlay::DebugRequest>(GetCurrentThreadId());
     }
+    controller_busy = controller_busy || placement_flight;
     // Capture belongs to the freecam state itself. Keep it active across brief
     // request/loading phases instead of opening a path back to player input.
     DingoSDKOverlaySetFreecamInputCapture((dingosdk::client_free_camera_active() && freecam_controller) ||
@@ -724,7 +730,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
         // (The card that asks has the pointer, as a menu does: it is still read for.)
         DingoSDKOverlayReadControllerInput(&controller, map_prompt || map_vote || message_up);
     for (std::size_t i = 0; i < action_combos.size(); ++i)
-        if (r.action_bind_latches[i].update(action_combos[i], controller, r.observer_failed)) {
+        if (r.action_bind_latches[i].update(action_combos[i], controller, r.observer_failed || placement_flight)) {
             std::array<char, 256> result{};
             const std::string command(dingosdk::action_binds[i].command);
             if (queue_console_command(nullptr, command.c_str(), result.data(), result.size()))
@@ -893,6 +899,15 @@ void update_model(std::uintptr_t client, TickState& frame) {
             r.debug_model.noclip || (r.debug_model.free_camera && freecam_controller));
         // A plugin holding the skater still (reskate.skater.freeze): noclip with no input hovers.
         if (r.debug_model.noclip && dingosdk::plugins::plugin_freeze_active()) flight_input = {true};
+        // A plugin's pad flight reserves the triggers for it (selecting what it places).
+        // Bumpers (or keyboard Q/E) adjust height without cycling objects.
+        if (placement_flight) {
+            dingosdk::ControllerInput placement_pad;
+            DingoSDKOverlayReadControllerInput(&placement_pad);
+            const auto buttons=placement_pad.available?placement_pad.buttons:0u;
+            flight_input.up = ((buttons & 0x0200) || dingosdk::overlay::key_down('E') ? 1.f : 0.f) -
+                              ((buttons & 0x0100) || dingosdk::overlay::key_down('Q') ? 1.f : 0.f);
+        }
         const auto phase_issue = camera_phase_issue();
         auto debug = dingosdk::on_client_debug_tick(r.base, client, debug_ready,
             phase_issue == nullptr,
@@ -1317,8 +1332,13 @@ void update_model(std::uintptr_t client, TickState& frame) {
             const bool manifest_description_active = manifest_sublevel && description.available &&
                 equals(description.level, r.last_request) &&
                 equals(description.lm_level, r.last_lm_level);
-            const bool content_confirmed = manifest_sublevel ? manifest_description_active :
-                (sublevel_active && client_sublevel_present);
+            const bool playable_destination = dingosdk::playable_load_complete(r.transition_seen, state,
+                description.available && equals(description.level, r.last_request) &&
+                    (r.last_lm_level.empty() || equals(description.lm_level, r.last_lm_level)),
+                context_ready, client_content.players_available, client_content.local_player_count,
+                client_content.controllable_reference_count);
+            const bool content_confirmed = playable_destination || (manifest_sublevel ? manifest_description_active :
+                (sublevel_active && client_sublevel_present));
             const bool settled = r.transition_seen && (state == 13 || state == 21) && content_confirmed;
             const bool timed_out = now - r.request_started >= 90000 && (state == 13 || state == 21) && local;
             const bool cancelled = state == 2 || state == 24 || state == 25;
@@ -1342,6 +1362,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
                        ",\"timed_out\":" + (timed_out ? "true" : "false") +
                        ",\"manifest_sublevel\":" + (manifest_sublevel ? "true" : "false") +
                        ",\"manifest_description_active\":" + (manifest_description_active ? "true" : "false") +
+                       ",\"playable_destination\":" + (playable_destination ? "true" : "false") +
                        ",\"start_points_matched\":" + (start_points_matched ? "true" : "false") +
                        ",\"server_sublevel_active\":" + (sublevel_active ? "true" : "false") +
                        ",\"client_sublevel_present\":" + (client_sublevel_present ? "true" : "false") +
@@ -1649,9 +1670,14 @@ void tick(std::uintptr_t client, std::uintptr_t update) {
             dingosdk::ai_skaters::tick(r.base,client,multiplayer_ready);
         }
         {
+            DINGO_PROFILE_ZONE("tick/world objects");
+            dingosdk::world_entities::tick(r.base, client, multiplayer_ready);
+        }
+        {
             DINGO_PROFILE_ZONE("tick/trainer");
             // A custom map is a sublevel of the root level: that is the map the player means.
             dingosdk::trainer::tick(r.base, client, multiplayer_ready, r.catalog_level.empty() ? r.last_level : r.catalog_level);
+            dingosdk::bonecam::tick_bone_cam(r.base,client,multiplayer_ready);
         }
         {
             DINGO_PROFILE_ZONE("tick/Steam friend join");

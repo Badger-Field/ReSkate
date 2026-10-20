@@ -7,7 +7,7 @@
 #include <vector>
 
 // A plugin's message to the same plugin on other players' games, sent in the session's throwdown
-// packets (as Domination's are). Throwdown kinds are 1-15 and Domination's tag 0xD0; plugins' is
+// packets. Throwdown kinds are 1-15 and 0xD0 is an earlier game-mode tag, still kept apart; plugins' is
 // 0xD1, and 0xD2 for what the session's authority says (the server copy of a plugin, on the
 // lobby's host or the dedicated server), which only the authority may send. Little-endian: u8 tag,
 // u8 version, u32 channel (fnv1a of the plugin's lowercase name), u64 the player it is for (0:

@@ -1,3 +1,4 @@
+#include "Extension/Skater/trick_feed.h"
 #include "hud_corner.h"
 #include "Engine/Core/Hooks/hooks.h"
 #include "Engine/Core/Log/logging.h"
@@ -64,6 +65,8 @@ Hook& hook() {
 // The game's write of a taken field writes ours instead and keeps the game's.
 std::uint64_t model_write(Address manager, std::uint64_t handle, Address type, const void* value, std::uint8_t flag) {
     auto& h = hook();
+    // SmokeyDawg58's trick feed reads the score HUD's trick list off the same writes.
+    if (handle && value && tricks::feed::wanted()) tricks::feed::tap(handle, type, value);
     if (handle && value) {
         for (std::size_t index = 0; index < score_switches.size(); ++index) {
             auto& field = h.fields[index];
@@ -334,11 +337,12 @@ void tick() noexcept {
     try {
         bool hidden{};
         for (const auto& [owner, on] : a.owners) hidden = hidden || on;
-        if (!a.owners.empty() && !a.hooked) a.hooked = hook_hud(true);
+        const bool feeding = tricks::feed::wanted();
+        if ((!a.owners.empty() || feeding) && !a.hooked) a.hooked = hook_hud(true);
         if (!a.hooked) return;
         const bool back = hide_hud(hidden);
         // No plugin left: the hook goes once the corner is the game's again.
-        if (a.owners.empty() && back && hook_hud(false)) a.hooked = false;
+        if (a.owners.empty() && !feeding && back && hook_hud(false)) a.hooked = false;
     } catch (...) {
     }
 }

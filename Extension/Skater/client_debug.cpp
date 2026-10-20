@@ -7,6 +7,7 @@
 #include "Engine/Game/Build/20260929/engine.h"
 #include "Engine/Game/Multiplayer/session_tools.h"
 #include "free_flight.h"
+#include "client_camera_activation.h"
 #include "Engine/Game/Skater/first_person_cycle.h"
 #include "Engine/Game/Skater/velocity_boost.h"
 #include "Extension/Multiplayer/Remote/native_skater.h"
@@ -20,6 +21,9 @@
 #include <utility>
 
 namespace dingosdk::client_source::detail {
+namespace {
+std::atomic<std::uintptr_t> verified_free_camera{};
+}
 double source_flight_now() {
     // GetTickCount64 advances by roughly 15.6 ms even at high frame rates.
     // Keep those coarse ticks for deadlines, never for integrating motion.
@@ -718,36 +722,22 @@ void debug_action(SourceTrial& trial, std::uintptr_t client, bool can_control, b
             debug.status = "Original camera restored.";
             return;
         }
-        if (debug.camera_owned) {
-            source_require(camera.identity == debug.camera_identity && camera.mode == 1,
-                "The owned free camera changed.");
+        if (debug.camera_owned && debug.first_person) {
+            source_require(camera.identity == debug.camera_identity && camera.mode == 1 &&
+                camera.active == camera.identity.camera, "The owned free camera changed.");
             if (debug.first_person) {
-                // Keep the owned camera and fly on from the last head pose.
                 first_person_disarm();
                 first_person_restore_fov(debug);
                 debug.first_person = false;
                 debug.status = "Freecam enabled from the first-person view.";
             }
-            return;
         }
-        source_require(camera.mode == 0 && camera.view_enabled && !camera.input_active,
-            "An active local view with no other camera override is required.");
-        const auto pose = debug_view_matrix(trial, camera);
-        debug.camera_identity = camera.identity;
-        debug.camera_owned = true; debug.camera_ambiguous = true;
-        SetLastError(error);
-        trial.camera_mode(camera.identity.controller, 1);
-        debug.camera_ambiguous = false;
-        camera = source_camera_snapshot(trial, client);
-        source_require(camera.identity == debug.camera_identity && camera.mode == 1 &&
-            camera.active == camera.identity.camera && camera.input_active,
-            "Freecam activation could not be verified; disable Freecam to restore the view.");
-        SetLastError(error);
-        trial.camera_transform(camera.identity.camera, &pose);
-        debug.flight_matrix = pose;
-        debug.flight_time = source_flight_now();
-        debug.flight_ready = true;
-        debug.status = "Freecam enabled. WASD / Q E move; hold RMB to look; Shift boosts.";
+        const bool recovering = debug.camera_owned;
+        if (activate_free_camera(trial, client, camera, error)) {
+            debug.flight_time = source_flight_now();
+            debug.status = recovering ? "Freecam restored after native placement changed the view."
+                : "Freecam enabled. WASD / Q E move; hold RMB to look; Shift boosts.";
+        }
         return;
     }
     source_require(false, "Unknown debug request.");
@@ -902,6 +892,7 @@ overlay::DebugModel on_client_debug_tick(std::uintptr_t base, std::uintptr_t cli
     // (First person owns the same camera but leaves the skater its controls.)
     state.free_camera_active.store(debug.camera_owned && !debug.first_person, std::memory_order_release);
     model.free_camera = debug.camera_owned && !debug.first_person;
+    verified_free_camera.store(0, std::memory_order_release);
     std::optional<SourceCameraSnapshot> flight_camera;
     try { debug_flight_tick(trial, client, can_control, camera_phase_observed, flight_input, error.value, flight_camera); }
     catch (const SourceGuard& guard) { debug_stop_noclip(debug); debug.status = guard.message; }
@@ -918,6 +909,8 @@ overlay::DebugModel on_client_debug_tick(std::uintptr_t base, std::uintptr_t cli
     } catch (...) {}
     try {
         const auto camera = flight_camera ? *flight_camera : source_camera_snapshot(trial, client);
+        if (verified_free_camera_view(debug, camera))
+            verified_free_camera.store(camera.identity.camera, std::memory_order_release);
         const bool owned_view = camera.mode == 1 && camera.active == camera.identity.camera;
         model.free_camera = owned_view && !debug.first_person;
         // Handed back on foot still reads as on, so the toggle can switch it off.
@@ -1074,6 +1067,9 @@ overlay::DebugModel on_client_debug_tick(std::uintptr_t base, std::uintptr_t cli
 }
 bool client_free_camera_active() noexcept {
     return source_state().free_camera_active.load(std::memory_order_acquire);
+}
+std::uintptr_t client_free_camera_view() noexcept {
+    return verified_free_camera.load(std::memory_order_acquire);
 }
 bool restore_client_debug(std::uintptr_t base, std::uintptr_t client, bool camera_phase_observed) {
     const overlay::DebugRequest request{overlay::DebugAction::restore_debug};

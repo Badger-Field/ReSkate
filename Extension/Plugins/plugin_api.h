@@ -14,6 +14,13 @@ void install_ui_api(Plugin& plugin, lua_State* L);
 void install_more_api(Plugin& plugin, lua_State* L);
 // The wider set's game parts (plugin_api_world.cpp), into the same table.
 void install_world_api(Plugin& plugin, lua_State* L);
+// General services for a game layer: the skater's telemetry and Bone Cam, the pad and keys, the
+// free and pad-flown cameras, the session's world, competition physics and the trick feed
+// (plugin_api_services.cpp).
+void install_services_api(Plugin& plugin, lua_State* L);
+// The throwdown kit's documents and native flag, the plugin's data files, overlay dialogs and the
+// skater's push (with its wait and reset) and hold (plugin_api_throwdowns.cpp).
+void install_kit_api(Plugin& plugin, lua_State* L);
 // A player as plugins get one: {id = "<SteamID64>", name, me, host}.
 void push_player(lua_State* L, const SessionPlayer& player);
 // A file's bytes when it is a regular file no larger than `most`; otherwise empty, and `error`

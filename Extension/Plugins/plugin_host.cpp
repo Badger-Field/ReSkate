@@ -3,6 +3,7 @@
 #include "plugin_api.h"
 #include "plugin_wire.h"
 #include "Engine/Core/Console/console_core.h"
+#include "Extension/Throwdowns/throwdown_kit.h"
 #include <algorithm>
 #include <format>
 #include <utility>
@@ -86,6 +87,7 @@ void Host::unload(Entry& entry) {
     }
     release_commands(entry.candidate.id + suffix_);
     environment_.game().release(entry.candidate.id + suffix_);
+    throwdowns::kit::release(entry.candidate.id + suffix_);
 }
 
 void Host::collect(Entry& entry) {
@@ -95,6 +97,7 @@ void Host::collect(Entry& entry) {
     entry.plugin.reset();
     release_commands(entry.candidate.id + suffix_);
     environment_.game().release(entry.candidate.id + suffix_);
+    throwdowns::kit::release(entry.candidate.id + suffix_);
 }
 
 void Host::release_commands(std::string_view id) {
@@ -347,32 +350,28 @@ void Host::follow_game() {
             each([&](Plugin& plugin, const std::string&) { plugin.track_changed(track); });
         }
     }
+    // The trick feed (tricks.feed): what the trick list wrote, to plugins that read tricks.
+    if (wants("events.tricks"))
+        if (const auto notes = game.take_trick_notes(); !notes.empty()) {
+            auto list = Json::array();
+            for (const auto& n : notes) list.push_back(Json{{"entry", std::to_string(n.entry)}, {"kind", std::string(1, n.kind)}, {"text", n.text}});
+            auto data = Json::object();
+            data["notes"] = std::move(list);
+            each([&](Plugin& plugin, const std::string&) { plugin.game_event("trick_notes", "events.tricks", data); });
+        }
     if (wants("throwdowns")) {
-        each([&](Plugin& plugin, const std::string& id) {
-            for (const auto& news : game.take_throwdown_news(id)) {
+        each([&](Plugin& plugin, const std::string&) {
+            // What the native Throwdowns UI reports of the plugin's modes (throwdown_kit.h), each
+            // mode by the plugin's own id.
+            const auto prefix = plugin.id() + "/";
+            for (auto& e : throwdowns::kit::take(plugin.id())) {
                 auto data = Json::object();
-                data["mode"] = news.mode;
-                data["action"] = news.action;
-                if (!news.row.empty()) {
-                    data["row"] = news.row;
-                    data["value"] = news.value;
-                }
-                auto settings = Json::object();
-                for (const auto& [row, value] : news.settings) settings[row] = value;
-                data["settings"] = std::move(settings);
-                if (news.at) {
-                    data["position"] = Json::array({(*news.at)[0], (*news.at)[1], (*news.at)[2]});
-                    data["heading"] = news.heading;
-                }
-                data["host"] = news.host;
-                if (news.leader) data["leader"] = std::to_string(news.leader);
-                if (news.player) data["player"] = std::to_string(news.player);
-                if (!news.players.empty()) {
-                    auto players = Json::array();
-                    for (const auto who : news.players) players.push_back(std::to_string(who));
-                    data["players"] = std::move(players);
-                }
-                plugin.game_event("throwdown_mode", "throwdowns", data);
+                data["action"] = std::move(e.action);
+                data["mode"] = e.mode.starts_with(prefix) ? e.mode.substr(prefix.size()) : std::move(e.mode);
+                auto args = Json::array();
+                for (auto& a : e.args) args.push_back(std::move(a));
+                data["args"] = std::move(args);
+                plugin.game_event("throwdown_ui", "throwdowns", data);
             }
         });
         const bool active = game.throwdowns().active;

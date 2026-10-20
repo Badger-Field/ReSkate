@@ -1,8 +1,8 @@
 #pragma once
 
 // When a trick lands and what it was worth, from the score HUD's values each tick (score_hud.h).
-// Apart from the game, so its rules are tested alone. Moved from Domination (PR 279), which adds
-// its spots on top: the start event is where a caller records where a trick began.
+// Apart from the game, so its rules are tested alone. The start event is where a caller records
+// where a trick began.
 //
 // Measured in play (a recording of the score HUD's values in a play session, 2026-10-14):
 // ActionActive is on while a trick goes on; LineScore rises one tick after it goes off. LineScore

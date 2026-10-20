@@ -10,8 +10,7 @@
 #include <numbers>
 #include <optional>
 
-// World positions on screen, through the camera as it is now (as the nametags and Domination's
-// overlay read it). The plugin host projects with it on the client thread (world_to_screen) and the
+// World positions on screen, through the camera as it is now (as the nametags read it). The plugin host projects with it on the client thread (world_to_screen) and the
 // overlay on the render thread (world shapes), each with the camera of its own moment.
 namespace dingosdk::plugin_camera {
 inline std::atomic<std::uintptr_t>& image_base() {

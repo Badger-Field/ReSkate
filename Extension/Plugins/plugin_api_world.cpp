@@ -254,8 +254,14 @@ struct WorldApi {
         lua_setfield(L, -2, "position");
         push_position(L, view->forward);
         lua_setfield(L, -2, "forward");
+        push_position(L, view->right);
+        lua_setfield(L, -2, "right");
+        push_position(L, view->up);
+        lua_setfield(L, -2, "up");
         lua_pushnumber(L, view->fov);
         lua_setfield(L, -2, "fov");
+        lua_pushboolean(L, view->free_camera);
+        lua_setfield(L, -2, "free");
         return 1;
     }
     // ---- trainer: one save point of the plugin's own -------------------------------------------
@@ -373,6 +379,119 @@ struct WorldApi {
         auto& plugin = plugin_of(L);
         if (!within(plugin.services_.now_ms(), plugin.edit_second_, plugin.edits_, 4)) return result(L, "more than 4 edits in a second");
         return result(L, game(plugin).edit_object(operation, object));
+    }
+    // ---- world.entities ----------------------------------------------------------------------------
+    // set(id, blueprint, transform, hidden?): the plugin's object `id` (1 to 2^31) is an entity of the
+    // world object blueprint at the transform, made, moved or taken away by the game a few a frame.
+    // A transform is {position = vector, right = vector, up = vector, forward = vector} (axes carry
+    // their scale), {position, yaw, pitch, roll (degrees), scale (number or vector)}, or
+    // {matrix = {16 numbers}} (rows right, up, forward, position).
+    static std::uint32_t entity_id(lua_State* L, int index) {
+        const double id = luaL_checknumber(L, index);
+        if (!(id >= 1 && id <= 2147483647.0) || id != std::floor(id)) luaL_argerror(L, index, "an object's id is a whole number from 1");
+        return static_cast<std::uint32_t>(id);
+    }
+    static std::array<float, 3> axis_of(lua_State* L, int table, const char* field) {
+        lua_getfield(L, table, field);
+        const float* v = luaL_checkvector(L, -1);
+        std::array<float, 3> result{v[0], v[1], v[2]};
+        lua_pop(L, 1);
+        return result;
+    }
+    static std::array<float, 16> transform_of(lua_State* L, int table) {
+        luaL_checktype(L, table, LUA_TTABLE);
+        std::array<float, 16> m{};
+        lua_getfield(L, table, "matrix");
+        if (!lua_isnil(L, -1)) {
+            luaL_checktype(L, -1, LUA_TTABLE);
+            if (lua_objlen(L, -1) != 16) luaL_error(L, "a matrix is 16 numbers");
+            for (int i = 0; i < 16; ++i) {
+                lua_rawgeti(L, -1, i + 1);
+                m[i] = static_cast<float>(luaL_checknumber(L, -1));
+                lua_pop(L, 1);
+            }
+            lua_pop(L, 1);
+            return m;
+        }
+        lua_pop(L, 1);
+        lua_getfield(L, table, "position");
+        const auto at = position_of(L, -1, "an object's position");
+        lua_pop(L, 1);
+        lua_getfield(L, table, "right");
+        const bool axes = !lua_isnil(L, -1);
+        lua_pop(L, 1);
+        std::array<float, 3> right{1, 0, 0}, up{0, 1, 0}, forward{0, 0, 1};
+        if (axes) {
+            right = axis_of(L, table, "right");
+            up = axis_of(L, table, "up");
+            forward = axis_of(L, table, "forward");
+        } else {
+            const auto degrees = [&](const char* field) {
+                lua_getfield(L, table, field);
+                const double value = luaL_optnumber(L, -1, 0);
+                lua_pop(L, 1);
+                if (!std::isfinite(value)) luaL_error(L, "%s is a finite number of degrees", field);
+                return value * 3.14159265358979323846 / 180;
+            };
+            const double yaw = degrees("yaw"), pitch = degrees("pitch"), roll = degrees("roll");
+            // Yaw about up (forward = sin, 0, cos at zero pitch), then pitch about right, then roll
+            // about forward, as the game lays out a world object's axes.
+            const double cy = std::cos(yaw), sy = std::sin(yaw), cp = std::cos(pitch), sp = std::sin(pitch), cr = std::cos(roll), sr = std::sin(roll);
+            const std::array<double, 3> f{sy * cp, sp, cy * cp}, r0{cy, 0, -sy};
+            const std::array<double, 3> u0{f[1] * r0[2] - f[2] * r0[1], f[2] * r0[0] - f[0] * r0[2], f[0] * r0[1] - f[1] * r0[0]};
+            for (int i = 0; i < 3; ++i) {
+                right[i] = static_cast<float>(r0[i] * cr + u0[i] * sr);
+                up[i] = static_cast<float>(u0[i] * cr - r0[i] * sr);
+                forward[i] = static_cast<float>(f[i]);
+            }
+            lua_getfield(L, table, "scale");
+            std::array<float, 3> scale{1, 1, 1};
+            if (lua_isnumber(L, -1)) scale.fill(static_cast<float>(lua_tonumber(L, -1)));
+            else if (lua_isvector(L, -1)) {
+                const float* v = lua_tovector(L, -1);
+                scale = {v[0], v[1], v[2]};
+            } else if (!lua_isnil(L, -1)) luaL_error(L, "a scale is a number or a vector");
+            lua_pop(L, 1);
+            for (int i = 0; i < 3; ++i) right[i] *= scale[0], up[i] *= scale[1], forward[i] *= scale[2];
+        }
+        for (int i = 0; i < 3; ++i) m[i] = right[i], m[4 + i] = up[i], m[8 + i] = forward[i], m[12 + i] = at[i];
+        m[15] = 1;
+        return m;
+    }
+    static int entities_set(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "world.entities", "reskate.entities.set");
+        const auto id = entity_id(L, 1);
+        const auto asset = checked_text(L, 2, 200, "a blueprint's name");
+        const auto matrix = transform_of(L, 3);
+        return result(L, game(plugin).entity_set(plugin.id(), id, asset, matrix, lua_toboolean(L, 4) != 0));
+    }
+    static int entities_remove(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "world.entities", "reskate.entities.remove");
+        game(plugin).entity_remove(plugin.id(), entity_id(L, 1));
+        return 0;
+    }
+    static int entities_clear(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "world.entities", "reskate.entities.clear");
+        game(plugin).entity_clear(plugin.id());
+        return 0;
+    }
+    static int entities_status(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "world.entities", "reskate.entities.status");
+        static constexpr const char* names[] = {nullptr, "waiting", "loading", "missing", "ready", "hidden"};
+        const auto status = game(plugin).entity_status(plugin.id(), entity_id(L, 1));
+        if (status <= 0 || status > 5) lua_pushnil(L);
+        else lua_pushstring(L, names[status]);
+        return 1;
+    }
+    static int entities_ready(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "world.entities", "reskate.entities.ready");
+        lua_pushboolean(L, game(plugin).entities_ready(plugin.id()));
+        return 1;
     }
     static int place(lua_State* L) {
         need(L, plugin_of(L), "world.objects", "reskate.objects.place");
@@ -1054,9 +1173,11 @@ struct WorldApi {
         else lua_pushlstring(L, status.data(), status.size());
         return 1;
     }
-    // mode{id, name, description, art, flag, players = {min, max, default},
-    // timer = {caption, min, max, step, default}, rows = {{id, kind, caption, ...}}}: the mode's card on
-    // the Throwdowns page, its setup page and its start flag. Again with the same id updates it.
+    // mode{id, name, description, art, color, card, replaces, order, flag, cursor_height,
+    // players = {min, max, default}}: the mode's card on the Throwdowns page (cloned from the stock
+    // `card`: "skate", "spot" or "jam") and its native flag's preview prefab; cursor_height (metres)
+    // lets its flag's placement cursor rise onto anything that high. Its setup page is the plugin's
+    // `setup` document (throwdowns.ui). Again with the same id updates it.
     static int int_field(lua_State* L, int table, const char* name, int fallback) {
         lua_getfield(L, table, name);
         const int value = lua_isnil(L, -1) ? fallback : static_cast<int>(luaL_checkinteger(L, -1));
@@ -1073,35 +1194,6 @@ struct WorldApi {
         lua_pop(L, 1);
         return value;
     }
-    static ThrowdownRow row_of(lua_State* L, int table, const char* fallback_kind) {
-        ThrowdownRow row;
-        row.id = text_field(L, table, "id");
-        row.kind = text_field(L, table, "kind");
-        if (row.kind.empty()) row.kind = fallback_kind;
-        if (row.kind != "slider" && row.kind != "choice" && row.kind != "button")
-            luaL_error(L, "a row's kind is \"slider\", \"choice\" or \"button\"");
-        row.caption = text_field(L, table, "caption");
-        row.text = text_field(L, table, "text");
-        row.minimum = int_field(L, table, "min", 0);
-        row.maximum = int_field(L, table, "max", 0);
-        row.step = int_field(L, table, "step", 1);
-        row.value = int_field(L, table, "default", row.minimum);
-        lua_getfield(L, table, "options");
-        if (!lua_isnil(L, -1)) {
-            luaL_checktype(L, -1, LUA_TTABLE);
-            const int count = lua_objlen(L, -1);
-            for (int i = 1; i <= count && i <= 16; ++i) {
-                lua_rawgeti(L, -1, i);
-                if (!lua_isstring(L, -1)) luaL_error(L, "a choice's options are strings");
-                row.options.emplace_back(lua_tostring(L, -1));
-                lua_pop(L, 1);
-            }
-        }
-        lua_pop(L, 1);
-        // A choice's default is its option's number, from 1 as Lua counts.
-        if (row.kind == "choice") row.value = int_field(L, table, "default", 1) - 1;
-        return row;
-    }
     static int throwdown_mode(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "throwdowns", "reskate.throwdowns.mode");
@@ -1113,10 +1205,31 @@ struct WorldApi {
         mode.art = text_field(L, 1, "art");
         mode.flag = text_field(L, 1, "flag");
         mode.replaces = text_field(L, 1, "replaces");
-        if (!mode.replaces.empty() && mode.replaces != "skate" && mode.replaces != "spot_battle" && mode.replaces != "jam")
-            luaL_argerror(L, 1, "replaces is \"skate\", \"spot_battle\" or \"jam\"");
+        mode.card = text_field(L, 1, "card");
+        if (mode.card.empty()) mode.card = "spot";
+        mode.order = int_field(L, 1, "order", 0);
+        lua_getfield(L, 1, "color");
+        if (lua_isnumber(L, -1)) {
+            const double c = lua_tonumber(L, -1);
+            if (!(c >= 0 && c <= 4294967295.0)) luaL_argerror(L, 1, "color is 0xAABBGGRR");
+            mode.color = static_cast<std::uint32_t>(c);
+        }
+        lua_pop(L, 1);
+        lua_getfield(L, 1, "cursor_height");
+        if (!lua_isnil(L, -1)) {
+            const double h = luaL_checknumber(L, -1);
+            if (!(h >= 0 && h <= 100000)) luaL_argerror(L, 1, "cursor_height is 0 to 100000 metres");
+            mode.cursor_height = static_cast<float>(h);
+        }
+        lua_pop(L, 1);
+        const auto stock = [](const std::string& tile) { return tile == "skate" || tile == "spot" || tile == "spot_battle" || tile == "jam"; };
+        if (!mode.replaces.empty() && !stock(mode.replaces)) luaL_argerror(L, 1, "replaces is \"skate\", \"spot\" or \"jam\"");
+        if (!stock(mode.card)) luaL_argerror(L, 1, "card is \"skate\", \"spot\" or \"jam\"");
+        if (mode.flag.size() > 256 || mode.art.size() > 256) luaL_argerror(L, 1, "art and flag are at most 256 characters");
+        // An asset path: letters, digits, _ - . and /.
         for (const char c : mode.flag)
-            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') luaL_argerror(L, 1, "flag is letters, digits and _");
+            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '/' && c != '-' && c != '.')
+                luaL_argerror(L, 1, "flag is an asset path: letters, digits, _, -, . and /");
         lua_getfield(L, 1, "players");
         if (!lua_isnil(L, -1)) {
             luaL_checktype(L, -1, LUA_TTABLE);
@@ -1126,39 +1239,12 @@ struct WorldApi {
             mode.players = int_field(L, at, "default", std::min(4, mode.max_players));
         }
         lua_pop(L, 1);
-        lua_getfield(L, 1, "timer");
-        if (!lua_isnil(L, -1)) {
-            luaL_checktype(L, -1, LUA_TTABLE);
-            auto timer = row_of(L, lua_gettop(L), "slider");
-            if (timer.caption.empty()) timer.caption = "Timer";
-            timer.id = "timer";
-            mode.timer = std::move(timer);
-        }
-        lua_pop(L, 1);
-        lua_getfield(L, 1, "rows");
-        if (!lua_isnil(L, -1)) {
-            luaL_checktype(L, -1, LUA_TTABLE);
-            const int count = lua_objlen(L, -1);
-            for (int i = 1; i <= count && i <= 16; ++i) {
-                lua_rawgeti(L, -1, i);
-                luaL_checktype(L, -1, LUA_TTABLE);
-                mode.rows.push_back(row_of(L, lua_gettop(L), "slider"));
-                lua_pop(L, 1);
-            }
-        }
-        lua_pop(L, 1);
         return result(L, game(plugin).set_throwdown_mode(plugin.id(), mode));
     }
     static int throwdown_remove_mode(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "throwdowns", "reskate.throwdowns.remove_mode");
         game(plugin).remove_throwdown_mode(plugin.id(), luaL_checkstring(L, 1));
-        return 0;
-    }
-    static int throwdown_release_flag(lua_State* L) {
-        auto& plugin = plugin_of(L);
-        need(L, plugin, "throwdowns", "reskate.throwdowns.release_flag");
-        game(plugin).release_throwdown_flag(plugin.id());
         return 0;
     }
     static int throwdown_state(lua_State* L) {
@@ -1490,6 +1576,8 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     into(L, "hud", {{"hide", hide_hud}, {"corner", hud_corner}});
     into(L, "time", {{"slow", slow}, {"speed", speed}});
     into(L, "objects", {{"catalog", catalog}, {"list", objects}, {"place", place}, {"move", move}, {"remove", remove}});
+    into(L, "entities", {{"set", entities_set}, {"remove", entities_remove}, {"clear", entities_clear}, {"status", entities_status},
+                         {"ready", entities_ready}});
     into(L, "world", {{"set_time", set_time}, {"set_control", set_control}, {"set_park", set_park}});
     into(L, "travel", {{"locations", locations}, {"levels", levels}, {"go", go}, {"load", load}});
     into(L, "ai", {{"spawn", ai_spawn}, {"clear", ai_clear}, {"count", ai_count}});
@@ -1502,7 +1590,7 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     into(L, "audio", {{"play", audio_play}, {"set", audio_set}, {"stop", audio_stop}, {"playing", audio_playing}});
     into(L, "server", {{"kick", server_kick}, {"say", server_say}, {"tell", server_tell}, {"move", server_move}});
     into(L, "throwdowns", {{"state", throwdown_state}, {"host", throwdown_host}, {"cancel", throwdown_cancel}, {"hosting", throwdown_hosting},
-                           {"mode", throwdown_mode}, {"remove_mode", throwdown_remove_mode}, {"release_flag", throwdown_release_flag}});
+                           {"mode", throwdown_mode}, {"remove_mode", throwdown_remove_mode}});
     into(L, "music", {{"current", current}, {"play", play}, {"pause", pause}, {"next", next}, {"previous", previous},
                       {"game", game_current}, {"game_next", game_next}});
     into(L, "progression", {{"get", progress}});

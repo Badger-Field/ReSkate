@@ -5,6 +5,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // Messages that link the players' own throwdowns (analysis/throwdowns-native-mp.md).
@@ -34,11 +35,14 @@ struct ThrowdownMessage {
         // A drop for chosen players only (a plugin's, reskate.throwdowns.host): order = who may see
         // and join the leader's drop `id`; sent before each of its offers.
         invite = 16,
-        // The leader's drop `id` is the flag of a plugin's throwdown mode (custom_modes.h), sent
-        // before each of its offers: challenge = the mode ("plugin/mode"), series = its flag (may
-        // be empty), value = how many players it takes. Its offers' series is mode_series, which
-        // a ReSkate without plugin modes does not show.
-        mode = 17
+        // Older clients tagged a drop as a plugin mode's flag with this before each offer
+        // (challenge = the mode, series = its flag, value = its players; the offers' series was
+        // mode_series). Still decoded so the wire stays compatible; ignored and no longer sent.
+        mode = 17,
+        // The leader's flag of a plugin mode (throwdown_kit.h Flag), published by its plugin:
+        // id = the flag's game, challenge = the mode ("plugin/mode"), placement = the flag
+        // (encode_flag_body). Sent when it changes and every few seconds; withdrawn once.
+        flag = 18
     };
     Kind kind = Kind::offer;
     std::uint64_t leader{}; // Steam ID of the player hosting the throwdown
@@ -65,6 +69,20 @@ inline constexpr std::string_view mode_series = "ReSkateMode";
 constexpr std::size_t max_throwdown_series = 48, max_throwdown_params = 1536, max_throwdown_order = 32,
                       max_throwdown_boards = 16, max_challenge_id = 96, max_challenge_criteria = 64,
                       challenge_criteria_size = 0x14, max_challenge_players = 4;
+// Kind::flag's body: the plugin's flag id, where it stands and what its card says.
+struct ThrowdownFlagBody {
+    std::string id;
+    std::array<float, 3> at{};
+    float yaw{}; // degrees
+    std::uint8_t players = 1, capacity = 6;
+    bool open = true, withdrawn{};
+    std::vector<std::pair<std::string, std::string>> stats; // {title, value}
+    bool operator==(const ThrowdownFlagBody &) const = default;
+};
+constexpr std::size_t max_flag_id = 64, max_flag_stat = 48, max_flag_stats = 3;
+// Throws std::invalid_argument for an invalid flag.
+std::vector<std::uint8_t> encode_flag_body(const ThrowdownFlagBody &);
+std::optional<ThrowdownFlagBody> decode_flag_body(std::span<const std::uint8_t>) noexcept;
 bool valid_throwdown(const ThrowdownMessage &) noexcept;
 // Throws std::invalid_argument for an invalid message.
 std::vector<std::uint8_t> encode_throwdown(const ThrowdownMessage &);

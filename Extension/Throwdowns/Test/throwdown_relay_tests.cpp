@@ -8,12 +8,16 @@
 #include "Extension/Throwdowns/grouped_number.h"
 #include "Extension/Multiplayer/Hud/native_party.h"
 #include "Extension/Settings/named_settings.h"
+#include "Extension/Throwdowns/throwdown_kit.h"
+#include "Extension/Throwdowns/native_flag_session.h"
 #include <Windows.h>
 #include <chrono>
 #include <cmath>
 #include <iostream>
 #include <thread>
 #include <map>
+#include <set>
+#include <algorithm>
 #include <stdexcept>
 
 namespace {
@@ -28,6 +32,30 @@ std::map<std::string, std::string> settings_changed;
 bool leaderboard_live = true;
 bool types_ready = true; // stands in for the event types of the level being found
 std::uint64_t last_token{};
+// The kit's store and native flag, as the relay sees them: the plugins' documents, the events
+// it posts and the flags it hands to the native flag registration.
+std::vector<dingosdk::throwdowns::kit::Documents> kit_documents;
+std::vector<dingosdk::throwdowns::kit::Event> kit_events;
+struct Adopted { std::string mode; std::uint32_t game{}, mmid{}; unsigned capacity{}; };
+std::vector<Adopted> adopted;
+bool accept_adopt=true;
+std::set<std::uint32_t> custom_queues;
+}
+namespace dingosdk::throwdowns::kit {
+std::vector<Documents> documents() {return kit_documents;}
+void post_to(std::string_view plugin,std::string action,std::string mode,std::vector<std::string> args) {
+    kit_events.push_back({std::string(plugin),std::move(action),std::move(mode),std::move(args)});
+}
+namespace flag {
+bool adopt(std::string_view mode,std::uint32_t game,std::uint32_t mmid,const Vec3&,float,unsigned,unsigned capacity) {
+    adopted.push_back({std::string(mode),game,mmid,capacity});
+    if(accept_adopt)for(auto& d:kit_documents)d.flags.clear(); // the plugin stops offering it
+    return accept_adopt;
+}
+}
+}
+namespace dingosdk::multiplayer::native_flag {
+bool known_queue(std::uint32_t mmid) noexcept {return custom_queues.contains(mmid);}
 }
 
 namespace dingosdk {
@@ -56,6 +84,10 @@ bool queue_throwdown_host(std::uint64_t token, const std::string &series, const 
     last_token = token;
     calls.push_back({"host", series, most_players, 0, static_cast<std::int32_t>(at[0]), token});
     return true;
+}
+bool queue_custom_throwdown_flag(std::uint64_t token,std::uint32_t host,const std::string& key,
+    const std::array<float,3>& at,float yaw) noexcept {
+    last_token=token;calls.push_back({"custom flag",key,host,static_cast<std::uint32_t>(at[0]),static_cast<std::int32_t>(yaw),token});return true;
 }
 bool queue_throwdown_add(std::uint32_t player, const std::string &series, std::uint32_t mmid) noexcept {
     calls.push_back({"add", series, player, mmid});
@@ -167,6 +199,24 @@ void end_session() {
     calls.clear();
 }
 
+void native_queue_banner_lifetime() {
+    const auto before=native_queue_hud_state().generation;
+    local(Local::created,501);auto queue=native_queue_hud_state();
+    check(queue.generation>before && queue.waiting,"Creating a native queue enables its waiting notice");
+    local(Local::force_started,501);check(native_queue_hud_state().waiting,"A Start request alone does not assume the event successfully began");
+    local(Local::entered,501);check(!native_queue_hud_state().waiting,"Actual activity entry retires the long-timer waiting banner");
+    local(Local::ended,501);check(!native_queue_hud_state().waiting,"A completed Skate Jam cannot resurrect its waiting banner");
+    local(Local::joined,502);auto rejoined=native_queue_hud_state();
+    check(rejoined.generation>queue.generation && rejoined.waiting,"A new enrollment gets a fresh waiting notice");
+    local(Local::left,502);check(!native_queue_hud_state().waiting,"Leave retires the queue notice immediately");
+    local(Local::joined,503);local(Local::quit,503);
+    check(!native_queue_hud_state().waiting,"Quit cannot leave a stock waiting banner alive");
+    local(Local::created,504);retire_native_queue_hud();
+    check(!native_queue_hud_state().waiting,"A real level teardown retires its waiting notice");
+    local(Local::created,505);check(native_queue_hud_state().waiting,"The next map's fresh queue is visible");
+    end_session();
+}
+
 // Another player's drop: shown, joined natively, started by its leader, scored.
 void guest_flow() {
     const ThrowdownRelayInput in{me, {{leader, 3}, {other, 5}}, true, 77};
@@ -222,6 +272,15 @@ void guest_flow() {
 }
 
 // The local player's own drop: offered, joined by others, force-started, scored.
+void private_draft_relay_flow() {
+    const ThrowdownRelayInput in{me,{{other,4}},true,78};tick(in);
+    custom_queues.insert(0x999);
+    ThrowdownLocalAction exited{Local::exited};exited.series="SpotBattle";exited.mmid=0x999;
+    exited.placement={9};exited.settings={8};throwdown_relay_local(std::move(exited));
+    const auto out=tick(in);
+    check(std::none_of(out.begin(),out.end(),[](const auto& m){return m.kind==Kind::offer;}),"A custom draft leaked through the stock donor relay");
+    custom_queues.clear();end_session();
+}
 void leader_flow() {
     const ThrowdownRelayInput in{me, {{other, 4}}, true, 78};
     tick(in);
@@ -824,87 +883,24 @@ void plugin_host_flow() {
     end_session();
 }
 
-// A plugin throwdown mode's flag (custom_modes.h): offered as that mode's, shown only where the
-// plugin has the mode too, held open on every copy, and its joins, leaves and start reach the
-// plugins instead of starting a Spot Battle.
-void plugin_mode_flow() {
+// An older client's plugin mode flag (a Kind::mode tag before a mode_series offer): ignored, even
+// where the plugin has that mode; the kit's flags travel as flag messages (custom_flag_flow).
+void legacy_mode_tags_are_ignored() {
     using namespace dingosdk::multiplayer::custom_throwdowns;
     Mode mode;
-    mode.plugin = "smokey"; mode.id = "oneup"; mode.name = "1-UP"; mode.flag = "oneup"; mode.players = 3;
+    mode.plugin = "demo"; mode.id = "duel"; mode.name = "Duel"; mode.flag = "duel"; mode.players = 3;
     check(set_mode(mode).empty(), "The test mode registers");
-    (void)take("smokey");
-    // Hosting: the flag is offered as the mode's, with an offer older versions do not show.
-    {
-        const ThrowdownRelayInput in{me, {{other, 4}}, true, 81};
-        tick(in);
-        ThrowdownLocalAction exited{Local::exited};
-        exited.series = "SpotBattle"; exited.mmid = 0x61; exited.placement = {9}; exited.settings = {8};
-        exited.mode = "smokey/oneup"; exited.flag = "oneup"; exited.mode_players = 2;
-        throwdown_relay_local(std::move(exited));
-        auto out = tick(in);
-        check(out.size() == 2 && out[0].kind == Kind::mode && out[0].challenge == "smokey/oneup" && out[0].series == "oneup" &&
-                  out[0].value == 2 && out[1].kind == Kind::offer && out[1].series == "ReSkateMode",
-              "A mode's flag was not offered as that mode's");
-        receive(other, make(Kind::join, me, 0x61));
-        tick(in);
-        const auto *add = find("add");
-        check(add && add->id == 0x304 && add->mmid == 0x61, "A join did not enter the flag's queue");
-        auto news = take("smokey");
-        check(news.size() == 1 && news[0].action == "joined" && news[0].host && news[0].player == other,
-              "The host's plugin did not hear who joined");
-        check(throwdown_relay_mode_players(0x61) == std::vector<std::uint64_t>{me, other}, "The flag's players were not published");
-        local(Local::force_started, 0x61);
-        out = tick(in);
-        check(out.size() == 1 && out[0].kind == Kind::start && out[0].order == std::vector<std::uint64_t>{me, other},
-              "The host's Start did not reach the other players");
-        check(throwdown_relay_mode_players(0x61).empty(), "The flag was still up after Start");
-        end_session();
-    }
-    // Another player's flag, seen where the mode is: held open with the mode's flag.
-    {
-        calls.clear();
-        const ThrowdownRelayInput in{me, {{leader, 3}, {other, 5}}, true, 82};
-        tick(in);
-        auto tag = make(Kind::mode, leader, 0x71);
-        tag.challenge = "smokey/oneup"; tag.series = "oneup"; tag.value = 3;
-        receive(leader, tag);
-        receive(leader, offer(leader, 0x71, "ReSkateMode"));
-        tick(in);
-        const auto *spawn = find("spawn");
-        check(spawn && spawn->series == "SpotBattle" && last_instance == "ReSkate.oneup" && last_capacity == 10,
-              "A mode's flag was not shown as the mode's, held open");
-        throwdown_relay_spawned(last_token, 0x7777, 10);
-        tick(in);
-        local(Local::joined, 0x7777);
-        auto out = tick(in);
-        check(out.size() == 1 && out[0].kind == Kind::join, "Joining a mode's flag was not reported to its leader");
-        auto news = take("smokey");
-        check(news.size() == 1 && news[0].action == "joined" && !news[0].host && news[0].leader == leader,
-              "The plugin did not hear the local player joined");
-        auto start = make(Kind::start, leader, 0x71);
-        start.order = {leader, me};
-        receive(leader, start);
-        tick(in);
-        check(!find("start") && find("destroy"), "A mode's flag started a Spot Battle instead of going");
-        news = take("smokey");
-        check(news.size() == 1 && news[0].action == "start" && news[0].players == std::vector<std::uint64_t>{leader, me},
-              "The plugin did not hear who plays");
-        end_session();
-    }
-    // Where the plugin does not have that mode, nothing shows.
-    {
-        calls.clear();
-        const ThrowdownRelayInput in{me, {{leader, 3}}, true, 83};
-        tick(in);
-        auto tag = make(Kind::mode, leader, 0x72);
-        tag.challenge = "elsewhere/race"; tag.value = 4;
-        receive(leader, tag);
-        receive(leader, offer(leader, 0x72, "ReSkateMode"));
-        tick(in);
-        check(!find("spawn"), "A mode this player does not have was shown");
-        end_session();
-    }
-    remove_plugin("smokey");
+    calls.clear();
+    const ThrowdownRelayInput in{me, {{leader, 3}}, true, 82};
+    tick(in);
+    auto tag = make(Kind::mode, leader, 0x71);
+    tag.challenge = "demo/duel"; tag.series = "duel"; tag.value = 3;
+    receive(leader, tag);
+    receive(leader, offer(leader, 0x71, "ReSkateMode"));
+    const auto out = tick(in);
+    check(!find("spawn") && out.empty(), "An older client's mode flag was shown or answered");
+    end_session();
+    remove_plugin("demo");
 }
 
 void level_change_flow() {
@@ -922,6 +918,108 @@ void level_change_flow() {
     tick(in);
     check(count("spawn") == 1, "The drop was not shown once the event types were found again");
     end_session();
+}
+dingosdk::throwdowns::kit::Flag kit_flag(std::uint64_t owner,std::uint32_t game,float x,float yaw,const char* mode="demo/lap") {
+    dingosdk::throwdowns::kit::Flag f;
+    f.id="flag-"+std::to_string(game);f.mode=mode;f.leader=owner;f.game=game;f.at={x,2,30};f.yaw=yaw;f.players=1;f.capacity=4;
+    return f;
+}
+void publish_flags(std::vector<dingosdk::throwdowns::kit::Flag> flags) {
+    kit_documents.clear();
+    if(flags.empty())return;
+    dingosdk::throwdowns::kit::Documents d;d.plugin="demo";d.flags=std::move(flags);
+    kit_documents.push_back(std::move(d));
+}
+// Other players' plugin mode flags (kit documents' `flags`, or the leader's relay): native
+// registrations hosted by the leader's virtual id, joined with the stock Join.
+void custom_flag_flow() {
+    using namespace dingosdk::multiplayer::custom_throwdowns;
+    Mode mode;
+    mode.plugin="demo";mode.id="lap";mode.name="Lap";mode.flag="lap";
+    check(set_mode(mode).empty(),"The flag test mode registers");
+    const ThrowdownRelayInput in{me,{{leader,3,"Host"},{other,5,"Other"}},true,777};
+    publish_flags({kit_flag(leader,23,100,90)});
+    tick(in);
+    check(count("custom flag")==1 && find("custom flag")->id==0x303 && find("custom flag")->series=="demo/lap" &&
+        find("custom flag")->mmid==100 && find("custom flag")->value==90,"a plugin's flag spawns a native registration at its spot, hosted by its remote player");
+    const auto first=last_token;
+    tick(in);check(count("custom flag")==1,"repeat documents do not duplicate a physical flag");
+    throwdown_relay_spawned(first,501,10);tick(in);
+    check(custom_throwdown_flag_key(501)=="demo/lap","native POI/bubble resolves its own queue's mode");
+    check(custom_throwdown_flag_available(leader,23) && !custom_throwdown_flag_available(other,23) && !custom_throwdown_flag_available(leader,24),
+        "only the exact advertised native flag takes over the A interaction");
+    kit_documents.front().flags.front().players=2;kit_documents.front().flags.front().stats={{"Gates","5"}};
+    tick(in);
+    const auto info=custom_throwdown_flag_info(501);
+    check(info && info->players==2 && info->stats.size()==1 && info->stats.front().second=="5" && info->id=="flag-23" &&
+        count("custom flag")==1 && count("destroy")==0,"updated players/stats do not respawn or flash the flag");
+    local(Local::joined,501);tick(in);
+    check(adopted.size()==1 && adopted.back().mmid==501 && adopted.back().game==23 && adopted.back().mode=="demo/lap" &&
+        adopted.back().capacity==4 && count("start")==0 && count("destroy")==0,
+        "native Join hands the registration to the flag session without starting or destroying a Spot Battle");
+    check(!kit_events.empty() && kit_events.back().plugin=="demo" && kit_events.back().action=="join" &&
+        kit_events.back().mode=="demo/lap" &&
+        kit_events.back().args==std::vector<std::string>{"flag-23",std::to_string(leader),"23"},"the mode's plugin hears join {flag id, leader, game}");
+    check(custom_throwdown_flag_key(501).empty(),"the flag session takes over the joined flag's lifetime");
+
+    calls.clear();publish_flags({kit_flag(leader,24,101,45)});tick(in);
+    const auto pending=last_token;publish_flags({});tick(in);
+    throwdown_relay_spawned(pending,502,10);tick(in);
+    check(count("destroy")==1 && find("destroy")->mmid==502 && custom_throwdown_flag_key(502).empty(),"withdrawal while spawning destroys the late flag instead of reviving a stale invitation");
+
+    calls.clear();publish_flags({kit_flag(leader,25,102,30)});tick(in);
+    throwdown_relay_spawned(last_token,503,10);tick(in);
+    accept_adopt=false;local(Local::joined,503);tick(in);
+    check(count("remove")==1 && find("remove")->id==2 && count("start")==0,"a refused native Join removes only the local donor participant");
+    accept_adopt=true;publish_flags({});tick(in);
+    check(count("destroy")==1 && find("destroy")->mmid==503,"withdrawn open flags are removed");
+
+    calls.clear();publish_flags({kit_flag(leader,26,103,20)});tick(in);
+    const auto same_tick=last_token;
+    throwdown_relay_spawned(same_tick,504,10);local(Local::joined,504);tick(in);
+    check(adopted.back().mmid==504 && count("destroy")==0,"native Join in the spawn callback's tick resolves the correct flag");
+
+    calls.clear();publish_flags({kit_flag(leader,27,104,0,"elsewhere/lap")});tick(in);
+    check(count("custom flag")==0,"a flag of a mode no plugin here registered is not shown");
+    auto closed=kit_flag(leader,28,105,0);closed.open=false;publish_flags({closed});tick(in);
+    check(count("custom flag")==0,"a closed flag is not shown");
+    publish_flags({});end_session();
+
+    // The local plugin's own flag goes to the other players; theirs come back the same way.
+    {
+        const ThrowdownRelayInput host{me,{{other,4}},true,778};
+        tick(host);
+        auto own=kit_flag(0,31,106,15);own.stats={{"Laps","3"}};
+        publish_flags({own});
+        auto out=tick(host);
+        const auto sent=std::find_if(out.begin(),out.end(),[](const auto& m){return m.kind==Kind::flag;});
+        check(sent!=out.end() && sent->leader==me && sent->id==31 && sent->challenge=="demo/lap","the local plugin's flag was not sent to the other players");
+        const auto body=decode_flag_body(sent->placement);
+        check(body && body->id=="flag-31" && body->at[0]==106 && body->yaw==15 && body->capacity==4 && body->stats.size()==1 &&
+            !body->withdrawn,"the sent flag lost its card");
+        out=tick(host);
+        check(std::none_of(out.begin(),out.end(),[](const auto& m){return m.kind==Kind::flag;}),"an unchanged flag was resent at once");
+        publish_flags({});out=tick(host);
+        const auto gone=std::find_if(out.begin(),out.end(),[](const auto& m){return m.kind==Kind::flag;});
+        check(gone!=out.end() && gone->id==31 && decode_flag_body(gone->placement)->withdrawn,"a taken-down flag was not withdrawn");
+        end_session();
+
+        const ThrowdownRelayInput guest{me,{{leader,3}},true,779};
+        tick(guest);
+        auto remote=make(Kind::flag,leader,41);remote.challenge="demo/lap";
+        ThrowdownFlagBody flag;flag.id="remote";flag.at={107,2,30};flag.yaw=5;flag.capacity=6;
+        remote.placement=encode_flag_body(flag);
+        receive(leader,remote);tick(guest);
+        check(count("custom flag")==1 && find("custom flag")->mmid==107 && find("custom flag")->id==0x303,"a flag another player's relay sent was not shown");
+        throwdown_relay_spawned(last_token,505,10);tick(guest);
+        check(custom_throwdown_flag_info(505) && custom_throwdown_flag_info(505)->id=="remote","the sent flag's id did not reach the native card");
+        flag.withdrawn=true;remote.placement=encode_flag_body(flag);
+        receive(leader,remote);tick(guest);
+        check(count("destroy")==1 && find("destroy")->mmid==505,"a withdrawn flag stayed up");
+        end_session();
+    }
+    remove_plugin("demo");
+    kit_events.clear();adopted.clear();
 }
 } // namespace
 
@@ -947,7 +1045,9 @@ void grouped_number_checks() {
 }
 int main() {
     try {
+        native_queue_banner_lifetime();
         guest_flow();
+        private_draft_relay_flow();
         leader_flow();
         removal_flow();
         spot_battle_flow();
@@ -958,8 +1058,9 @@ int main() {
         beacon_flow();
         level_change_flow();
         plugin_host_flow();
-        plugin_mode_flow();
-        std::cout << "Throwdown relay: guest, leader, removal, Spot Battle, S.K.A.T.E., last-player, coop challenge, party beacon, level change, plugin drop and plugin mode flows passed.\n";
+        legacy_mode_tags_are_ignored();
+        custom_flag_flow();
+        std::cout << "Throwdown relay: guest, leader, removal, Spot Battle, S.K.A.T.E., last-player, coop challenge, party beacon, level change, plugin drop, legacy mode tag and custom flag flows passed.\n";
         return 0;
     } catch (const std::exception &e) {
         std::cerr << e.what() << '\n';

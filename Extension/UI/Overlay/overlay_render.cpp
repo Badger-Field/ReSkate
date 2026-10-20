@@ -15,6 +15,7 @@
 #include <imgui_internal.h>
 
 namespace dingosdk::overlay::detail {
+void draw_plugin_dialog(); // reskate.ui.dialog (plugin_dialog.cpp)
 
 // ImGui draws into the swapchain's back buffer, so its display is the buffer, in the buffer's
 // pixels. The Win32 backend sizes the display by the window's client area and places the mouse in
@@ -819,7 +820,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     // (Watching the pointer for the pause menu's browser keeps the mouse state between frames,
     // or every frame would look like a fresh click.)
     if (!interactive) { ImGui::GetIO().ClearInputKeys(); if (!hub_frame) ImGui::GetIO().ClearInputMouse(); }
-    feed_menu_gamepad(interactive && s.visible.load() && !s.editor_visible.load());
+    feed_menu_gamepad(interactive && (s.visible.load() || s.plugin_dialog_visible.load()) && !s.editor_visible.load());
     ImGui::GetIO().MouseDrawCursor = owns_menu_cursor(s);
     ImGui_ImplDX12_NewFrame();
     { OverlayInputAccess access; ImGui_ImplWin32_NewFrame(); }
@@ -841,6 +842,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     draw_trainer_hud();
     draw_notices();
     draw_item_browser();
+    draw_plugin_dialog();
     draw_chat();
     draw_map_download();
     sync_menu_cursor(); // close buttons also change visibility, without a key message

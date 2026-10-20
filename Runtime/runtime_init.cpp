@@ -12,7 +12,9 @@
 #include "Extension/World/shader_permutation_guard.h"
 #include "Extension/World/shader_registry_guard.h"
 #include "Extension/World/light_table_guard.h"
+#include "Extension/World/guid_table_guard.h"
 #include "Extension/World/stack_check_report.h"
+#include "Extension/World/world_entities.h"
 #include "Extension/Music/music_inject.h"
 #include "Extension/Music/spotify_web.h"
 #include "Extension/Music/plex_web.h"
@@ -341,9 +343,13 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         (void)dingosdk::shader_permutation_guard::install(r.base);
         (void)dingosdk::shader_registry_guard::install(r.base);
         (void)dingosdk::light_table_guard::install(r.base);
+        (void)dingosdk::guid_table_guard::install(r.base);
         (void)dingosdk::load_error_guard::install(r.base);
         (void)dingosdk::texture_handle_limit::install(r.base);
+#if !defined(DINGOSDK_LEAN_PLAYTEST)
         (void)dingosdk::stack_check_report::install(r.base);
+        dingosdk::console::start_memory_trace_from_environment();
+#endif
         (void)dingosdk::music_inject::install(r.base);
         (void)dingosdk::spotify_rows::install(r.base);
         dingosdk::spotify_device::start(); // (the game as a device in the player's Spotify app)
@@ -506,6 +512,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         r.native_loading_logging = dingosdk::start_level_loading_logging(r.base,
             [](std::uintptr_t base, unsigned next) noexcept {
                 dingosdk::local_profile_before_level_transition(next);
+                dingosdk::world_entities::before_level_transition(base, next);
                 dingosdk::multiplayer::native_menu_before_level_transition(base, next);
                 dingosdk::multiplayer::throwdown_lab_before_level_transition(next);
             });

@@ -2,5 +2,28 @@
     "api": 1,
     "entry": "plugin/main.lua",
     "side": "client",
-    "permissions": ["throwdowns", "chat.local", "console", "session.read"]
+    "permissions": [
+        "throwdowns",
+        "chat.local",
+        "console",
+        "session.read",
+        "net.session",
+        "skater.read",
+        "skater.teleport",
+        "skater.control",
+        "events.tricks",
+        "events.skater",
+        "overlay",
+        "camera",
+        "session.skaters",
+        "input",
+        "storage",
+        "world.entities",
+        "world.raycast",
+        "audio",
+        "audio.ui",
+        "files",
+        "ui.screen",
+        "menu"
+    ]
 }

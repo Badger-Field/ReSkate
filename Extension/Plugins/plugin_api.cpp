@@ -17,14 +17,15 @@ namespace {
 struct Event {
     std::string_view name, permission;
 };
-constexpr std::array<Event, 25> events{{
+constexpr std::array<Event, 26> events{{
     {"load", {}}, {"unload", {}}, {"tick", {}}, {"level_loaded", {}}, {"level_unloading", {}},
     {"trick_started", "events.tricks"}, {"trick_landed", "events.tricks"}, {"line_broken", "events.tricks"},
     {"draw", "overlay"}, {"player_joined", "session.read"}, {"player_left", "session.read"}, {"message", "net.session"},
     {"skater_state", "events.skater"}, {"bail", "events.skater"}, {"chat", "chat.read"}, {"track_changed", "music"},
     {"throwdown", "throwdowns"}, {"action", "input"}, {"screen_closed", "ui.screen"},
     {"board_landed", "events.skater"}, {"body_hit", "events.skater"}, {"bail_end", "events.skater"},
-    {"physics_step", "events.physics"}, {"grind_exit", "events.skater"}, {"throwdown_mode", "throwdowns"},
+    {"physics_step", "events.physics"}, {"grind_exit", "events.skater"}, {"trick_notes", "events.tricks"},
+    {"throwdown_ui", "throwdowns"},
 }};
 constexpr std::size_t maximum_key = 128;
 constexpr std::size_t maximum_command = 48;
@@ -81,6 +82,12 @@ Json to_json(lua_State* L, int index, int depth, Budget& budget) {
         const char* text = lua_tolstring(L, index, &length);
         budget.spend(0, length);
         return std::string(text, length);
+    }
+    case LUA_TVECTOR: { // a position: [x, y, z]
+        const float* v = lua_tovector(L, index);
+        if (!std::isfinite(v[0]) || !std::isfinite(v[1]) || !std::isfinite(v[2])) throw std::runtime_error("JSON has no NaN or infinity");
+        budget.spend(3, 0);
+        return Json::array({static_cast<double>(v[0]), static_cast<double>(v[1]), static_cast<double>(v[2])});
     }
     case LUA_TTABLE: {
         luaL_checkstack(L, 4, "tables nested too deep");
@@ -676,6 +683,8 @@ void Api::install(Plugin& plugin, lua_State* L) {
     install_ui_api(plugin, L);
     install_more_api(plugin, L);
     install_world_api(plugin, L);
+    install_services_api(plugin, L);
+    install_kit_api(plugin, L);
     readonly();
     lua_setglobal(L, "reskate");
     lua_pushcfunction(L, ApiFunctions::print, "print");
