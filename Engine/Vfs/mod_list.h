@@ -117,6 +117,11 @@ struct Exclusion {
 };
 // Names, sizes and write times of every file in the mod folder.
 std::string mod_fingerprint(const std::filesystem::path& directory);
+// Plugins' files from before plugin_data_folder (Mods/.reskate/data/<plugin>/, inside the generated
+// folder a full merge deletes) move to Mods/.reskate_plugin_data/<plugin>/: a plugin's folder whole
+// when it has none there yet, else the files it lacks. Run before anything deletes the generated
+// folder. Never throws; returns what it moved, a line each, for the log.
+std::vector<std::string> keep_plugin_data(const std::filesystem::path& mods_root) noexcept;
 std::map<std::string, Exclusion, std::less<>> read_exclusions(const std::filesystem::path& mods_root) noexcept;
 // Replaces the file; an empty map removes it.
 void write_exclusions(const std::filesystem::path& mods_root,
