@@ -347,6 +347,18 @@ public:
         bool left{}, right{}, middle{}, over_screen{};
     };
     virtual std::optional<Cursor> cursor() { return std::nullopt; }
+    // What was typed since the last call while a plugin's screen is open (reskate.input.text);
+    // `capture` keeps the typing the plugin's for 300 ms more.
+    virtual std::string typed_text(bool /*capture*/) { return {}; }
+    // The game menu's character room (Extension/World/character_room.h; reskate.room): walked to, the
+    // local skater shown in it once there, and walked back from. One plugin at a time. state: "idle",
+    // "opening", "open", "leaving" or "failed" (with why).
+    virtual std::string room_open(std::string_view /*plugin*/) { return unavailable; }
+    virtual void room_leave(std::string_view /*plugin*/) {}
+    struct RoomState {
+        std::string state, why;
+    };
+    virtual RoomState room_state(std::string_view /*plugin*/) { return {"idle", {}}; }
     // Game buttons kept from the game while asked (overlay::hide_game_buttons/hold_game_buttons),
     // and all game input paused for half a second at a time.
     virtual void game_buttons(std::string_view /*plugin*/, std::uint16_t /*hidden*/, std::uint16_t /*held*/, bool /*paused*/) {}

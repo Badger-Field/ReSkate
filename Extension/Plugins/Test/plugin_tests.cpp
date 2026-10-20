@@ -153,6 +153,19 @@ struct FakeGame final : Game {
         calls.push_back(text);
         return {};
     }
+    std::string typed = "";
+    std::string typed_text(bool capture) override { return capture ? std::exchange(typed, {}) : std::string{}; }
+    std::string room_phase = "idle";
+    std::string room_open(std::string_view plugin) override {
+        calls.push_back("room open " + std::string(plugin));
+        room_phase = "open";
+        return {};
+    }
+    void room_leave(std::string_view plugin) override {
+        calls.push_back("room leave " + std::string(plugin));
+        room_phase = "idle";
+    }
+    RoomState room_state(std::string_view) override { return {room_phase, {}}; }
     std::string set_setting(std::string_view plugin, std::string_view name, std::optional<std::string> value) override {
         calls.push_back(std::format("setting {} {} {}", plugin, name, value ? *value : std::string("none")));
         return {};
@@ -1161,6 +1174,39 @@ void plugins_read_joints_and_tune_physics() {
     check(environment.logged("[sneaky] false false false"), "skater.control, session.skaters and settings.write are needed\n" + environment.all());
 }
 
+// Typing into a field a plugin draws (only while its screen is open), and the character room.
+void plugins_type_and_use_the_room() {
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    const std::string main = R"(
+        reskate.ui.screen("Editor", function() end, {panel = false})
+        assert(not pcall(reskate.ui.screen, "Docked", function() end, {panel = false, dock = "left"}), "no panel, no dock")
+        assert(reskate.input.text(true) == "", "nothing without its screen open")
+        reskate.ui.open("Editor")
+        local typed = reskate.input.text(true)
+        assert(typed == "ab", "what was typed: " .. typed)
+        assert(reskate.input.text(true) == "", "once")
+        assert(reskate.room.state() == "idle")
+        assert(reskate.room.open())
+        assert(reskate.room.state() == "open")
+        reskate.room.leave()
+        assert(reskate.room.state() == "idle")
+        reskate.log("typed")
+    )";
+    game.typed = "ab";
+    host.apply({package("editor", {{manifest_file, manifest(R"("ui.screen", "input", "room")")}, {"plugin/main.lua", main}})});
+    ticks(host, environment, 1);
+    running(host, "editor", environment);
+    check(environment.logged("[editor] typed"), "A plugin takes typing and the room\n" + environment.all());
+    check(game.called("room open editor") && game.called("room leave editor"), "The room is walked to and from\n" + environment.all());
+    host.apply({package("sneaky", {{manifest_file, manifest(R"("input")")}, {"plugin/main.lua", R"(
+        reskate.log(tostring(pcall(reskate.room.open)) .. " " .. tostring(pcall(reskate.room.state)))
+    )"}})});
+    ticks(host, environment, 1);
+    check(environment.logged("[sneaky] false false"), "room is needed\n" + environment.all());
+}
+
 // A clip read, sampled, cut, keyed, saved and read back from the data folder, and played held.
 void plugins_edit_clips() {
     TestEnvironment environment;
@@ -2153,7 +2199,7 @@ void animator_studio_records_and_saves() {
     ticks(host, environment, 2);
     check(game.called("play animator-studio 3 frames 1.0 0.00 true at 0.00 paused"), "held on the skater\n" + environment.all());
     // Past its loading screen, the studio's screen is drawn every frame, within the plugin's time.
-    ticks(host, environment, 120);
+    ticks(host, environment, 300); // past the loading screen over the walk to the room
     std::size_t tiles = 0, texts = 0;
     for (const auto& layer : environment.layers)
         for (const auto& shape : layer.shapes) {
@@ -2184,6 +2230,13 @@ void animator_studio_records_and_saves() {
     check(game.files.contains("animator-studio/anims/Kick One.fas") && game.files.contains("animator-studio/anims/Kick One.json"),
           "a clip file and its keys in the data folder\n" + environment.all());
     check(game.called("replace animator-studio kickflip any clip"), "and plays in game\n" + environment.all());
+    // It opened in the character room, and walks back from it as it closes.
+    check(game.called("room open animator-studio"), "The studio opens in the character room\n" + environment.all());
+    check(host.run_console("studio close") && game.called("room leave animator-studio"), "and leaves it as it closes\n" + environment.all());
+    // Typed into its card (the trick's name here): what is typed goes into the field, Enter keeps it.
+    check(host.run_console("studio open"), "studio open");
+    ticks(host, environment, 260); // past the walk's loading screen
+    running(host, "animator-studio", environment);
     // Started again, it puts it back in game.
     game.calls.clear();
     host.apply({});
@@ -2993,6 +3046,7 @@ int main() {
         plugins_place_world_entities();
         plugins_reach_cruise_and_read_the_mouse();
         plugins_read_joints_and_tune_physics();
+        plugins_type_and_use_the_room();
         plugins_edit_clips();
         animator_studio_records_and_saves();
         plugins_server_copies_are_the_authority();

@@ -2102,6 +2102,41 @@ struct WorldApi {
         lua_pop(L, 1);
         return 0;
     }
+    // input.text(capture): what was typed since the last call while this plugin's screen is open; with
+    // capture, the typing stays the plugin's (and Esc with it) for 300 ms more.
+    static int input_text(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "input", "reskate.input.text");
+        const bool capture = lua_isnone(L, 1) || lua_toboolean(L, 1) != 0;
+        const auto typed = plugin.open_screen_.empty() ? game(plugin).typed_text(false) : game(plugin).typed_text(capture);
+        if (plugin.open_screen_.empty()) {
+            lua_pushliteral(L, "");
+            return 1;
+        }
+        lua_pushlstring(L, typed.data(), typed.size());
+        return 1;
+    }
+    // room.open(), leave(), state(): the game menu's character room, the local skater shown in it.
+    static int room_open(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "room", "reskate.room.open");
+        return result(L, game(plugin).room_open(plugin.id()));
+    }
+    static int room_leave(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "room", "reskate.room.leave");
+        game(plugin).room_leave(plugin.id());
+        return 0;
+    }
+    static int room_state(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "room", "reskate.room.state");
+        const auto s = game(plugin).room_state(plugin.id());
+        lua_pushlstring(L, s.state.data(), s.state.size());
+        if (s.why.empty()) return 1;
+        lua_pushlstring(L, s.why.data(), s.why.size());
+        return 2;
+    }
     // input.cursor(): the mouse over the game window while this plugin's screen is open, or nil.
     static int input_cursor(lua_State* L) {
         auto& plugin = plugin_of(L);
@@ -2198,7 +2233,8 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     add_functions(L, "progression", {{"get", progress}});
     add_functions(L, "settings", {{"game", setting}, {"names", setting_names}, {"set", setting_set}});
     add_functions(L, "input", {{"bind", bind}, {"flight", input_flight}, {"gamepad", input_gamepad}, {"joystick", input_joystick}, {"capture", input_capture},
-                               {"hide", input_hide}, {"cursor", input_cursor}});
+                               {"hide", input_hide}, {"cursor", input_cursor}, {"text", input_text}});
+    add_functions(L, "room", {{"open", room_open}, {"leave", room_leave}, {"state", room_state}});
     add_functions(L, "ui", {{"screen", screen}, {"open", open}, {"close", close}});
     add_functions(L, "screen", {{"look", screen_look}, {"slap", screen_slap}});
 }
