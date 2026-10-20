@@ -295,6 +295,42 @@ struct ApiFunctions {
         push_json(L, Json::parse(text, {plugin.limits_.file_bytes, 64, 1u << 20}));
         return 1;
     }
+    // variants(): the variants the plugin's own mod holds (its reskate-plugin.json "variants",
+    // Engine/Vfs/mod_list.h): {list = {...}, chosen = name or nil, in_play = name or nil}, its "order"
+    // first; nil when it declares none.
+    static int variants(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        const auto state = plugin.services_.game().variants(plugin.id(), plugin.directory());
+        if (!state) {
+            lua_pushnil(L);
+            return 1;
+        }
+        lua_createtable(L, 0, 3);
+        lua_createtable(L, static_cast<int>(state->installed.size()), 0);
+        for (std::size_t i = 0; i < state->installed.size(); ++i) {
+            lua_pushlstring(L, state->installed[i].data(), state->installed[i].size());
+            lua_rawseti(L, -2, static_cast<int>(i + 1));
+        }
+        lua_setfield(L, -2, "list");
+        for (const auto& [field, value] : {std::pair{"chosen", &state->chosen}, std::pair{"in_play", &state->in_play}}) {
+            if (value->empty()) continue;
+            lua_pushlstring(L, value->data(), value->size());
+            lua_setfield(L, -2, field);
+        }
+        return 1;
+    }
+    // choose(name): that variant of the plugin's own mod in the game: kept as the choice, the mods
+    // applied again and the level loaded again with it. true, or false and why not.
+    static int choose(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "variants", "reskate.package.choose");
+        const std::string name = luaL_checkstring(L, 1);
+        const auto why = plugin.services_.game().choose_variant(plugin.id(), plugin.directory(), name);
+        lua_pushboolean(L, why.empty());
+        if (why.empty()) return 1;
+        lua_pushlstring(L, why.data(), why.size());
+        return 2;
+    }
     static int list(lua_State* L) {
         auto& plugin = plugin_of(L);
         const auto folder = package_path(L, plugin, luaL_optstring(L, 1, ""), true);
@@ -623,10 +659,12 @@ void Api::install(Plugin& plugin, lua_State* L) {
     readonly();
     lua_setfield(L, -2, "level");
 
-    lua_createtable(L, 0, 3);
+    lua_createtable(L, 0, 5);
     set_function(L, "read", ApiFunctions::read);
     set_function(L, "read_json", ApiFunctions::read_json);
     set_function(L, "list", ApiFunctions::list);
+    set_function(L, "variants", ApiFunctions::variants);
+    set_function(L, "choose", ApiFunctions::choose);
     readonly();
     lua_setfield(L, -2, "package");
 

@@ -17,6 +17,8 @@
 #include "Extension/Skater/skater_events.h"
 #include "Extension/Skater/outfit_overlay.h"
 #include "Extension/Skater/board_pose.h"
+#include "Engine/Vfs/mod_catalog.h"
+#include "Extension/Assets/live_mods.h"
 #include "Extension/Skater/game_speed.h"
 #include "Extension/Skater/grind_exit.h"
 #include "Extension/Skater/xray.h"
@@ -349,6 +351,36 @@ public:
     void board_park(std::string_view plugin, std::vector<int> bones) override { board_pose::park(plugin, std::move(bones)); }
     std::string board_toss(std::string_view plugin, std::vector<int> bones, const Vec3& velocity, const Vec3& spin, float ground) override {
         return board_pose::toss(plugin, std::move(bones), velocity, spin, ground);
+    }
+    std::string board_fit(std::string_view plugin, std::optional<BoardFit> fit) override {
+        if (!fit) return board_pose::fit(plugin, std::nullopt);
+        return board_pose::fit(plugin, board_pose::Fit{fit->plates, fit->axle});
+    }
+    // ---- variants ------------------------------------------------------------------------------------
+    // The mod's folder is read again at most every 2 s: a menu page asks every frame.
+    std::optional<VariantState> variants(std::string_view plugin, const std::filesystem::path& package) override {
+        const auto now = GetTickCount64();
+        auto& kept = variant_reads_[std::string(plugin)];
+        if (!kept.at || now - kept.at > 2000) {
+            std::vector<std::string> notes;
+            const auto mod = mods::describe_mod(package, std::string(plugin), notes);
+            kept.declared = mod.variants.has_value();
+            kept.installed = kept.declared ? mods::installed_variants(mod) : std::vector<std::string>{};
+            kept.at = now;
+        }
+        if (!kept.declared) return std::nullopt;
+        return VariantState{kept.installed, mods::chosen_variant(plugin), mods::variant_in_play(plugin)};
+    }
+    std::string choose_variant(std::string_view plugin, const std::filesystem::path& package, std::string_view variant) override {
+        const auto state = variants(plugin, package);
+        if (!state) return "its mod declares no variants";
+        std::string name(variant);
+        for (auto& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (std::find(state->installed.begin(), state->installed.end(), name) == state->installed.end()) return "its mod has no variant " + name;
+        if (live_mods::busy()) return "the mods are being applied";
+        if (!mods::save_variant(plugin, name)) return "the choice could not be saved";
+        if (name != state->in_play) (void)live_mods::apply(true);
+        return {};
     }
     // ---- outfit --------------------------------------------------------------------------------------
     std::string outfit_set(std::string_view plugin, std::string_view slot, std::string_view item, std::vector<float> placement, bool covers) override {
@@ -922,6 +954,7 @@ public:
         outfit_overlay::clear(plugin);
         board_pose::clear(plugin);
         board_pose::park(plugin, {});
+        (void)board_pose::fit(plugin, std::nullopt);
         cancel_throwdown(plugin);
         multiplayer::custom_throwdowns::remove_plugin(plugin);
         if (capturer_ == plugin) capturer_.clear();
@@ -955,6 +988,13 @@ private:
     std::optional<FlightInput> flight_;
     // By (trick, pop): the plugin and its clip.
     std::map<std::pair<std::string, std::string>, std::pair<std::string, skater_animation::Replacement>> replacements_;
+    // What each plugin's mod held of variants when last read (variants).
+    struct VariantRead {
+        std::uint64_t at{};
+        bool declared{};
+        std::vector<std::string> installed;
+    };
+    std::map<std::string, VariantRead, std::less<>> variant_reads_;
     using BindKey = std::pair<std::string, std::string>;
     struct Bind {
         std::uint32_t own{};

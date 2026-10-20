@@ -188,6 +188,46 @@ void read_resident(Mod& mod, std::vector<std::string>& notes) {
     }
 }
 
+// reskate-plugin.json's "variants" (Variants). A malformed one is a note, and the mod has no variants:
+// it loads as any other mod.
+void read_variants(Mod& mod, std::vector<std::string>& notes) {
+    const auto path = mod.directory / plugin_manifest_file;
+    std::error_code error;
+    if (!fs::is_regular_file(path, error) || error) return;
+    try {
+        const auto root = parse(path, maximum_plugin_bytes);
+        if (!root.is_object() || !root.contains("variants")) return;
+        const auto& declared = root.at("variants");
+        if (!declared.is_object() || !declared.contains("folder")) throw std::runtime_error("variants names its folder");
+        const auto text = [](const Json& value, std::size_t most, bool name) {
+            if (!value.is_string() || value.string().empty() || value.string().size() > most)
+                throw std::runtime_error("a name is 1 to " + std::to_string(most) + " characters");
+            auto out = lower(value.string());
+            for (const auto c : out)
+                if (name ? !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')
+                         : static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) > 0x7e || c == '\\')
+                    throw std::runtime_error(name ? "a folder or variant name is letters, digits, '_' and '-'"
+                                                  : "a bundle name is printable ASCII with / between folders");
+            return out;
+        };
+        const auto list = [&](const char* field, std::size_t most, bool name) {
+            std::vector<std::string> out;
+            if (!declared.contains(field)) return out;
+            const auto& items = declared.at(field);
+            if (!items.is_array() || items.size() > most) throw std::runtime_error(std::string(field) + " is a list of at most " + std::to_string(most));
+            for (const auto& item : items) out.push_back(text(item, name ? maximum_mod_name : 260, name));
+            return out;
+        };
+        Variants result;
+        result.folder = text(declared.at("folder"), maximum_mod_name, true);
+        result.order = list("order", 64, true);
+        result.displaces = list("displaces", 16, false);
+        mod.variants = std::move(result);
+    } catch (const std::exception& failure) {
+        notes.push_back("Mod " + mod.name + ": " + plugin_manifest_file + "'s variants could not be read (" + failure.what() + ")");
+    }
+}
+
 // .reskate-studio-patch: the stamp line, then key=value lines. A mod that ships game data must
 // record the Skate.exe it was built for, and it must be this one (supported_build).
 void read_studio_marker(Mod& mod) {
@@ -405,6 +445,7 @@ Mod describe_mod(const std::filesystem::path& directory, std::string name, std::
     read_mod_info(mod, notes);
     read_levels(mod);
     read_resident(mod, notes);
+    read_variants(mod, notes);
     read_studio_marker(mod);
     return mod;
 }

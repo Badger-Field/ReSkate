@@ -15,7 +15,17 @@ size that has one, or the wave files in `sounds/` itself; at most 6 of each are 
 - `plugin/feel.lua`: the settings, the chances, wear, the contact type on a rail.
 - `plugin/breaker.lua`: the rules at play (breaks, mending, wear, drawing), with the game passed
   in, so `plugin/tests.lua` can run them against a fake one.
-- `plugin/main.lua`: the wiring to `reskate`, the console command and its page in the menu's PLUGINS section.
+- `plugin/main.lua`: the wiring to `reskate`, the deck, the console command and its page in the menu's
+  PLUGINS section.
+
+## The decks
+
+The game has one deck model for every board, so the pack's decks are variants of it:
+`reskate-plugin.json` declares `decks/<name>/` as its `variants`, and the merge loads the one chosen
+(the first of its `order` when none is) and sets aside every other mod that brings a deck model.
+The plugin picks the deck with `reskate.package.choose` (its page, or `boardbreak deck`), reads each
+deck's `deck.ini` (`label`, `axle`) and fits every board for the deck in the game with
+`reskate.board.fit`: the baseplates held on the deck and the wheels as far apart as its trucks.
 
 ## Install
 
@@ -24,7 +34,7 @@ Copy `reskate-plugin.json` and `plugin/` into the pack's folder in `Mods`, besid
 ## Console
 
 `boardbreak`, or `board break` while ReSkate still has a Board Break of its own:
-`0|1`, `status`, `snap [nose|mid|tail]` (to look at a break: it stays until `mend` or a respawn),
+`0|1`, `status`, `deck [name|number|next]` (the list, or a deck to put in the game), `snap [nose|mid|tail]` (to look at a break: it stays until `mend` or a respawn),
 `mend`, `new` (a new board), `worn [percent]`, `test` (its own checks), and the settings
 `always`, `sensitivity`, `joined`, `rails`, `wear`, `wearrate`, `cracks`, `bodysounds`, each with
 a value to set it or none to read it. The same is on its page in the ReSkate menu's PLUGINS section.
@@ -34,15 +44,11 @@ a value to set it or none to read it. The same is on its page in the ReSkate men
 What the plugin API cannot do yet:
 
 - Physics tuning by wear (a worn board's softer trucks and lazier turn).
-- Choosing the deck (`boardbreak deck`) and each deck's own setup (`deck.ini`: its label, its
-  wheels' spread). There is one wear for the board, not one per deck.
+- One wear for the board, not one per deck.
 - Material detection: no metal sound for a board that breaks on metal, no `metal` or `materials`
   commands.
 - Multiplayer: other players do not see a broken board.
 - A new board's scratches: the game's own board wear is not reset with the break.
-- The baseplates are held on the deck only while the board is broken (ReSkate held them on every
-  board, every frame).
-- Whether a breakable deck is in the game: the plugin takes it that its pack's deck is.
 
 How it differs from ReSkate's Board Break, where the API made it so:
 

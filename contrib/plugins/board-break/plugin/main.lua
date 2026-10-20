@@ -12,6 +12,10 @@
 -- real deck goes away and each stretch goes to where its piece lies. The sounds are the pack's,
 -- sounds/light|medium|heavy|body/*.wav.
 --
+-- The game has one deck model for every board, so the pack's decks (decks/<name>/) are variants of
+-- it, as reskate-plugin.json declares them: one is in the game at a time, the one chosen on this
+-- plugin's page or with `boardbreak deck`.
+--
 -- The rules are in breaker.lua, the geometry in model.lua, the numbers in feel.lua.
 local breaker = require("breaker")
 
@@ -75,6 +79,76 @@ local game = {
 local bb = breaker.new(game)
 bb.state = reskate.skater.state() or "none"
 
+-- ---- the deck --------------------------------------------------------------------------------------
+-- Each deck says of itself in its deck.ini what it is called (label) and how far apart its wheels sit
+-- (axle: 1 a standard board's, more on a wider deck).
+local setups = {}
+local function deck_setup(name)
+    if setups[name] then return setups[name] end
+    local setup = {axle = 1}
+    local ok, text = pcall(reskate.package.read, "decks/" .. name .. "/deck.ini")
+    if ok and type(text) == "string" then
+        for line in string.gmatch(text, "[^\r\n]+") do
+            local key, value = string.match(string.gsub(line, "[#;].*", ""), "^%s*([%w_]+)%s*=%s*(.-)%s*$")
+            key = key and string.lower(key)
+            if key == "label" and value ~= "" then
+                setup.label = value
+            elseif key == "axle" and tonumber(value) then
+                setup.axle = math.clamp(tonumber(value), 0.8, 1.6)
+            end
+        end
+    end
+    -- Else its folder's name, in words.
+    setup.label = setup.label or (string.gsub(string.gsub(name, "_", " "), "(%a)(%w*)", function(first, rest) return string.upper(first) .. rest end))
+    setups[name] = setup
+    return setup
+end
+local function decks()
+    local ok, state = pcall(reskate.package.variants)
+    return if ok and type(state) == "table" then state else {list = {}}
+end
+-- Every board in the game, other players' too, has the deck in the game: its trucks' baseplates are
+-- held on the deck and its wheels sit as far apart as its trucks have them. Looked at again every
+-- 2 s, as a deck chosen here is in the game once the level has loaded again.
+local fitted = false
+local function fit_boards()
+    local deck = decks().in_play
+    if deck == fitted then return end
+    fitted = deck
+    local ok, why = reskate.board.fit(if deck then {plates = true, axle = deck_setup(deck).axle} else nil)
+    if not ok and why then reskate.log("the boards are not fitted for the deck: " .. tostring(why)) end
+end
+fit_boards()
+reskate.time.every(2000, fit_boards)
+-- The deck `word` means (a name, its number in the list, or "next"), put in the game. What happened.
+local function choose_deck(word)
+    local state = decks()
+    if #state.list == 0 then return "none of the pack's decks is in its decks folder." end
+    local chosen
+    if word == "next" then
+        chosen = state.list[1]
+        for i, name in state.list do
+            if name == state.in_play then chosen = state.list[i % #state.list + 1] end
+        end
+    elseif tonumber(word) then
+        chosen = state.list[tonumber(word)]
+    else
+        chosen = string.lower(string.gsub(word, " ", "_"))
+    end
+    if not chosen then return "there is no such deck." end
+    if chosen == state.in_play then return "the " .. deck_setup(chosen).label .. " deck is the one in the game." end
+    local done, why = reskate.package.choose(chosen)
+    if not done then return "the " .. chosen .. " deck: " .. tostring(why) end
+    return "the " .. deck_setup(chosen).label .. " deck: the mods are applied and the level loads again with it."
+end
+local function deck_list()
+    local state, parts = decks(), {}
+    for i, name in state.list do
+        table.insert(parts, i .. " " .. deck_setup(name).label .. (if name == state.in_play then " (in the game)" else ""))
+    end
+    return if #parts > 0 then table.concat(parts, ", ") else "none of the pack's decks is in its decks folder."
+end
+
 reskate.on("tick", function(dt) bb:tick(dt) end)
 reskate.on("skater_state", function(now, previous) bb:skater_state(now, previous) end)
 reskate.on("bail", function(e) bb:bail(e.force) end)
@@ -111,7 +185,9 @@ local function answer(name)
             bb:set_on(value == 1)
             return say(if bb.on then "on" else "off: boards hold; one that is broken stays so until it is picked up")
         end
-        if what == "snap" then
+        if what == "deck" then
+            return say(if args[2] then choose_deck(table.concat(args, " ", 2)) else deck_list())
+        elseif what == "snap" then
             local place = args[2]
             if place ~= nil and place ~= "nose" and place ~= "mid" and place ~= "tail" then return say("snap nose, mid, tail, or nothing for anywhere") end
             return say(snap(place))
@@ -138,11 +214,11 @@ local function answer(name)
             end
             return say(what .. " is " .. bb:setting(what))
         end
-        say("say " .. name .. " 0|1, status, snap [nose|mid|tail], mend, new, worn [percent], or a setting: " ..
+        say("say " .. name .. " 0|1, status, deck [name|number|next], snap [nose|mid|tail], mend, new, worn [percent], or a setting: " ..
             "always, sensitivity, joined, rails, wear, wearrate, cracks, bodysounds")
     end
 end
-local help = "A hard slam can snap your board (needs the Board Break deck pack): 0|1, status, snap, mend, new, worn, settings"
+local help = "A hard slam can snap your board (needs the Board Break deck pack): 0|1, status, deck, snap, mend, new, worn, settings"
 -- While ReSkate has a Board Break of its own, boardbreak is its command: this one answers to board break.
 local name = "boardbreak"
 if not pcall(reskate.console.command, name, help, answer(name)) then
@@ -165,7 +241,20 @@ reskate.menu.page("Board Break", function(ui)
     local on = ui:toggle("on", "Board Break", bb.on,
         "A hard slam can snap your board: at the nose, in the middle or at the tail. Whole again once you pick it up. Needs the Board Break deck pack.")
     if on ~= bb.on then bb:set_on(on) end
-    ui:note("Which deck every board has is on the Mods page (BREAKABLE DECK).")
+
+    -- The deck: a button for each, the one in the game marked. Picking another loads the level again.
+    local state = decks()
+    if #state.list > 0 then
+        ui:card("DECK", if state.in_play then deck_setup(state.in_play).label else "none in the game")
+        for i, name in state.list do
+            local label = i .. " " .. deck_setup(name).label .. (if name == state.in_play then " *" else "")
+            if ui:button("deck_" .. name, label) and name ~= state.in_play then reskate.ui.toast(choose_deck(name)) end
+        end
+        if state.chosen and state.chosen ~= state.in_play then
+            ui:note(deck_setup(state.chosen).label .. " is chosen and shows once the level has loaded again.")
+        end
+        ui:note("The deck every board in the game has, and the one that breaks. Picking another loads the level again.")
+    end
 
     ui:card("YOUR BOARD", string.format("%d%% worn (%s)%s", math.floor(bb.wear * 100 + 0.5), feel.condition(bb.wear),
         if bb.broken then ", broken" else ""))

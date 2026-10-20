@@ -526,6 +526,10 @@ void a_permission_must_be_declared() {
         assert(not ok and err:find("needs the \"console\" permission"), err)
         ok, err = pcall(reskate.storage.get, "x")
         assert(not ok and err:find("needs the \"storage\" permission"), err)
+        -- A mod's variants are read freely, but choosing one (which loads the level again) is asked for.
+        assert(reskate.package.variants() == nil, "a mod without variants has none")
+        ok, err = pcall(reskate.package.choose, "wide")
+        assert(not ok and err:find("needs the \"variants\" permission"), err)
         reskate.console.print("never")
     )")});
     stopped(host, "bare", "raised an error");

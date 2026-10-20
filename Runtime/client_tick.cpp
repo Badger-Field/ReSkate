@@ -44,7 +44,6 @@
 #include "Extension/World/world_entities.h"
 #include "Extension/Skater/client_source_spawn.h"
 #include "Extension/Skater/skater_slot_override.h"
-#include "Extension/Skater/breakable_deck.h"
 #include "Extension/Throwdowns/native_throwdowns.h"
 #include "Extension/Skater/bone_cam.h"
 #include "Extension/Skater/pad_flight.h"
@@ -1105,7 +1104,6 @@ void update_model(std::uintptr_t client, TickState& frame) {
         DINGO_PROFILE_ZONE("tick/item browser");
         dingosdk::update_local_item_browser();
     }
-    dingosdk::breakable_deck::tick();
     {
         DINGO_PROFILE_ZONE("tick/plugins");
         dingosdk::plugins::on_client_tick();

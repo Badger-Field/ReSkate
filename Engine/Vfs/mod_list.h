@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -52,6 +53,20 @@ struct ResidentAssets {
     std::vector<Shader> shaders;
 };
 
+// A mod that brings several takes on the same game data, of which one is in the game at a time (a deck
+// pack's decks: the game has one deck model). reskate-plugin.json:
+//   "variants": {"folder": "decks", "order": ["standard", "wide"], "displaces": ["..._bundlereftable"]}
+// Each folder <folder>/<name>/ with a layout.toc is the variant <name> (lower-case letters, digits and
+// '_'), laid out like a mod folder. "order" is the variants the menus list first, in that order; the
+// first of them loads when none was chosen. "displaces" names the bundles a variant replaces: while one
+// loads, every other mod whose layout lists one of them (the declaring mod's own layout too) is set
+// aside for the run (mod_catalog.h).
+struct Variants {
+    std::string folder;
+    std::vector<std::string> order;
+    std::vector<std::string> displaces;
+};
+
 struct Mod {
     std::string name;                 // folder name directly under Mods/
     std::filesystem::path directory;
@@ -72,6 +87,8 @@ struct Mod {
     std::vector<std::string> problems;
     // From reskate-plugin.json: the assets its bundles keep resident (ResidentAssets).
     std::vector<ResidentAssets> resident;
+    // From reskate-plugin.json: the variants it holds (Variants), if it declares any.
+    std::optional<Variants> variants;
     // From .reskate-studio-patch: whether the mod has one, and the Skate.exe SHA-256 it records.
     bool studio_marker{};
     std::string skate_sha256;

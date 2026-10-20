@@ -5,6 +5,7 @@
 #include "Extension/Throwdowns/throwdown_kit.h"
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <optional>
@@ -450,6 +451,24 @@ public:
     virtual void board_clear(std::string_view /*plugin*/, int /*bone, -1: all*/) {}
     virtual void board_park(std::string_view /*plugin*/, std::vector<int>) {}
     virtual std::string board_toss(std::string_view /*plugin*/, std::vector<int>, const Vec3&, const Vec3&, float) { return unavailable; }
+    // How every board is fitted (board_pose.h fit); none: the plugin's fit ends.
+    struct BoardFit {
+        bool plates{};
+        float axle = 1.0f;
+    };
+    virtual std::string board_fit(std::string_view /*plugin*/, std::optional<BoardFit>) { return unavailable; }
+    // ---- variants: of the plugin's own mod (Engine/Vfs/mod_list.h Variants) -----------------------------
+    struct VariantState {
+        std::vector<std::string> installed; // its "order" first
+        std::string chosen;                 // empty: none was
+        std::string in_play;                // empty: none of them is in the game
+    };
+    // Empty when the mod declares no variants.
+    virtual std::optional<VariantState> variants(std::string_view /*plugin*/, const std::filesystem::path& /*package*/) { return std::nullopt; }
+    // The variant saved as the mod's choice, the mods applied again and the level loaded again with it.
+    virtual std::string choose_variant(std::string_view /*plugin*/, const std::filesystem::path& /*package*/, std::string_view /*variant*/) {
+        return unavailable;
+    }
     // ---- the skater's physics -----------------------------------------------------------------------
     virtual SkaterNews take_skater_news() { return {}; }
     virtual std::optional<Vec3> board_velocity() { return std::nullopt; }

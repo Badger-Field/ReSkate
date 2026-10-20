@@ -909,6 +909,22 @@ struct WorldApi {
         game(plugin).board_park(plugin.id(), bone_list(L, 1));
         return 0;
     }
+    // fit({plates = bool, axle = 0.8 to 1.6}): how every board in the game is fitted, for a deck model
+    // that is not the game's own: the baseplates held on the deck, the wheels' spread. fit(nil) ends it.
+    static int board_fit(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "board", "reskate.board.fit");
+        if (lua_isnoneornil(L, 1)) return result(L, game(plugin).board_fit(plugin.id(), std::nullopt));
+        luaL_checktype(L, 1, LUA_TTABLE);
+        Game::BoardFit fit;
+        lua_getfield(L, 1, "plates");
+        fit.plates = lua_toboolean(L, -1);
+        lua_pop(L, 1);
+        lua_getfield(L, 1, "axle");
+        if (!lua_isnil(L, -1)) fit.axle = static_cast<float>(luaL_checknumber(L, -1));
+        lua_pop(L, 1);
+        return result(L, game(plugin).board_fit(plugin.id(), fit));
+    }
     // toss({bones}, {velocity, spin, ground}): a piece of the board comes off and falls.
     static int board_toss(lua_State* L) {
         auto& plugin = plugin_of(L);
@@ -1570,7 +1586,7 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     into(L, "skater", {{"state", state}, {"noclip", noclip}, {"boost", boost}, {"freeze", freeze}, {"wipeout", wipeout}, {"xray", xray},
                         {"grind_exit", grind_exit}});
     into(L, "board", {{"motion", board_motion}, {"bones", board_bones}, {"set", board_set}, {"hide", board_hide}, {"clear", board_clear},
-                       {"park", board_park}, {"toss", board_toss}});
+                       {"park", board_park}, {"fit", board_fit}, {"toss", board_toss}});
     into(L, "camera", {{"look", camera_look}, {"set", camera_set}, {"follow", camera_follow}, {"release", camera_release}, {"held", camera_held}, {"get", camera_get}});
     into(L, "trainer", {{"set_point", set_point}, {"back", back}});
     into(L, "hud", {{"hide", hide_hud}, {"corner", hud_corner}});
