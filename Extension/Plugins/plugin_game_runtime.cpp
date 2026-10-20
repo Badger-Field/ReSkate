@@ -630,20 +630,26 @@ public:
         return {};
     }
     std::string files_read(std::string_view plugin, std::string_view path, std::string& text) override {
+        return files_read_bytes(plugin, path, text, most_file_bytes);
+    }
+    std::string files_read_bytes(std::string_view plugin, std::string_view path, std::string& text, std::size_t most) override {
         std::filesystem::path root, file;
         if (auto why = data_file(plugin, path, root, file); !why.empty()) return why;
         std::error_code error;
         if (!std::filesystem::is_regular_file(file, error)) return "not found";
         const auto size = std::filesystem::file_size(file, error);
         if (error) return "the file cannot be read";
-        if (size > most_file_bytes) return "the file is larger than 1 MB";
+        if (size > most) return std::format("the file is larger than {} MB", most >> 20);
         std::ifstream in(file, std::ios::binary);
         text.resize(static_cast<std::size_t>(size));
         if (!in || !in.read(text.data(), static_cast<std::streamsize>(size))) return "the file cannot be read";
         return {};
     }
     std::string files_write(std::string_view plugin, std::string_view path, std::string_view text) override {
-        if (text.size() > most_file_bytes) return "a file is at most 1 MB";
+        return files_write_bytes(plugin, path, text, most_file_bytes);
+    }
+    std::string files_write_bytes(std::string_view plugin, std::string_view path, std::string_view text, std::size_t most) override {
+        if (text.size() > most) return std::format("a file is at most {} MB", most >> 20);
         std::filesystem::path root, file;
         if (auto why = data_file(plugin, path, root, file); !why.empty()) return why;
         std::error_code error;
@@ -820,12 +826,22 @@ public:
         return !capturer_.empty() && camera_mine(capturer_) && GetTickCount64() < capture_until_;
     }
     // ---- skater.animation ---------------------------------------------------------------------------
-    std::string play_clip(std::string_view plugin, ClipRef clip, float speed, float blend, bool loop) override {
+    std::string play_clip(std::string_view plugin, ClipRef clip, float speed, float blend, bool loop, float at, bool paused) override {
         if (multiplayer::local_throwdown_active()) return "not while a throwdown runs";
         if (!player_.empty() && player_ != plugin && skater_animation::playing()) return player_ + " is playing a clip";
         player_ = plugin;
-        skater_animation::play(skater_animation::Play{std::move(clip), speed, blend, loop});
+        skater_animation::play(skater_animation::Play{std::move(clip), speed, blend, loop, at, paused});
         return {};
+    }
+    void seek_clip(std::string_view plugin, float seconds) override {
+        if (player_ == plugin) skater_animation::seek(seconds);
+    }
+    void pause_clip(std::string_view plugin, bool paused) override {
+        if (player_ == plugin) skater_animation::pause(paused);
+    }
+    std::optional<float> clip_time(std::string_view plugin) override {
+        if (player_ != plugin || !skater_animation::playing()) return std::nullopt;
+        return skater_animation::play_time();
     }
     void stop_clip(std::string_view plugin) override {
         if (player_ != plugin) return;
@@ -1010,6 +1026,11 @@ public:
     int mouse_wheel() override { return overlay::take_mouse_wheel(); }
     // One read of the overlay's mouse a call, shared out: every plugin that read it in the last two
     // seconds gets the movement, so two plugins never take it from each other.
+    std::optional<Cursor> cursor() override {
+        overlay::PluginCursor c;
+        if (!overlay::read_plugin_cursor(c)) return std::nullopt;
+        return Cursor{c.x, c.y, c.wheel, c.left, c.right, c.middle, c.over_screen};
+    }
     std::optional<MouseMotion> mouse_motion(std::string_view plugin) override {
         overlay::MouseLook look;
         const bool live = overlay::read_mouse_look(look);

@@ -170,6 +170,8 @@ std::string pop_of(float air) {
 struct Plan {
     std::optional<Play> play;
     double started{};
+    float from{};               // the clip's seconds at `started`
+    std::optional<float> held;  // paused at these seconds of the clip
     std::uint64_t serial{};
     std::vector<Replacement> replacements;
     bool allowed{};
@@ -351,12 +353,12 @@ void on_animation(std::uintptr_t component) noexcept {
             clip = p.clip.get();
             const float elapsed = static_cast<float>(at - snap->started);
             const float blend = std::max(p.blend, 0.0f);
-            const float run = elapsed * std::max(p.speed, 0.05f);
+            const float run = snap->held ? *snap->held : snap->from + elapsed * std::max(p.speed, 0.05f);
             const float length = clip->duration();
             if (p.loop && length > 0) t = std::fmod(run, length);
             else t = std::min(run, length);
             weight = blend > 0 ? std::clamp(elapsed / blend, 0.0f, 1.0f) : 1.0f;
-            if (!p.loop && run >= length) {
+            if (!p.loop && !snap->held && run >= length) {
                 const float after = (run - length) / std::max(p.speed, 0.05f);
                 weight = std::min(weight, blend > 0 ? 1 - std::clamp(after / blend, 0.0f, 1.0f) : 0.0f);
                 if (weight <= 0) finished_serial.store(snap->serial, std::memory_order_release);
@@ -638,7 +640,41 @@ std::uint64_t serial{};
 void play(std::optional<Play> clip) {
     plan_draft.play = std::move(clip);
     plan_draft.started = now_seconds();
+    plan_draft.from = plan_draft.play ? plan_draft.play->at : 0;
+    plan_draft.held = plan_draft.play && plan_draft.play->paused ? std::optional(plan_draft.from) : std::nullopt;
     plan_draft.serial = ++serial;
+    publish();
+}
+std::optional<float> play_time() {
+    if (!plan_draft.play || !plan_draft.play->clip) return std::nullopt;
+    if (plan_draft.held) return plan_draft.held;
+    const auto& p = *plan_draft.play;
+    const float run = plan_draft.from + static_cast<float>(now_seconds() - plan_draft.started) * std::max(p.speed, 0.05f);
+    const float length = p.clip->duration();
+    if (p.loop && length > 0) return std::fmod(run, length);
+    return std::min(run, length);
+}
+void seek(float seconds) {
+    if (!plan_draft.play || !plan_draft.play->clip) return;
+    const float t = std::clamp(seconds, 0.0f, plan_draft.play->clip->duration());
+    if (plan_draft.held) plan_draft.held = t;
+    else {
+        // Playing on from there, already blended in.
+        plan_draft.from = t;
+        plan_draft.started = now_seconds() - std::max(plan_draft.play->blend, 0.0f);
+        if (plan_draft.play->speed > 0) plan_draft.from -= std::max(plan_draft.play->blend, 0.0f) * plan_draft.play->speed;
+    }
+    publish();
+}
+void pause(bool paused) {
+    if (!plan_draft.play || !plan_draft.play->clip || paused == plan_draft.held.has_value()) return;
+    if (paused) plan_draft.held = play_time();
+    else {
+        const float t = *plan_draft.held;
+        plan_draft.held.reset();
+        seek(t);
+        return;
+    }
     publish();
 }
 bool playing() noexcept {

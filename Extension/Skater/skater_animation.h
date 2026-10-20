@@ -24,6 +24,8 @@ struct Play {
     std::shared_ptr<const Clip> clip;
     float speed{1}, blend{0.15f};
     bool loop{};
+    float at{};     // seconds into the clip it starts from
+    bool paused{};  // held at `at` until resumed (seek, pause)
 };
 // A clip the game's own trick plays as, from its takeoff: the clip's air (its takeoff to its
 // landing) stretched to the trick's. `trick` is the game's name ("kickflip"); `pop` "", "low",
@@ -37,6 +39,11 @@ struct Replacement {
 // Client thread throughout.
 void play(std::optional<Play> clip);
 bool playing() noexcept; // a clip of play() has not finished
+// The clip of play(), moved to `seconds` (clamped to it), held there or playing on from it.
+void seek(float seconds);
+void pause(bool paused);
+// Where in its clip play() is now, in seconds; empty without one.
+std::optional<float> play_time();
 void set_replacements(std::vector<Replacement> list);
 // Records the pose for `seconds` (at most 10); the clip comes from take_recording once done.
 bool record(float seconds);

@@ -339,6 +339,14 @@ public:
         double x{}, y{}, wheel{};
     };
     virtual std::optional<MouseMotion> mouse_motion(std::string_view /*plugin*/) { return std::nullopt; }
+    // The mouse over the game window while a plugin's screen is open (reskate.input.cursor): where
+    // (pixels from the top left), its buttons, the wheel's notches since the last read, and whether
+    // it is over the screen's own panel.
+    struct Cursor {
+        float x{}, y{}, wheel{};
+        bool left{}, right{}, middle{}, over_screen{};
+    };
+    virtual std::optional<Cursor> cursor() { return std::nullopt; }
     // Game buttons kept from the game while asked (overlay::hide_game_buttons/hold_game_buttons),
     // and all game input paused for half a second at a time.
     virtual void game_buttons(std::string_view /*plugin*/, std::uint16_t /*hidden*/, std::uint16_t /*held*/, bool /*paused*/) {}
@@ -401,6 +409,13 @@ public:
     virtual std::string files_read(std::string_view /*plugin*/, std::string_view /*path*/, std::string& /*text*/) { return unavailable; }
     virtual std::string files_write(std::string_view /*plugin*/, std::string_view /*path*/, std::string_view /*text*/) { return unavailable; }
     virtual std::string files_remove(std::string_view /*plugin*/, std::string_view /*path*/) { return unavailable; }
+    // The same, for a file up to `most` bytes (an animation clip's, say).
+    virtual std::string files_read_bytes(std::string_view plugin, std::string_view path, std::string& out, std::size_t /*most*/) {
+        return files_read(plugin, path, out);
+    }
+    virtual std::string files_write_bytes(std::string_view plugin, std::string_view path, std::string_view bytes, std::size_t /*most*/) {
+        return files_write(plugin, path, bytes);
+    }
     // ---- ui.dialog -----------------------------------------------------------------------------------
     // One dialog at a time over the game; the same id again updates it (what was typed is kept).
     virtual std::string dialog_open(std::string_view /*plugin*/, const DialogSpec&) { return unavailable; }
@@ -462,8 +477,14 @@ public:
     // One plugin plays at a time; none while a throwdown runs. A replacement plays when the game does
     // `trick` ("kickflip") with that pop ("" any, "low", "mid", "high"); a null clip takes it away.
     using ClipRef = std::shared_ptr<const anim_studio::Clip>;
-    virtual std::string play_clip(std::string_view /*plugin*/, ClipRef, float /*speed*/, float /*blend*/, bool /*loop*/) { return unavailable; }
+    // `at`: seconds into the clip it starts from; `paused`: held there (seek and pause move it).
+    virtual std::string play_clip(std::string_view /*plugin*/, ClipRef, float /*speed*/, float /*blend*/, bool /*loop*/, float /*at*/, bool /*paused*/) {
+        return unavailable;
+    }
     virtual void stop_clip(std::string_view /*plugin*/) {}
+    virtual void seek_clip(std::string_view /*plugin*/, float /*seconds*/) {}
+    virtual void pause_clip(std::string_view /*plugin*/, bool /*paused*/) {}
+    virtual std::optional<float> clip_time(std::string_view /*plugin*/) { return std::nullopt; }
     virtual bool clip_playing(std::string_view /*plugin*/) { return false; }
     // An arm of the local skater reaching (Extension/Skater/arm_reach.h): its hand joint to `at` in the
     // world, turned to `rotation` when given, `weight` of the way; held 0.3 s, set every tick. One

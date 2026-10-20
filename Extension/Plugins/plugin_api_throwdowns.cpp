@@ -69,6 +69,7 @@ std::string own_mode(lua_State* L, int index) {
     if (id.empty() || id.find('/') != std::string::npos) luaL_argerror(L, index, "a mode id of 1 to 32 characters, without /");
     return id;
 }
+} // namespace
 // A path in the plugin's data folder: relative, inside it, and no name Windows keeps for a device.
 std::string data_path(lua_State* L, int index, bool folder) {
     if (folder && lua_isnoneornil(L, index)) return {};
@@ -88,6 +89,7 @@ std::string data_path(lua_State* L, int index, bool folder) {
     }
     return path;
 }
+namespace {
 } // namespace
 
 struct KitApi {

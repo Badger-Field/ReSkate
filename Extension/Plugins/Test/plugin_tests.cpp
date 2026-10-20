@@ -268,10 +268,14 @@ struct FakeGame final : Game {
     }
     ThrowdownState throwdowns() override { return throwdown; }
     ClipRef recorded;
-    std::string play_clip(std::string_view plugin, ClipRef clip, float speed, float blend, bool loop) override {
-        calls.push_back(std::format("play {} {} frames {:.1f} {:.2f} {}", plugin, clip->times.size(), speed, blend, loop));
+    std::string play_clip(std::string_view plugin, ClipRef clip, float speed, float blend, bool loop, float at, bool paused) override {
+        calls.push_back(std::format("play {} {} frames {:.1f} {:.2f} {}", plugin, clip->times.size(), speed, blend, loop) +
+                        (at > 0 || paused ? std::format(" at {:.2f}{}", at, paused ? " paused" : "") : std::string{}));
         return {};
     }
+    void seek_clip(std::string_view plugin, float seconds) override { calls.push_back(std::format("seek {} {:.2f}", plugin, seconds)); }
+    void pause_clip(std::string_view plugin, bool paused) override { calls.push_back(std::format("pause {} {}", plugin, paused)); }
+    std::optional<float> clip_time(std::string_view) override { return 0.25f; }
     void stop_clip(std::string_view plugin) override { calls.push_back("stop " + std::string(plugin)); }
     std::string replace_trick(std::string_view plugin, std::string trick, std::string pop, ClipRef clip, float) override {
         calls.push_back(std::format("replace {} {} {} {}", plugin, trick, pop.empty() ? "any" : pop, clip ? "clip" : "none"));
@@ -283,6 +287,8 @@ struct FakeGame final : Game {
         clip->joints = dingosdk::anim_studio::skeleton_joints;
         clip->times = {0, 0.25f, 0.5f};
         clip->frames.resize(clip->times.size() * clip->joints);
+        clip->takeoff = 0.1f;
+        clip->landing = 0.4f;
         recorded = std::move(clip);
         return {};
     }
@@ -1153,6 +1159,65 @@ void plugins_read_joints_and_tune_physics() {
     )"}})});
     ticks(host, environment, 1);
     check(environment.logged("[sneaky] false false false"), "skater.control, session.skaters and settings.write are needed\n" + environment.all());
+}
+
+// A clip read, sampled, cut, keyed, saved and read back from the data folder, and played held.
+void plugins_edit_clips() {
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    const std::string main = R"(
+        assert(reskate.animation.record(2))
+        local rec = reskate.animation.recorded()
+        local i = reskate.animation.info(rec)
+        assert(i.frames == 3 and i.duration == 0.5 and i.joints == 395 and not i.board, "a recording's info")
+        assert(math.abs(i.takeoff - 0.1) < 1e-6 and math.abs(i.landing - 0.4) < 1e-6, "with its takeoff and landing")
+        local cut = reskate.animation.trim(rec, 0.2, 0.5)
+        local c = reskate.animation.info(cut)
+        assert(cut == "clip:2" and c.frames == 2 and math.abs(c.duration - 0.25) < 1e-6, "a trim from its first frame")
+        assert(c.takeoff == nil and math.abs(c.landing - 0.15) < 1e-6, "its marks moved with it")
+        local work = reskate.animation.edit(rec, {{joint = "hips", keys = {{time = 0, angles = vector.create(0, 0, 90)},
+            {time = 0.5, angles = vector.create(0, 0, 90), offset = vector.create(0, 0.5, 0), ease = "linear"}}}}, {name = "work"})
+        assert(work == "edit:work", work)
+        local s = reskate.animation.sample(work, 7, 0.5)
+        assert(math.abs(s.rotation[3] - 0.70711) < 1e-3 and math.abs(s.rotation[4] - 0.70711) < 1e-3, "the hips turned 90 degrees")
+        assert(math.abs(s.position.y - 0.5) < 1e-4 and math.abs(reskate.animation.sample(work, "hips", 0.25).position.y - 0.25) < 1e-4, "and moved, blended")
+        assert(reskate.animation.sample(rec, 7, 0.5).rotation[4] == 1, "the recording stays as it was")
+        assert(reskate.animation.edit(rec, {}, {name = "work"}) == "edit:work", "the same name again")
+        assert(reskate.animation.sample("edit:work", 7, 0.5).rotation[4] == 1, "replaces it")
+        local list = reskate.animation.joints()
+        assert(#list == 25 and list[1].joint == "board" and list[2].joint == 7 and list[2].label == "Hips" and list[2].moves, "the editable joints")
+        assert(reskate.animation.save(work, "anims/work.fas"))
+        local keyed = reskate.animation.edit(rec, {{joint = 7, keys = {{time = 0.5, offset = vector.create(0, 0.5, 0)}}}})
+        assert(reskate.animation.save(keyed, "anims/keyed.fas"))
+        local back = reskate.animation.info("data:anims/keyed.fas")
+        assert(back.frames == 3 and math.abs(reskate.animation.sample("data:anims/keyed.fas", "hips", 0.5).position.y - 0.5) < 1e-4, "saved and read back")
+        assert(reskate.animation.play(work, {at = 0.25, paused = true}))
+        reskate.animation.seek(0.4)
+        reskate.animation.pause(false)
+        assert(reskate.animation.time() == 0.25)
+        assert(not pcall(reskate.animation.edit, rec, {{joint = 1, keys = {}}}), "the placement joint")
+        assert(not pcall(reskate.animation.edit, rec, {{joint = 7, keys = {{time = 0, ease = "bouncy"}}}}), "an ease")
+        assert(not pcall(reskate.animation.edit, rec, {{joint = 7, keys = {}}, {joint = "hips", keys = {}}}), "a joint once")
+        assert(not pcall(reskate.animation.edit, rec, {}, {name = "../x"}), "a name")
+        assert(not pcall(reskate.animation.trim, rec, 0.3, 0.2) and not pcall(reskate.animation.trim, rec, 0.26, 0.3), "a trim keeps two frames")
+        assert(not pcall(reskate.animation.info, "data:none.fas") and not pcall(reskate.animation.info, "edit:none"), "clips there are not")
+        assert(not pcall(reskate.animation.play, work, {at = 9}), "at is within the clip")
+        reskate.log("edited")
+    )";
+    host.apply({package("editor", {{manifest_file, manifest(R"("skater.animation", "files")")}, {"plugin/main.lua", main}})});
+    ticks(host, environment, 1);
+    running(host, "editor", environment);
+    check(environment.logged("[editor] edited"), "A plugin edits clips\n" + environment.all());
+    check(game.called("play editor 3 frames 1.0 0.15 false at 0.25 paused") && game.called("seek editor 0.40") && game.called("pause editor false"),
+          "and plays one held, moved and let run\n" + environment.all());
+    host.apply({package("sneaky", {{manifest_file, manifest(R"("skater.animation")")}, {"plugin/main.lua", R"(
+        assert(reskate.animation.record(2))
+        local rec = reskate.animation.recorded()
+        reskate.log(tostring(pcall(reskate.animation.save, rec, "x.fas")) .. " " .. tostring(pcall(reskate.animation.info, "data:x.fas")))
+    )"}})});
+    ticks(host, environment, 1);
+    check(environment.logged("[sneaky] false false"), "files is needed for data clips\n" + environment.all());
 }
 
 void plugins_draw_on_the_overlay() {
@@ -2068,6 +2133,43 @@ void dual_stick_edits_the_companions_settings() {
           "Goofy picked on the page is written:\n" + after + environment.all());
 }
 
+// Animator Studio as a mod (contrib/plugins/animator-studio): it records a trick, opens on it, keys a
+// joint, saves it to play in game, and puts it back in game when it starts again.
+void animator_studio_records_and_saves() {
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    game.files.clear();
+    Host host(environment, Side::client);
+    host.apply({contributed("animator-studio")});
+    running(host, "animator-studio", environment);
+    check(host.run_console("studio status") && environment.printed("studio: closed; nothing recorded; 0 saved"),
+          "It starts closed:\n" + printed_lines(environment) + environment.all());
+    environment.local_skater = SkaterState{{1, 0, 2}, 0, 0, 0, false, 0};
+    check(host.run_console("studio record") && game.called("record animator-studio 10.0"), "It records\n" + environment.all());
+    ticks(host, environment, 3);
+    environment.lines.clear();
+    check(host.run_console("studio status") && environment.printed("studio: open; kickflip, 0.50 s; 0 saved"),
+          "and opens on the trick:\n" + printed_lines(environment) + environment.all());
+    ticks(host, environment, 2);
+    check(game.called("play animator-studio 3 frames 1.0 0.00 true at 0.00 paused"), "held on the skater\n" + environment.all());
+    // Saved to play in game: a clip file and its keys, and the trick replaced.
+    environment.lines.clear();
+    check(host.run_console("studio ingame on") && host.run_console("studio save Kick One") && environment.printed("studio: Saved Kick One"),
+          "It saves:\n" + printed_lines(environment) + environment.all());
+    check(game.files.contains("animator-studio/anims/Kick One.fas") && game.files.contains("animator-studio/anims/Kick One.json"),
+          "a clip file and its keys in the data folder\n" + environment.all());
+    check(game.called("replace animator-studio kickflip any clip"), "and plays in game\n" + environment.all());
+    // Started again, it puts it back in game.
+    game.calls.clear();
+    host.apply({});
+    host.apply({contributed("animator-studio")});
+    running(host, "animator-studio", environment);
+    check(game.called("replace animator-studio kickflip any clip") && environment.logged("[animator-studio] 1 saved animation(s) play in game"),
+          "Started again, the saved trick plays in game\n" + environment.all());
+    environment.lines.clear();
+    check(host.run_console("studio list") && environment.printed("studio: Kick One"), "and lists it:\n" + printed_lines(environment));
+}
+
 // Rock to Fakie as a mod (contrib/plugins/rock-to-fakie), on reskate.tricks.label and record_as: off
 // until switched on; then a held stall shows the label, B pressed in it asks for fakie_rock, and
 // leaving the stall gives the label back.
@@ -2866,6 +2968,8 @@ int main() {
         plugins_place_world_entities();
         plugins_reach_cruise_and_read_the_mouse();
         plugins_read_joints_and_tune_physics();
+        plugins_edit_clips();
+        animator_studio_records_and_saves();
         plugins_server_copies_are_the_authority();
         plugins_animate_the_skater();
         plugins_play_their_own_sounds();
