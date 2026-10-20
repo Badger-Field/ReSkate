@@ -297,9 +297,41 @@ struct FakeGame final : Game {
     }
     ThrowdownState throwdowns() override { return throwdown; }
     ClipRef recorded;
-    std::string play_clip(std::string_view plugin, ClipRef clip, float speed, float blend, bool loop, float at, bool paused) override {
+    std::vector<std::string> game_clip_names(std::string_view containing, std::size_t most, std::string& why) override {
+        if (!game_clips_ready) {
+            why = "the game's animations are still being read";
+            return {};
+        }
+        std::vector<std::string> out;
+        for (const char* name : {"animation/dingo/c_proto_onb_trick_o_kickflip_high", "animation/dingo/c_proto_onb_trick_o_ollie_mid",
+                                 "animation/dingo/seq_c_proto_onb_trick_o_kickflip_low"})
+            if (std::string_view(name).find(containing) != std::string_view::npos && out.size() < most) out.push_back(name);
+        return out;
+    }
+    // A game clip: three frames of the whole skeleton, 0.1 s apart, its takeoff and landing marked.
+    ClipRef game_clip(std::string_view name, std::string& why) override {
+        if (!game_clips_ready) {
+            why = "the game's animations are still being read";
+            return nullptr;
+        }
+        if (name.starts_with("animation/dingo/seq_")) {
+            why = std::string(name) + " is a SequenceContainerAsset, not a clip";
+            return nullptr;
+        }
+        calls.push_back("game clip " + std::string(name));
+        auto clip = std::make_shared<dingosdk::anim_studio::Clip>();
+        clip->joints = dingosdk::anim_studio::skeleton_joints;
+        clip->times = {0, 0.1f, 0.2f};
+        clip->frames.resize(3 * clip->joints);
+        clip->board.resize(3);
+        clip->takeoff = 0.05f;
+        clip->landing = 0.15f;
+        return clip;
+    }
+    bool game_clips_ready{};
+    std::string play_clip(std::string_view plugin, ClipRef clip, float speed, float blend, bool loop, float at, bool paused, bool floor) override {
         calls.push_back(std::format("play {} {} frames {:.1f} {:.2f} {}", plugin, clip->times.size(), speed, blend, loop) +
-                        (at > 0 || paused ? std::format(" at {:.2f}{}", at, paused ? " paused" : "") : std::string{}));
+                        (at > 0 || paused ? std::format(" at {:.2f}{}", at, paused ? " paused" : "") : std::string{}) + (floor ? " floor" : ""));
         return {};
     }
     void seek_clip(std::string_view plugin, float seconds) override { calls.push_back(std::format("seek {} {:.2f}", plugin, seconds)); }
@@ -1298,6 +1330,45 @@ void plugins_type_and_use_the_room() {
     check(environment.logged("[sneaky] false false"), "room is needed\n" + environment.all());
 }
 
+// The game's own clips: listed once they are read, each a "game:" clip like any other.
+void plugins_use_the_games_clips() {
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    const std::string main = R"(
+        local none, why = reskate.animation.game_clips("trick")
+        assert(none == nil and why == "the game's animations are still being read", tostring(why))
+        reskate.on("tick", function()
+            local names = reskate.animation.game_clips("kickflip")
+            if not names or done then return end
+            done = true
+            assert(#names == 2 and names[1] == "animation/dingo/c_proto_onb_trick_o_kickflip_high", "the names that contain it")
+            assert(#reskate.animation.game_clips() == 3, "all of them")
+            local info = reskate.animation.info("game:" .. names[1])
+            assert(info.frames == 3 and info.joints == 395 and math.abs(info.takeoff - 0.05) < 1e-6 and math.abs(info.landing - 0.15) < 1e-6, "a clip")
+            assert(reskate.animation.play("game:" .. names[1], {floor = true}))
+            local ok, err = pcall(reskate.animation.info, "game:" .. names[2])
+            assert(not ok and err:find("SequenceContainerAsset, not a clip"), err)
+            assert(not pcall(reskate.animation.game_clips, string.rep("x", 65)), "a part of a name is at most 64 characters")
+            reskate.log("game clips")
+        end)
+    )";
+    host.apply({package("clips", {{manifest_file, manifest(R"("skater.animation")")}, {"plugin/main.lua", main}})});
+    ticks(host, environment, 1);
+    game.game_clips_ready = true;
+    ticks(host, environment, 2);
+    running(host, "clips", environment);
+    check(environment.logged("[clips] game clips"), "A plugin lists and plays the game's clips\n" + environment.all());
+    check(game.called("game clip animation/dingo/c_proto_onb_trick_o_kickflip_high") &&
+              game.called("play clips 3 frames 1.0 0.15 false floor"),
+          "read once, and played on the floor\n" + environment.all());
+    host.apply({package("sneaky", {{manifest_file, manifest(R"("files")")}, {"plugin/main.lua", R"(
+        reskate.log(tostring(pcall(reskate.animation.game_clips)))
+    )"}})});
+    ticks(host, environment, 1);
+    check(environment.logged("[sneaky] false"), "skater.animation is needed\n" + environment.all());
+}
+
 // A clip read, sampled, cut, keyed, saved and read back from the data folder, and played held.
 void plugins_edit_clips() {
     TestEnvironment environment;
@@ -1329,7 +1400,7 @@ void plugins_edit_clips() {
         assert(reskate.animation.save(keyed, "anims/keyed.fas"))
         local back = reskate.animation.info("data:anims/keyed.fas")
         assert(back.frames == 3 and math.abs(reskate.animation.sample("data:anims/keyed.fas", "hips", 0.5).position.y - 0.5) < 1e-4, "saved and read back")
-        assert(reskate.animation.play(work, {at = 0.25, paused = true}))
+        assert(reskate.animation.play(work, {at = 0.25, paused = true, floor = true}))
         reskate.animation.seek(0.4)
         reskate.animation.pause(false)
         assert(reskate.animation.time() == 0.25)
@@ -1346,7 +1417,7 @@ void plugins_edit_clips() {
     ticks(host, environment, 1);
     running(host, "editor", environment);
     check(environment.logged("[editor] edited"), "A plugin edits clips\n" + environment.all());
-    check(game.called("play editor 3 frames 1.0 0.15 false at 0.25 paused") && game.called("seek editor 0.40") && game.called("pause editor false"),
+    check(game.called("play editor 3 frames 1.0 0.15 false at 0.25 paused floor") && game.called("seek editor 0.40") && game.called("pause editor false"),
           "and plays one held, moved and let run\n" + environment.all());
     host.apply({package("sneaky", {{manifest_file, manifest(R"("skater.animation")")}, {"plugin/main.lua", R"(
         assert(reskate.animation.record(2))
@@ -2288,7 +2359,12 @@ void animator_studio_records_and_saves() {
     check(host.run_console("studio status") && environment.printed("studio: open; kickflip, 0.50 s; 0 saved"),
           "and opens on the trick:\n" + printed_lines(environment) + environment.all());
     ticks(host, environment, 2);
-    check(game.called("play animator-studio 3 frames 1.0 0.00 true at 0.00 paused"), "held on the skater\n" + environment.all());
+    check(game.called("play animator-studio 3 frames 1.0 0.00 true at 0.00 paused floor"), "held on the skater\n" + environment.all());
+    // The game's own tricks, once its animations are read: one for each pop the game has a clip for.
+    game.game_clips_ready = true;
+    ticks(host, environment, 70);
+    environment.lines.clear();
+    check(host.run_console("studio status") && environment.printed("0 saved; 2 game tricks"), "The game's tricks are listed:\n" + printed_lines(environment));
     // Past its loading screen, the studio's screen is drawn every frame, within the plugin's time.
     ticks(host, environment, 300); // past the loading screen over the walk to the room
     std::size_t tiles = 0, texts = 0;
@@ -3139,6 +3215,7 @@ int main() {
         plugins_read_joints_and_tune_physics();
         plugins_type_and_use_the_room();
         plugins_touch_hide_and_ray_at_players();
+        plugins_use_the_games_clips();
         plugins_edit_clips();
         animator_studio_records_and_saves();
         plugins_server_copies_are_the_authority();
