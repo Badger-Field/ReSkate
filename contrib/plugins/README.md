@@ -33,3 +33,14 @@ test`) that `dingosdk_plugin_tests` runs too, and its own page in the ReSkate me
   pictures (`d:game_image`). `hallofmeat 0|1`.
 - **grind-exits**: LT / RT in a grind pick the side of the pop (`reskate.skater.grind_exit`,
   `reskate.input.hide`). `grindexit status`.
+
+## Throwdown modes
+
+Throwdown modes made in Lua with the throwdown kit ([throwdown-kit.md](../throwdown-kit.md)): the
+plugin registers its modes and publishes what the player should see; ReSkate shows it with skate.'s
+native Throwdowns page, setup page, flag, HUD and match panel.
+
+- **throwdown-modes-test**: two modes through the whole native flow (card, setup page, flag,
+  waiting card) and no match. The smallest example of the kit.
+- **SmokeyDawg58-ReSkate_Throwdown**: SmokeyDawg58's ten modes, with their rules, HUDs, gates and
+  route editor, all in Lua, inside his asset mod. `tdm help`.
