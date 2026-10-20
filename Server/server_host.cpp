@@ -1524,7 +1524,7 @@ void Host::sync_objects() {
     // Guests upload their layouts; the server alone decides what everyone else
     // sees, and freezes the layouts of players who may not build right now.
     for (auto &[id, guest] : guests_)
-        if (guest->handshaken && guest->objects.revision() != guest->shared_from && now_ >= guest->objects_held_until &&
+        if (guest->handshaken && !(locks_of(id) & lock_objects) && guest->objects.revision() != guest->shared_from && now_ >= guest->objects_held_until &&
             (config_.object_placement == ObjectPlacement::everyone ||
              (config_.object_placement == ObjectPlacement::host_only && has(id, multiplayer::role_objects)))) {
             auto layout = guest->objects.layout();

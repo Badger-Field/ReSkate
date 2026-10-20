@@ -286,6 +286,16 @@ public:
     virtual std::string announce(std::string_view /*plugin*/, std::string_view) { return unavailable; }
     virtual std::string tell(std::string_view /*plugin*/, std::uint64_t, std::string_view) { return unavailable; }
     virtual std::string move_player(std::uint64_t, const Vec3&) { return unavailable; }
+    // Bans a player by SteamID64, connected or not (a dedicated server's only); lifts a ban.
+    virtual std::string ban(std::uint64_t) { return unavailable; }
+    virtual std::string unban(std::uint64_t) { return unavailable; }
+    // A player's permissions, true where they may: what the server holds for them now, or nothing
+    // for one it cannot hold any for. Applying makes them exactly these.
+    struct Permissions {
+        bool noclip = true, nobail = true, boosts = true, tuning = true, objects = true;
+    };
+    virtual std::optional<Permissions> permissions(std::uint64_t) { return std::nullopt; }
+    virtual std::string apply_permissions(std::string_view /*plugin*/, std::uint64_t, const Permissions&) { return unavailable; }
     // ---- skater.animation: clips on the local skater's body (Extension/Skater/skater_animation.h) ------
     // One plugin plays at a time; none while a throwdown runs. A replacement plays when the game does
     // `trick` ("kickflip") with that pop ("" any, "low", "mid", "high"); a null clip takes it away.

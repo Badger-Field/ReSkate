@@ -600,6 +600,25 @@ void Api::install(Plugin& plugin, lua_State* L) {
     // "client" for the copy on a player's game, "server" for the session authority's copy.
     lua_pushstring(L, plugin.services_.authority() ? "server" : "client");
     lua_setfield(L, -2, "side");
+    // Named constants, read-only and built from the C++ lists so they cannot drift:
+    // reskate.Enums.Side.server is "server", reskate.Enums.Event.tick is "tick". Plain strings still work.
+    lua_createtable(L, 0, 2);
+    lua_createtable(L, 0, 3);
+    for (const auto side : {Side::client, Side::server, Side::both}) {
+        lua_pushstring(L, side_name(side));
+        lua_setfield(L, -2, side_name(side));
+    }
+    readonly();
+    lua_setfield(L, -2, "Side");
+    lua_createtable(L, 0, static_cast<int>(events.size()));
+    for (const auto& event : events) {
+        lua_pushlstring(L, event.name.data(), event.name.size());
+        lua_setfield(L, -2, std::string(event.name).c_str());
+    }
+    readonly();
+    lua_setfield(L, -2, "Event");
+    readonly();
+    lua_setfield(L, -2, "Enums");
     set_function(L, "log", ApiFunctions::log);
     set_function(L, "on", ApiFunctions::on);
 
@@ -697,5 +716,7 @@ void push_player(lua_State* L, const SessionPlayer& player) {
     lua_setfield(L, -2, "host");
     lua_pushboolean(L, player.server);
     lua_setfield(L, -2, "server");
+    lua_getfield(L, LUA_REGISTRYINDEX, "reskate.player"); // its permissions (plugin_api_world.cpp)
+    lua_setmetatable(L, -2);
 }
 }

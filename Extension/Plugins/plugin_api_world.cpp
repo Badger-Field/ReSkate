@@ -1006,6 +1006,73 @@ struct WorldApi {
         const auto player = player_of(L, 1);
         return result(L, game(plugin).move_player(player, position_of(L, 2, "where the player goes")));
     }
+    static int server_ban(lua_State* L) {
+        auto& plugin = authority(L, "reskate.server.ban");
+        return result(L, game(plugin).ban(player_of(L, 1)));
+    }
+    static int server_unban(lua_State* L) {
+        auto& plugin = authority(L, "reskate.server.unban");
+        return result(L, game(plugin).unban(player_of(L, 1)));
+    }
+    // A player's permissions: player.permissions is what the server holds for them now, read-only;
+    // permissions:clone() is a copy to change; player:apply_permissions(copy) makes it theirs.
+    static constexpr std::array<std::pair<const char*, bool Game::Permissions::*>, 5> permission_fields{{
+        {"noclip", &Game::Permissions::noclip}, {"nobail", &Game::Permissions::nobail}, {"boosts", &Game::Permissions::boosts},
+        {"tuning", &Game::Permissions::tuning}, {"objects", &Game::Permissions::objects}}};
+    static void push_permissions(lua_State* L, const Game::Permissions& permissions, bool readonly) {
+        lua_createtable(L, 0, static_cast<int>(permission_fields.size()));
+        for (const auto& [name, field] : permission_fields) {
+            lua_pushboolean(L, permissions.*field);
+            lua_setfield(L, -2, name);
+        }
+        lua_getfield(L, LUA_REGISTRYINDEX, "reskate.permissions");
+        lua_setmetatable(L, -2);
+        if (readonly) lua_setreadonly(L, -1, true);
+    }
+    // Every permission, each true or false, and nothing else: a clone, so none is left out by mistake.
+    static Game::Permissions permissions_of(lua_State* L, int index) {
+        luaL_checktype(L, index, LUA_TTABLE);
+        Game::Permissions permissions;
+        for (const auto& [name, field] : permission_fields) {
+            lua_getfield(L, index, name);
+            if (!lua_isboolean(L, -1)) luaL_error(L, "permission \"%s\" must be true or false (clone the player's permissions to change them)", name);
+            permissions.*field = lua_toboolean(L, -1);
+            lua_pop(L, 1);
+        }
+        lua_pushnil(L);
+        while (lua_next(L, index)) {
+            const char* key = lua_type(L, -2) == LUA_TSTRING ? lua_tostring(L, -2) : nullptr;
+            const bool known = key && std::any_of(permission_fields.begin(), permission_fields.end(),
+                                                  [&](const auto& f) { return std::string_view(f.first) == key; });
+            if (!known) luaL_error(L, "there is no permission \"%s\"", key ? key : "(not a name)");
+            lua_pop(L, 1);
+        }
+        return permissions;
+    }
+    static int permissions_clone(lua_State* L) {
+        push_permissions(L, permissions_of(L, 1), false);
+        return 1;
+    }
+    static int player_apply_permissions(lua_State* L) {
+        auto& plugin = authority(L, "player:apply_permissions");
+        const auto player = player_of(L, 1);
+        return result(L, game(plugin).apply_permissions(plugin.id(), player, permissions_of(L, 2)));
+    }
+    // A player table's own names: permissions (read when asked, so always the server's now) and
+    // apply_permissions. Anything else a player table does not have is nil.
+    static int player_index(lua_State* L) {
+        const char* key = lua_type(L, 2) == LUA_TSTRING ? lua_tostring(L, 2) : "";
+        if (std::string_view(key) == "apply_permissions") {
+            lua_pushcfunction(L, player_apply_permissions, "apply_permissions");
+            return 1;
+        }
+        if (std::string_view(key) != "permissions") return 0;
+        auto& plugin = authority(L, "player.permissions");
+        const auto permissions = game(plugin).permissions(player_of(L, 1));
+        if (!permissions) return 0;
+        push_permissions(L, *permissions, true);
+        return 1;
+    }
     // ---- throwdowns -------------------------------------------------------------------------------------
     // host(mode, players, {max}): a drop where the skater stands for these players ("jam",
     // "spot_battle" or "skate"); it starts once they all join. One every 5 s.
@@ -1478,6 +1545,22 @@ static void into(lua_State* L, const char* field, std::initializer_list<std::pai
 
 void WorldApi::install(Plugin& plugin, lua_State* L) {
     (void)plugin;
+    // The metatables of player tables (push_player) and of permissions; their own stay hidden.
+    lua_createtable(L, 0, 2);
+    lua_pushcfunction(L, player_index, "player");
+    lua_setfield(L, -2, "__index");
+    lua_pushstring(L, "locked");
+    lua_setfield(L, -2, "__metatable");
+    lua_setfield(L, LUA_REGISTRYINDEX, "reskate.player");
+    lua_createtable(L, 0, 2);
+    lua_createtable(L, 0, 1);
+    lua_pushcfunction(L, permissions_clone, "clone");
+    lua_setfield(L, -2, "clone");
+    lua_setreadonly(L, -1, true);
+    lua_setfield(L, -2, "__index");
+    lua_pushstring(L, "locked");
+    lua_setfield(L, -2, "__metatable");
+    lua_setfield(L, LUA_REGISTRYINDEX, "reskate.permissions");
     into(L, "skater", {{"state", state}, {"noclip", noclip}, {"boost", boost}, {"freeze", freeze}, {"wipeout", wipeout}, {"xray", xray},
                         {"grind_exit", grind_exit}});
     into(L, "board", {{"motion", board_motion}, {"bones", board_bones}, {"set", board_set}, {"hide", board_hide}, {"clear", board_clear},
@@ -1497,7 +1580,8 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
                           {"record", animation_record}, {"recorded", animation_recorded}, {"forget", animation_forget}, {"trick", animation_trick}});
     into(L, "outfit", {{"set", outfit_set}, {"clear", outfit_clear}, {"find", outfit_find}, {"slots", outfit_slots}, {"status", outfit_status}});
     into(L, "audio", {{"play", audio_play}, {"set", audio_set}, {"stop", audio_stop}, {"playing", audio_playing}});
-    into(L, "server", {{"kick", server_kick}, {"say", server_say}, {"tell", server_tell}, {"move", server_move}});
+    into(L, "server", {{"kick", server_kick}, {"say", server_say}, {"tell", server_tell}, {"move", server_move},
+                        {"ban", server_ban}, {"unban", server_unban}});
     into(L, "throwdowns", {{"state", throwdown_state}, {"host", throwdown_host}, {"cancel", throwdown_cancel}, {"hosting", throwdown_hosting},
                            {"mode", throwdown_mode}, {"remove_mode", throwdown_remove_mode}, {"release_flag", throwdown_release_flag}});
     into(L, "music", {{"current", current}, {"play", play}, {"pause", pause}, {"next", next}, {"previous", previous},
