@@ -279,7 +279,7 @@ struct WorldApi {
         if (!plugin.trainer_point_) return result(L, "no save point is set");
         if (!within(plugin.services_.now_ms(), plugin.teleport_second_, plugin.teleports_, plugin.limits_.teleports_per_second))
             return result(L, "asked more than twice in a second");
-        switch (plugin.services_.teleport(plugin.trainer_point_->first, plugin.trainer_point_->second)) {
+        switch (plugin.services_.teleport(plugin.id(), plugin.trainer_point_->first, plugin.trainer_point_->second)) {
         case Teleport::sent: return result(L, {});
         case Teleport::forbidden: return result(L, "the host has turned teleporting off");
         default: return result(L, "teleporting is unavailable now");

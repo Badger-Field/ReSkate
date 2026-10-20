@@ -526,7 +526,7 @@ struct ApiFunctions {
         }
         const char* refusal = nullptr;
         if (++plugin.teleports_ > plugin.limits_.teleports_per_second) refusal = "asked more than twice in a second";
-        else switch (plugin.services_.teleport(at, heading)) {
+        else switch (plugin.services_.teleport(plugin.id(), at, heading)) {
         case Teleport::sent: break;
         case Teleport::forbidden: refusal = "the host has turned teleporting off"; break;
         case Teleport::unavailable: refusal = "teleporting is unavailable now (no skater, or a load)"; break;

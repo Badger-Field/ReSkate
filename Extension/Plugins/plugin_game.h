@@ -319,7 +319,8 @@ public:
     virtual throwdowns::kit::flag::State throwdown_flag_state() { return {}; }
     virtual void throwdown_flag_leave(std::string_view /*plugin*/) {}
     // ---- general services for a game layer in Lua (plugin_api_services.cpp) ----------------------
-    virtual std::optional<SkaterTelemetry> skater_telemetry() { return std::nullopt; }
+    // `plugin`: whose read it is (slam and struck are news since that plugin's last read).
+    virtual std::optional<SkaterTelemetry> skater_telemetry(std::string_view /*plugin*/) { return std::nullopt; }
     // The pad's XInput button bits, LT 0x10000 and RT 0x20000 (empty: no pad). `menu`: read while
     // ReSkate's menu is open too.
     virtual std::optional<std::uint32_t> pad_bits(bool /*menu*/) { return std::nullopt; }

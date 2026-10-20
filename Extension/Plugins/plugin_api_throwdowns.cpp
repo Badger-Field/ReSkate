@@ -134,7 +134,7 @@ struct KitApi {
         if (!lua_isnoneornil(L, 3)) {
             luaL_checktype(L, 3, LUA_TTABLE);
             options.players = static_cast<unsigned>(number_field(L, 3, "players", options.players, 1, 10));
-            options.seconds = static_cast<unsigned>(number_field(L, 3, "seconds", options.seconds, 0, 3600));
+            options.seconds = static_cast<unsigned>(number_field(L, 3, "seconds", options.seconds, 1, 3600));
             options.setup_page = bool_field(L, 3, "setup_page", options.setup_page);
             options.cursor_height = static_cast<float>(number_field(L, 3, "cursor_height", options.cursor_height, 0, 100000));
         }

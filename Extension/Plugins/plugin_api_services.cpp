@@ -61,7 +61,7 @@ void field_vec(lua_State* L, const char* name, const Vec3& v) {
 // skater.telemetry(): the trainer's telemetry, its last jump, the physics watch and the bail's body.
 int telemetry(lua_State* L) {
     auto& plugin = allowed(L, "skater.read", "reskate.skater.telemetry");
-    const auto t = game_of(plugin).skater_telemetry();
+    const auto t = game_of(plugin).skater_telemetry(plugin.id());
     if (!t) {
         lua_pushnil(L);
         return 1;
