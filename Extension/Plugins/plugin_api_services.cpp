@@ -274,6 +274,42 @@ int gesture(lua_State* L) {
     return 1;
 }
 
+// tricks.label(from, to): the trick ticker shows `to` where the game's label is exactly `from`
+// ("Board Stall"); to nil, that label is the game's again. 1 to 63 characters each, 16 labels a plugin.
+int label(lua_State* L) {
+    auto& plugin = allowed(L, "hud", "reskate.tricks.label");
+    std::size_t from_length = 0, to_length = 0;
+    const char* from = luaL_checklstring(L, 1, &from_length);
+    const char* to = lua_isnoneornil(L, 2) ? "" : luaL_checklstring(L, 2, &to_length);
+    if (!from_length || from_length > 63 || to_length > 63) luaL_error(L, "a label is 1 to 63 characters");
+    return result(L, game_of(plugin).trick_label(plugin.id(), std::string_view(from, from_length), std::string_view(to, to_length)));
+}
+// tricks.record_as(from, to, within_ms): the next trick the game records whose id is one of `from`
+// (a list of 1 to 16 ids, or one id), within `within_ms` (1 to 2000), is recorded as the id `to`.
+// The game's trick ids, 0 to 336. One pending record a plugin: a new one replaces it.
+int record_as(lua_State* L) {
+    auto& plugin = allowed(L, "skater.control", "reskate.tricks.record_as");
+    const auto id_at = [&](int index) {
+        const double value = luaL_checknumber(L, index);
+        if (!(value >= 0 && value <= 336) || value != std::floor(value)) luaL_error(L, "a trick id is a whole number, 0 to 336");
+        return static_cast<std::uint32_t>(value);
+    };
+    std::vector<std::uint32_t> from;
+    if (lua_istable(L, 1)) {
+        const int count = lua_objlen(L, 1);
+        if (count < 1 || count > 16) luaL_error(L, "a record names 1 to 16 trick ids");
+        for (int i = 1; i <= count; ++i) {
+            lua_rawgeti(L, 1, i);
+            from.push_back(id_at(lua_gettop(L)));
+            lua_pop(L, 1);
+        }
+    } else from.push_back(id_at(1));
+    const auto to = id_at(2);
+    const double within = luaL_checknumber(L, 3);
+    if (!(within >= 1 && within <= 2000)) luaL_error(L, "a record waits 1 to 2000 ms");
+    return result(L, game_of(plugin).trick_record_as(plugin.id(), std::move(from), to, static_cast<int>(within)));
+}
+
 } // namespace
 
 void install_services_api(Plugin&, lua_State* L) {
@@ -282,6 +318,6 @@ void install_services_api(Plugin&, lua_State* L) {
     add_functions(L, "session", {{"spectate", spectate}, {"world", world}});
     add_functions(L, "camera", {{"free", free_camera}, {"pad_flight", pad_flight}});
     add_functions(L, "physics", {{"competition", competition}, {"stock_ready", stock_ready}, {"prepare", prepare}});
-    add_functions(L, "tricks", {{"feed", trick_feed}, {"gesture", gesture}});
+    add_functions(L, "tricks", {{"feed", trick_feed}, {"gesture", gesture}, {"label", label}, {"record_as", record_as}});
 }
 } // namespace dingosdk::plugins

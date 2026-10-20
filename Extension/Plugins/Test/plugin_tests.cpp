@@ -85,6 +85,16 @@ struct FakeGame final : Game {
         if (words.empty()) return "game";
         return words.front() == "ringing" ? "1" : "";
     }
+    std::string trick_label(std::string_view plugin, std::string_view from, std::string_view to) override {
+        calls.push_back(std::format("trick label {} {}={}", plugin, from, to));
+        return {};
+    }
+    std::string trick_record_as(std::string_view plugin, std::vector<std::uint32_t> from, std::uint32_t to, int within_ms) override {
+        std::string ids;
+        for (const auto id : from) ids += (ids.empty() ? "" : ",") + std::to_string(id);
+        calls.push_back(std::format("trick record {} {}->{} {}", plugin, ids, to, within_ms));
+        return {};
+    }
     std::string board_toss(std::string_view plugin, std::vector<int> bones, const Vec3& velocity, const Vec3&, float ground) override {
         calls.push_back(std::format("board toss {} {} {:.0f} {:.0f}", plugin, bones.size(), velocity[1], ground));
         return {};
@@ -530,6 +540,10 @@ void a_permission_must_be_declared() {
         assert(reskate.package.variants() == nil, "a mod without variants has none")
         ok, err = pcall(reskate.package.choose, "wide")
         assert(not ok and err:find("needs the \"variants\" permission"), err)
+        ok, err = pcall(reskate.tricks.label, "Board Stall", "Rock to Fakie")
+        assert(not ok and err:find("needs the \"hud\" permission"), err)
+        ok, err = pcall(reskate.tricks.record_as, {9}, 187, 100)
+        assert(not ok and err:find("needs the \"skater.control\" permission"), err)
         reskate.console.print("never")
     )")});
     stopped(host, "bare", "raised an error");
@@ -1851,6 +1865,43 @@ void dual_stick_edits_the_companions_settings() {
           "Goofy picked on the page is written:\n" + after + environment.all());
 }
 
+// Rock to Fakie as a mod (contrib/plugins/rock-to-fakie), on reskate.tricks.label and record_as: off
+// until switched on; then a held stall shows the label, B pressed in it asks for fakie_rock, and
+// leaving the stall gives the label back.
+void rock_to_fakie_relabels_and_records_the_stall() {
+    TestEnvironment environment;
+    std::filesystem::remove_all(scratch / "storage" / "rock-to-fakie");
+    auto& game = environment.fake;
+    game.telemetry = SkaterTelemetry{};
+    game.telemetry->watch.valid = true;
+    game.telemetry->watch.state = 400;
+    game.pad_bits_now = 0u;
+    Host host(environment, Side::client);
+    host.apply({contributed("rock-to-fakie")});
+    running(host, "rock-to-fakie", environment);
+    ticks(host, environment, 5);
+    check(!game.called("trick label"), "Off by default: nothing is asked\n" + environment.all());
+    check(host.run_console("rocktofakie on") && environment.printed("rocktofakie: on."), "rocktofakie on");
+    ticks(host, environment, 2);
+    check(game.called("trick label rock-to-fakie Board Stall=Rock to Fakie") && game.called("trick label rock-to-fakie Lip Stall=Rock to Fakie"),
+          "A held stall is labelled\n" + environment.all());
+    game.pad_bits_now = 0x2000u;
+    ticks(host, environment, 1);
+    check(game.called("trick record rock-to-fakie 9,12->187 250"), "B in the stall asks for fakie_rock\n" + environment.all());
+    game.calls.clear();
+    ticks(host, environment, 3);
+    check(!game.called("trick record"), "B held asks once\n" + environment.all());
+    game.telemetry->watch.state = 604;
+    game.pad_bits_now = 0u;
+    ticks(host, environment, 1);
+    check(game.called("trick label rock-to-fakie Board Stall=") && game.called("trick label rock-to-fakie Lip Stall="),
+          "Leaving the stall gives the labels back\n" + environment.all());
+    game.calls.clear();
+    game.pad_bits_now = 0x2000u;
+    ticks(host, environment, 1);
+    check(!game.called("trick record"), "B outside a stall asks nothing\n" + environment.all());
+}
+
 void board_break_snaps_the_board_on_a_slam() {
     TestEnvironment environment;
     std::filesystem::remove_all(scratch / "storage" / "board-break");
@@ -2592,6 +2643,7 @@ int main() {
         reskate_test_passes_its_own_checks();
         road_rash_marks_the_skater_as_it_bails();
         dual_stick_edits_the_companions_settings();
+        rock_to_fakie_relabels_and_records_the_stall();
         board_break_snaps_the_board_on_a_slam();
         fpv_drone_flies_and_follows();
         hall_of_meat_scores_a_bail();

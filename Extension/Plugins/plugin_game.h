@@ -362,6 +362,13 @@ public:
     // The flick diagram of a flip trick as skate. names it (trick_gestures.h): read in the
     // background the first time; empty until then, or for a trick without one.
     virtual std::vector<std::array<float, 2>> trick_gesture(std::string_view /*trick*/) { return {}; }
+    // What the game shows and records of the local skater's tricks (Extension/Skater/trick_rewrite.h):
+    // the ticker's label `from` shown as `to` (empty: that label is the game's again), and the next
+    // trick with one of `from`'s ids, within `within_ms`, recorded as `to`. Empty when done, else why not.
+    virtual std::string trick_label(std::string_view /*plugin*/, std::string_view /*from*/, std::string_view /*to*/) { return unavailable; }
+    virtual std::string trick_record_as(std::string_view /*plugin*/, std::vector<std::uint32_t> /*from*/, std::uint32_t /*to*/, int /*within_ms*/) {
+        return unavailable;
+    }
     // ---- files: the plugin's own data folder, <game>/Mods/.reskate_plugin_data/<plugin>/ -----------
     // Paths are relative to it and already checked (plugin_manifest.h's safe_relative_path). A listing
     // names the files and folders in `folder` (empty: the top), folders ending in "/".

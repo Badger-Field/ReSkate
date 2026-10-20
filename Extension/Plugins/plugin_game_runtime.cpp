@@ -47,6 +47,7 @@
 #include "Extension/Skater/trick_feed.h"
 #include "Extension/Skater/skater_push.h"
 #include "Extension/Skater/trick_gestures.h"
+#include "Extension/Skater/trick_rewrite.h"
 #include "Extension/Throwdowns/throwdown_lab.h"
 #include "Extension/Console/commands.h"
 #include "Extension/Settings/local_gameplay_settings.h"
@@ -857,6 +858,14 @@ public:
         tricks::prepare_trick_gestures();
         return tricks::trick_gesture(trick);
     }
+    std::string trick_label(std::string_view plugin, std::string_view from, std::string_view to) override {
+        return trick_rewrite::label(plugin, from, to);
+    }
+    // A trick recorded as another changes the score: not while a throwdown runs, as trick replacements.
+    std::string trick_record_as(std::string_view plugin, std::vector<std::uint32_t> from, std::uint32_t to, int within_ms) override {
+        if (multiplayer::local_throwdown_active()) return "not while a throwdown runs";
+        return trick_rewrite::record_as(plugin, std::move(from), to, within_ms);
+    }
     std::string bone_cam(std::string_view plugin, const std::vector<std::string>& words) override {
         if (words.empty()) return bonecam::bone_cam_setting();
         const auto& setting = words.front();
@@ -991,6 +1000,7 @@ public:
         hud_corner::release(plugin);
         game_speed::ask(plugin, 1.0f);
         grind_exit::release(plugin);
+        trick_rewrite::release(plugin);
         if (const auto seen = telemetry_seen_.find(plugin); seen != telemetry_seen_.end()) telemetry_seen_.erase(seen);
         plugin_feed::release_tags(std::string(plugin));
         if (std::erase_if(binds_, [&](const auto& item) { return item.first.first == plugin; })) publish_binds();
