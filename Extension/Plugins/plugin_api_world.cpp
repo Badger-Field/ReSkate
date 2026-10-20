@@ -16,27 +16,6 @@
 // under the game's own rules (a session's host, the park editor's limits).
 namespace dingosdk::plugins {
 namespace {
-Plugin& plugin_of(lua_State* L) {
-    auto& plugin = *static_cast<Plugin*>(lua_callbacks(L)->userdata);
-    if (plugin.halted()) luaL_error(L, "the plugin was stopped");
-    return plugin;
-}
-void need(lua_State* L, Plugin& plugin, const char* permission, const char* what) {
-    if (!plugin.has(permission)) luaL_error(L, "%s needs the \"%s\" permission in reskate-plugin.json", what, permission);
-}
-std::string checked_text(lua_State* L, int index, std::size_t most, const char* what) {
-    std::size_t length = 0;
-    const char* text = luaL_checklstring(L, index, &length);
-    if (length > most) luaL_error(L, "%s is longer than %d characters", what, static_cast<int>(most));
-    return std::string(text, length);
-}
-Vec3 position_of(lua_State* L, int index, const char* what) {
-    const float* v = luaL_checkvector(L, index);
-    for (int i = 0; i < 3; ++i)
-        if (!std::isfinite(v[i]) || std::fabs(v[i]) > 1e5f) luaL_error(L, "%s must be a finite position within 100 km", what);
-    return {v[0], v[1], v[2]};
-}
-void push_position(lua_State* L, const Vec3& v) { lua_pushvector(L, v[0], v[1], v[2]); }
 // ok, or false and why: what most of these return.
 int result(lua_State* L, const std::string& why) {
     lua_pushboolean(L, why.empty());
@@ -1523,26 +1502,6 @@ struct WorldApi {
 
 void install_world_api(Plugin& plugin, lua_State* L) { WorldApi::install(plugin, L); }
 
-// Adds the functions to the table at `field` of the reskate table on top of the stack, making it
-// when there is none yet.
-static void into(lua_State* L, const char* field, std::initializer_list<std::pair<const char*, lua_CFunction>> functions) {
-    lua_getfield(L, -1, field);
-    if (lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        lua_createtable(L, 0, static_cast<int>(functions.size()));
-        lua_pushvalue(L, -1);
-        lua_setfield(L, -3, field);
-    }
-    // A table made read-only earlier in the install is opened for this, and closed again.
-    lua_setreadonly(L, -1, false);
-    for (const auto& [name, function] : functions) {
-        lua_pushcfunction(L, function, name);
-        lua_setfield(L, -2, name);
-    }
-    lua_setreadonly(L, -1, true);
-    lua_pop(L, 1);
-}
-
 void WorldApi::install(Plugin& plugin, lua_State* L) {
     (void)plugin;
     // The metatables of player tables (push_player) and of permissions; their own stay hidden.
@@ -1561,36 +1520,36 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     lua_pushstring(L, "locked");
     lua_setfield(L, -2, "__metatable");
     lua_setfield(L, LUA_REGISTRYINDEX, "reskate.permissions");
-    into(L, "skater", {{"state", state}, {"noclip", noclip}, {"boost", boost}, {"freeze", freeze}, {"wipeout", wipeout}, {"xray", xray},
-                        {"grind_exit", grind_exit}});
-    into(L, "board", {{"motion", board_motion}, {"bones", board_bones}, {"set", board_set}, {"hide", board_hide}, {"clear", board_clear},
-                       {"park", board_park}, {"toss", board_toss}});
-    into(L, "camera", {{"look", camera_look}, {"set", camera_set}, {"follow", camera_follow}, {"release", camera_release}, {"held", camera_held}, {"get", camera_get}});
-    into(L, "trainer", {{"set_point", set_point}, {"back", back}});
-    into(L, "hud", {{"hide", hide_hud}, {"corner", hud_corner}});
-    into(L, "time", {{"slow", slow}, {"speed", speed}});
-    into(L, "objects", {{"catalog", catalog}, {"list", objects}, {"place", place}, {"move", move}, {"remove", remove}});
-    into(L, "world", {{"set_time", set_time}, {"set_control", set_control}, {"set_park", set_park}});
-    into(L, "travel", {{"locations", locations}, {"levels", levels}, {"go", go}, {"load", load}});
-    into(L, "ai", {{"spawn", ai_spawn}, {"clear", ai_clear}, {"count", ai_count}});
-    into(L, "session", {{"skaters", skaters}, {"tag", tag}});
-    into(L, "voice", {{"set_volume", voice_volume}});
-    into(L, "chat", {{"send", chat_send}, {"notice", chat_local}});
-    into(L, "animation", {{"play", animation_play}, {"stop", animation_stop}, {"playing", animation_playing}, {"replace", animation_replace},
-                          {"record", animation_record}, {"recorded", animation_recorded}, {"forget", animation_forget}, {"trick", animation_trick}});
-    into(L, "outfit", {{"set", outfit_set}, {"clear", outfit_clear}, {"find", outfit_find}, {"slots", outfit_slots}, {"status", outfit_status}});
-    into(L, "audio", {{"play", audio_play}, {"set", audio_set}, {"stop", audio_stop}, {"playing", audio_playing}});
-    into(L, "server", {{"kick", server_kick}, {"say", server_say}, {"tell", server_tell}, {"move", server_move},
-                        {"ban", server_ban}, {"unban", server_unban}});
-    into(L, "throwdowns", {{"state", throwdown_state}, {"host", throwdown_host}, {"cancel", throwdown_cancel}, {"hosting", throwdown_hosting},
-                           {"mode", throwdown_mode}, {"remove_mode", throwdown_remove_mode}, {"release_flag", throwdown_release_flag}});
-    into(L, "music", {{"current", current}, {"play", play}, {"pause", pause}, {"next", next}, {"previous", previous},
-                      {"game", game_current}, {"game_next", game_next}});
-    into(L, "progression", {{"get", progress}});
-    into(L, "settings", {{"game", setting}, {"names", setting_names}});
-    into(L, "input", {{"bind", bind}, {"flight", input_flight}, {"gamepad", input_gamepad}, {"joystick", input_joystick}, {"capture", input_capture},
-                      {"hide", input_hide}});
-    into(L, "ui", {{"screen", screen}, {"open", open}, {"close", close}});
+    add_functions(L, "skater", {{"state", state}, {"noclip", noclip}, {"boost", boost}, {"freeze", freeze}, {"wipeout", wipeout}, {"xray", xray},
+                                {"grind_exit", grind_exit}});
+    add_functions(L, "board", {{"motion", board_motion}, {"bones", board_bones}, {"set", board_set}, {"hide", board_hide}, {"clear", board_clear},
+                               {"park", board_park}, {"toss", board_toss}});
+    add_functions(L, "camera", {{"look", camera_look}, {"set", camera_set}, {"follow", camera_follow}, {"release", camera_release}, {"held", camera_held}, {"get", camera_get}});
+    add_functions(L, "trainer", {{"set_point", set_point}, {"back", back}});
+    add_functions(L, "hud", {{"hide", hide_hud}, {"corner", hud_corner}});
+    add_functions(L, "time", {{"slow", slow}, {"speed", speed}});
+    add_functions(L, "objects", {{"catalog", catalog}, {"list", objects}, {"place", place}, {"move", move}, {"remove", remove}});
+    add_functions(L, "world", {{"set_time", set_time}, {"set_control", set_control}, {"set_park", set_park}});
+    add_functions(L, "travel", {{"locations", locations}, {"levels", levels}, {"go", go}, {"load", load}});
+    add_functions(L, "ai", {{"spawn", ai_spawn}, {"clear", ai_clear}, {"count", ai_count}});
+    add_functions(L, "session", {{"skaters", skaters}, {"tag", tag}});
+    add_functions(L, "voice", {{"set_volume", voice_volume}});
+    add_functions(L, "chat", {{"send", chat_send}, {"notice", chat_local}});
+    add_functions(L, "animation", {{"play", animation_play}, {"stop", animation_stop}, {"playing", animation_playing}, {"replace", animation_replace},
+                                   {"record", animation_record}, {"recorded", animation_recorded}, {"forget", animation_forget}, {"trick", animation_trick}});
+    add_functions(L, "outfit", {{"set", outfit_set}, {"clear", outfit_clear}, {"find", outfit_find}, {"slots", outfit_slots}, {"status", outfit_status}});
+    add_functions(L, "audio", {{"play", audio_play}, {"set", audio_set}, {"stop", audio_stop}, {"playing", audio_playing}});
+    add_functions(L, "server", {{"kick", server_kick}, {"say", server_say}, {"tell", server_tell}, {"move", server_move},
+                                {"ban", server_ban}, {"unban", server_unban}});
+    add_functions(L, "throwdowns", {{"state", throwdown_state}, {"host", throwdown_host}, {"cancel", throwdown_cancel}, {"hosting", throwdown_hosting},
+                                    {"mode", throwdown_mode}, {"remove_mode", throwdown_remove_mode}, {"release_flag", throwdown_release_flag}});
+    add_functions(L, "music", {{"current", current}, {"play", play}, {"pause", pause}, {"next", next}, {"previous", previous},
+                               {"game", game_current}, {"game_next", game_next}});
+    add_functions(L, "progression", {{"get", progress}});
+    add_functions(L, "settings", {{"game", setting}, {"names", setting_names}});
+    add_functions(L, "input", {{"bind", bind}, {"flight", input_flight}, {"gamepad", input_gamepad}, {"joystick", input_joystick}, {"capture", input_capture},
+                               {"hide", input_hide}});
+    add_functions(L, "ui", {{"screen", screen}, {"open", open}, {"close", close}});
 }
 
 std::uint32_t combo_of(std::string_view name) {

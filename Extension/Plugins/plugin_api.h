@@ -1,5 +1,7 @@
 #pragma once
 #include "plugin_vm.h"
+#include "lua.h"
+#include <initializer_list>
 
 // Inside the plugin host only: the reskate API a plugin's VM gets.
 namespace dingosdk::plugins {
@@ -14,6 +16,38 @@ void install_ui_api(Plugin& plugin, lua_State* L);
 void install_more_api(Plugin& plugin, lua_State* L);
 // The wider set's game parts (plugin_api_world.cpp), into the same table.
 void install_world_api(Plugin& plugin, lua_State* L);
+
+// ---- adding to the reskate table ---------------------------------------------------------------
+// A new part of the API is a file of `static int name(lua_State*)` functions and an install_*_api
+// that lists them, called from Api::install:
+//
+//     add_functions(L, "skater", {{"get", skater_get}, {"teleport", skater_teleport}});  // reskate.skater.*
+//     add_functions(L, {{"log", log}, {"on", on}});                                      // reskate.*
+//
+// Each function checks its own permission (need) and arguments, as the rest of the API does.
+struct ApiFunction {
+    const char* name;
+    lua_CFunction function;
+};
+// Adds the functions to reskate.<field>, the reskate table being on top of the stack. The table is
+// made when there is none yet, and another file may add to one already there; it is left read-only.
+void add_functions(lua_State* L, const char* field, std::initializer_list<ApiFunction> functions);
+// Adds the functions to the reskate table itself (on top of the stack).
+void add_functions(lua_State* L, std::initializer_list<ApiFunction> functions);
+// Pushes a new read-only table of the functions, kept outside reskate (the draw and ui handles).
+void push_functions(lua_State* L, std::initializer_list<ApiFunction> functions);
+
+// ---- what most API functions start with --------------------------------------------------------
+// The plugin calling, or a Lua error once it has been stopped.
+Plugin& plugin_of(lua_State* L);
+// A Lua error naming `what` unless the plugin's reskate-plugin.json grants `permission`.
+void need(lua_State* L, Plugin& plugin, const char* permission, const char* what);
+// A string argument of at most `most` bytes.
+std::string checked_text(lua_State* L, int index, std::size_t most, const char* what);
+// A vector argument, finite and within 100 km of the map's centre.
+Vec3 position_of(lua_State* L, int index, const char* what);
+void push_position(lua_State* L, const Vec3& v);
+
 // A player as plugins get one: {id = "<SteamID64>", name, me, host}.
 void push_player(lua_State* L, const SessionPlayer& player);
 // A file's bytes when it is a regular file no larger than `most`; otherwise empty, and `error`
