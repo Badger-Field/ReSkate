@@ -134,8 +134,36 @@ struct FakeGame final : Game {
     }
     std::vector<GrindPop> pops;
     std::vector<GrindPop> take_grind_pops(std::string_view) override { return std::exchange(pops, {}); }
-    std::string hide_pad(std::string_view plugin, bool lt, bool rt, bool left_x) override {
-        calls.push_back(std::format("hide {} {} {} {}", plugin, lt, rt, left_x));
+    std::string hide_pad(std::string_view plugin, const PadHidden& h) override {
+        calls.push_back(std::format("hide {} {} {} {}", plugin, h.left_trigger, h.right_trigger, h.left_x_grinding) +
+                        (h.right_stick || h.left_stick_click || h.right_stick_click
+                             ? std::format(" stick {} {} {}", h.right_stick, h.left_stick_click, h.right_stick_click) : std::string{}));
+        return {};
+    }
+    std::string cruise(std::string_view plugin, float speed, bool may_slow) override {
+        calls.push_back(std::format("cruise {} {:.1f} {}", plugin, speed, may_slow));
+        return {};
+    }
+    std::optional<MouseMotion> mouse_motion(std::string_view) override { return MouseMotion{3, -2, 1}; }
+    std::string skater_reach(std::string_view plugin, std::optional<Reach> r) override {
+        calls.push_back(r ? std::format("reach {} {} {:.1f} {:.1f} {:.1f} {} {:.2f}", plugin, r->left ? "left" : "right", r->at[0], r->at[1], r->at[2],
+                                        r->rotation.has_value(), r->weight)
+                          : std::format("reach {} none", plugin));
+        return {};
+    }
+    std::optional<HandPlace> skater_hand(bool left) override {
+        if (left) return std::nullopt;
+        return HandPlace{{1, 2, 3}, {0, 0, 0, 1}};
+    }
+    std::string screen_look(std::string_view plugin, std::optional<ScreenLook> l) override {
+        calls.push_back(l ? std::format("look {} {:.2f} {:.0f} {:.2f} {}{}{}{}{}{}{}{}{}{}{} {:.1f} [{}|{}|{}|{}|{}]", plugin, l->bend, l->fov, l->age, l->bars, l->hood,
+                                        l->grade, l->soft, l->scanlines, l->grain, l->dropouts, l->head_switching, l->tracking, l->smear, l->iris, l->rolling,
+                                        l->text[0], l->text[1], l->text[2], l->text[3], l->text[4])
+                          : std::format("look {} none", plugin));
+        return {};
+    }
+    std::string screen_slap(std::string_view plugin) override {
+        calls.push_back(std::format("slap {}", plugin));
         return {};
     }
     std::optional<Vec3> board_velocity() override { return Vec3{1, -2, 3}; }
@@ -154,10 +182,12 @@ struct FakeGame final : Game {
     }
     // World objects as the fake keeps them: by plugin and id, ready at once unless hidden.
     std::map<std::pair<std::string, std::uint32_t>, std::pair<std::string, std::array<float, 16>>> entities;
-    std::string entity_set(std::string_view plugin, std::uint32_t id, std::string_view asset, const std::array<float, 16>& m, bool hidden) override {
+    std::string entity_set(std::string_view plugin, std::uint32_t id, std::string_view asset, const std::array<float, 16>& m, bool hidden,
+                           std::optional<EntityAttach> attach) override {
         if (entities.size() >= 600) return "too many";
         entities[{std::string(plugin), id}] = {std::string(asset) + (hidden ? " hidden" : ""), m};
-        calls.push_back(std::format("entity {} {} {} {:.2f} {:.2f} {:.2f} {:.2f}{}", plugin, id, asset, m[12], m[13], m[14], m[8], hidden ? " hidden" : ""));
+        calls.push_back(std::format("entity {} {} {} {:.2f} {:.2f} {:.2f} {:.2f}{}{}", plugin, id, asset, m[12], m[13], m[14], m[8], hidden ? " hidden" : "",
+                                    attach ? std::format(" on {} {}", attach->player, attach->joint) : std::string{}));
         return {};
     }
     void entity_remove(std::string_view plugin, std::uint32_t id) override { entities.erase({std::string(plugin), id}); }
@@ -945,6 +975,12 @@ void plugins_place_world_entities() {
         assert(not pcall(reskate.entities.set, 0, gate, {position = vector.create(0, 0, 0)}), "ids start at 1")
         assert(not pcall(reskate.entities.set, 4, gate, {position = vector.create(0 / 0, 0, 0)}), "a finite position")
         assert(not pcall(reskate.entities.set, 4, gate, {matrix = {1, 2, 3}}), "16 numbers")
+        -- On a skater's joint: yours by name, another player's by number.
+        assert(reskate.entities.set(4, "Props/Camcorder", {position = vector.create(0, 0.1, 0)}, false, {joint = "right_hand"}))
+        assert(reskate.entities.set(5, "Props/Camcorder", {position = vector.create(0, 0, 0)}, false, {player = "76561198000000001", joint = 103}))
+        assert(not pcall(reskate.entities.set, 6, gate, {position = vector.create(0, 0, 0)}, false, {joint = 395}), "joints end at 394")
+        assert(not pcall(reskate.entities.set, 6, gate, {position = vector.create(0, 0, 0)}, false, {joint = "elbow"}), "a joint's name")
+        assert(not pcall(reskate.entities.set, 6, gate, {position = vector.create(0, 0, 0)}, false, {player = "me", joint = 1}), "a player")
         reskate.entities.remove(2)
         assert(reskate.entities.status(2) == nil and reskate.entities.ready())
         reskate.log("placed")
@@ -957,6 +993,9 @@ void plugins_place_world_entities() {
     check(game.called("entity props 1 World/Props/Gate_Arch 1.00 2.00 3.00 2.00"), "a yaw and a scale\n" + environment.all());
     check(game.called("entity props 2 World/Props/Gate_Arch 0.00 0.00 0.00 0.00"), "its own axes");
     check(game.called("entity props 3 World/Props/Gate_Arch 7.00 8.00 9.00 0.00 hidden"), "a matrix, hidden");
+    check(game.called("entity props 4 Props/Camcorder 0.00 0.10 0.00 0.00 on 0 49") &&
+              game.called("entity props 5 Props/Camcorder 0.00 0.00 0.00 0.00 on 76561198000000001 103"),
+          "on your right hand, on another player's head\n" + environment.all());
     host.apply({});
     check(game.called("entities clear props"), "A plugin's objects go with it");
     // Without the permission, refused.
@@ -965,6 +1004,58 @@ void plugins_place_world_entities() {
     )"}})});
     ticks(host, environment, 1);
     check(environment.logged("[sneaky] false"), "world.entities is needed\n" + environment.all());
+}
+
+// What a camera mode needs (the Filmer): an arm that reaches, where the hand is, cruise control, the
+// mouse, and the right stick and stick clicks kept from the game.
+void plugins_reach_cruise_and_read_the_mouse() {
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    const std::string main = R"(
+        assert(reskate.skater.reach({at = vector.create(1, 2, 3)}))
+        assert(reskate.skater.reach({hand = "left", at = vector.create(4, 5, 6), rotation = {0, 0, 0, 2}, weight = 0.5}))
+        assert(reskate.skater.reach(nil))
+        assert(not pcall(reskate.skater.reach, {hand = "foot", at = vector.create(0, 0, 0)}), "a hand is right or left")
+        assert(not pcall(reskate.skater.reach, {at = vector.create(0, 0, 0), weight = 2}), "a weight is 0 to 1")
+        assert(not pcall(reskate.skater.reach, {}), "a reach needs a point")
+        local h = reskate.skater.hand()
+        assert(h and h.position.x == 1 and h.position.z == 3 and h.rotation[4] == 1, "the right hand")
+        assert(reskate.skater.hand("left") == nil and not pcall(reskate.skater.hand, "foot"))
+        assert(reskate.skater.cruise(8, true) and reskate.skater.cruise(0))
+        assert(not pcall(reskate.skater.cruise, 0.5) and not pcall(reskate.skater.cruise, 31), "1 to 30 m/s")
+        local m = reskate.input.mouse()
+        assert(m and m.x == 3 and m.y == -2 and m.wheel == 1, "the mouse")
+        assert(reskate.input.hide({right_stick = true, right_stick_click = true}))
+        assert(reskate.screen.look({bend = 0.8, fov = 110, bars = true, hood = true, grade = true, grain = true, age = 0.35, iris = true,
+            rolling = 2, text = {"#rec", "0:00:02", nil, "4:05 PM", "OCT.20 2026"}}))
+        assert(reskate.screen.slap() and reskate.screen.look(nil))
+        assert(not pcall(reskate.screen.look, {bend = 2}), "a bend is 0 to 1")
+        assert(not pcall(reskate.screen.look, {text = {"far too long a line"}}), "12 characters")
+        assert(not pcall(reskate.screen.look, {text = {"{}"}}), "the camcorder's characters")
+        assert(not pcall(reskate.screen.look, {text = {"a", "b", "c", "d", "e", "f"}}), "5 lines")
+        reskate.log("filmed")
+    )";
+    host.apply({package("filmer", {{manifest_file, manifest(R"("skater.animation", "skater.read", "skater.control", "input", "overlay")")}, {"plugin/main.lua", main}})});
+    ticks(host, environment, 1);
+    running(host, "filmer", environment);
+    check(environment.logged("[filmer] filmed"), "A camera mode's calls work\n" + environment.all());
+    check(game.called("reach filmer right 1.0 2.0 3.0 false 1.00") && game.called("reach filmer left 4.0 5.0 6.0 true 0.50") &&
+              game.called("reach filmer none"),
+          "The arm reaches, either hand, and lets go\n" + environment.all());
+    check(game.called("cruise filmer 8.0 true") && game.called("cruise filmer 0.0 false"), "Cruise control on and off");
+    check(game.called("hide filmer false false false stick true false true"), "The right stick and its click kept from the game");
+    check(game.called("look filmer 0.80 110 0.35 truetruetruefalsefalsetruefalsefalsefalsefalsetrue 2.0 [#REC|0:00:02||4:05 PM|OCT.20 2026]") &&
+              game.called("slap filmer") && game.called("look filmer none"),
+          "A camcorder look on the screen, its text in capitals, a slap, and off\n" + environment.all());
+    // Each needs its permission.
+    host.apply({package("sneaky", {{manifest_file, manifest()}, {"plugin/main.lua", R"(
+        reskate.log(tostring(pcall(reskate.skater.reach, {at = vector.create(0, 0, 0)})) .. " " .. tostring(pcall(reskate.skater.hand)) .. " " ..
+            tostring(pcall(reskate.skater.cruise, 5)) .. " " .. tostring(pcall(reskate.input.mouse)) .. " " .. tostring(pcall(reskate.screen.look, {})))
+    )"}})});
+    ticks(host, environment, 1);
+    check(environment.logged("[sneaky] false false false false false"),
+          "skater.animation, skater.read, skater.control, input and overlay are needed\n" + environment.all());
 }
 
 void plugins_draw_on_the_overlay() {
@@ -2676,6 +2767,7 @@ int main() {
         plugins_draw_on_the_overlay();
         plugins_draw_pictures();
         plugins_place_world_entities();
+        plugins_reach_cruise_and_read_the_mouse();
         plugins_server_copies_are_the_authority();
         plugins_animate_the_skater();
         plugins_play_their_own_sounds();

@@ -29,6 +29,10 @@ JumpScaleResult take_jump_scale_result() noexcept;
 // rolling skater that is not braking gains speed up to it (m/s). Publish every client tick: it
 // expires after 500 ms.
 void set_push_speed(std::uintptr_t client, std::uintptr_t entity, float factor, float stock, float cruise) noexcept;
+// A plugin's cruise control (reskate.skater.cruise): a rolling skater that is not braking is carried
+// up to `speed` (m/s; 0 off, at most 30), and with `may_slow` eased down to it when not pushing. Rides
+// on the trainer's skater and expiry (set_push_speed); it expires after 300 ms, so set it every tick.
+void set_plugin_cruise(float speed, bool may_slow) noexcept;
 // Engine-thread-only interactive controls. Presentation callbacks only queue requests.
 overlay::DebugModel on_client_debug_tick(std::uintptr_t base, std::uintptr_t client,
     bool can_control, bool camera_phase_observed, const overlay::DebugRequest* request = nullptr,

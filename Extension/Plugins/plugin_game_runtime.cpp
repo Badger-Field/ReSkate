@@ -56,6 +56,7 @@
 #include "Extension/UI/NativeMenu/throwdown_menu.h"
 #include <filesystem>
 #include "Extension/UI/Overlay/overlay.h"
+#include "Extension/UI/Overlay/screen_look.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -148,8 +149,37 @@ public:
         const auto status = edit_local_park(operation, model.map, model.generation, model.revision, {}, placed);
         return status.starts_with("error: ") ? status.substr(7) : std::string{};
     }
-    std::string entity_set(std::string_view plugin, std::uint32_t id, std::string_view asset, const std::array<float, 16>& matrix, bool hidden) override {
-        return world_entities::set(plugin, id, std::string(asset), matrix, hidden);
+    std::string entity_set(std::string_view plugin, std::uint32_t id, std::string_view asset, const std::array<float, 16>& matrix, bool hidden,
+                           std::optional<EntityAttach> attach) override {
+        if (!attach) return world_entities::set(plugin, id, std::string(asset), matrix, hidden);
+        world_entities::set_joint_source(&joint_matrix);
+        return world_entities::set(plugin, id, std::string(asset), matrix, hidden, world_entities::Attach{attach->player, attach->joint});
+    }
+    // Where a skater's joint is (world_entities' attach): the local skater's as its pose is evaluated,
+    // another player's as the session draws it.
+    static std::optional<world_entities::Matrix> joint_matrix(std::uint64_t player, std::uint16_t joint) noexcept {
+        try {
+            std::array<float, 3> position{};
+            std::array<float, 4> q{0, 0, 0, 1};
+            float scale = 1;
+            if (!player) {
+                const auto at = skater_animation::joint(joint);
+                if (!at) return std::nullopt;
+                position = at->position, q = at->rotation, scale = at->scale[0];
+            } else {
+                const auto at = plugin_feed::joint_place(player, joint);
+                if (!at) return std::nullopt;
+                position = at->position, q = at->rotation, scale = at->scale;
+            }
+            // The rotation's axes as rows (right, up, forward), scaled, then the position.
+            const float x = q[0], y = q[1], z = q[2], w = q[3];
+            return world_entities::Matrix{(1 - 2 * (y * y + z * z)) * scale, 2 * (x * y + w * z) * scale, 2 * (x * z - w * y) * scale, 0,
+                                          2 * (x * y - w * z) * scale, (1 - 2 * (x * x + z * z)) * scale, 2 * (y * z + w * x) * scale, 0,
+                                          2 * (x * z + w * y) * scale, 2 * (y * z - w * x) * scale, (1 - 2 * (x * x + y * y)) * scale, 0,
+                                          position[0], position[1], position[2], 1};
+        } catch (...) {
+            return std::nullopt;
+        }
     }
     void entity_remove(std::string_view plugin, std::uint32_t id) override { world_entities::remove(plugin, id); }
     void entity_clear(std::string_view plugin) override { world_entities::clear(plugin); }
@@ -616,9 +646,16 @@ public:
         for (auto& p : grind_exit::take_pops(plugin)) out.push_back({p.applied, std::move(p.reason), std::move(p.basis), p.toward, p.before, p.after});
         return out;
     }
-    std::string hide_pad(std::string_view plugin, bool lt, bool rt, bool left_x) override {
+    // A speed boost: off where the session's host turned boosts off, and while a throwdown runs.
+    std::string cruise(std::string_view, float speed, bool may_slow) override {
+        if (speed > 0 && multiplayer_session_active() && !session_boosts_allowed()) return "the host has turned boosts off";
+        if (speed > 0 && multiplayer::local_throwdown_active()) return "not while a throwdown runs";
+        set_plugin_cruise(speed, may_slow);
+        return {};
+    }
+    std::string hide_pad(std::string_view plugin, const PadHidden& h) override {
         if (!grind_exit::available()) return "hiding pad controls is unavailable for this game build";
-        grind_exit::hide(plugin, {lt, rt, left_x});
+        grind_exit::hide(plugin, {h.left_trigger, h.right_trigger, h.left_x_grinding, h.right_stick, h.left_stick_click, h.right_stick_click});
         return {};
     }
     std::optional<Vec3> board_velocity() override {
@@ -720,6 +757,60 @@ public:
         player_.clear();
     }
     bool clip_playing(std::string_view plugin) override { return player_ == plugin && skater_animation::playing(); }
+    std::string screen_look(std::string_view plugin, std::optional<ScreenLook> look) override {
+        const auto now = GetTickCount64();
+        if (!looker_.empty() && looker_ != plugin && now < look_at_ + 300) return look ? looker_ + " has the screen's look" : std::string{};
+        if (!look) {
+            if (looker_ == plugin) {
+                screen_look::clear();
+                looker_.clear();
+            }
+            return {};
+        }
+        looker_ = plugin;
+        look_at_ = now;
+        screen_look::Settings s;
+        s.bend = look->bend, s.fov = look->fov, s.age = look->age;
+        s.bars = look->bars, s.hood = look->hood, s.grade = look->grade, s.soft = look->soft, s.scanlines = look->scanlines, s.grain = look->grain;
+        s.dropouts = look->dropouts, s.head_switching = look->head_switching, s.tracking = look->tracking, s.smear = look->smear, s.iris = look->iris;
+        s.rolling = look->rolling;
+        s.text = look->text;
+        screen_look::set(s);
+        return {};
+    }
+    std::string screen_slap(std::string_view plugin) override {
+        if (looker_ != plugin || GetTickCount64() >= look_at_ + 300) return "only over this plugin's screen look";
+        screen_look::slap();
+        return {};
+    }
+    std::string skater_reach(std::string_view plugin, std::optional<Reach> goal) override {
+        const auto now = GetTickCount64();
+        if (!reacher_.empty() && reacher_ != plugin && now < reach_at_ + 300) {
+            if (!goal) return {};
+            return reacher_ + " holds the skater's arm";
+        }
+        if (!goal) {
+            if (reacher_ == plugin) {
+                skater_animation::reach(std::nullopt);
+                reacher_.clear();
+            }
+            return {};
+        }
+        reacher_ = plugin;
+        reach_at_ = now;
+        arm_reach::Goal g;
+        g.hand = goal->left ? arm_reach::Hand::left : arm_reach::Hand::right;
+        g.at = goal->at;
+        if (goal->rotation) g.rotation = *goal->rotation;
+        g.weight = goal->weight;
+        skater_animation::reach(g);
+        return {};
+    }
+    std::optional<HandPlace> skater_hand(bool left) override {
+        const auto placed = skater_animation::hand(left ? arm_reach::Hand::left : arm_reach::Hand::right);
+        if (!placed) return std::nullopt;
+        return HandPlace{placed->position, placed->rotation};
+    }
     std::string replace_trick(std::string_view plugin, std::string trick, std::string pop, ClipRef clip, float speed) override {
         const auto key = std::make_pair(trick, pop);
         if (const auto found = replacements_.find(key); found != replacements_.end() && found->second.first != plugin)
@@ -795,6 +886,25 @@ public:
     }
     bool key_down(int virtual_key) override { return overlay::key_down(virtual_key); }
     int mouse_wheel() override { return overlay::take_mouse_wheel(); }
+    // One read of the overlay's mouse a call, shared out: every plugin that read it in the last two
+    // seconds gets the movement, so two plugins never take it from each other.
+    std::optional<MouseMotion> mouse_motion(std::string_view plugin) override {
+        overlay::MouseLook look;
+        const bool live = overlay::read_mouse_look(look);
+        const auto now = GetTickCount64();
+        std::erase_if(mouse_readers_, [&](const auto& entry) { return now - entry.second.at > 2000; });
+        for (auto& [who, reader] : mouse_readers_) {
+            reader.motion.x += look.x;
+            reader.motion.y += look.y;
+            reader.motion.wheel += look.wheel / 120.0;
+        }
+        auto& mine = mouse_readers_[std::string(plugin)];
+        if (!mine.at) mine.motion = {static_cast<double>(look.x), static_cast<double>(look.y), look.wheel / 120.0};
+        mine.at = now;
+        const auto out = std::exchange(mine.motion, {});
+        if (!live) return std::nullopt;
+        return out;
+    }
     void game_buttons(std::string_view plugin, std::uint16_t hidden, std::uint16_t held, bool paused) override {
         buttons_owner_ = plugin;
         overlay::hide_game_buttons(hidden);
@@ -1069,6 +1179,14 @@ public:
         game_speed::ask(plugin, 1.0f);
         grind_exit::release(plugin);
         trick_rewrite::release(plugin);
+        if (reacher_ == plugin) {
+            skater_animation::reach(std::nullopt);
+            reacher_.clear();
+        }
+        if (looker_ == plugin) {
+            screen_look::clear();
+            looker_.clear();
+        }
         if (const auto seen = telemetry_seen_.find(plugin); seen != telemetry_seen_.end()) telemetry_seen_.erase(seen);
         plugin_feed::release_tags(std::string(plugin));
         if (std::erase_if(binds_, [&](const auto& item) { return item.first.first == plugin; })) publish_binds();
@@ -1099,6 +1217,15 @@ private:
     };
     std::map<std::string, VariantRead, std::less<>> variant_reads_;
     std::vector<EnabledMod> enabled_mods_;
+    std::string reacher_; // the plugin holding the skater's arm (skater_reach)
+    std::string looker_;  // the plugin whose look is on the screen (screen_look)
+    std::uint64_t look_at_{};
+    std::uint64_t reach_at_{};
+    struct MouseReader {
+        MouseMotion motion;
+        std::uint64_t at{};
+    };
+    std::map<std::string, MouseReader, std::less<>> mouse_readers_;
     std::uint64_t enabled_read_at_{};
     // The Bone Cam's slam and strike counts each plugin last read with its telemetry.
     std::map<std::string, std::pair<std::uint64_t, std::uint64_t>, std::less<>> telemetry_seen_;

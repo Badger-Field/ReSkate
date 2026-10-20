@@ -340,6 +340,15 @@ struct KitApi {
         need(L, plugin, "skater.control", "reskate.skater.push_reset");
         return result(L, game(plugin).skater_push_reset(plugin.id()));
     }
+    // cruise(speed, may_slow): carried up to `speed` (m/s, 1 to 30; 0 or nil off) while rolling and not
+    // braking, for the next 300 ms (call it every tick); with may_slow, eased down to it when faster.
+    static int cruise(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "skater.control", "reskate.skater.cruise");
+        const double speed = luaL_optnumber(L, 1, 0);
+        if (!(speed == 0 || (speed >= 1 && speed <= 30))) luaL_argerror(L, 1, "a cruise speed is 1 to 30 m/s, or 0 for none");
+        return result(L, game(plugin).cruise(plugin.id(), static_cast<float>(speed), lua_toboolean(L, 2) != 0));
+    }
     static int hold(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "skater.control", "reskate.skater.hold");
@@ -360,6 +369,6 @@ void KitApi::install(Plugin&, lua_State* L) {
     lua_pop(L, 1);
     add_functions(L, "files", {{"list", files_list}, {"read", files_read}, {"write", files_write}, {"remove", files_remove}});
     add_functions(L, "ui", {{"dialog", dialog}, {"close_dialog", close_dialog}});
-    add_functions(L, "skater", {{"push", push}, {"push_wait", push_wait}, {"push_reset", push_reset}, {"hold", hold}});
+    add_functions(L, "skater", {{"push", push}, {"push_wait", push_wait}, {"push_reset", push_reset}, {"hold", hold}, {"cruise", cruise}});
 }
 }

@@ -1,5 +1,6 @@
 #pragma once
 #include "Extension/AnimationStudio/anim_core.h"
+#include "Extension/Skater/arm_reach.h"
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -41,6 +42,15 @@ void set_replacements(std::vector<Replacement> list);
 bool record(float seconds);
 bool recording() noexcept;
 std::shared_ptr<const Clip> take_recording();
+// An arm reaching (arm_reach.h), after any clip, in the pose drawn and sent to the other players;
+// none ends it. It holds for 0.3 s: set it every tick. Unlike clips it is allowed in a throwdown.
+void reach(std::optional<arm_reach::Goal> goal);
+// Where a joint (of the 395) was in the world in the last pose evaluated, after any clip and reach;
+// empty without a skater. Asking keeps that joint read for two seconds, so the first ask comes back
+// empty; at most 32 joints are read at once.
+std::optional<anim_studio::Joint> joint(std::uint16_t index);
+// The hand joint's (joint()).
+std::optional<arm_reach::Placed> hand(arm_reach::Hand side);
 // The game's name for the trick the skater is doing now, or empty.
 std::string current_trick() noexcept;
 // Each client tick: the local skater's animation component (0 for none), and whether clips may be

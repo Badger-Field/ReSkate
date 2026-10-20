@@ -166,6 +166,25 @@ int wheel(lua_State* L) {
     lua_pushnumber(L, game_of(plugin).mouse_wheel());
     return 1;
 }
+// input.mouse(): the mouse since this plugin's last read, whatever the game does with it: {x, y
+// (raw counts right and down), wheel (notches, away from you positive)}; nil while the game is not in
+// front or a menu is open.
+int mouse(lua_State* L) {
+    auto& plugin = allowed(L, "input", "reskate.input.mouse");
+    const auto motion = game_of(plugin).mouse_motion(plugin.id());
+    if (!motion) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_createtable(L, 0, 3);
+    lua_pushnumber(L, motion->x);
+    lua_setfield(L, -2, "x");
+    lua_pushnumber(L, motion->y);
+    lua_setfield(L, -2, "y");
+    lua_pushnumber(L, motion->wheel);
+    lua_setfield(L, -2, "wheel");
+    return 1;
+}
 // input.game_buttons(hidden, held, pause): the game buttons (XInput bits) kept from the game while
 // asked, those held down for it, and all game input paused for half a second.
 int game_buttons(lua_State* L) {
@@ -369,7 +388,7 @@ int read_content(lua_State* L) {
 
 void install_services_api(Plugin&, lua_State* L) {
     add_functions(L, "skater", {{"telemetry", telemetry}, {"goofy", goofy}, {"bone_cam", bone_cam}});
-    add_functions(L, "input", {{"pad_bits", pad_bits}, {"key", key}, {"wheel", wheel}, {"game_buttons", game_buttons}, {"allowed", input_allowed}, {"focus", focus}});
+    add_functions(L, "input", {{"pad_bits", pad_bits}, {"key", key}, {"wheel", wheel}, {"mouse", mouse}, {"game_buttons", game_buttons}, {"allowed", input_allowed}, {"focus", focus}});
     add_functions(L, "session", {{"spectate", spectate}, {"world", world}});
     add_functions(L, "camera", {{"free", free_camera}, {"pad_flight", pad_flight}});
     add_functions(L, "physics", {{"competition", competition}, {"stock_ready", stock_ready}, {"prepare", prepare}});

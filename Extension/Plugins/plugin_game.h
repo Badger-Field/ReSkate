@@ -268,7 +268,14 @@ public:
     // full transform (rows: right, up, forward axes with their scale, then the position), kept by the
     // plugin's id for it. Only this player's game shows them. Status: 0 none, 1 waiting, 2 loading,
     // 3 missing, 4 ready, 5 hidden.
-    virtual std::string entity_set(std::string_view /*plugin*/, std::uint32_t, std::string_view, const std::array<float, 16>&, bool) {
+    // With `attach`, kept on a joint of a skater (player 0: the local one) and the transform in that
+    // joint's frame, moved with it every frame.
+    struct EntityAttach {
+        std::uint64_t player{};
+        std::uint16_t joint{};
+    };
+    virtual std::string entity_set(std::string_view /*plugin*/, std::uint32_t, std::string_view, const std::array<float, 16>&, bool,
+                                   std::optional<EntityAttach> /*attach*/) {
         return unavailable;
     }
     virtual void entity_remove(std::string_view /*plugin*/, std::uint32_t) {}
@@ -326,6 +333,12 @@ public:
     virtual std::optional<std::uint32_t> pad_bits(bool /*menu*/) { return std::nullopt; }
     virtual bool key_down(int /*virtual_key*/) { return false; }
     virtual int mouse_wheel() { return 0; }
+    // The mouse since this plugin's last read (reskate.input.mouse): raw counts right and down, the
+    // wheel in notches (away from you positive). Empty while the game is not in front or a menu is open.
+    struct MouseMotion {
+        double x{}, y{}, wheel{};
+    };
+    virtual std::optional<MouseMotion> mouse_motion(std::string_view /*plugin*/) { return std::nullopt; }
     // Game buttons kept from the game while asked (overlay::hide_game_buttons/hold_game_buttons),
     // and all game input paused for half a second at a time.
     virtual void game_buttons(std::string_view /*plugin*/, std::uint16_t /*hidden*/, std::uint16_t /*held*/, bool /*paused*/) {}
@@ -449,6 +462,22 @@ public:
     virtual std::string play_clip(std::string_view /*plugin*/, ClipRef, float /*speed*/, float /*blend*/, bool /*loop*/) { return unavailable; }
     virtual void stop_clip(std::string_view /*plugin*/) {}
     virtual bool clip_playing(std::string_view /*plugin*/) { return false; }
+    // An arm of the local skater reaching (Extension/Skater/arm_reach.h): its hand joint to `at` in the
+    // world, turned to `rotation` when given, `weight` of the way; held 0.3 s, set every tick. One
+    // plugin at a time; none ends that plugin's. Empty when done, else why not.
+    struct Reach {
+        bool left{};
+        Vec3 at{};
+        std::optional<std::array<float, 4>> rotation;
+        float weight{1};
+    };
+    virtual std::string skater_reach(std::string_view /*plugin*/, std::optional<Reach>) { return unavailable; }
+    // Where a hand joint of the local skater is in the world, as last evaluated (after any reach).
+    struct HandPlace {
+        Vec3 position{};
+        std::array<float, 4> rotation{0, 0, 0, 1};
+    };
+    virtual std::optional<HandPlace> skater_hand(bool /*left*/) { return std::nullopt; }
     virtual std::string replace_trick(std::string_view /*plugin*/, std::string /*trick*/, std::string /*pop*/, ClipRef, float /*speed*/) {
         return unavailable;
     }
@@ -519,7 +548,25 @@ public:
     virtual std::vector<GrindPop> take_grind_pops(std::string_view /*plugin*/) { return {}; }
     // Pad controls kept from the game while any plugin asks: the triggers, and the left stick's
     // left/right while the skater grinds.
-    virtual std::string hide_pad(std::string_view /*plugin*/, bool /*lt*/, bool /*rt*/, bool /*left_x while grinding*/) { return unavailable; }
+    // The skater carried up to a speed (m/s, 0 off) for the next 300 ms, eased down to it with may_slow.
+    virtual std::string cruise(std::string_view /*plugin*/, float /*speed*/, bool /*may_slow*/) { return unavailable; }
+    // What of the pad the game does not see (reskate.input.hide): the triggers, the left stick's
+    // sideways while grinding, the right stick and the stick clicks.
+    struct PadHidden {
+        bool left_trigger{}, right_trigger{}, left_x_grinding{}, right_stick{}, left_stick_click{}, right_stick_click{};
+    };
+    virtual std::string hide_pad(std::string_view /*plugin*/, const PadHidden&) { return unavailable; }
+    // A camcorder look over the game's picture (reskate.screen.look; Extension/UI/Overlay/screen_look.h
+    // says what each is) for the next 300 ms; empty ends it. One plugin at a time.
+    struct ScreenLook {
+        float bend{}, fov{60}, age{};
+        bool bars{}, hood{}, grade{}, soft{}, scanlines{}, grain{}, dropouts{}, head_switching{}, tracking{}, smear{}, iris{};
+        double rolling{-1};
+        std::array<std::string, 5> text;
+    };
+    virtual std::string screen_look(std::string_view /*plugin*/, std::optional<ScreenLook>) { return unavailable; }
+    // A hand slaps the lens, while this plugin has the look.
+    virtual std::string screen_slap(std::string_view /*plugin*/) { return unavailable; }
     // The skater bails as from a slam of `force` (0.5 to 3); not in a throwdown. While No Bail protects
     // the skater the wipeout is dropped, as any other is.
     virtual std::string wipeout(float /*force*/) { return unavailable; }

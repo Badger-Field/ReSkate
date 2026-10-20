@@ -175,7 +175,15 @@ struct Plan {
     bool allowed{};
     float record_seconds{}; // > 0: record this long, from the next update
     std::uint64_t record_serial{};
+    std::optional<arm_reach::Goal> reach;
+    double reach_until{}, joints_until{}; // now_seconds() until which the reach holds, and the joints are read
+    std::vector<std::uint16_t> joints_read; // joint(): the joints asked for, in order
 };
+// The joints asked for as last evaluated (joint()), for the client thread.
+std::mutex joints_mutex;
+std::vector<std::pair<std::uint16_t, Joint>> joints_now;
+// The client thread's: each joint asked for and when it was last.
+std::vector<std::pair<std::uint16_t, double>> joints_asked;
 std::mutex plan_mutex;
 std::shared_ptr<const Plan> plan_now = std::make_shared<Plan>();
 Plan plan_draft; // the client thread's, published as plan_now
@@ -294,7 +302,10 @@ void on_animation(std::uintptr_t component) noexcept {
         const auto snap = plan();
         const bool wants_record = snap->record_seconds > 0 && snap->record_serial != l.record_serial.load(std::memory_order_acquire);
         const bool busy = record_running.load(std::memory_order_acquire) || wants_record;
-        if (!busy && (!snap->allowed || (!snap->play && snap->replacements.empty()))) {
+        const double now = now_seconds();
+        const bool reaching = snap->reach && now < snap->reach_until;
+        const bool joints_wanted = now < snap->joints_until && !snap->joints_read.empty();
+        if (!busy && !reaching && !joints_wanted && (!snap->allowed || (!snap->play && snap->replacements.empty()))) {
             std::lock_guard lock(pending().mutex);
             pending().bones.clear();
             SetLastError(error);
@@ -425,6 +436,30 @@ void on_animation(std::uintptr_t component) noexcept {
             }
             first = 2;
             last = layout.count;
+        }
+        // An arm reaching, after the clip: its joints join what is written.
+        if (reaching) {
+            const auto& goal = *snap->reach;
+            if (arm_reach::reach(std::span<Joint>(l.pose.data(), l.pose.size()), goal).valid) {
+                const std::size_t from = arm_reach::first_written(goal.hand), to = arm_reach::last_written(goal.hand) + 1u;
+                if (last > first) {
+                    first = std::min(first, from);
+                    last = std::max(last, to);
+                } else {
+                    first = from;
+                    last = to;
+                }
+            }
+        }
+        if (joints_wanted) {
+            const std::span<const Joint> pose(l.pose.data(), l.pose.size());
+            thread_local std::vector<std::pair<std::uint16_t, Joint>> placed;
+            placed.clear();
+            for (const auto index : snap->joints_read)
+                if (index < pose.size())
+                    if (const auto w = anim_studio::world(pose, index); anim_studio::finite(w)) placed.emplace_back(index, w);
+            std::lock_guard lock(joints_mutex);
+            joints_now.swap(placed);
         }
         if (last > first) {
             for (std::size_t i = first; i < last; ++i)
@@ -587,6 +622,37 @@ void play(std::optional<Play> clip) {
 bool playing() noexcept {
     return plan_draft.play.has_value() && finished_serial.load(std::memory_order_acquire) != plan_draft.serial;
 }
+void reach(std::optional<arm_reach::Goal> goal) {
+    plan_draft.reach = std::move(goal);
+    plan_draft.reach_until = plan_draft.reach ? now_seconds() + 0.3 : 0;
+    publish();
+}
+std::optional<Joint> joint(std::uint16_t index) {
+    if (index >= 395) return std::nullopt;
+    const double now = now_seconds();
+    std::erase_if(joints_asked, [&](const auto& asked) { return now - asked.second > 2.0; });
+    const auto asked = std::find_if(joints_asked.begin(), joints_asked.end(), [&](const auto& a) { return a.first == index; });
+    if (asked != joints_asked.end()) asked->second = now;
+    else if (joints_asked.size() < 32) joints_asked.emplace_back(index, now);
+    else return std::nullopt;
+    std::vector<std::uint16_t> read;
+    for (const auto& a : joints_asked) read.push_back(a.first);
+    std::sort(read.begin(), read.end());
+    if (read != plan_draft.joints_read || plan_draft.joints_until < now + 1.0) {
+        plan_draft.joints_read = std::move(read);
+        plan_draft.joints_until = now + 2.0;
+        publish();
+    }
+    std::lock_guard lock(joints_mutex);
+    for (const auto& [at, w] : joints_now)
+        if (at == index) return w;
+    return std::nullopt;
+}
+std::optional<arm_reach::Placed> hand(arm_reach::Hand side) {
+    const auto at = joint(arm_reach::chain(side).back());
+    if (!at) return std::nullopt;
+    return arm_reach::Placed{at->position, at->rotation, at->scale[0]};
+}
 void set_replacements(std::vector<Replacement> list) {
     plan_draft.replacements = std::move(list);
     publish();
@@ -635,7 +701,9 @@ void tick(std::uintptr_t base, std::uintptr_t component, bool allowed) {
         plan_draft.play.reset();
         publish();
     }
-    const bool wanted = plan_draft.play || !plan_draft.replacements.empty() || recording();
+    const double now = now_seconds();
+    const bool wanted = plan_draft.play || !plan_draft.replacements.empty() || recording() ||
+                        (plan_draft.reach && now < plan_draft.reach_until) || now < plan_draft.joints_until;
     if (wanted && !hooked && base) {
         std::string detail;
         if (multiplayer::install_entity_hooks(base, detail)) {

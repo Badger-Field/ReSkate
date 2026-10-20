@@ -370,6 +370,12 @@ if(DINGOSDK_BUILD_ANIMATION_STUDIO_TESTS)
     target_include_directories(dingosdk_animation_studio_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     target_link_libraries(dingosdk_animation_studio_tests PRIVATE dingosdk_json)
     add_test(NAME animation_studio COMMAND dingosdk_animation_studio_tests)
+    # An arm reaching (reskate.skater.reach) on a made-up pose.
+    add_executable(dingosdk_arm_reach_tests Extension/Skater/Test/arm_reach_tests.cpp Extension/Skater/arm_reach.cpp
+        Extension/AnimationStudio/anim_core.cpp)
+    target_include_directories(dingosdk_arm_reach_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_link_libraries(dingosdk_arm_reach_tests PRIVATE dingosdk_json)
+    add_test(NAME arm_reach COMMAND dingosdk_arm_reach_tests)
 endif()
 option(DINGOSDK_BUILD_REPLAY_KEYFRAMES_TESTS "Build replay keyframe smoothing regression tests" OFF)
 if(DINGOSDK_BUILD_REPLAY_KEYFRAMES_TESTS)

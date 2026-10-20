@@ -39,6 +39,13 @@ void hold_game_buttons(std::uint16_t held) noexcept;
 void pause_game_input(bool paused) noexcept;
 bool key_down(int virtual_key) noexcept;
 int take_mouse_wheel() noexcept;
+// The mouse since the last call, whatever the game does with it: raw counts right and down, and the
+// wheel in 120 a notch (away from you positive). False and zeros while the game is not in front or a
+// menu, the console or chat is open (what moved meanwhile is dropped). One reader: the plugin runtime.
+struct MouseLook {
+    long x = 0, y = 0, wheel = 0;
+};
+bool read_mouse_look(MouseLook& look) noexcept;
 // reskate.ui.dialog (plugin_dialog.cpp): one dialog at a time over the game, input captured while it
 // is open. The same plugin and id again updates it and keeps what was typed. Empty when shown, else
 // why not. Answers reach the plugin as throwdown kit events (action "dialog", throwdown_kit.h).
