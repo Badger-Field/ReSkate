@@ -165,6 +165,17 @@ struct LevelInfo {
     std::string asset, name;
     bool can_load{};
 };
+// A skater's body as capsules: `part` indexes body_part_names; a and b are its ends in the world.
+struct BodyCapsule {
+    std::uint8_t part{};
+    Vec3 a{}, b{};
+    float radius{};
+};
+struct Body {
+    std::uint64_t player{}; // 0: the local skater
+    std::vector<BodyCapsule> capsules;
+};
+inline constexpr std::array<const char*, 7> body_part_names{"head", "body", "left_arm", "right_arm", "left_leg", "right_leg", "board"};
 // Another player's skater as the session last heard it.
 struct PeerSkater {
     std::uint64_t id{};
@@ -295,6 +306,14 @@ public:
     virtual int ai_count() { return 0; }
     // ---- the session ----------------------------------------------------------------------------
     virtual std::vector<PeerSkater> peer_skaters() { return {}; }
+    // Every skater's body in the session as this game drew it last (plugin_session_feed.h body_of):
+    // the other players' (hidden ones too) and the local skater's, as player 0. Asking keeps them read
+    // for two seconds, so the first ask comes back empty.
+    virtual std::vector<Body> bodies() { return {}; }
+    // Another player's skater, board, sound, nametag and map marker not shown on this screen while
+    // any plugin hides them (at most 256 between them).
+    virtual std::string hide_player(std::string_view /*plugin*/, std::uint64_t, bool /*hidden*/) { return unavailable; }
+    virtual std::vector<std::uint64_t> hidden_players(std::string_view /*plugin*/) { return {}; }
     // A short tag beside a player's nametag, the plugin's own (empty text takes it away).
     virtual void set_nametag(std::string_view /*plugin*/, std::uint64_t, std::string, std::uint32_t) {}
     // 0 mutes, 1 is as heard, up to 10. The local player's ears only.

@@ -323,6 +323,19 @@ public:
         }
         return result;
     }
+    std::vector<Body> bodies() override {
+        std::vector<Body> result;
+        for (const auto& b : plugin_feed::latest_bodies()) {
+            Body body{b.player, {}};
+            for (const auto& c : b.capsules) body.capsules.push_back({c.part, c.a, c.b, c.radius});
+            result.push_back(std::move(body));
+        }
+        return result;
+    }
+    std::string hide_player(std::string_view plugin, std::uint64_t player, bool hidden) override {
+        return plugin_feed::hide(std::string(plugin), player, hidden) ? std::string{} : "at most 256 players are hidden";
+    }
+    std::vector<std::uint64_t> hidden_players(std::string_view plugin) override { return plugin_feed::hidden_by(std::string(plugin)); }
     void set_nametag(std::string_view plugin, std::uint64_t player, std::string text, std::uint32_t colour) override {
         plugin_feed::set_tag(std::string(plugin), player, std::move(text), colour);
     }
@@ -1326,6 +1339,7 @@ public:
     bool frozen() const noexcept { return !freezers_.empty(); }
     void release(std::string_view plugin) override {
         if (hold_owner_ == plugin) (void)skater_hold(plugin, false);
+        plugin_feed::release_hidden(std::string(plugin));
         world_entities::clear(plugin);
         throwdown_flag_leave(plugin);
         dialog_close(plugin, {});
