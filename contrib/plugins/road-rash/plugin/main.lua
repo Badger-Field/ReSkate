@@ -4,8 +4,8 @@
 -- a few bails behind. A mark never gets smaller until the skater is healed (`roadrash heal`) or
 -- the game is closed.
 --
--- The marks are cosmetic items of a content mod (rules.lua has their names), worn over the outfit
--- with reskate.outfit: ReSkate gives the skater back to the game while one of its menus is up and
+-- The marks are the skin items of the Road Rash item pack this plugin comes in (rules.lua has their
+-- names), worn over the outfit with reskate.outfit: ReSkate gives the skater back to the game while one of its menus is up and
 -- puts them on again after. A slot that holds one of the player's own tattoos or moles keeps it,
 -- unless the player lets the wounds cover it.
 local rules = require("rules")
@@ -80,9 +80,9 @@ local function wear()
     if missing and shown == 0 then
         if not missing_told and #reskate.outfit.slots() > 0 then
             missing_told = true
-            reskate.log("the skater has marks to show, but the Road Rash items are not installed (a content mod holds them)")
+            reskate.log("the skater has marks to show, but the Road Rash items are not in the game (this plugin ships inside the Road Rash item pack)")
         end
-        status = missing_told and "the Road Rash items are not installed (a content mod holds them)" or "waiting for the skater"
+        status = missing_told and "the Road Rash items are not in the game (this plugin ships inside the Road Rash item pack)" or "waiting for the skater"
     else
         status = shown > 0 and string.format("%d mark(s) worn", shown) or "nothing to show"
     end
