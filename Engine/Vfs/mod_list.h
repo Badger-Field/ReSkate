@@ -19,6 +19,10 @@ namespace dingosdk::mods {
 inline constexpr std::size_t maximum_mod_name = 64;
 // Generated state the SDK owns. Folders beginning with a dot are never mods.
 inline constexpr char generated_folder[] = ".reskate";
+// What plugins save (reskate.files), a folder each: Mods/.reskate_plugin_data/<plugin>/. Not in the
+// generated folder, which every full merge deletes, and not in a mod's folder, which its updates
+// replace.
+inline constexpr char plugin_data_folder[] = ".reskate_plugin_data";
 inline constexpr char mods_folder[] = "Mods";
 inline constexpr char order_file[] = "mods.json";
 // The mod's own description, written by its author or by the park editor:

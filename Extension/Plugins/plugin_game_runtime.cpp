@@ -18,6 +18,7 @@
 #include "Extension/Skater/outfit_overlay.h"
 #include "Extension/Skater/board_pose.h"
 #include "Engine/Vfs/mod_catalog.h"
+#include "Engine/Core/Log/logging.h"
 #include "Extension/Assets/live_mods.h"
 #include "Extension/Skater/game_speed.h"
 #include "Extension/Skater/grind_exit.h"
@@ -479,13 +480,31 @@ public:
     void throwdown_flag_leave(std::string_view plugin) override {
         if (throwdowns::kit::flag::state().mode.starts_with(std::string(plugin) + "/")) throwdowns::kit::flag::leave();
     }
-    // ---- files: <game>/Mods/.reskate/data/<plugin>/ -----------------------------------------------------
+    // ---- files: <game>/Mods/.reskate_plugin_data/<plugin>/ (mod_list.h plugin_data_folder) -------------
     static constexpr std::size_t most_file_bytes = 1u << 20, most_files = 1000;
+    // Before 2026-10-20 the folder was Mods/.reskate/data/<plugin>/, which a full merge deletes: what is
+    // still there moves across once, the first time the plugin's folder is looked for.
+    static void move_old_data(const std::filesystem::path& root, std::string_view plugin) {
+        std::error_code error;
+        if (std::filesystem::exists(root, error)) return;
+        const auto old = game_folder() / mods::mods_folder / mods::generated_folder / "data" / std::filesystem::path(std::string(plugin));
+        if (!std::filesystem::is_directory(old, error)) return;
+        std::filesystem::create_directories(root.parent_path(), error);
+        std::filesystem::rename(old, root, error);
+        if (error) {
+            // Another volume or a file in use: copy what can be copied, and leave the old folder.
+            error.clear();
+            std::filesystem::copy(old, root, std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, error);
+        }
+        logging::write(logging::Level::info, logging::Channel::plugins,
+            "Plugins: " + std::string(plugin) + "'s data folder moved to Mods/" + mods::plugin_data_folder + (error ? " (partly: " + error.message() + ")" : ""));
+    }
     // The plugin's folder and the path in it, or why not. A path that resolves outside the folder
     // (through a junction someone made in it) is refused.
     static std::string data_file(std::string_view plugin, std::string_view path, std::filesystem::path& root, std::filesystem::path& file) {
         try {
-            root = game_folder() / "Mods" / ".reskate" / "data" / std::filesystem::path(std::string(plugin));
+            root = game_folder() / mods::mods_folder / mods::plugin_data_folder / std::filesystem::path(std::string(plugin));
+            move_old_data(root, plugin);
             file = path.empty() ? root : root / std::filesystem::path(std::string(path));
             std::error_code error;
             const auto real_root = std::filesystem::weakly_canonical(root, error);

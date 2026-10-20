@@ -362,7 +362,7 @@ public:
     // The flick diagram of a flip trick as skate. names it (trick_gestures.h): read in the
     // background the first time; empty until then, or for a trick without one.
     virtual std::vector<std::array<float, 2>> trick_gesture(std::string_view /*trick*/) { return {}; }
-    // ---- files: the plugin's own data folder, <game>/Mods/.reskate/data/<plugin>/ ------------------
+    // ---- files: the plugin's own data folder, <game>/Mods/.reskate_plugin_data/<plugin>/ -----------
     // Paths are relative to it and already checked (plugin_manifest.h's safe_relative_path). A listing
     // names the files and folders in `folder` (empty: the top), folders ending in "/".
     virtual std::string files_list(std::string_view /*plugin*/, std::string_view /*folder*/, std::vector<std::string>& /*names*/) { return unavailable; }
