@@ -502,6 +502,11 @@ local function catalog()
     if game_tricks then return game_tricks end
     if reskate.time.now() - game_tricks_at < 1000 then return {} end
     game_tricks_at = reskate.time.now()
+    -- An older ReSkate has no game clips: the studio works without them.
+    if not reskate.animation.game_clips then
+        game_tricks_why = "this ReSkate does not read the game's animations; update it"
+        return {}
+    end
     local names, why = reskate.animation.game_clips("c_proto_onb_trick_")
     if not names then
         game_tricks_why = why
