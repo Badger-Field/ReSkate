@@ -29,6 +29,7 @@ constexpr std::size_t maximum_order_bytes = 4 * 1024 * 1024;
 constexpr std::size_t maximum_build_bytes = 16 * 1024;
 constexpr std::size_t maximum_info_bytes = 32 * 1024;
 constexpr std::size_t maximum_levels_bytes = 64 * 1024;
+constexpr std::size_t maximum_plugin_bytes = 64 * 1024;
 
 std::string lower(std::string_view text) {
     std::string result(text);
@@ -139,6 +140,54 @@ void read_levels(Mod& mod) {
     }
 }
 
+// reskate-plugin.json's "resident" list (ResidentAssets). A malformed list is a note, and the mod
+// keeps nothing resident; the plugin host reports the rest of the file.
+void read_resident(Mod& mod, std::vector<std::string>& notes) {
+    const auto path = mod.directory / plugin_manifest_file;
+    std::error_code error;
+    if (!fs::is_regular_file(path, error) || error) return;
+    try {
+        const auto root = parse(path, maximum_plugin_bytes);
+        if (!root.is_object() || !root.contains("resident")) return;
+        const auto name_of = [](const Json& value) {
+            if (!value.is_string() || value.string().empty() || value.string().size() > 260) throw std::runtime_error("a name is 1 to 260 characters");
+            for (const auto c : value.string())
+                if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) > 0x7e || c == '\\')
+                    throw std::runtime_error("names are printable ASCII with / between folders");
+            return lower(value.string());
+        };
+        const auto names_of = [&](const Json& list, std::size_t most) {
+            if (!list.is_array() || list.size() > most) throw std::runtime_error("roots is a list of at most " + std::to_string(most) + " names");
+            std::vector<std::string> out;
+            for (const auto& item : list) out.push_back(name_of(item));
+            return out;
+        };
+        const auto& list = root.at("resident");
+        if (!list.is_array() || list.size() > 16) throw std::runtime_error("resident is a list of at most 16 bundles");
+        std::vector<ResidentAssets> result;
+        for (const auto& row : list) {
+            if (!row.is_object() || !row.contains("bundle")) throw std::runtime_error("each resident entry names its bundle");
+            ResidentAssets entry;
+            entry.bundle = name_of(row.at("bundle"));
+            if (row.contains("roots")) entry.roots = names_of(row.at("roots"), 512);
+            if (row.contains("shaders")) {
+                const auto& shaders = row.at("shaders");
+                if (!shaders.is_array() || shaders.size() > 32) throw std::runtime_error("shaders is a list of at most 32 depots");
+                for (const auto& shader : shaders) {
+                    if (!shader.is_object() || !shader.contains("name") || !shader.contains("roots"))
+                        throw std::runtime_error("each shader names its depot and its roots");
+                    entry.shaders.push_back({name_of(shader.at("name")), names_of(shader.at("roots"), 64)});
+                    if (entry.shaders.back().roots.empty()) throw std::runtime_error("a shader needs its roots");
+                }
+            }
+            result.push_back(std::move(entry));
+        }
+        mod.resident = std::move(result);
+    } catch (const std::exception& failure) {
+        notes.push_back("Mod " + mod.name + ": " + plugin_manifest_file + "'s resident list could not be read (" + failure.what() + ")");
+    }
+}
+
 // .reskate-studio-patch: the stamp line, then key=value lines. A mod that ships game data must
 // record the Skate.exe it was built for, and it must be this one (supported_build).
 void read_studio_marker(Mod& mod) {
@@ -183,6 +232,14 @@ std::vector<std::string> folders_on_disk(const fs::path& root) {
         if (error) break;
         if (!entry.is_directory(error) || error) { error.clear(); continue; }
         const auto name = ascii_path(entry.path().filename());
+        // A folder with no file of its own and no parks (only other folders, such as saved data a
+        // tool keeps beside the mods) holds no mod: every other mod has its manifest or layout at its
+        // top, and a park editor mod its parks folder.
+        bool content{};
+        for (fs::directory_iterator inner(entry.path(), error), end; !error && inner != end && !content; inner.increment(error))
+            content = inner->is_regular_file(error) || (inner->is_directory(error) && lower(ascii_path(inner->path().filename())) == "parks");
+        error.clear();
+        if (!content) continue;
         if (valid_mod_name(name)) names.push_back(name);
     }
     std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) {
@@ -229,7 +286,7 @@ std::string mod_fingerprint(const std::filesystem::path& directory) {
         const auto size = it->file_size(error);
         const auto written = it->last_write_time(error).time_since_epoch().count();
         // Wide, so any file name counts; ASCII names give the same text as before.
-        const auto relative = fs::relative(it->path(), directory, error).generic_wstring();
+        const auto relative = it->path().lexically_relative(directory).generic_wstring();  // as laid out, not through links
         std::string name;
         for (const auto ch : relative) {
             if (ch < 0x80) name.push_back(static_cast<char>(ch));
@@ -347,8 +404,32 @@ Mod describe_mod(const std::filesystem::path& directory, std::string name, std::
     read_build_info(mod, notes);
     read_mod_info(mod, notes);
     read_levels(mod);
+    read_resident(mod, notes);
     read_studio_marker(mod);
     return mod;
+}
+
+bool resident_root(const Mod& mod, std::string_view bundle, std::string_view name) noexcept {
+    try {
+        const auto b = lower(bundle), n = lower(name);
+        for (const auto& entry : mod.resident) {
+            if (entry.bundle != b) continue;
+            for (const auto& root : entry.roots)
+                if (root.ends_with('/') ? n.starts_with(root) : n == root) return true;
+        }
+    } catch (...) {}
+    return false;
+}
+const ResidentAssets::Shader* resident_shader(const Mod& mod, std::string_view bundle, std::string_view name) noexcept {
+    try {
+        const auto b = lower(bundle), n = lower(name);
+        for (const auto& entry : mod.resident) {
+            if (entry.bundle != b) continue;
+            for (const auto& shader : entry.shaders)
+                if (shader.name == n) return &shader;
+        }
+    } catch (...) {}
+    return nullptr;
 }
 
 ModList scan_mods(const std::filesystem::path& data_root) noexcept {
