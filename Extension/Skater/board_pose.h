@@ -11,8 +11,7 @@
 // the deck, 4 and 8 the trucks, 6, 7, 10, 11 the wheels, 12 to 15 a breakable deck's stretches. What
 // is written goes into the pose as it goes to the renderer, every frame, and the next animation
 // update writes the whole pose again: nothing of the board itself changes, only what is drawn. Bones
-// 0 and 1 are never written (they place the board; clips of the skater move bone 1). While a
-// breakable deck pack is in the game, every board keeps 12 to 15 out of sight unless a plugin sets them.
+// 0 and 1 are never written (they place the board; clips of the skater move bone 1).
 namespace dingosdk::board_pose {
 using Vec3 = std::array<float, 3>;
 using Quat = std::array<float, 4>; // x, y, z, w
@@ -34,6 +33,16 @@ void clear(std::string_view owner, int bone = -1);
 // These bones go out of sight on every board, other players' included (a breakable deck's
 // stretches, which the game would draw as cracks).
 void park(std::string_view owner, std::vector<int> list);
+// How every board in the game is fitted, other players' included, for a deck model that is not the
+// game's own (a breakable deck pack's): `plates` holds each truck's baseplate (its effector, bones 5
+// and 9) on the deck as the truck steers, and `axle` sets the wheels as far apart as the deck's
+// trucks have them (1 the game's own, 0.8 to 1.6). One owner at a time; empty: fitted, else why not.
+// No value: that owner's fit ends.
+struct Fit {
+    bool plates{};
+    float axle = 1.0f;
+};
+std::string fit(std::string_view owner, std::optional<Fit> value);
 // A piece comes off the local board: these bones (hanging on bone 1) leave as one, from where they
 // are, at `velocity` (m/s, world) turning at `spin` (rad/s, world), fall, land on `ground` (a world
 // height) and lie there, until cleared.

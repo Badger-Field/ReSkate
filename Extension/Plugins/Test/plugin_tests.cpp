@@ -4,6 +4,9 @@
 #include "Extension/Plugins/plugin_host.h"
 #include "Extension/Plugins/plugin_manifest.h"
 #include "Extension/Plugins/plugin_wire.h"
+#include "Extension/Throwdowns/challenge_registry.h"
+#include "Extension/Throwdowns/custom_modes.h"
+#include "Extension/Throwdowns/throwdown_kit.h"
 #include "Engine/Vfs/mod_list.h"
 #include <algorithm>
 #include <chrono>
@@ -58,6 +61,30 @@ struct FakeGame final : Game {
     }
     std::string board_hide(std::string_view plugin, int bone) override { calls.push_back(std::format("board hide {} {}", plugin, bone)); return {}; }
     void board_park(std::string_view plugin, std::vector<int> bones) override { calls.push_back(std::format("board park {} {}", plugin, bones.size())); }
+    // The general services a game layer in Lua reads and drives (plugin_api_services.cpp).
+    std::optional<SkaterTelemetry> telemetry;
+    std::optional<SkaterTelemetry> skater_telemetry() override { return telemetry; }
+    std::uint64_t world_id() override { return 77; }
+    std::string world_map() override { return "test_map"; }
+    std::string pad_flight(std::string_view plugin, bool on) override {
+        calls.push_back(std::format("pad flight {} {}", plugin, on));
+        return {};
+    }
+    void competition(std::string_view plugin, bool on) override { calls.push_back(std::format("competition {} {}", plugin, on)); }
+    bool stock_physics_ready() override { return true; }
+    void prepare_physics() override { calls.push_back("prepare physics"); }
+    void trick_feed(std::string_view plugin, bool on) override { calls.push_back(std::format("trick feed {} {}", plugin, on)); }
+    std::vector<std::array<float, 2>> trick_gesture(std::string_view trick) override {
+        if (trick == "Kickflip") return {{0, 0}, {0.5f, 1}};
+        return {};
+    }
+    std::string bone_cam(std::string_view plugin, const std::vector<std::string>& words) override {
+        std::string line = "bone cam " + std::string(plugin);
+        for (const auto& w : words) line += " " + w;
+        calls.push_back(line);
+        if (words.empty()) return "game";
+        return words.front() == "ringing" ? "1" : "";
+    }
     std::string board_toss(std::string_view plugin, std::vector<int> bones, const Vec3& velocity, const Vec3&, float ground) override {
         calls.push_back(std::format("board toss {} {} {:.0f} {:.0f}", plugin, bones.size(), velocity[1], ground));
         return {};
@@ -102,6 +129,24 @@ struct FakeGame final : Game {
         calls.push_back(std::format("{} {} {} {:.1f}", op, o.id, o.item, o.position[0]));
         return {};
     }
+    // World objects as the fake keeps them: by plugin and id, ready at once unless hidden.
+    std::map<std::pair<std::string, std::uint32_t>, std::pair<std::string, std::array<float, 16>>> entities;
+    std::string entity_set(std::string_view plugin, std::uint32_t id, std::string_view asset, const std::array<float, 16>& m, bool hidden) override {
+        if (entities.size() >= 600) return "too many";
+        entities[{std::string(plugin), id}] = {std::string(asset) + (hidden ? " hidden" : ""), m};
+        calls.push_back(std::format("entity {} {} {} {:.2f} {:.2f} {:.2f} {:.2f}{}", plugin, id, asset, m[12], m[13], m[14], m[8], hidden ? " hidden" : ""));
+        return {};
+    }
+    void entity_remove(std::string_view plugin, std::uint32_t id) override { entities.erase({std::string(plugin), id}); }
+    void entity_clear(std::string_view plugin) override {
+        std::erase_if(entities, [&](const auto& e) { return e.first.first == plugin; });
+        calls.push_back("entities clear " + std::string(plugin));
+    }
+    int entity_status(std::string_view plugin, std::uint32_t id) override {
+        const auto found = entities.find({std::string(plugin), id});
+        return found == entities.end() ? 0 : found->second.first.ends_with(" hidden") ? 5 : 4;
+    }
+    bool entities_ready(std::string_view) override { return true; }
     std::string set_environment(std::string_view kind, std::string_view key, std::string_view value) override {
         calls.push_back(std::format("env {} {} {}", kind, key, value));
         return key == "never" ? "refused" : "";
@@ -181,16 +226,85 @@ struct FakeGame final : Game {
     }
     std::string throwdown_status(std::string_view) override { return "open"; }
     std::vector<ThrowdownMode> modes;
-    std::vector<ThrowdownModeNews> mode_news;
     std::string set_throwdown_mode(std::string_view plugin, const ThrowdownMode& mode) override {
-        calls.push_back(std::format("mode {} {} {} rows {}{}", plugin, mode.id, mode.name, mode.rows.size(), mode.timer ? " timer" : ""));
+        calls.push_back(std::format("mode {} {} {}", plugin, mode.id, mode.name));
         std::erase_if(modes, [&](const auto& m) { return m.id == mode.id; });
         modes.push_back(mode);
         return {};
     }
     void remove_throwdown_mode(std::string_view plugin, std::string_view id) override { calls.push_back(std::format("remove mode {} {}", plugin, id)); }
-    void release_throwdown_flag(std::string_view plugin) override { calls.push_back(std::format("release flag {}", plugin)); }
-    std::vector<ThrowdownModeNews> take_throwdown_news(std::string_view) override { return std::exchange(mode_news, {}); }
+    // The throwdown kit: documents go to the real store (so the tests read them parsed); the flag is
+    // the fake's own (kit::flag is the game's).
+    int kit_documents{};
+    std::string publish_throwdown_ui(std::string_view plugin, const dingosdk::Json& document) override {
+        ++kit_documents;
+        return dingosdk::throwdowns::kit::publish(plugin, document);
+    }
+    dingosdk::throwdowns::kit::flag::State flag;
+    bool throwdown_flag_begin(std::string_view mode, std::uint32_t game, const dingosdk::throwdowns::kit::flag::Options& o) override {
+        calls.push_back(std::format("flag begin {} {} {} {} {} {:.1f}", mode, game, o.players, o.seconds, o.setup_page, o.cursor_height));
+        if (flag.busy) return false;
+        flag = {true, false, true, true, std::string(mode), game};
+        return true;
+    }
+    dingosdk::throwdowns::kit::flag::State throwdown_flag_state() override { return flag; }
+    void throwdown_flag_leave(std::string_view plugin) override {
+        calls.push_back(std::format("flag leave {}", plugin));
+        if (flag.mode.starts_with(std::string(plugin) + "/")) flag = {};
+    }
+    // A plugin's data folder, as a map by "<plugin>/<path>".
+    std::map<std::string, std::string> files;
+    std::string files_list(std::string_view plugin, std::string_view folder, std::vector<std::string>& names) override {
+        const auto prefix = std::string(plugin) + "/" + (folder.empty() ? "" : std::string(folder) + "/");
+        for (const auto& [path, text] : files) {
+            if (!path.starts_with(prefix)) continue;
+            auto rest = path.substr(prefix.size());
+            if (const auto slash = rest.find('/'); slash != std::string::npos) rest = rest.substr(0, slash + 1);
+            if (std::find(names.begin(), names.end(), rest) == names.end()) names.push_back(rest);
+        }
+        return {};
+    }
+    std::string files_read(std::string_view plugin, std::string_view path, std::string& text) override {
+        const auto found = files.find(std::string(plugin) + "/" + std::string(path));
+        if (found == files.end()) return "not found";
+        text = found->second;
+        return {};
+    }
+    std::string files_write(std::string_view plugin, std::string_view path, std::string_view text) override {
+        files[std::string(plugin) + "/" + std::string(path)] = std::string(text);
+        return {};
+    }
+    std::string files_remove(std::string_view plugin, std::string_view path) override {
+        return files.erase(std::string(plugin) + "/" + std::string(path)) ? std::string{} : std::string("not found");
+    }
+    std::optional<DialogSpec> dialog;
+    std::string dialog_open(std::string_view plugin, const DialogSpec& spec) override {
+        calls.push_back(std::format("dialog {} {} rows {} buttons {}", plugin, spec.id, spec.rows.size(), spec.buttons.size()));
+        dialog = spec;
+        return {};
+    }
+    // SmokeyDawg58's editor reads the pad and the window's focus.
+    std::optional<std::uint32_t> pad_bits_now;
+    InputFocus focus_now{};
+    std::optional<std::uint32_t> pad_bits(bool) override { return pad_bits_now; }
+    InputFocus input_focus() override { return focus_now; }
+    void dialog_close(std::string_view plugin, std::string_view id) override { calls.push_back(std::format("dialog close {} {}", plugin, id)); }
+    std::string skater_push(std::string_view plugin, const Vec3& v) override {
+        calls.push_back(std::format("push {} {:.0f} {:.0f} {:.0f}", plugin, v[0], v[1], v[2]));
+        return {};
+    }
+    std::string skater_push_wait(std::string_view plugin) override {
+        calls.push_back(std::format("push wait {}", plugin));
+        return {};
+    }
+    std::string skater_push_reset(std::string_view plugin) override {
+        calls.push_back(std::format("push reset {}", plugin));
+        return {};
+    }
+    std::string skater_hold(std::string_view plugin, bool on) override {
+        calls.push_back(std::format("hold {} {}", plugin, on));
+        return {};
+    }
     std::string kick(std::uint64_t player, std::string_view why) override { calls.push_back(std::format("kick {} {}", player, why)); return {}; }
     std::string announce(std::string_view plugin, std::string_view text) override {
         calls.push_back(std::format("announce {} {}", plugin, text));
@@ -217,7 +331,7 @@ struct FakeGame final : Game {
         return {};
     }
     std::vector<std::pair<std::string, std::string>> take_presses() override { return std::exchange(presses, {}); }
-    void release(std::string_view plugin) override { released.emplace_back(plugin); }
+    void release(std::string_view plugin) override { released.emplace_back(plugin); entity_clear(plugin); }
     bool called(std::string_view part) const {
         return std::any_of(calls.begin(), calls.end(), [&](const auto& c) { return c.find(part) != std::string::npos; });
     }
@@ -412,6 +526,10 @@ void a_permission_must_be_declared() {
         assert(not ok and err:find("needs the \"console\" permission"), err)
         ok, err = pcall(reskate.storage.get, "x")
         assert(not ok and err:find("needs the \"storage\" permission"), err)
+        -- A mod's variants are read freely, but choosing one (which loads the level again) is asked for.
+        assert(reskate.package.variants() == nil, "a mod without variants has none")
+        ok, err = pcall(reskate.package.choose, "wide")
+        assert(not ok and err:find("needs the \"variants\" permission"), err)
         reskate.console.print("never")
     )")});
     stopped(host, "bare", "raised an error");
@@ -782,6 +900,42 @@ void plugins_draw_pictures() {
     check(environment.layers[0].shapes[1].kind == plugin_ui::Shape::Kind::world_image && environment.layers[0].shapes[1].radius == 1.5f &&
               environment.layers[0].shapes[1].style.uv[2] == 0.5f && environment.layers[0].shapes[1].style.uv[3] == 0.25f,
           "and in the world, so many metres tall, a part of it");
+}
+
+void plugins_place_world_entities() {
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    const std::string main = R"(
+        local gate = "World/Props/Gate_Arch"
+        assert(reskate.entities.set(1, gate, {position = vector.create(1, 2, 3), yaw = 90, scale = 2}))
+        assert(reskate.entities.set(2, gate, {position = vector.create(0, 0, 0), right = vector.create(1, 0, 0),
+            up = vector.create(0, 1, 0), forward = vector.create(0, 0, 3)}))
+        assert(reskate.entities.set(3, gate, {matrix = {1,0,0,0, 0,1,0,0, 0,0,1,0, 7,8,9,1}}, true))
+        assert(reskate.entities.status(1) == "ready" and reskate.entities.status(3) == "hidden" and reskate.entities.status(9) == nil)
+        assert(not pcall(reskate.entities.set, 0, gate, {position = vector.create(0, 0, 0)}), "ids start at 1")
+        assert(not pcall(reskate.entities.set, 4, gate, {position = vector.create(0 / 0, 0, 0)}), "a finite position")
+        assert(not pcall(reskate.entities.set, 4, gate, {matrix = {1, 2, 3}}), "16 numbers")
+        reskate.entities.remove(2)
+        assert(reskate.entities.status(2) == nil and reskate.entities.ready())
+        reskate.log("placed")
+    )";
+    host.apply({package("props", {{manifest_file, manifest(R"("world.entities")")}, {"plugin/main.lua", main}})});
+    ticks(host, environment, 1);
+    running(host, "props", environment);
+    check(environment.logged("[props] placed"), "A plugin places world objects\n" + environment.all());
+    // Yaw 90: forward is +x (sin, 0, cos), scaled 2; the axes and the matrix come as given.
+    check(game.called("entity props 1 World/Props/Gate_Arch 1.00 2.00 3.00 2.00"), "a yaw and a scale\n" + environment.all());
+    check(game.called("entity props 2 World/Props/Gate_Arch 0.00 0.00 0.00 0.00"), "its own axes");
+    check(game.called("entity props 3 World/Props/Gate_Arch 7.00 8.00 9.00 0.00 hidden"), "a matrix, hidden");
+    host.apply({});
+    check(game.called("entities clear props"), "A plugin's objects go with it");
+    // Without the permission, refused.
+    host.apply({package("sneaky", {{manifest_file, manifest()}, {"plugin/main.lua", R"(
+        reskate.log(tostring(pcall(reskate.entities.set, 1, "x", {position = vector.create(0, 0, 0)})))
+    )"}})});
+    ticks(host, environment, 1);
+    check(environment.logged("[sneaky] false"), "world.entities is needed\n" + environment.all());
 }
 
 void plugins_draw_on_the_overlay() {
@@ -1746,39 +1900,463 @@ void plugins_add_throwdown_modes() {
     auto& game = environment.fake;
     Host host(environment, Side::client);
     host.apply({script("modes", R"(
-        assert(reskate.throwdowns.mode{id = "oneup", name = "1-UP", description = "Beat the last total.", art = "OneUp", flag = "oneup",
-            players = {min = 1, max = 6, default = 2}, timer = {caption = "Turn", min = 10, max = 120, step = 10, default = 20},
-            rows = {{id = "letters", caption = "Letters", min = 1, max = 7, default = 3},
-                    {id = "tricks", kind = "choice", caption = "Tricks", options = {"All", "Flips"}, default = 2},
-                    {id = "area", kind = "button", caption = "Area", text = "Set area"}}})
-        assert(not pcall(reskate.throwdowns.mode, {id = "x", name = "X", rows = {{id = "r", kind = "dial"}}}), "a row kind")
+        assert(reskate.throwdowns.mode{id = "duel", name = "Duel", description = "Beat the last total.", art = "Duel", flag = "duel", replaces = "skate",
+            players = {min = 1, max = 6, default = 2}, cursor_height = 99999})
         assert(not pcall(reskate.throwdowns.mode, {id = "x", name = "X", flag = "two words"}), "a flag name")
-        reskate.on("throwdown_mode", function(e)
-            reskate.log(e.mode .. " " .. e.action .. " " .. tostring(e.settings.players) .. " " .. tostring(e.settings.tricks)
-                .. (e.position and string.format(" at %.0f %.0f %.0f facing %.0f", e.position[1], e.position[2], e.position[3], e.heading) or ""))
-            if e.action == "start" then reskate.throwdowns.release_flag() end
-        end)
-        reskate.console.command("tdgone", "Removes the mode", function() reskate.throwdowns.remove_mode("oneup") end)
+        assert(not pcall(reskate.throwdowns.mode, {id = "x", name = "X", replaces = "bowling"}), "a stock throwdown")
+        assert(not pcall(reskate.throwdowns.mode, {id = "x", name = "X", cursor_height = 200000}), "a cursor height")
+        assert(reskate.throwdowns.release_flag == nil and reskate.throwdowns.view == nil and reskate.throwdowns.one_up_view == nil,
+            "the old flag and view calls are gone")
+        assert(not pcall(reskate.on, "throwdown_mode", function() end), "and the old news event")
+        reskate.console.command("tdgone", "Removes the mode", function() reskate.throwdowns.remove_mode("duel") end)
     )", R"("throwdowns", "console")")});
     running(host, "modes", environment);
-    check(game.called("mode modes oneup 1-UP rows 3 timer") && game.modes.size() == 1, "The mode reaches the game\n" + environment.all());
+    check(game.called("mode modes duel Duel") && game.modes.size() == 1, "The mode reaches the game\n" + environment.all());
     const auto& mode = game.modes.front();
-    check(mode.players == 2 && mode.min_players == 1 && mode.max_players == 6 && mode.flag == "oneup" && mode.art == "OneUp",
-          "with its players, flag and art");
-    check(mode.timer && mode.timer->caption == "Turn" && mode.timer->step == 10 && mode.timer->value == 20, "its timer");
-    check(mode.rows[0].kind == "slider" && mode.rows[0].maximum == 7 && mode.rows[0].value == 3, "a slider row");
-    check(mode.rows[1].kind == "choice" && mode.rows[1].options.size() == 2 && mode.rows[1].value == 1, "a choice, counted from 0");
-    check(mode.rows[2].kind == "button" && mode.rows[2].text == "Set area", "a button");
-    game.mode_news.push_back({"oneup", "placed", "", 0, {{"players", 2}, {"tricks", 1}}, Vec3{1, 2, 3}, 90});
-    game.mode_news.push_back({"oneup", "start", "", 0, {{"players", 2}, {"tricks", 1}}});
-    ticks(host, environment, 1);
-    check(environment.logged("[modes] oneup placed 2 1 at 1 2 3 facing 90"), "The flag's place reaches the plugin\n" + environment.all());
-    check(environment.logged("[modes] oneup start 2 1") && game.called("release flag modes"), "and its Start, and it takes the flag down");
-    check(host.run_console("tdgone") && game.called("remove mode modes oneup"), "A mode can go");
+    check(mode.players == 2 && mode.min_players == 1 && mode.max_players == 6 && mode.flag == "duel" && mode.art == "Duel" && mode.replaces == "skate" &&
+              mode.cursor_height == 99999,
+          "with its players, flag, art and cursor height");
+    check(host.run_console("tdgone") && game.called("remove mode modes duel"), "A mode can go");
     host.apply({contributed("throwdown-modes-test")});
     running(host, "throwdown-modes-test", environment);
-    check(game.called("mode throwdown-modes-test oneup 1-UP rows 0 timer") && game.called("mode throwdown-modes-test race Deathrace rows 3 timer"),
+    check(game.called("mode throwdown-modes-test duel Duel") && game.called("mode throwdown-modes-test gates Gates"),
           "The test plugin's two modes register\n" + environment.all());
+    // Its card clicked: it publishes the setup page, then its waiting card once the flag is down.
+    namespace kit = dingosdk::throwdowns::kit;
+    kit::post("throwdown-modes-test/gates", "open", {"9"});
+    ticks(host, environment, 1);
+    const auto setup = kit::documents_for("throwdown-modes-test/gates");
+    check(setup && setup->setup && setup->setup->rows.size() == 3 && setup->setup->timer.present, "Its setup page\n" + environment.all());
+    kit::post("throwdown-modes-test/gates", "flag_placed", {"9", "1", "2", "3", "0"});
+    ticks(host, environment, 1);
+    const auto waiting = kit::documents_for("throwdown-modes-test/gates");
+    check(waiting && !waiting->setup && waiting->waiting && waiting->waiting->can_start, "Its waiting card\n" + environment.all());
+    kit::post("throwdown-modes-test/gates", "start", {"9"});
+    ticks(host, environment, 1);
+    check(game.called("flag leave throwdown-modes-test"), "Start lets the flag go");
+}
+
+// The throwdown kit: a plugin registers a mode, publishes its documents (parsed into the store the
+// native UI reads), hears what the native UI posts, holds the native flag, keeps data files, opens a
+// dialog; and everything goes when it stops.
+void plugins_drive_the_throwdown_kit() {
+    namespace kit = dingosdk::throwdowns::kit;
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    host.apply({script("kit", R"(
+        assert(reskate.throwdowns.mode{id = "lap", name = "Lap", description = "Through the gates.", card = "spot", order = 2,
+            flag = "World/ReSkate/Throwdowns/Flags/lap_Placement", color = 0xff3434ff, players = {min = 1, max = 6, default = 4}})
+        assert(not pcall(reskate.throwdowns.mode, {id = "x", name = "X", card = "bowling"}), "a stock card")
+        assert(reskate.throwdowns.ui{
+            setup = {mode = "lap", title = "LAP", players = {caption = "Players", min = 1, max = 6, step = 1, value = 4},
+                     timer = {caption = "Finish deadline", min = 30, max = 600, step = 30, value = 180},
+                     rows = {{id = "laps", kind = "choice", caption = "Laps", options = {"1", "2", "3"}, value = 2},
+                             {id = "area", kind = "button", caption = "Area", label = "Set optional area"}}},
+            waiting = {mode = "lap", title = "LAP", status = "Waiting for host", enrolled = 1, capacity = 6, can_start = true},
+            hud = {theme = "lap", layout = "side", counters = {{text = "LEADER 1,200"}},
+                   clock = {remaining_ms = 60000, total_ms = 90000, sampled_ms = 5, ticking = true},
+                   board = {title = "LEADERBOARD", columns = {"POS", "NAME", "SCORE"},
+                            rows = {{rank = 1, name = "Me", value = 1200, self = true, marks = {{text = "S", on = true}}}}},
+                   timers = {{caption = "LAP", text = {base_ms = 1500, sampled_ms = 5, running = true, cap_ms = 600000}}},
+                   markers = {{at = vector.create(1, 2, 3), text = "1", distance = true}}},
+            panel = {title = "LAP", settings = {{icon = "players", caption = "Players", value = "4"}},
+                     prompts = {{input = "UI_ShoulderL", caption = "Area", command = "area"}}, players = {{id = "76561198000000001", name = "Me", self = true}}},
+            flags = {{id = "f1", mode = "lap", leader = "76561198000000001", game = 7, at = vector.create(1, 2, 3), yaw = 90,
+                      stats = {{title = "LAPS", value = "2"}}}},
+            match = {teleports = true, hidden = {"76561198000000002"}},
+        })
+        assert(not pcall(reskate.throwdowns.ui, "text"), "a document is a table")
+        reskate.on("throwdown_ui", function(e)
+            reskate.log("ui " .. e.action .. " " .. e.mode .. " " .. table.concat(e.args, ","))
+            if e.action == "open" then
+                assert(reskate.throwdowns.flag.begin("lap", tonumber(e.args[1]), {players = 4, seconds = 90}))
+                local state = reskate.throwdowns.flag.state()
+                assert(state.mine and state.mode == "lap" and state.game == tonumber(e.args[1]) and state.placing, "the flag is the plugin's")
+            elseif e.action == "leave" then
+                reskate.throwdowns.flag.leave()
+            end
+        end)
+        assert(reskate.files.write("routes/a.json", "{\"gates\": 3}"))
+        assert(reskate.files.read("routes/a.json") == "{\"gates\": 3}")
+        local names = reskate.files.list("routes")
+        assert(#names == 1 and names[1] == "a.json", "the folder lists its file")
+        assert(reskate.files.list()[1] == "routes/", "and the top its folder")
+        assert(not pcall(reskate.files.read, "../escape.json"), "no way out")
+        assert(not pcall(reskate.files.write, "C:/escape.json", ""), "no drive")
+        assert(not pcall(reskate.files.write, "routes/con.json", ""), "no device")
+        assert(reskate.files.write("old.json", "x") and reskate.files.remove("old.json"))
+        local missing, why = reskate.files.read("old.json")
+        assert(missing == nil and why == "not found", "a removed file is gone")
+        assert(reskate.ui.dialog("save", {title = "SAVE ROUTE", field = {text = "My route", max = 32},
+            list = {rows = {{text = "Route A", sub = "3 gates", buttons = {"rename"}}}, empty = "No routes"},
+            buttons = {"Save", {id = "cancel", label = "Cancel"}}, file = {label = "Load .json", filter = "*.json"}}))
+        assert(not pcall(reskate.ui.dialog, "x", {buttons = {"1", "2", "3", "4", "5"}}), "at most 4 buttons")
+        assert(reskate.skater.push(vector.create(1, 0, 2)))
+        assert(reskate.skater.push_wait() and reskate.skater.push_reset())
+        reskate.skater.hold(true)
+        assert(reskate.modes == nil, "reskate.modes is gone")
+        -- The general services: physics, the session's world, the trick feed and flick diagrams,
+        -- the pad flight and the Bone Cam.
+        reskate.physics.competition(true)
+        assert(reskate.physics.stock_ready())
+        reskate.physics.prepare()
+        local world = reskate.session.world()
+        assert(world.world == "77" and world.map == "test_map" and world.barred == false, "the session's world")
+        reskate.tricks.feed(true)
+        assert(#reskate.tricks.gesture("Kickflip") == 2 and #reskate.tricks.gesture("Boardslide") == 0, "flick diagrams")
+        assert(reskate.camera.pad_flight(true))
+        assert(reskate.skater.bone_cam() == "game" and reskate.skater.bone_cam("ringing") == "1")
+        reskate.skater.bone_cam("game", "on")
+    )", R"("throwdowns", "files", "ui.screen", "skater.control", "session.read", "events.tricks", "camera")")});
+    running(host, "kit", environment);
+    check(game.called("mode kit lap Lap") && game.modes.size() == 1, "The mode reaches the game\n" + environment.all());
+    const auto& mode = game.modes.front();
+    check(mode.card == "spot" && mode.order == 2 && mode.flag == "World/ReSkate/Throwdowns/Flags/lap_Placement" && mode.color == 0xff3434ffU,
+          "with its card, order, flag prefab and colour");
+    const auto documents = kit::documents_for("kit/lap");
+    check(documents && documents->plugin == "kit" && game.kit_documents == 1, "Its documents are in the kit's store");
+    const auto& setup = *documents->setup;
+    check(setup.mode == "kit/lap" && setup.title == "LAP" && setup.players.present && setup.players.value == 4 && setup.timer.present &&
+              setup.timer.value == 180 && setup.hide_native == std::vector<std::string>{"rounds"},
+          "Its setup page, its mode the SDK's id");
+    check(setup.rows.size() == 2 && setup.rows[0].kind == "choice" && setup.rows[0].selected == 1 && setup.rows[1].kind == "button" &&
+              setup.rows[1].label == "Set optional area",
+          "Its setup rows, a choice counted from 0");
+    check(documents->waiting && documents->waiting->mode == "kit/lap" && documents->waiting->can_start && documents->waiting->capacity == 6, "Its waiting card");
+    const auto& hud = documents->hud;
+    check(hud.active && hud.theme == "lap" && hud.counters == std::vector<std::string>{"LEADER 1,200"} && hud.clock.present && hud.clock.remaining_ms == 60000,
+          "Its HUD");
+    check(hud.board.present && hud.board.rows.size() == 1 && hud.board.rows[0].rank == "1" && hud.board.rows[0].value == "1200" && hud.board.rows[0].self &&
+              hud.board.rows[0].marks.size() == 1 && hud.board.rows[0].marks[0].on && hud.board.columns.size() == 3,
+          "Its board, numbers as labels");
+    check(hud.timers.size() == 1 && hud.timers[0].clock.present && hud.timers[0].clock.up && hud.timers[0].clock.remaining_ms == 1500 &&
+              hud.timers[0].clock.total_ms == 600000 && hud.markers.size() == 1 && hud.markers[0].at[2] == 3,
+          "A stopwatch timer and a marker");
+    check(documents->panel.present && documents->panel.prompts.size() == 1 && documents->panel.prompts[0].glyph == "area" &&
+              documents->panel.players.size() == 1 && documents->panel.players[0].id == 76561198000000001ULL,
+          "Its match panel");
+    check(documents->flags.size() == 1 && documents->flags[0].mode == "kit/lap" && documents->flags[0].leader == 76561198000000001ULL &&
+              documents->flags[0].game == 7 && documents->flags[0].at[0] == 1 && documents->flags[0].stats.size() == 1,
+          "Its flags");
+    check(kit::match().teleports && kit::hidden(76561198000000002ULL) && !kit::hidden(76561198000000001ULL) && kit::active() && kit::active()->plugin == "kit",
+          "What its match asks of the game");
+    check(game.files.contains("kit/routes/a.json") && !game.files.contains("kit/old.json"), "Its files are in its own folder");
+    check(game.called("dialog kit save rows 1 buttons 2") && game.dialog && game.dialog->field.text == "My route" && game.dialog->file.filter == "*.json" &&
+              game.dialog->buttons[1].id == "cancel" && game.dialog->rows[0].buttons[0] == "rename",
+          "Its dialog");
+    check(game.called("push kit 1 0 2") && game.called("push wait kit") && game.called("push reset kit") && game.called("hold kit true"),
+          "Push, its wait and reset, and hold reach the game");
+    check(game.called("competition kit true") && game.called("prepare physics") && game.called("trick feed kit true") &&
+              game.called("pad flight kit true") && game.called("bone cam kit game on"),
+          "The general services reach the game\n" + environment.all());
+    // The native UI: a card clicked, a dialog answered.
+    kit::post("kit/lap", "open", {"7"});
+    kit::post_to("kit", "dialog", "", {"save", "Save", "My route", "0", ""});
+    kit::post("other/lap", "open", {"8"});
+    ticks(host, environment, 1);
+    check(environment.logged("[kit] ui open lap 7") && game.called("flag begin kit/lap 7 4 90 true 0.0"),
+          "A card clicked reaches the plugin by its own id, which takes the flag\n" + environment.all());
+    check(environment.logged("[kit] ui dialog  save,Save,My route,0,"), "A dialog's answer reaches it\n" + environment.all());
+    check(!environment.logged("ui open lap 8") && kit::take("other").size() == 1, "Another plugin's events stay its own");
+    kit::post("kit/lap", "leave");
+    ticks(host, environment, 1);
+    check(game.called("flag leave kit") && !game.flag.busy, "Leave lets the flag go");
+    host.switch_off("kit");
+    check(!kit::documents_for("kit/lap") && !kit::match().teleports && !kit::hidden(76561198000000002ULL), "Its documents go when it stops");
+}
+
+// The Throwdowns page's cards: the stock three (one replaced) and the plugin modes by order.
+void the_throwdowns_page_lists_the_stock_cards_and_plugin_modes() {
+    namespace custom = dingosdk::multiplayer::custom_throwdowns;
+    using dingosdk::throwdowns::Adapter;
+    custom::Mode skate;
+    skate.plugin = "p";
+    skate.id = "skate";
+    skate.name = "Letters";
+    skate.card = "skate";
+    skate.replaces = "skate";
+    custom::Mode late = skate;
+    late.id = "late";
+    late.name = "Late";
+    late.card = "jam";
+    late.replaces.clear();
+    late.order = 20;
+    late.color = 0xff00ff00U;
+    custom::Mode early = late;
+    early.id = "early";
+    early.name = "Early";
+    early.card = "spot";
+    early.order = 10;
+    early.color = 0;
+    check(custom::set_mode(skate).empty() && custom::set_mode(late).empty() && custom::set_mode(early).empty(), "The modes register");
+    check(!custom::set_mode([&] { auto bad = early; bad.card = "bowling"; return bad; }()).empty(), "A card is a stock one");
+    const auto& registry = dingosdk::throwdowns::registry();
+    std::vector<std::string> ids;
+    for (const auto& d : registry.definitions()) ids.push_back(d.id);
+    check(ids == std::vector<std::string>{"p/skate", "native.spot", "native.jam", "p/early", "p/late"}, "In the grid's order: " + [&] {
+        std::string all;
+        for (const auto& id : ids) all += id + " ";
+        return all;
+    }());
+    const auto* late_card = registry.find("p/late");
+    check(late_card && late_card->adapter == Adapter::plugin && late_card->donor == 2 && late_card->palette.primary == 0xff00ff00U && late_card->plugin == "p",
+          "A plugin card: its donor and colour");
+    check(registry.find("p/early")->palette.primary == dingosdk::throwdowns::palette_for("p/early").primary, "a colour picked from its id");
+    check(registry.find("native.spot")->donor == 1 && registry.find("native.jam")->adapter == Adapter::native_jam, "The stock cards");
+    const auto before = registry.revision();
+    custom::remove_plugin("p");
+    const auto& again = dingosdk::throwdowns::registry();
+    check(again.revision() > before && again.definitions().size() == 3 && again.definitions()[0].id == "native.skate", "S.K.A.T.E. is back when it goes");
+}
+
+void smokey_throwdowns_register_and_play_one_up() {
+    namespace kit = dingosdk::throwdowns::kit;
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    const std::string plugin = "SmokeyDawg58-ReSkate_Throwdown";
+    Host host(environment, Side::client);
+    host.apply({contributed(plugin)});
+    running(host, plugin, environment);
+    // His challenge registry on the Throwdowns page: R.E.S.K.A.T.E. in S.K.A.T.E.'s place, 1-UP and his
+    // game modes after the stock cards, each with his donor card, colour, order and flag prefab.
+    check(game.modes.size() == 10, "His ten modes are on the Throwdowns page\n" + environment.all());
+    check(game.modes.front().id == "skate" && game.modes.front().replaces == "skate" && game.modes.front().card == "skate",
+          "R.E.S.K.A.T.E. takes S.K.A.T.E.'s place");
+    const auto registered = [&](const std::string& id) -> const ThrowdownMode& {
+        for (const auto& m : game.modes) if (m.id == id) return m;
+        throw std::runtime_error("no mode " + id);
+    };
+    check(registered("oneup").card == "spot" && registered("oneup").order == 1 && registered("oneup").name == "1-UP" &&
+              registered("oneup").flag == "World/ReSkate/Throwdowns/Flags/oneup_Placement",
+          "1-UP is one of his modes now");
+    check(registered("race").card == "spot" && registered("race").color == 0xff3434ffU && registered("race").order == 4 &&
+              registered("race").flag == "World/ReSkate/Throwdowns/Flags/race_Placement" && registered("race").cursor_height == 99999,
+          "Deathrace: his donor, colour, order, flag and a start flag that may stand on anything");
+    check(registered("tag").card == "skate" && registered("hide").card == "skate" && registered("jam").card == "jam" && registered("meat").card == "spot",
+          "His donor rule: tag-like modes S.K.A.T.E.'s card, Spot Jam Skate Jam's, the rest Spot Battle's");
+    SkaterTelemetry t;
+    t.skater = true;
+    t.position = {1, 2, 3};
+    t.physics_state = 100;
+    game.telemetry = t;
+    environment.local_skater = SkaterState{{1, 2, 3}, 0, 0, 0, false, 0};
+    environment.score_now = ScoreState{0, 1, false, {}, {}, false};
+    host.set_level("sanvan");
+    ticks(host, environment, 50); // its game layer loads a part a tick
+    running(host, plugin, environment);
+    check(game.kit_documents >= 5, "It publishes the kit's documents\n" + environment.all());
+    {
+        const auto idle = kit::documents_for(plugin + "/jam");
+        check(idle && !idle->hud.active && !idle->setup && !idle->waiting && !idle->panel.present, "Idle, no HUD and no pages");
+    }
+    check(!environment.logged(".lua:") && !environment.logged("tick failed"), "Idle ticks run clean\n" + environment.all());
+    // His rule checks (tdm test, his mode_rules_tests.cpp).
+    environment.lines.clear();
+    check(host.run_console("tdm test"), "tdm test");
+    check(environment.printed(" 0 failed") && environment.printed(" passed"), "His rule checks pass:\n" + printed_lines(environment));
+
+    const auto docs_of = [&](const std::string& key) {
+        const auto docs = kit::documents_for(key);
+        check(docs.has_value(), key + ": its documents are in the kit's store");
+        return *docs;
+    };
+    const auto flag_waiting = [&](const std::string& key, std::uint32_t id) { game.flag = {true, true, false, true, key, id}; };
+    struct Expect {
+        const char* mode;
+        const char* title;
+        const char* timer;
+        std::vector<std::string> rows;
+    };
+    const std::vector<Expect> expected{
+        {"jam", "Spot Jam", "Timer", {"area"}}, {"meat", "Hall of Meat", "Timer", {"area"}},
+        {"domination", "Domination", "Timer", {"capture-spots"}}, {"graffiti", "Graffiti", "Timer", {"area"}},
+        {"tag", "Skate Tag", "Timer", {"area"}}, {"infection", "Infection", "Timer", {"area"}},
+        {"hide", "Hide & Seek", "Duration", {"hide_time", "area"}}, {"skate", "R.E.S.K.A.T.E.", "Turn Timer", {"letters", "tricks", "zone"}},
+        {"race", "Deathrace", "Finish deadline", {}}};
+    std::uint32_t id = 101;
+    for (const auto& e : expected) {
+        const std::string mode = e.mode, key = plugin + "/" + mode;
+        id += 2;
+        // A card click: the kit begins the native flag with the stock setup page open, then says `open`.
+        check(game.throwdown_flag_begin(key, id, {6, 120, true, 0}), mode + ": the flag begins");
+        game.flag.placing = false;
+        kit::post(key, "open", {std::to_string(id)});
+        ticks(host, environment, 2);
+        auto docs = docs_of(key);
+        check(docs.setup && docs.setup->mode == key && docs.setup->title == e.title && docs.setup->timer.present &&
+                  docs.setup->timer.caption == e.timer && docs.setup->players.present && docs.setup->players.max == 6 && docs.setup->back == "BACK",
+              mode + ": his setup page\n" + environment.all());
+        std::vector<std::string> rows;
+        for (const auto& row : docs.setup->rows) rows.push_back(row.id);
+        check(rows == e.rows, mode + ": his setup rows (" + std::to_string(rows.size()) + ")");
+        if (mode == "jam") check(docs.setup->rows[0].kind == "button" && docs.setup->rows[0].label == "Set optional area", "Spot Jam's Area button");
+        if (mode == "skate")
+            check(docs.setup->rows[1].options.size() == 4 && docs.setup->rows[2].options.size() == 6 && docs.setup->rows[0].max == 7,
+                  "R.E.S.K.A.T.E.'s Letters, Tricks and Trick Zone");
+        kit::post(key, "setup_row", {"players", "3"});
+        ticks(host, environment, 2);
+        check(docs_of(key).setup->players.value == 3, mode + ": the Players row sets his capacity");
+        // Confirm, then the native flag placed.
+        kit::post(key, "setup_confirm", {"3", mode == "race" ? "120" : "300"});
+        game.flag.placing = true;
+        ticks(host, environment, 1);
+        flag_waiting(key, id);
+        kit::post(key, "flag_placed", {std::to_string(id), "1", "2", "3", "90"});
+        ticks(host, environment, 3);
+        docs = docs_of(key);
+        // Deathrace's route editor opens over its placed start flag: no waiting card until it closes.
+        check(mode == "race" ? !docs.waiting
+                             : docs.waiting && docs.waiting->mode == key && docs.waiting->title == e.title && docs.waiting->capacity == 3,
+              mode + ": his waiting card\n" + environment.all());
+        if (mode == "race") {
+            check(docs.hud.active && docs.hud.theme == "race" && docs.hud.editor.present && docs.hud.editor.title == "Deathrace builder" &&
+                      docs.hud.editor.prompts.size() == 11 && docs.hud.editor.info_title == "ROUTE INFO" && docs.hud.header.title == "DEATHRACE" &&
+                      docs.hud.header.frame_width == 704,
+                  "Deathrace's start gate opens his route editor\n" + environment.all());
+            // His route library: a route saved on this map, the load dialog (hold Start), a row picked.
+            game.files[plugin + "/routes/test_map/Loop.json"] =
+                R"({"format": "ReSkate Deathrace route", "version": 1, "id": 7, "name": "Loop", "map": "test_map", "settings": {)"
+                R"("duration_seconds": 120, "turn_seconds": 30, "strikes": 3, "radius": 6, "area_radius": 0, "corners": [],)"
+                R"("points": [[1, 2, 3], [1, 2, 23], [1, 2, 43]], "yaw_degrees": [0, 0, 0], "half_widths": [6, 6, 6],)"
+                R"("gate_types": ["required", "required", "required"], "arrow_roll_degrees": [], "pitch_degrees": [], "spawn": [1, 2, 3],)"
+                R"("has_spawn": true, "finish_gate": true, "trick_kinds": 15}})";
+            game.focus_now = {true, false, true};
+            game.pad_bits_now = 0u;
+            ticks(host, environment, 3);
+            game.pad_bits_now = 0x10u;
+            ticks(host, environment, 100);
+            check(game.dialog && game.dialog->id == "route-load" && game.dialog->title == "LOAD DEATHRACE ROUTE" && game.dialog->rows.size() == 1 &&
+                      game.dialog->rows[0].text == "Loop" && game.dialog->file.present && game.dialog->buttons[0].label == "Back to builder",
+                  "Hold Start: his route library\n" + environment.all());
+            game.pad_bits_now = 0u;
+            ticks(host, environment, 2);
+            kit::post_to(plugin, "dialog", {}, {"route-load", "row", "", "1", ""});
+            ticks(host, environment, 3);
+            {
+                const auto info = docs_of(key).hud.editor.info;
+                check(!info.empty() && info[0].first == "Required gates: 1" && info[1].first == "Finish gate: Placed", "The route is loaded\n" + environment.all());
+            }
+            // Tap Start: name and save it, then players can enroll.
+            game.pad_bits_now = 0x10u;
+            ticks(host, environment, 2);
+            game.pad_bits_now = 0u;
+            ticks(host, environment, 3);
+            check(game.dialog && game.dialog->id == "route-save" && game.dialog->title == "SAVE DEATHRACE ROUTE" && game.dialog->field.text == "Loop",
+                  "Tap Start: his save dialog\n" + environment.all());
+            kit::post_to(plugin, "dialog", {}, {"route-save", "save", "Loop Two", "0", ""});
+            ticks(host, environment, 3);
+            check(game.files.contains(plugin + "/routes/test_map/Loop Two.json") && game.called("dialog close " + plugin + " route-save"),
+                  "The route is saved as his JSON\n" + environment.all());
+            check(game.files[plugin + "/routes/test_map/Loop Two.json"].find("\"format\": \"ReSkate Deathrace route\"") != std::string::npos,
+                  "in his format");
+            {
+                const auto saved = docs_of(key);
+                check(saved.waiting && saved.waiting->title == e.title && saved.waiting->capacity == 3 && saved.waiting->can_start &&
+                          !saved.hud.editor.present,
+                      "A saved route closes the editor: his waiting card, and it can start\n" + environment.all());
+            }
+            game.focus_now = {};
+            game.pad_bits_now.reset();
+        } else {
+            if (mode == "domination") check(host.run_console("tdm point"), "his Domination needs a spot: `mode point` where the skater is");
+            ticks(host, environment, 2);
+            check(docs_of(key).waiting->can_start, mode + ": the host can start\n" + environment.all());
+            kit::post(key, "start", {std::to_string(id)});
+            ticks(host, environment, 400);
+            const auto ms = status_of(host, plugin).tick_ms;
+            std::cout << "SmokeyDawg58 " << mode << ": " << ms << " ms a tick playing (its budget is 2 ms)\n";
+            check(ms < 2, mode + ": within its time");
+            docs = docs_of(key);
+            const auto& hud = docs.hud;
+            check(hud.active && hud.theme == mode && !docs.waiting, mode + ": Start plays it alone\n" + environment.all());
+            check(mode == "skate" ? hud.header.title.empty() && hud.card.present && hud.layout == "bottom"
+                                  : hud.header.title == e.title && hud.counters.size() == 2 && hud.counters[0].starts_with("LEADER"),
+                  mode + ": his HUD's title and score block");
+            check(hud.board.present && !hud.results.present
+                      ? hud.board.title == "LEADERBOARD" && hud.board.rows.size() == 1 && hud.board.rows[0].self
+                      : hud.results.present && hud.results.title == std::string(e.title) + " RESULTS",
+                  mode + ": his leaderboard\n" + environment.all());
+            if (!hud.results.present)
+                check(docs.panel.present && docs.panel.title == e.title && docs.panel.players.size() == 1 && docs.panel.settings.size() == 3,
+                      mode + ": his Throwdown Panel");
+            check(kit::match().markers || hud.results.present, mode + ": the match keeps the session markers");
+        }
+        running(host, plugin, environment);
+        check(!environment.logged(".lua:") && !environment.logged("tick failed") && !environment.logged("failed:"),
+              mode + " runs without errors\n" + environment.all());
+        kit::post(key, "quit", {});
+        ticks(host, environment, 3);
+        game.flag = {};
+        ticks(host, environment, 2);
+        docs = docs_of(key);
+        check(!docs.hud.active && !docs.waiting, mode + ": Quit ends it\n" + environment.all());
+    }
+    // 1-UP: a practice match, alone at its flag.
+    const std::string oneup = plugin + "/oneup";
+    check(game.throwdown_flag_begin(oneup, 501, {4, 120, true, 0}), "1-UP's flag begins");
+    game.flag.placing = false;
+    kit::post(oneup, "open", {"501"});
+    ticks(host, environment, 2);
+    auto docs = docs_of(oneup);
+    check(docs.setup && docs.setup->title == "1-UP" && docs.setup->timer.value == 20 && docs.setup->timer.max == 120, "1-UP's setup page\n" + environment.all());
+    kit::post(oneup, "setup_row", {"players", "1"});
+    kit::post(oneup, "setup_confirm", {"1", "20"});
+    game.flag.placing = true;
+    ticks(host, environment, 1);
+    flag_waiting(oneup, 501);
+    kit::post(oneup, "flag_placed", {"501", "1", "2", "3", "0"});
+    ticks(host, environment, 5);
+    docs = docs_of(oneup);
+    check(docs.waiting && docs.waiting->title == "1-UP" && docs.waiting->can_start && docs.waiting->capacity == 1, "1-UP's waiting card\n" + environment.all());
+    kit::post(oneup, "start", {"501"});
+    bool played = false;
+    for (int i = 0; i < 600 && !played; ++i) {
+        ticks(host, environment, 1);
+        docs = docs_of(oneup);
+        played = docs.hud.active && docs.hud.clock.present && docs.hud.clock.ticking;
+    }
+    const auto& hud = docs.hud;
+    check(played && hud.theme == "oneup" && hud.header.title == "1-UP" && hud.counters.size() == 2 && hud.counters[0].starts_with("TARGET") &&
+              hud.board.present && hud.board.variant == "stamps" && hud.board.rows.size() == 1 && hud.board.rows[0].marks.size() == 3 &&
+              hud.board.title.ends_with("'S TURN"),
+          "1-UP's practice plays, his score HUD up\n" + environment.all());
+    check(docs.panel.present && docs.panel.title == "1-UP" && kit::match().markers, "1-UP's panel and markers");
+    std::cout << "SmokeyDawg58 1-UP: " << status_of(host, plugin).tick_ms << " ms a tick playing\n";
+    check(status_of(host, plugin).tick_ms < 2, "1-UP within its time");
+    kit::post(oneup, "quit", {});
+    ticks(host, environment, 3);
+    game.flag = {};
+    ticks(host, environment, 2);
+    check(!docs_of(oneup).hud.active, "1-UP's Quit ends it\n" + environment.all());
+    running(host, plugin, environment);
+    check(!environment.logged(".lua:") && !environment.logged("tick failed"), "1-UP runs without errors\n" + environment.all());
+    // His ReSkate-menu 1-UP card, as the plugin's page: Place 1-Up here, then its lobby, then Exit.
+    environment.panels_open = true;
+    environment.shown = plugin;
+    ticks(host, environment, 5);
+    using K = plugin_ui::Widget::Kind;
+    check(!environment.panels.empty() && environment.panels[0].page && environment.panels[0].title == "1-UP" &&
+              environment.panels[0].widgets[0].kind == K::card && environment.panels[0].widgets[0].text == "1-UP",
+          "His 1-UP card on the plugin's page\n" + environment.all());
+    environment.actions = {plugin_ui::Action{plugin, "1-UP", "place", false}};
+    ticks(host, environment, 30);
+    const auto heading = [&] {
+        for (const auto& w : environment.panels[0].widgets) if (w.kind == K::heading) return w.text;
+        return std::string{};
+    };
+    {
+        std::string widgets;
+        for (const auto& w : environment.panels[0].widgets) widgets += w.text + " | " + w.help + "\n";
+        check(heading() == "READY UP", "Place 1-Up here opens its lobby: " + heading() + "\n" + widgets + environment.all());
+    }
+    environment.actions = {plugin_ui::Action{plugin, "1-UP", "exit", false}};
+    ticks(host, environment, 30);
+    check(heading().empty(), "and Exit 1-Up leaves it");
+    environment.panels_open = false;
+    // His console verbs, under tdm.
+    check(host.run_console("tdm help"), "tdm help");
+    check(!environment.logged(".lua:"), "tdm help answers\n" + environment.all());
 }
 
 void grind_exits_pick_the_side() {
@@ -1953,6 +2531,7 @@ int main() {
         tricks_reach_plugins_that_ask_for_them();
         plugins_draw_on_the_overlay();
         plugins_draw_pictures();
+        plugins_place_world_entities();
         plugins_server_copies_are_the_authority();
         plugins_animate_the_skater();
         plugins_play_their_own_sounds();
@@ -1974,6 +2553,9 @@ int main() {
         fpv_drone_flies_and_follows();
         hall_of_meat_scores_a_bail();
         grind_exits_pick_the_side();
+        smokey_throwdowns_register_and_play_one_up();
+        plugins_drive_the_throwdown_kit();
+        the_throwdowns_page_lists_the_stock_cards_and_plugin_modes();
         plugins_add_throwdown_modes();
         reskate_hostile_is_stopped_or_refused_every_time();
         std::filesystem::remove_all(scratch);

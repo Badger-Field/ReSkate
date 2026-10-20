@@ -1,8 +1,11 @@
 #pragma once
 #include "plugin_wave.h"
+#include "Engine/Core/Json/json.h"
 #include "Extension/AnimationStudio/anim_core.h"
+#include "Extension/Throwdowns/throwdown_kit.h"
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <optional>
@@ -25,6 +28,38 @@ inline constexpr char unavailable[] = "unavailable here";
 struct CameraView {
     Vec3 position{}, forward{};
     float fov{};
+    Vec3 right{}, up{};
+    bool free_camera{}; // the view is Freecam's, verified selected (not just asked for)
+};
+// What a game layer reads of the local skater each tick (reskate.skater.telemetry): the trainer's
+// telemetry and its last measured jump, the physics state the skater's selector chose (with No
+// Bail's wipeout and runout counts), the Bone Cam's slams and where the body is during a bail.
+struct SkaterTelemetry {
+    bool skater{}, airborne{};
+    Vec3 position{};
+    float heading{}; // the trainer's degrees: 0 faces +Z, forward (sin, 0, cos)
+    float speed{}, vertical{}, air_time{}, height{}, top_speed{};
+    std::uint32_t physics_state{};
+    struct Jump {
+        std::uint64_t serial{};
+        float takeoff_speed{}, takeoff_angle{}, air_time{}, height{}, distance{}, drop{}, landing_speed{};
+        float spin{}, spin_rate{}, flip{}, board_turn{};
+        std::uint32_t state{};
+        Vec3 takeoff{}, landing{};
+    } last;
+    struct Watch {
+        bool valid{}, ragdoll_known{}, ragdoll{};
+        std::uint32_t state{}, previous{};
+        float previous_seconds{};
+        std::uint64_t changes{}, wipeouts{}, runouts{};
+    } watch;
+    bool teleport_pending{}, slam{}, struck{};
+    std::optional<Vec3> body; // the hips, during a bail (Bone Cam)
+};
+struct TrickNote {
+    std::uint64_t entry{};
+    char kind{}; // 'n' name, 's' side, 'l' landing, 'b' body spin, 'r' board spin, 'k' stance, 'm' modifier
+    std::string text;
 };
 // Input for a plugin that flies something: the flight keys and mouse look (as Freecam reads them),
 // a gamepad's sticks, triggers and buttons (XInput's bits), a joystick or radio's axes and buttons.
@@ -156,29 +191,43 @@ struct ThrowdownState {
     };
     std::vector<Player> skate; // S.K.A.T.E.'s players and letters, while one is shown
 };
-// A throwdown mode on the game's Throwdowns page: a card on its picker, the game's own setup
-// page with these rows, and the game's start flag. The plugin runs the mode itself.
-struct ThrowdownRow {
-    std::string id, kind, caption, text; // kind "slider", "choice" or "button"; text: a button's label
-    int minimum{}, maximum{}, step{1}, value{};
-    std::vector<std::string> options; // a choice's; its value is the option's index (from 0)
-};
+// A throwdown mode on the game's Throwdowns page: a card on its picker, the game's own setup page
+// (relabelled from the plugin's setup document) and the game's start flag. The plugin runs it.
 struct ThrowdownMode {
     std::string id, name, description;
-    std::string art;  // the logo: a texture or image asset the plugin's mod adds, by path; empty: Spot Battle's
-    std::string flag; // the mod's own flag (InstanceId ReSkate.<flag>); empty: Spot Battle's
+    std::string art;  // the logo: a texture or image asset the plugin's mod adds, by path; empty: the card's own
+    std::string flag; // the placement-preview prefab its native flag shows, by path; empty: Spot Battle's
+    std::string card = "spot"; // the stock card it is cloned from: "skate", "spot" or "jam"
+    std::string replaces; // the stock throwdown whose place it takes: "skate", "spot", "jam" or empty
+    std::uint32_t color{};
+    int order{};          // among the plugin modes on the picker
     int min_players = 1, max_players = 6, players = 4;
-    std::optional<ThrowdownRow> timer;
-    std::vector<ThrowdownRow> rows;
+    float cursor_height{}; // > 0: its flag's placement cursor may rise this far (metres)
 };
-// "opened", "setting", "button", "placed", "start", "leave" or "cancelled" for one of the
-// plugin's modes, with every setting (players, timer and the rows by id).
-struct ThrowdownModeNews {
-    std::string mode, action, row;
-    int value{};
-    std::map<std::string, int> settings;
-    std::optional<Vec3> at;
-    float heading{}; // degrees
+// reskate.ui.dialog: an overlay dialog over the game (plugin_dialog.cpp). Its answers come back to
+// the plugin as throwdown_ui events with action "dialog" (throwdown_kit.h).
+struct DialogSpec {
+    std::string id, title, message;
+    struct Field {
+        bool present{};
+        std::string text;
+        std::size_t max{64};
+    } field;
+    struct Row {
+        std::string text, sub;
+        std::vector<std::string> buttons; // each answers with its name and the row
+    };
+    bool list{};
+    std::vector<Row> rows;
+    std::string empty; // shown in a list with no rows
+    struct Button {
+        std::string id, label;
+    };
+    std::vector<Button> buttons;
+    struct File {
+        bool present{};
+        std::string label, filter; // filter: "*.json" or "*.json;*.txt"
+    } file;
 };
 struct Progress {
     bool available{};
@@ -215,6 +264,17 @@ public:
     // "place" (item and pose), "move" (id and pose) or "delete" (id): through the park editor,
     // under the session's object rules and limits. One at a time: it is busy until done.
     virtual std::string edit_object(std::string_view, const GameObject&) { return unavailable; }
+    // A plugin's own world objects (world_entities.h): an entity of a world object blueprint at a
+    // full transform (rows: right, up, forward axes with their scale, then the position), kept by the
+    // plugin's id for it. Only this player's game shows them. Status: 0 none, 1 waiting, 2 loading,
+    // 3 missing, 4 ready, 5 hidden.
+    virtual std::string entity_set(std::string_view /*plugin*/, std::uint32_t, std::string_view, const std::array<float, 16>&, bool) {
+        return unavailable;
+    }
+    virtual void entity_remove(std::string_view /*plugin*/, std::uint32_t) {}
+    virtual void entity_clear(std::string_view /*plugin*/) {}
+    virtual int entity_status(std::string_view /*plugin*/, std::uint32_t) { return 0; }
+    virtual bool entities_ready(std::string_view /*plugin*/) { return false; }
     // kind "tod" (key: morning, noon, afternoon, evening, night, weatherday, weathernight, default),
     // "control" (key: fog, fog_distance, sky_brightness, clouds, wind_strength, wind_direction,
     // traffic, pedestrians; value a number, -1 the default) or "park" (key: a lot, value a layout).
@@ -251,9 +311,75 @@ public:
     // Adds the mode to the Throwdowns page, or updates it (by id).
     virtual std::string set_throwdown_mode(std::string_view /*plugin*/, const ThrowdownMode&) { return unavailable; }
     virtual void remove_throwdown_mode(std::string_view /*plugin*/, std::string_view /*id*/) {}
-    // Takes the plugin's start flag down: its lobby is over.
-    virtual void release_throwdown_flag(std::string_view /*plugin*/) {}
-    virtual std::vector<ThrowdownModeNews> take_throwdown_news(std::string_view /*plugin*/) { return {}; }
+    // The throwdown kit (throwdown_kit.h): the plugin's documents for the native UI, and the one
+    // native flag registration (`mode` is the SDK's id, "<plugin>/<id>"). Leave lets go of the
+    // registration only when it is one of the plugin's modes.
+    virtual std::string publish_throwdown_ui(std::string_view /*plugin*/, const Json&) { return unavailable; }
+    virtual bool throwdown_flag_begin(std::string_view /*mode*/, std::uint32_t /*game*/, const throwdowns::kit::flag::Options&) { return false; }
+    virtual throwdowns::kit::flag::State throwdown_flag_state() { return {}; }
+    virtual void throwdown_flag_leave(std::string_view /*plugin*/) {}
+    // ---- general services for a game layer in Lua (plugin_api_services.cpp) ----------------------
+    virtual std::optional<SkaterTelemetry> skater_telemetry() { return std::nullopt; }
+    // The pad's XInput button bits, LT 0x10000 and RT 0x20000 (empty: no pad). `menu`: read while
+    // ReSkate's menu is open too.
+    virtual std::optional<std::uint32_t> pad_bits(bool /*menu*/) { return std::nullopt; }
+    virtual bool key_down(int /*virtual_key*/) { return false; }
+    virtual int mouse_wheel() { return 0; }
+    // Game buttons kept from the game while asked (overlay::hide_game_buttons/hold_game_buttons),
+    // and all game input paused for half a second at a time.
+    virtual void game_buttons(std::string_view /*plugin*/, std::uint16_t /*hidden*/, std::uint16_t /*held*/, bool /*paused*/) {}
+    // The game window has the focus, ReSkate's menu is shut and the native UI lets the game play.
+    virtual bool input_allowed() { return false; }
+    virtual std::string free_camera(std::string_view /*plugin*/, bool) { return unavailable; }
+    // The free camera flown from the pad while placing from the air (Extension/Skater/pad_flight.h);
+    // one plugin holds it at a time.
+    virtual std::string pad_flight(std::string_view /*plugin*/, bool) { return unavailable; }
+    // The stock physics while the local player competes (set_competition_stock_physics).
+    virtual void competition(std::string_view /*plugin*/, bool) {}
+    virtual bool stock_physics_ready() { return false; }
+    // physics_tuning::prepare(): the game's stock tuning read, without switching anything.
+    virtual void prepare_physics() {}
+    // The session's world (it changes with the map or session), whether the local player's mods bar
+    // them from scoring, and the map's name.
+    virtual std::string world_map() { return {}; }
+    virtual std::uint64_t world_id() { return 0; }
+    virtual bool world_barred() { return false; }
+    virtual std::optional<bool> stance_goofy() { return std::nullopt; }
+    virtual void trick_feed(std::string_view /*plugin*/, bool) {}
+    virtual std::vector<TrickNote> take_trick_notes() { return {}; }
+    // The Bone Cam (Extension/Skater/bone_cam.h): no words for its setting, "status", "bail",
+    // "ringing", "game on|off" (the plugin's game asks for it), or the bonecam console words.
+    virtual std::string bone_cam(std::string_view /*plugin*/, const std::vector<std::string>& /*words*/) { return {}; }
+    // Three focus checks: the game window has focus, ReSkate's overlay is open, and the throwdown
+    // flow lets gameplay input through.
+    struct InputFocus {
+        bool focused{}, interface_open{}, gameplay{};
+    };
+    virtual InputFocus input_focus() { return {}; }
+    // Watch another player's skater the way the native party menu does (0: back to our own).
+    virtual void spectate(std::uint64_t /*player*/) {}
+    // The flick diagram of a flip trick as skate. names it (trick_gestures.h): read in the
+    // background the first time; empty until then, or for a trick without one.
+    virtual std::vector<std::array<float, 2>> trick_gesture(std::string_view /*trick*/) { return {}; }
+    // ---- files: the plugin's own data folder, <game>/Mods/.reskate/data/<plugin>/ ------------------
+    // Paths are relative to it and already checked (plugin_manifest.h's safe_relative_path). A listing
+    // names the files and folders in `folder` (empty: the top), folders ending in "/".
+    virtual std::string files_list(std::string_view /*plugin*/, std::string_view /*folder*/, std::vector<std::string>& /*names*/) { return unavailable; }
+    virtual std::string files_read(std::string_view /*plugin*/, std::string_view /*path*/, std::string& /*text*/) { return unavailable; }
+    virtual std::string files_write(std::string_view /*plugin*/, std::string_view /*path*/, std::string_view /*text*/) { return unavailable; }
+    virtual std::string files_remove(std::string_view /*plugin*/, std::string_view /*path*/) { return unavailable; }
+    // ---- ui.dialog -----------------------------------------------------------------------------------
+    // One dialog at a time over the game; the same id again updates it (what was typed is kept).
+    virtual std::string dialog_open(std::string_view /*plugin*/, const DialogSpec&) { return unavailable; }
+    virtual void dialog_close(std::string_view /*plugin*/, std::string_view /*id, empty: any of the plugin's*/) {}
+    // ---- skater.push / hold ----------------------------------------------------------------------------
+    // The skater's velocity set to this (metres per second, world) once it is back on its board, and
+    // the skater held where it is (no input, no physics) while asked. A pending push may wait two
+    // seconds more (the skater is still getting back on its board) or be dropped.
+    virtual std::string skater_push(std::string_view /*plugin*/, const Vec3&) { return unavailable; }
+    virtual std::string skater_push_wait(std::string_view /*plugin*/) { return unavailable; }
+    virtual std::string skater_push_reset(std::string_view /*plugin*/) { return unavailable; }
+    virtual std::string skater_hold(std::string_view /*plugin*/, bool) { return unavailable; }
     // ---- the rest ----------------------------------------------------------------------------------
     // The music an outside player (Spotify and the like) is playing, and "play", "pause",
     // "next" or "previous" for it.
@@ -335,6 +461,24 @@ public:
     virtual void board_clear(std::string_view /*plugin*/, int /*bone, -1: all*/) {}
     virtual void board_park(std::string_view /*plugin*/, std::vector<int>) {}
     virtual std::string board_toss(std::string_view /*plugin*/, std::vector<int>, const Vec3&, const Vec3&, float) { return unavailable; }
+    // How every board is fitted (board_pose.h fit); none: the plugin's fit ends.
+    struct BoardFit {
+        bool plates{};
+        float axle = 1.0f;
+    };
+    virtual std::string board_fit(std::string_view /*plugin*/, std::optional<BoardFit>) { return unavailable; }
+    // ---- variants: of the plugin's own mod (Engine/Vfs/mod_list.h Variants) -----------------------------
+    struct VariantState {
+        std::vector<std::string> installed; // its "order" first
+        std::string chosen;                 // empty: none was
+        std::string in_play;                // empty: none of them is in the game
+    };
+    // Empty when the mod declares no variants.
+    virtual std::optional<VariantState> variants(std::string_view /*plugin*/, const std::filesystem::path& /*package*/) { return std::nullopt; }
+    // The variant saved as the mod's choice, the mods applied again and the level loaded again with it.
+    virtual std::string choose_variant(std::string_view /*plugin*/, const std::filesystem::path& /*package*/, std::string_view /*variant*/) {
+        return unavailable;
+    }
     // ---- the skater's physics -----------------------------------------------------------------------
     virtual SkaterNews take_skater_news() { return {}; }
     virtual std::optional<Vec3> board_velocity() { return std::nullopt; }

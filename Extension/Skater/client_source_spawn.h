@@ -9,6 +9,10 @@ namespace dingosdk {
 void initialize_client_source_spawn(std::uintptr_t base);
 // Installs the exact camera-reset handler guard; forwarding is unchanged until a Noclip request is queued.
 bool start_client_noclip_velocity(std::uintptr_t base) noexcept;
+// A plugin's push (skater_push.h): one horizontal velocity at the next on-board physics step,
+// in competition physics only. Uses the verified local physics owner and never enables trainer
+// boosts.
+bool queue_skater_push_velocity(std::uintptr_t client,std::uintptr_t entity,const std::array<float,3>& velocity) noexcept;
 // Trainer: at the local skater's next physics update, multiply its upward velocity by
 // `factor` if it is off the board and rising (a hippy jump that has just started). One request
 // at a time; it expires after 150 ms.
@@ -31,6 +35,9 @@ overlay::DebugModel on_client_debug_tick(std::uintptr_t base, std::uintptr_t cli
     const overlay::FlightInput* flight_input = nullptr);
 bool restore_client_debug(std::uintptr_t base, std::uintptr_t client, bool camera_phase_observed);
 bool client_free_camera_active() noexcept;
+// The last verified mode-1 local view, or zero when native placement handed it
+// back. Unlike the input-capture lease above, this proves actual selection.
+std::uintptr_t client_free_camera_view() noexcept;
 // Native camera lease for the party's Spectate action. Null restores only the
 // camera acquired by this function; it never changes another debug camera. A positive
 // `fov` is applied to the spectate camera while it is held; its own comes back after.

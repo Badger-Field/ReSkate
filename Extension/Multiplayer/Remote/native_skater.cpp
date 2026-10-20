@@ -1,6 +1,7 @@
 #include "native_skater_internal.h"
 #include "native_pose_layout.h"
 #include "puppet_cost.h"
+#include "Extension/World/world_entities.h"
 #include "Extension/Multiplayer/Session/monotonic_clock.h"
 #include "Extension/Multiplayer/Session/peer_slots.h"
 #include "Extension/Skater/board_pose.h"
@@ -392,6 +393,7 @@ void animation_hook(std::uintptr_t component, std::uintptr_t update) {
         listener(component);
 }
 void destroy_hook(std::uintptr_t entity, std::uintptr_t owner) {
+    world_entities::entity_destroyed(entity);
     if (const auto listener = shared().destroyed_listener.load(std::memory_order_acquire))
         listener(entity);
     // The first slot watching it as either skater or board.

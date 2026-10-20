@@ -48,8 +48,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Throwdowns/native_throwdowns.cpp
     Extension/Throwdowns/native_type_scan.cpp
     Extension/Throwdowns/throwdown_lab.cpp
-    Extension/Throwdowns/custom_modes.cpp
-    Extension/Throwdowns/custom_placement.cpp
+    Extension/Throwdowns/native_flag_session.cpp
     Extension/Throwdowns/throwdown_relay.cpp
     Extension/Throwdowns/throwdown_debug_text.cpp
     Extension/Throwdowns/skate_trick_rule.cpp
@@ -99,6 +98,11 @@ add_library(dingosdk_runtime SHARED
     Extension/UI/ui_pointer_skip.cpp
     Extension/Settings/named_settings.cpp
     Extension/World/console_commands.cpp
+    Extension/World/world_entities.cpp
+    Extension/World/guid_table_guard.cpp
+    Extension/Skater/bone_cam.cpp
+    Extension/Skater/trick_gestures.cpp
+    Extension/Skater/trick_feed.cpp
     Extension/Rendering/console_commands.cpp
     Extension/Progression/console_commands.cpp
     Extension/Objects/console_commands.cpp
@@ -163,6 +167,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Skater/client_source_spawn.cpp
     Extension/Skater/source_spawn_camera.cpp
     Extension/Skater/client_noclip.cpp
+    Extension/Skater/skater_push.cpp
     Extension/Skater/client_first_person.cpp
     Extension/Skater/client_debug.cpp
     Extension/Skater/ai_skaters.cpp
@@ -170,8 +175,6 @@ add_library(dingosdk_runtime SHARED
     Extension/Skater/physics_tuning.cpp
     Extension/Multiplayer/Remote/remote_collision.cpp
     Extension/Skater/physics_tuning_model.cpp
-    Extension/Skater/breakable_deck.cpp
-    Extension/Skater/breakable_deck_commands.cpp
     Extension/Trainer/trainer.cpp
     Extension/Trainer/trainer_presets.cpp
     Extension/Trainer/trainer_jump.cpp

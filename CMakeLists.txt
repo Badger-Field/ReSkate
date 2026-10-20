@@ -254,7 +254,7 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS AND WIN32)
     target_link_libraries(dingosdk_multiplayer_tests PRIVATE dingosdk_lz4 dingosdk_zstd dingosdk_logging dingosdk_word_filter dingosdk_json)
     add_test(NAME multiplayer_protocol COMMAND dingosdk_multiplayer_tests)
     add_executable(dingosdk_throwdown_relay_tests Extension/Throwdowns/Test/throwdown_relay_tests.cpp
-        Extension/Throwdowns/throwdown_relay.cpp Extension/Throwdowns/throwdown_wire.cpp)
+        Extension/Throwdowns/throwdown_relay.cpp Extension/Throwdowns/throwdown_wire.cpp Extension/Throwdowns/custom_modes.cpp)
     target_include_directories(dingosdk_throwdown_relay_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     target_link_libraries(dingosdk_throwdown_relay_tests PRIVATE dingosdk_logging)
     add_test(NAME throwdown_relay COMMAND dingosdk_throwdown_relay_tests)

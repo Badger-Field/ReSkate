@@ -1,49 +1,38 @@
 #pragma once
-#include <array>
 #include <cstdint>
-#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
-// Throwdown modes that plugins add to the game's Throwdowns page. A mode is a
-// card on the picker, the game's own Spot Battle setup page relabelled with the
-// mode's rows, and its native start flag: the plugin is told where the flag
-// went and runs the mode itself. Thread-safe; the menu reads it on the UI
-// thread, plugins write it from theirs.
+// Throwdown modes that plugins add to the game's Throwdowns page. A mode is a card on the picker
+// (cloned from a stock card), the game's own Spot Battle setup page relabelled from the plugin's
+// setup document (throwdown_kit.h), and its native start flag: the plugin runs the mode itself.
+// Thread-safe; the menu reads it on the UI thread, plugins write it from theirs.
 namespace dingosdk::multiplayer::custom_throwdowns {
-struct Row {
-    enum class Kind { slider, choice, button };
-    Kind kind{};
-    std::string id, caption;
-    int minimum{}, maximum{}, step{1}, value{}; // slider; choice: value is the option index
-    std::vector<std::string> options;           // choice
-    std::string text;                           // button: its label
-};
 struct Mode {
     std::string plugin, id, name, description;
     // The picker logo: a texture or image asset the plugin's mod adds, by path
     // (a bare name is a Throwdown_ModeSelect_ContentResources record). Empty:
-    // the Spot Battle art.
+    // the donor card's art.
     std::string art;
-    // The mod's flag (InstanceId ReSkate.<flag>). Empty: Spot Battle's own.
+    // The placement-preview prefab the native flag shows ("World/.../duel_Placement",
+    // or an InstanceId name of the plugin's mod). Empty: Spot Battle's own.
     std::string flag;
+    // The stock card it is cloned from: "skate", "spot" or "jam" (throwdown_kit.h).
+    std::string card = "spot";
+    // The stock throwdown whose place on the picker it takes: "skate", "spot"
+    // or "jam"; empty: after them.
+    std::string replaces;
+    std::uint32_t color{}; // the card's tint; 0: one picked from the mode's id
+    int order{};           // among the plugin modes on the picker, lowest first
     int min_players = 1, max_players = 6, players = 4;
-    std::optional<Row> timer; // the setup page's Timer row, when the mode has one
-    std::vector<Row> rows;
+    // > 0: the placement cursor of its flag may rise this far (metres), so the flag can stand on
+    // anything (kit::flag::Options::cursor_height); 0: the game's own ceiling.
+    float cursor_height{};
     std::string key() const { return plugin + "/" + id; }
-};
-// What happened to a plugin's mode: opened (its setup page), setting (a row
-// changed), button, placed (the flag is down: `at` and `heading`), start (the
-// host held Start on the waiting card), leave, cancelled (Back out of setup or
-// placement). `settings` holds players, timer and every row by id.
-struct News {
-    std::string mode, action, row;
-    int value{};
-    std::map<std::string, int> settings;
-    std::optional<std::array<float, 3>> at;
-    float heading{}; // degrees
+    // 0 S.K.A.T.E., 1 Spot Battle, 2 Skate Jam (challenge_registry.h's donors).
+    unsigned donor() const noexcept { return card == "skate" ? 0U : card == "jam" ? 2U : 1U; }
 };
 
 // Empty when accepted, else why not.
@@ -54,13 +43,4 @@ std::vector<Mode> modes();
 std::optional<Mode> find(std::string_view key);
 // Changes whenever a mode is set or removed.
 std::uint64_t revision() noexcept;
-
-// The setup page's values: players, timer and each row's value by its id.
-// Reset to the mode's defaults when its setup opens.
-std::map<std::string, int> settings(std::string_view key);
-void reset_settings(std::string_view key);
-// Records a new value; a change is also news for the plugin.
-void set_setting(std::string_view key, std::string_view row, int value);
-void post(std::string_view key, News news);
-std::vector<News> take(std::string_view plugin);
 } // namespace dingosdk::multiplayer::custom_throwdowns

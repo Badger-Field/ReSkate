@@ -1,6 +1,5 @@
 #include "board_pose.h"
 #include "Extension/AnimationStudio/anim_core.h"
-#include "breakable_deck.h"
 #include "Extension/Multiplayer/Remote/native_pose_layout.h"
 #include <Windows.h>
 #include <algorithm>
@@ -91,13 +90,11 @@ Shared& shared() {
 }
 std::atomic<std::uintptr_t> base_now{}, holder_now{};
 std::atomic<bool> any{};
-// A breakable deck pack is in the game (breakable_deck.h): its deck model carries four stretches of
-// deck on bones 12 to 15, which every board keeps out of sight unless a plugin places them (else they
-// show as cracks); its truck model has the baseplates on the trucks' effectors (5 and 9), held on the
-// deck; and the wheels sit as far apart as the deck's own trucks have them.
-std::atomic<bool> deck_pack{};
-std::atomic<float> deck_axle{1.0f};
-constexpr int first_stretch = 12;
+// How every board is fitted (fit): the baseplates held on the deck, and the wheels' spread. Read by
+// the render hook without the lock; the owner is under it.
+std::atomic<bool> fitted{}, fit_plates{};
+std::atomic<float> fit_axle{1.0f};
+std::string fit_owner;
 struct TruckRest {
     int truck, plate;
     Quat facing; // the truck's bone on the deck's, at rest
@@ -217,6 +214,24 @@ void park(std::string_view owner, std::vector<int> list) {
     for (const auto& [who, bones_of] : s.park_by) s.parked.insert(bones_of.begin(), bones_of.end());
     refresh_any(s);
 }
+std::string fit(std::string_view owner, std::optional<Fit> value) {
+    auto& s = shared();
+    std::lock_guard lock(s.mutex);
+    if (!value) {
+        if (fit_owner == owner) {
+            fit_owner.clear();
+            fitted.store(false, std::memory_order_release);
+        }
+        return {};
+    }
+    if (!(value->axle >= 0.8f && value->axle <= 1.6f)) return "a board's axle spread is 0.8 to 1.6 (1: the game's own)";
+    if (!fit_owner.empty() && fit_owner != owner) return fit_owner + " fits the boards";
+    fit_owner = owner;
+    fit_plates.store(value->plates, std::memory_order_release);
+    fit_axle.store(value->axle, std::memory_order_release);
+    fitted.store(value->plates || value->axle != 1.0f, std::memory_order_release);
+    return {};
+}
 std::string toss(std::string_view owner, std::vector<int> list, Vec3 velocity, Vec3 spin, float ground) {
     std::erase_if(list, [](int b) { return b < first_writable || b >= bones; });
     if (list.empty()) return "a piece is bones 2 to 15";
@@ -250,11 +265,6 @@ void tick(std::uintptr_t base, std::uintptr_t component) noexcept {
     } catch (...) {}
     base_now.store(base, std::memory_order_release);
     holder_now.store(holder, std::memory_order_release);
-    try {
-        const auto deck = breakable_deck::in_play();
-        deck_axle.store(breakable_deck::axle(deck), std::memory_order_release);
-        deck_pack.store(!deck.empty(), std::memory_order_release);
-    } catch (...) {}
 }
 
 void on_render_pose(std::uintptr_t animation_interface) noexcept {
@@ -264,8 +274,8 @@ void on_render_pose(std::uintptr_t animation_interface) noexcept {
         const auto base = base_now.load(std::memory_order_acquire);
         const auto holder = animation_interface - 0xc0;
         const bool local = holder == holder_now.load(std::memory_order_acquire) && holder;
-        const bool stretches = deck_pack.load(std::memory_order_acquire);
-        if (!local && !stretches && !any.load(std::memory_order_acquire)) {
+        const bool fitting = fitted.load(std::memory_order_acquire);
+        if (!local && !fitting && !any.load(std::memory_order_acquire)) {
             SetLastError(error);
             return;
         }
@@ -291,9 +301,7 @@ void on_render_pose(std::uintptr_t animation_interface) noexcept {
             if (length(at) < 100.0f) (void)store(bone_at(buffer, b), Quat{lanes[b].rotation}, add(at, {0, -2000, 0}));
         };
         for (const int b : s.parked) away(b);
-        if (stretches) {
-            for (int b = first_stretch; b < bones; ++b)
-                if (!s.parked.contains(b)) away(b);
+        if (fitting && fit_plates.load(std::memory_order_acquire)) {
             // Each baseplate on the deck, from its truck's bone as the animation left it (not while
             // the truck is off its place: a plugin moved it).
             for (const auto& rest : truck_rests) {
@@ -304,9 +312,11 @@ void on_render_pose(std::uintptr_t animation_interface) noexcept {
                 (void)store(bone_at(buffer, rest.plate), normalised(multiply(back, rest.facing)),
                             rotate(back, sub(add(rest.at, rotate(rest.facing, rest.effector)), at)));
             }
+        }
+        if (fitting) {
             // The deck's own trucks: the wheels' place along the axle is set rather than scaled, so a
             // pose that comes by twice is not moved twice.
-            if (const float axle = deck_axle.load(std::memory_order_acquire); axle != 1.0f)
+            if (const float axle = fit_axle.load(std::memory_order_acquire); axle != 1.0f)
                 for (const int b : wheel_bones) {
                     int way = 0; // the axle, in the truck's axes: the largest part of where the wheel sits
                     for (int i = 1; i < 3; ++i)

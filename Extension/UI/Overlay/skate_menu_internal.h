@@ -94,9 +94,6 @@ bool primary_button(SkateMenu& menu, const char* label, bool enabled = true);
 float page_body_height(const SkateMenu& menu);
 // Runs a console command and shows its reply as feedback.
 void send_console(SkateMenu& menu, const CallbacksV3& callbacks, const std::string& command);
-// The breakable decks, a button for each (modding_menu.cpp), on the Mods page. Draws nothing while
-// no deck is installed.
-void breakable_deck_card(SkateMenu& menu, const CallbacksV3& callbacks);
 void debug_request(SkateMenu& menu, const CallbacksV3& callbacks, DebugRequest request);
 // HOST shows the host form until a session exists, then that session (SESSION).
 inline constexpr int multiplayer_session_tab = 1, multiplayer_voice_tab = 2, multiplayer_bans_tab = 3, multiplayer_chat_tab = 4;

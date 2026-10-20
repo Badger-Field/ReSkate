@@ -39,6 +39,7 @@ add_library(dingosdk_overlay STATIC
     Extension/UI/Overlay/park_previews.cpp
     Extension/UI/Overlay/gpu_diagnostics.cpp
     Extension/UI/Overlay/input_capture.cpp
+    Extension/UI/Overlay/plugin_dialog.cpp
     Extension/UI/Overlay/cursor.cpp
     Extension/UI/Overlay/progression_menu.cpp
     Extension/UI/Overlay/atmosphere_menu.cpp

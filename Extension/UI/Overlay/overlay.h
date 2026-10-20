@@ -20,9 +20,31 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
+namespace dingosdk::plugins {
+struct DialogSpec;
+}
 namespace dingosdk::overlay {
+// The overlay's menu, console or a dialog has the input (input_capture.cpp).
+bool interface_open() noexcept;
+// A plugin dialog (reskate.ui.dialog) is open: the overlay keeps the input while it is.
+void set_plugin_dialog_active(bool active) noexcept;
+// Game input a plugin's game layer holds (input_capture.cpp): pad buttons kept from the game, held
+// down for it, or all game input paused for half a second; the keyboard as the overlay reads it,
+// and the mouse wheel's notches since the last call.
+void hide_game_buttons(std::uint16_t buttons) noexcept;
+void hold_game_buttons(std::uint16_t held) noexcept;
+void pause_game_input(bool paused) noexcept;
+bool key_down(int virtual_key) noexcept;
+int take_mouse_wheel() noexcept;
+// reskate.ui.dialog (plugin_dialog.cpp): one dialog at a time over the game, input captured while it
+// is open. The same plugin and id again updates it and keeps what was typed. Empty when shown, else
+// why not. Answers reach the plugin as throwdown kit events (action "dialog", throwdown_kit.h).
+std::string open_plugin_dialog(std::string_view plugin, const plugins::DialogSpec& spec);
+// An empty id closes any of the plugin's.
+void close_plugin_dialog(std::string_view plugin, std::string_view id);
 struct Level {
     std::string asset;
     std::string display_name;
@@ -573,6 +595,11 @@ extern "C" void DingoSDKOverlaySetFreecamInputCapture(bool active);
 // The same hold on the game's input while a card asks something of the player and a
 // controller answers it (the map download's): the buttons that answer must not also skate.
 extern "C" void DingoSDKOverlaySetPromptInputCapture(bool active);
+namespace dingosdk::overlay {
+// Route gameplay Start/Escape through the custom challenge's single menu
+// request. Our independent controller/key readers continue seeing the press.
+void capture_challenge_menu_input(bool active,bool native_panel=false,bool opening_key_down=false) noexcept;
+}
 // The keyboard keys such a card answers to, read past that hold: bit 0 left, 1 right, 2 Enter,
 // 3 Esc. Nothing while the game is not in front or the menu, console or chat has the keys.
 extern "C" unsigned DingoSDKOverlayReadPromptKeys();

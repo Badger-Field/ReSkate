@@ -502,7 +502,7 @@ struct UiApi {
             return 1;
         }
         if (!plugin.services_.ui_sound(name))
-            luaL_error(L, "there is no menu sound \"%s\": select, cancel, navigate, toggle or tab", name.c_str());
+            luaL_error(L, "there is no menu sound \"%s\": select, cancel, navigate, toggle, tab, countdown or go", name.c_str());
         lua_pushboolean(L, 1);
         return 1;
     }

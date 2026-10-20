@@ -17,14 +17,15 @@ namespace {
 struct Event {
     std::string_view name, permission;
 };
-constexpr std::array<Event, 25> events{{
+constexpr std::array<Event, 26> events{{
     {"load", {}}, {"unload", {}}, {"tick", {}}, {"level_loaded", {}}, {"level_unloading", {}},
     {"trick_started", "events.tricks"}, {"trick_landed", "events.tricks"}, {"line_broken", "events.tricks"},
     {"draw", "overlay"}, {"player_joined", "session.read"}, {"player_left", "session.read"}, {"message", "net.session"},
     {"skater_state", "events.skater"}, {"bail", "events.skater"}, {"chat", "chat.read"}, {"track_changed", "music"},
     {"throwdown", "throwdowns"}, {"action", "input"}, {"screen_closed", "ui.screen"},
     {"board_landed", "events.skater"}, {"body_hit", "events.skater"}, {"bail_end", "events.skater"},
-    {"physics_step", "events.physics"}, {"grind_exit", "events.skater"}, {"throwdown_mode", "throwdowns"},
+    {"physics_step", "events.physics"}, {"grind_exit", "events.skater"}, {"trick_notes", "events.tricks"},
+    {"throwdown_ui", "throwdowns"},
 }};
 constexpr std::size_t maximum_key = 128;
 constexpr std::size_t maximum_command = 48;
@@ -75,6 +76,12 @@ Json to_json(lua_State* L, int index, int depth, Budget& budget) {
         const char* text = lua_tolstring(L, index, &length);
         budget.spend(0, length);
         return std::string(text, length);
+    }
+    case LUA_TVECTOR: { // a position: [x, y, z]
+        const float* v = lua_tovector(L, index);
+        if (!std::isfinite(v[0]) || !std::isfinite(v[1]) || !std::isfinite(v[2])) throw std::runtime_error("JSON has no NaN or infinity");
+        budget.spend(3, 0);
+        return Json::array({static_cast<double>(v[0]), static_cast<double>(v[1]), static_cast<double>(v[2])});
     }
     case LUA_TTABLE: {
         luaL_checkstack(L, 4, "tables nested too deep");
@@ -172,7 +179,11 @@ void add_functions(lua_State* L, const char* field, std::initializer_list<ApiFun
         lua_pop(L, 1);
         lua_createtable(L, 0, static_cast<int>(functions.size()));
         lua_pushvalue(L, -1);
+        // The parent may be a read-only table itself (reskate.throwdowns, for its flag).
+        const bool locked = lua_getreadonly(L, -3) != 0;
+        lua_setreadonly(L, -3, false);
         lua_setfield(L, -3, field);
+        lua_setreadonly(L, -2, locked);
     }
     // A table made read-only earlier in the install is opened for this, and closed again.
     lua_setreadonly(L, -1, false);
@@ -313,6 +324,42 @@ struct ApiFunctions {
         if (!error.empty()) luaL_error(L, "%s %s", luaL_checkstring(L, 1), error.c_str());
         push_json(L, Json::parse(text, {plugin.limits_.file_bytes, 64, 1u << 20}));
         return 1;
+    }
+    // variants(): the variants the plugin's own mod holds (its reskate-plugin.json "variants",
+    // Engine/Vfs/mod_list.h): {list = {...}, chosen = name or nil, in_play = name or nil}, its "order"
+    // first; nil when it declares none.
+    static int variants(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        const auto state = plugin.services_.game().variants(plugin.id(), plugin.directory());
+        if (!state) {
+            lua_pushnil(L);
+            return 1;
+        }
+        lua_createtable(L, 0, 3);
+        lua_createtable(L, static_cast<int>(state->installed.size()), 0);
+        for (std::size_t i = 0; i < state->installed.size(); ++i) {
+            lua_pushlstring(L, state->installed[i].data(), state->installed[i].size());
+            lua_rawseti(L, -2, static_cast<int>(i + 1));
+        }
+        lua_setfield(L, -2, "list");
+        for (const auto& [field, value] : {std::pair{"chosen", &state->chosen}, std::pair{"in_play", &state->in_play}}) {
+            if (value->empty()) continue;
+            lua_pushlstring(L, value->data(), value->size());
+            lua_setfield(L, -2, field);
+        }
+        return 1;
+    }
+    // choose(name): that variant of the plugin's own mod in the game: kept as the choice, the mods
+    // applied again and the level loaded again with it. true, or false and why not.
+    static int choose(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "variants", "reskate.package.choose");
+        const std::string name = luaL_checkstring(L, 1);
+        const auto why = plugin.services_.game().choose_variant(plugin.id(), plugin.directory(), name);
+        lua_pushboolean(L, why.empty());
+        if (why.empty()) return 1;
+        lua_pushlstring(L, why.data(), why.size());
+        return 2;
     }
     static int list(lua_State* L) {
         auto& plugin = plugin_of(L);
@@ -649,7 +696,7 @@ void Api::install(Plugin& plugin, lua_State* L) {
     add_functions(L, {{"log", F::log}, {"on", F::on}});
     add_functions(L, "time", {{"now", F::now}, {"after", F::after}, {"every", F::every}, {"cancel", F::cancel}});
     add_functions(L, "level", {{"current", F::level}});
-    add_functions(L, "package", {{"read", F::read}, {"read_json", F::read_json}, {"list", F::list}});
+    add_functions(L, "package", {{"read", F::read}, {"read_json", F::read_json}, {"list", F::list}, {"variants", F::variants}, {"choose", F::choose}});
     add_functions(L, "json", {{"encode", F::encode}, {"decode", F::decode}});
     add_functions(L, "console", {{"command", F::command}, {"print", F::console_print}});
     add_functions(L, "storage", {{"get", F::storage_get}, {"set", F::storage_set}, {"add", F::storage_add}, {"keys", F::storage_keys}});
@@ -661,6 +708,8 @@ void Api::install(Plugin& plugin, lua_State* L) {
     install_ui_api(plugin, L);
     install_more_api(plugin, L);
     install_world_api(plugin, L);
+    install_services_api(plugin, L);
+    install_kit_api(plugin, L);
     readonly();
     lua_setglobal(L, "reskate");
     lua_pushcfunction(L, ApiFunctions::print, "print");

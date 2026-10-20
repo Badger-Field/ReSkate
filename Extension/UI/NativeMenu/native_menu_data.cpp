@@ -4,6 +4,7 @@
 #include "Engine/Game/Build/20260929/engine.h"
 #include "Engine/Game/Build/20260929/native_menu.h"
 #include "Engine/Game/Build/20260929/native_party.h"
+#include "Engine/Core/Log/logging.h"
 #include <algorithm>
 #include <atomic>
 #include <cstring>
@@ -12,6 +13,24 @@
 namespace dingosdk::multiplayer::menu_data {
 namespace engine = addr::engine;
 namespace menu = addr::native_menu;
+ModelRecordLoad model_record_load_original{};
+Handle model_record_load_hook(Address manager,Address record,bool flag) {
+    const auto base=reinterpret_cast<Address>(GetModuleHandleW(nullptr));
+    Address record_type{};
+    if(!record || !memory::peek(record+8,record_type) || record_type!=base+menu::asset_record_type) {
+        // Reject at the loader, before either of its TypeInfo reads. Returning
+        // from the constructor alone would still fault in the loader's tail.
+        static std::atomic<unsigned> reports{};
+        if(reports.fetch_add(1)<12) {
+            std::string name="unavailable";
+            try {name=string(read<Address>(record+0x18),192);}catch(...) {}
+            logging::log(logging::Level::error,logging::Channel::ui,
+                "Native model loader rejected non-record {:#x}, type {:#x}, asset '{}'.",record,record_type,name);
+        }
+        return 0;
+    }
+    return model_record_load_original(manager,record,flag);
+}
 void require(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
 unsigned kind(Address type) { return (read<std::uint16_t>(read<Address>(type) + 4) >> 5) & 31; }
 unsigned size(Address type) { return kind(type) == 3 ? 8 : read<std::uint16_t>(read<Address>(type) + 6); }
@@ -43,7 +62,8 @@ Address Context::type(Schema schema) const {
         types_.emplace(schema.hash, candidate);
         return candidate;
     }
-    throw std::runtime_error("Native menu schema has not loaded yet.");
+    throw std::runtime_error("Native menu schema has not loaded yet (hash " +
+        std::to_string(schema.hash) + ", size " + std::to_string(schema.size) + ").");
 }
 Address Context::type_of(Handle handle) const {
     const auto record = reinterpret_cast<Address (*)(Address, Handle, std::uint8_t)>(base + addr::native_party::model_record)(manager, handle, 0);
@@ -117,7 +137,8 @@ Field Context::member(Address type, std::uint32_t hash) const {
         require(result.offset + size(result.type) <= size(type), "Native menu field exceeds its structure.");
         return result;
     }
-    throw std::runtime_error("Native menu field schema differs.");
+    throw std::runtime_error("Native menu field schema differs (field " + std::to_string(hash) +
+        ", model " + std::to_string(read<std::uint32_t>(meta)) + ").");
 }
 Value Context::field(Value value, std::uint32_t hash) const {
     address(value);
@@ -189,6 +210,7 @@ void Context::text(Value target, const std::string& text) const {
     Address native{};
     game::native_data().values.assign(&native, text.c_str(), static_cast<std::uint32_t>(text.size()));
     struct Release { Address base; Address& value; ~Release() { if (value) reinterpret_cast<void (*)(Address*)>(base + engine::native_text_release)(&value); } } release{base, native};
+    require(native!=0,"Native menu string construction returned null.");
     set(target, native);
 }
 std::string Context::text(Value value, std::size_t maximum) const {

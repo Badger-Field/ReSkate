@@ -4,7 +4,7 @@
 #include <string>
 
 // skate.'s score HUD as values (ScoringHUDViewModel, read through the game's UI models), what
-// trick_watch.h turns into tricks. Moved from Domination (PR 279).
+// trick_watch.h turns into tricks.
 namespace dingosdk::tricks {
 struct ScoreHud {
     bool action{}; // a trick is going on

@@ -16,6 +16,13 @@ void install_ui_api(Plugin& plugin, lua_State* L);
 void install_more_api(Plugin& plugin, lua_State* L);
 // The wider set's game parts (plugin_api_world.cpp), into the same table.
 void install_world_api(Plugin& plugin, lua_State* L);
+// General services for a game layer: the skater's telemetry and Bone Cam, the pad and keys, the
+// free and pad-flown cameras, the session's world, competition physics and the trick feed
+// (plugin_api_services.cpp).
+void install_services_api(Plugin& plugin, lua_State* L);
+// The throwdown kit's documents and native flag, the plugin's data files, overlay dialogs and the
+// skater's push (with its wait and reset) and hold (plugin_api_throwdowns.cpp).
+void install_kit_api(Plugin& plugin, lua_State* L);
 
 // ---- adding to the reskate table ---------------------------------------------------------------
 // A new part of the API is a file of `static int name(lua_State*)` functions and an install_*_api
@@ -29,8 +36,9 @@ struct ApiFunction {
     const char* name;
     lua_CFunction function;
 };
-// Adds the functions to reskate.<field>, the reskate table being on top of the stack. The table is
-// made when there is none yet, and another file may add to one already there; it is left read-only.
+// Adds the functions to reskate.<field>, the reskate table being on top of the stack (or to a table
+// inside it, such as reskate.throwdowns, when that is on top). The table is made when there is none
+// yet, and another file may add to one already there; it is left read-only.
 void add_functions(lua_State* L, const char* field, std::initializer_list<ApiFunction> functions);
 // Adds the functions to the reskate table itself (on top of the stack).
 void add_functions(lua_State* L, std::initializer_list<ApiFunction> functions);

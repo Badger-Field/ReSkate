@@ -15,15 +15,16 @@ the launcher, the runtime that loads into the game, and the dedicated server.
   - Join dedicated servers from the in-game server browser.
   - Proximity voice chat, and text chat with emotes and an optional bad-word filter.
   - Parties in lobbies and on dedicated servers: invite, join, leave, promote.
-  - Throwdowns with other players (Jam, Spot Battle and S.K.A.T.E.), and co-op challenges.
+  - Throwdowns with other players (Jam, Spot Battle and S.K.A.T.E.), and co-op challenges. Plugins add
+    throwdown modes of their own to the Throwdowns page ([contrib/throwdown-kit.md](contrib/throwdown-kit.md)).
 - **In-game menu and console.**
   - Map and fast travel.
   - World: time of day, population, district levels, rotating parks.
   - The **Park Editor**: place, move and save objects with freecam, snapping and undo. Save a selection as a
     set and place it again anywhere, on any map.
   - Skater options: first person, movement, boosts, noclip.
-  - Hall of Meat and grind exit triggers are plugin mods now
-    ([contrib/plugins/hall-of-meat](contrib/plugins/hall-of-meat), [contrib/plugins/grind-exits](contrib/plugins/grind-exits)).
+  - Hall of Meat, grind exit triggers, Board Break, Road Rash and the FPV drone are plugin mods now
+    ([contrib/plugins](contrib/plugins)). Board Break and Road Rash ship inside their asset mods.
   - Progression, controls, graphics and multiplayer settings.
 - **Mods.**
   - Drop a mod in `Mods/` and it is merged into the game at launch. Mods can add custom maps, loading

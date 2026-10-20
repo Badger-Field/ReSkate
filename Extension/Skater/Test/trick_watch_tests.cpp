@@ -1,6 +1,5 @@
 // Reading tricks from the score HUD's values, apart from the game: a trick's start, its points
-// once it lands, a slam, and a trick whose points never come. Moved with the trick watch from
-// Domination (PR 279), which tests its spots on top.
+// once it lands, a slam, and a trick whose points never come.
 #include "Extension/Skater/trick_watch.h"
 #include <cmath>
 #include <iostream>
