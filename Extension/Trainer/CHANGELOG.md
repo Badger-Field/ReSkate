@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.3 - 2026-10-20
+
+Built on ReSkate 2.1.1 (same game build as 2.1.0).
+
+- **On ReSkate 2.1.1.** Everything from 0.8.2, with ReSkate 2.1.1's own changes: mod conflicts redone (fewer false
+  conflicts, a Resolve conflicts button), the new MY MODS list with official mods in it, other players' objects solid by
+  default, announcements in the launcher, and extra GPU crash info. Install it over ReSkate 2.1.1.
+
 ## v0.8.2 - 2026-10-19
 
 Built on ReSkate 2.1.0, like 0.8.0.
