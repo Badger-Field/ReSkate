@@ -1746,16 +1746,18 @@ void plugins_add_throwdown_modes() {
     auto& game = environment.fake;
     Host host(environment, Side::client);
     host.apply({script("modes", R"(
-        assert(reskate.throwdowns.mode{id = "oneup", name = "1-UP", description = "Beat the last total.", art = "OneUp", flag = "oneup",
+        assert(reskate.throwdowns.mode{id = "oneup", name = "1-UP", description = "Beat the last total.", art = "OneUp", flag = "oneup", replaces = "skate",
             players = {min = 1, max = 6, default = 2}, timer = {caption = "Turn", min = 10, max = 120, step = 10, default = 20},
             rows = {{id = "letters", caption = "Letters", min = 1, max = 7, default = 3},
                     {id = "tricks", kind = "choice", caption = "Tricks", options = {"All", "Flips"}, default = 2},
                     {id = "area", kind = "button", caption = "Area", text = "Set area"}}})
         assert(not pcall(reskate.throwdowns.mode, {id = "x", name = "X", rows = {{id = "r", kind = "dial"}}}), "a row kind")
         assert(not pcall(reskate.throwdowns.mode, {id = "x", name = "X", flag = "two words"}), "a flag name")
+        assert(not pcall(reskate.throwdowns.mode, {id = "x", name = "X", replaces = "bowling"}), "a stock throwdown")
         reskate.on("throwdown_mode", function(e)
             reskate.log(e.mode .. " " .. e.action .. " " .. tostring(e.settings.players) .. " " .. tostring(e.settings.tricks)
                 .. (e.position and string.format(" at %.0f %.0f %.0f facing %.0f", e.position[1], e.position[2], e.position[3], e.heading) or ""))
+            if e.players then reskate.log(e.mode .. " players " .. table.concat(e.players, ",") .. " led by " .. e.leader .. (e.host and " here" or " elsewhere")) end
             if e.action == "start" then reskate.throwdowns.release_flag() end
         end)
         reskate.console.command("tdgone", "Removes the mode", function() reskate.throwdowns.remove_mode("oneup") end)
@@ -1763,17 +1765,23 @@ void plugins_add_throwdown_modes() {
     running(host, "modes", environment);
     check(game.called("mode modes oneup 1-UP rows 3 timer") && game.modes.size() == 1, "The mode reaches the game\n" + environment.all());
     const auto& mode = game.modes.front();
-    check(mode.players == 2 && mode.min_players == 1 && mode.max_players == 6 && mode.flag == "oneup" && mode.art == "OneUp",
+    check(mode.players == 2 && mode.min_players == 1 && mode.max_players == 6 && mode.flag == "oneup" && mode.art == "OneUp" && mode.replaces == "skate",
           "with its players, flag and art");
     check(mode.timer && mode.timer->caption == "Turn" && mode.timer->step == 10 && mode.timer->value == 20, "its timer");
     check(mode.rows[0].kind == "slider" && mode.rows[0].maximum == 7 && mode.rows[0].value == 3, "a slider row");
     check(mode.rows[1].kind == "choice" && mode.rows[1].options.size() == 2 && mode.rows[1].value == 1, "a choice, counted from 0");
     check(mode.rows[2].kind == "button" && mode.rows[2].text == "Set area", "a button");
     game.mode_news.push_back({"oneup", "placed", "", 0, {{"players", 2}, {"tricks", 1}}, Vec3{1, 2, 3}, 90});
-    game.mode_news.push_back({"oneup", "start", "", 0, {{"players", 2}, {"tricks", 1}}});
+    ThrowdownModeNews start{"oneup", "start", "", 0, {{"players", 2}, {"tricks", 1}}};
+    start.host = false;
+    start.leader = 76561198000000001ULL;
+    start.players = {76561198000000001ULL, 76561198000000002ULL};
+    game.mode_news.push_back(start);
     ticks(host, environment, 1);
     check(environment.logged("[modes] oneup placed 2 1 at 1 2 3 facing 90"), "The flag's place reaches the plugin\n" + environment.all());
     check(environment.logged("[modes] oneup start 2 1") && game.called("release flag modes"), "and its Start, and it takes the flag down");
+    check(environment.logged("[modes] oneup players 76561198000000001,76561198000000002 led by 76561198000000001 elsewhere"),
+          "A start in another player's flag says who plays");
     check(host.run_console("tdgone") && game.called("remove mode modes oneup"), "A mode can go");
     host.apply({contributed("throwdown-modes-test")});
     running(host, "throwdown-modes-test", environment);

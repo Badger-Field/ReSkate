@@ -1,6 +1,7 @@
 // The throwdown relay's state machine without the game: the natives it drives are
 // recorded here, and messages are exchanged by hand as other players would send them.
 #include "Extension/Throwdowns/throwdown_relay.h"
+#include "Extension/Throwdowns/custom_modes.h"
 #include "Extension/Throwdowns/throwdown_lab.h"
 #include "Extension/Throwdowns/throwdown_wire.h"
 #include "Extension/Throwdowns/native_throwdowns.h"
@@ -40,9 +41,14 @@ std::uint32_t local_native_player_id() noexcept { return 2; }
 std::uint64_t native_party_player_info(std::uintptr_t, std::size_t) noexcept { return 0; }
 void spectate_party_member(std::uint64_t) noexcept {}
 bool prepare_throwdown_injection() noexcept { calls.push_back({"prepare"}); return types_ready; }
+std::string last_instance;
+std::uint32_t last_capacity{};
 bool queue_throwdown_spawn(std::uint64_t token, std::uint32_t host, const std::string &series,
-                           const std::vector<std::uint8_t> &, const std::vector<std::uint8_t> &) noexcept {
+                           const std::vector<std::uint8_t> &, const std::vector<std::uint8_t> &,
+                           const std::string &instance, std::uint32_t capacity) noexcept {
     last_token = token;
+    last_instance = instance;
+    last_capacity = capacity;
     calls.push_back({"spawn", series, host, 0, 0, token});
     return true;
 }
@@ -818,6 +824,89 @@ void plugin_host_flow() {
     end_session();
 }
 
+// A plugin throwdown mode's flag (custom_modes.h): offered as that mode's, shown only where the
+// plugin has the mode too, held open on every copy, and its joins, leaves and start reach the
+// plugins instead of starting a Spot Battle.
+void plugin_mode_flow() {
+    using namespace dingosdk::multiplayer::custom_throwdowns;
+    Mode mode;
+    mode.plugin = "smokey"; mode.id = "oneup"; mode.name = "1-UP"; mode.flag = "oneup"; mode.players = 3;
+    check(set_mode(mode).empty(), "The test mode registers");
+    (void)take("smokey");
+    // Hosting: the flag is offered as the mode's, with an offer older versions do not show.
+    {
+        const ThrowdownRelayInput in{me, {{other, 4}}, true, 81};
+        tick(in);
+        ThrowdownLocalAction exited{Local::exited};
+        exited.series = "SpotBattle"; exited.mmid = 0x61; exited.placement = {9}; exited.settings = {8};
+        exited.mode = "smokey/oneup"; exited.flag = "oneup"; exited.mode_players = 2;
+        throwdown_relay_local(std::move(exited));
+        auto out = tick(in);
+        check(out.size() == 2 && out[0].kind == Kind::mode && out[0].challenge == "smokey/oneup" && out[0].series == "oneup" &&
+                  out[0].value == 2 && out[1].kind == Kind::offer && out[1].series == "ReSkateMode",
+              "A mode's flag was not offered as that mode's");
+        receive(other, make(Kind::join, me, 0x61));
+        tick(in);
+        const auto *add = find("add");
+        check(add && add->id == 0x304 && add->mmid == 0x61, "A join did not enter the flag's queue");
+        auto news = take("smokey");
+        check(news.size() == 1 && news[0].action == "joined" && news[0].host && news[0].player == other,
+              "The host's plugin did not hear who joined");
+        check(throwdown_relay_mode_players(0x61) == std::vector<std::uint64_t>{me, other}, "The flag's players were not published");
+        local(Local::force_started, 0x61);
+        out = tick(in);
+        check(out.size() == 1 && out[0].kind == Kind::start && out[0].order == std::vector<std::uint64_t>{me, other},
+              "The host's Start did not reach the other players");
+        check(throwdown_relay_mode_players(0x61).empty(), "The flag was still up after Start");
+        end_session();
+    }
+    // Another player's flag, seen where the mode is: held open with the mode's flag.
+    {
+        calls.clear();
+        const ThrowdownRelayInput in{me, {{leader, 3}, {other, 5}}, true, 82};
+        tick(in);
+        auto tag = make(Kind::mode, leader, 0x71);
+        tag.challenge = "smokey/oneup"; tag.series = "oneup"; tag.value = 3;
+        receive(leader, tag);
+        receive(leader, offer(leader, 0x71, "ReSkateMode"));
+        tick(in);
+        const auto *spawn = find("spawn");
+        check(spawn && spawn->series == "SpotBattle" && last_instance == "ReSkate.oneup" && last_capacity == 10,
+              "A mode's flag was not shown as the mode's, held open");
+        throwdown_relay_spawned(last_token, 0x7777, 10);
+        tick(in);
+        local(Local::joined, 0x7777);
+        auto out = tick(in);
+        check(out.size() == 1 && out[0].kind == Kind::join, "Joining a mode's flag was not reported to its leader");
+        auto news = take("smokey");
+        check(news.size() == 1 && news[0].action == "joined" && !news[0].host && news[0].leader == leader,
+              "The plugin did not hear the local player joined");
+        auto start = make(Kind::start, leader, 0x71);
+        start.order = {leader, me};
+        receive(leader, start);
+        tick(in);
+        check(!find("start") && find("destroy"), "A mode's flag started a Spot Battle instead of going");
+        news = take("smokey");
+        check(news.size() == 1 && news[0].action == "start" && news[0].players == std::vector<std::uint64_t>{leader, me},
+              "The plugin did not hear who plays");
+        end_session();
+    }
+    // Where the plugin does not have that mode, nothing shows.
+    {
+        calls.clear();
+        const ThrowdownRelayInput in{me, {{leader, 3}}, true, 83};
+        tick(in);
+        auto tag = make(Kind::mode, leader, 0x72);
+        tag.challenge = "elsewhere/race"; tag.value = 4;
+        receive(leader, tag);
+        receive(leader, offer(leader, 0x72, "ReSkateMode"));
+        tick(in);
+        check(!find("spawn"), "A mode this player does not have was shown");
+        end_session();
+    }
+    remove_plugin("smokey");
+}
+
 void level_change_flow() {
     using namespace std::chrono_literals;
     const ThrowdownRelayInput in{me, {{leader, 3}}, true, 77};
@@ -869,7 +958,8 @@ int main() {
         beacon_flow();
         level_change_flow();
         plugin_host_flow();
-        std::cout << "Throwdown relay: guest, leader, removal, Spot Battle, S.K.A.T.E., last-player, coop challenge, party beacon, level change and plugin drop flows passed.\n";
+        plugin_mode_flow();
+        std::cout << "Throwdown relay: guest, leader, removal, Spot Battle, S.K.A.T.E., last-player, coop challenge, party beacon, level change, plugin drop and plugin mode flows passed.\n";
         return 0;
     } catch (const std::exception &e) {
         std::cerr << e.what() << '\n';

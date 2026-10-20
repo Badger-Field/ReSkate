@@ -31,6 +31,8 @@ std::string set_mode(Mode mode) {
         return "a mode needs an id of 1 to 32 characters, without /";
     if (mode.name.empty() || mode.name.size() > 32) return "a mode needs a name of 1 to 32 characters";
     if (mode.description.size() > 240) return "a description is at most 240 characters";
+    if (!mode.replaces.empty() && mode.replaces != "skate" && mode.replaces != "spot_battle" && mode.replaces != "jam")
+        return "replaces is \"skate\", \"spot_battle\" or \"jam\"";
     if (mode.min_players < 1 || mode.max_players > 10 || mode.min_players > mode.max_players)
         return "players are 1 to 10, min no more than max";
     mode.players = std::clamp(mode.players, mode.min_players, mode.max_players);

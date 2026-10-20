@@ -43,8 +43,11 @@ std::string challenge_lab_command(std::string_view arguments);
 bool prepare_throwdown_injection() noexcept;
 // DebugSpawnThrowdownWithParams hosted by `host`; the queue's MMID comes back through
 // throwdown_relay_spawned(token, ...).
+// `instance` names the drop's flag (InstanceId, a plugin mode's ReSkate.<flag>; empty: the
+// series' own), and `capacity` holds its queue at that size (0: as the settings say).
 bool queue_throwdown_spawn(std::uint64_t token, std::uint32_t host, const std::string &series,
-                           const std::vector<std::uint8_t> &placement, const std::vector<std::uint8_t> &settings) noexcept;
+                           const std::vector<std::uint8_t> &placement, const std::vector<std::uint8_t> &settings,
+                           const std::string &instance = {}, std::uint32_t capacity = 0) noexcept;
 // A plain `series` queue at `at`, hosted by the local player (a plugin's drop): its MMID comes back
 // through throwdown_relay_spawned(token, ...), its parameters through throwdown_relay_host_placement.
 bool queue_throwdown_host(std::uint64_t token, const std::string &series, const std::array<float, 3> &at, std::uint32_t most_players) noexcept;

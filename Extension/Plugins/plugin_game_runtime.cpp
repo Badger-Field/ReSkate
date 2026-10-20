@@ -404,6 +404,7 @@ public:
         mode.description = m.description;
         mode.art = m.art;
         mode.flag = m.flag;
+        mode.replaces = m.replaces;
         mode.min_players = m.min_players;
         mode.max_players = m.max_players;
         mode.players = m.players;
@@ -421,6 +422,10 @@ public:
             ThrowdownModeNews news{std::move(n.mode), std::move(n.action), std::move(n.row), n.value, std::move(n.settings)};
             if (n.at) news.at = Vec3{(*n.at)[0], (*n.at)[1], (*n.at)[2]};
             news.heading = n.heading;
+            news.host = n.host;
+            news.leader = n.leader;
+            news.player = n.player;
+            news.players = std::move(n.players);
             out.push_back(std::move(news));
         }
         return out;

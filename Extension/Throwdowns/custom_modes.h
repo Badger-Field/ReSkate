@@ -29,6 +29,9 @@ struct Mode {
     std::string art;
     // The mod's flag (InstanceId ReSkate.<flag>). Empty: Spot Battle's own.
     std::string flag;
+    // The stock throwdown whose place on the picker it takes: "skate",
+    // "spot_battle" or "jam"; empty: after them.
+    std::string replaces;
     int min_players = 1, max_players = 6, players = 4;
     std::optional<Row> timer; // the setup page's Timer row, when the mode has one
     std::vector<Row> rows;
@@ -38,12 +41,19 @@ struct Mode {
 // changed), button, placed (the flag is down: `at` and `heading`), start (the
 // host held Start on the waiting card), leave, cancelled (Back out of setup or
 // placement). `settings` holds players, timer and every row by id.
+// In a session the flag is offered to the other players who have the mode
+// (throwdown_relay.cpp). The host hears joined and left (`player`); a player in
+// another's flag hears joined and left (themselves), closed (it was taken down)
+// and start. start names who plays, `players`, the leader first.
 struct News {
     std::string mode, action, row;
     int value{};
     std::map<std::string, int> settings;
     std::optional<std::array<float, 3>> at;
     float heading{}; // degrees
+    bool host = true;            // the local player's own flag, else `leader`'s
+    std::uint64_t leader{}, player{}; // Steam IDs
+    std::vector<std::uint64_t> players;
 };
 
 // Empty when accepted, else why not.

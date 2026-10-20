@@ -101,8 +101,15 @@ struct ThrowdownLocalAction {
     std::string challenge;                         // challenge_started: the challenge's Id
     std::vector<std::uint8_t> criteria, indexes;   // challenge_attempt
     std::array<float, 16> location{};              // beacon_placed: the LinearTransform
+    // exited: the drop is a plugin mode's flag (custom_modes.h): its "plugin/mode", its flag
+    // (empty: Spot Battle's) and how many players it takes.
+    std::string mode, flag;
+    std::uint32_t mode_players{};
 };
 void throwdown_relay_local(ThrowdownLocalAction action) noexcept;
+// The players in the local player's own plugin mode flag `mmid`: the local player first, then
+// the others in the order they joined. Any thread.
+std::vector<std::uint64_t> throwdown_relay_mode_players(std::uint32_t mmid);
 // A mirror spawn queued with `token` ran on the local server (mmid 0: it did not).
 void throwdown_relay_spawned(std::uint64_t token, std::uint32_t mmid, std::uint32_t capacity) noexcept;
 // UIPlayerInfo model of a relayed player's virtual id (rows, host card, name), or 0.

@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -28,6 +29,12 @@ bool registration_waiting() noexcept;
 bool flag_down() noexcept;
 // The InstanceId suffix of the owning mode's own flag, when it has one.
 std::string flag_key();
+// The flag that is down, as the other players are offered it: its mode, flag and player count.
+struct Offer {
+    std::string key, flag;
+    std::uint32_t players{}, mmid{};
+};
+std::optional<Offer> flag_offer();
 // A queue we created; late events for it are not a new stock throwdown.
 bool known_queue(std::uint32_t mmid) noexcept;
 // The plugin is done with its flag (its match started, or it gave up).

@@ -145,6 +145,7 @@ struct Job {
                       beacon_move, beacon_remove } kind;
     std::uint32_t uid{}, max_players{};
     std::string series;                            // spawn: mode when no placement is recorded
+    std::string instance;                          // spawn: its flag's InstanceId (empty: the series' own)
     float score{}; bool flag{true};                // score: value and the native's flag
     std::optional<std::array<float, 3>> position;  // spawn: fresh parameters at this spot
     std::string challenge;                          // challenge_start: its Id (series in `series`)
@@ -1124,7 +1125,7 @@ std::string run_job(const Job& job) {
         // Party-only resolves the host's game group through its native player,
         // which a virtual host lacks, so the host would never enter the queue.
         if (const auto f = find_field(p->type, field_party_only); f && f->size == 1) *reinterpret_cast<std::uint8_t*>(at + f->offset) = 0;
-        if (const auto f = find_field(p->type, field_instance); f && f->kind == kind_string) assign_string(at + f->offset, "");
+        if (const auto f = find_field(p->type, field_instance); f && f->kind == kind_string) assign_string(at + f->offset, job.instance);
         e.set_u32(field_number_of_events, 1);
         // A plugin's drop: its parameters, as the stream other players' copies are spawned from.
         if (job.token && job.position) {
@@ -1563,8 +1564,22 @@ void observe_throwdown_send(std::uint32_t hash, Address type, Address payload) n
             ThrowdownLocalAction action{ThrowdownLocalAction::Kind::exited};
             if (const auto f = find_field(type, field_is_cancelling); f && f->size == 1)
                 action.cancelling = read<std::uint8_t>(payload + f->offset) != 0;
-            // Leaving a plugin mode's flag placement: not a drop to relay.
-            if (custom_throwdowns::placement_active()) { custom_throwdowns::observe_exit(action.cancelling); return; }
+            // Leaving a plugin mode's flag placement. A flag that is down is offered to the other
+            // players as that mode's (throwdown_relay.cpp), never as a Spot Battle.
+            if (custom_throwdowns::placement_active()) {
+                custom_throwdowns::observe_exit(action.cancelling);
+                const auto offer = custom_throwdowns::flag_offer();
+                if (!offer) return;
+                {
+                    std::lock_guard lock(l.mutex);
+                    action.series = l.series; action.mmid = l.hosted_mmid;
+                    action.placement = l.params; action.settings = l.host_params;
+                }
+                if (action.mmid != offer->mmid) return;
+                action.mode = offer->key; action.flag = offer->flag; action.mode_players = offer->players;
+                throwdown_relay_local(std::move(action));
+                return;
+            }
             {
                 std::lock_guard lock(l.mutex);
                 action.series = l.series; action.mmid = l.hosted_mmid;
@@ -2081,11 +2096,13 @@ bool prepare_throwdown_injection() noexcept {
     return false;
 }
 bool queue_throwdown_spawn(std::uint64_t token, std::uint32_t host, const std::string& series,
-                           const std::vector<std::uint8_t>& placement, const std::vector<std::uint8_t>& settings) noexcept {
+                           const std::vector<std::uint8_t>& placement, const std::vector<std::uint8_t>& settings,
+                           const std::string& instance, std::uint32_t capacity) noexcept {
     if (!token || !host || placement.empty()) return false;
     try {
         Job job{Job::Kind::spawn, host};
         job.token = token; job.series = series; job.placement = placement; job.settings = settings;
+        job.instance = instance; job.max_players = capacity;
         return queue_relay_job(std::move(job), event_debug_spawn);
     } catch (...) { return false; }
 }

@@ -167,18 +167,25 @@ struct ThrowdownMode {
     std::string id, name, description;
     std::string art;  // the logo: a texture or image asset the plugin's mod adds, by path; empty: Spot Battle's
     std::string flag; // the mod's own flag (InstanceId ReSkate.<flag>); empty: Spot Battle's
+    std::string replaces; // the stock throwdown whose place it takes: "skate", "spot_battle", "jam" or empty
     int min_players = 1, max_players = 6, players = 4;
     std::optional<ThrowdownRow> timer;
     std::vector<ThrowdownRow> rows;
 };
 // "opened", "setting", "button", "placed", "start", "leave" or "cancelled" for one of the
 // plugin's modes, with every setting (players, timer and the rows by id).
+// In a session the flag is offered to the other players with the same plugin mode: the host hears
+// "joined" and "left" (`player`); a player in another's flag hears "joined" and "left" (themselves),
+// "closed" (taken down) and "start", whose `players` (the leader first) also come to the host's.
 struct ThrowdownModeNews {
     std::string mode, action, row;
     int value{};
     std::map<std::string, int> settings;
     std::optional<Vec3> at;
     float heading{}; // degrees
+    bool host = true;
+    std::uint64_t leader{}, player{};
+    std::vector<std::uint64_t> players;
 };
 struct Progress {
     bool available{};

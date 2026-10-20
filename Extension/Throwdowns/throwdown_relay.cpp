@@ -1,4 +1,5 @@
 #include "throwdown_relay.h"
+#include "custom_modes.h"
 #include "throwdown_lab.h"
 #include "throwdown_wire.h"
 #include "native_throwdowns.h"
@@ -92,6 +93,14 @@ struct ChallengePlan {
     std::optional<Leader> leader_start; // the hook's answer to a leader start, for the tick
 };
 
+// A plugin throwdown mode a drop is the flag of (ThrowdownMessage::Kind::mode).
+struct ModeTag {
+    std::string key, flag; // "plugin/mode"; the InstanceId suffix of its flag, or empty
+    std::uint32_t players{};
+};
+// Every machine holds a plugin mode's flag copy open (it never fills and starts a Spot Battle):
+// the mode's own player count decides who may still join.
+constexpr std::uint32_t mode_queue_capacity = 10;
 // The local player's own drop.
 struct Hosted {
     std::uint32_t id{}; // its MMID
@@ -103,6 +112,7 @@ struct Hosted {
     // A plugin's drop (throwdown_relay_host): only these may join, and it starts once all have.
     std::vector<std::uint64_t> invited;
     bool plugin{}, start_asked{};
+    std::optional<ModeTag> mode; // the flag of a plugin's throwdown mode
 };
 // A plugin's drop on its way: spawned by the lab, its MMID not known yet.
 struct PluginSpawn {
@@ -121,6 +131,7 @@ struct Mirror {
     std::uint32_t mmid{}, max_players{};
     bool joined{}; // the local player is in it
     std::optional<std::vector<std::uint64_t>> start; // the leader started before the copy existed
+    std::optional<ModeTag> mode; // the flag of a plugin's throwdown mode
 };
 const char *state_name(Mirror::State s) {
     switch (s) {
@@ -173,6 +184,8 @@ struct Relay {
     std::string host_status; // under `mutex`
     // Drops shown only to chosen players: who may see each (an invite before its offer).
     std::map<Key, std::vector<std::uint64_t>> invites;
+    std::map<Key, ModeTag> mode_tags; // plugin modes' flags: a mode message before each offer
+    std::map<std::uint32_t, std::vector<std::uint64_t>> mode_players; // own mode flag's players; under `mutex`
     std::map<Key, Mirror> mirrors;
     std::optional<Key> running;
     std::string running_series;
@@ -289,8 +302,14 @@ void send_offer(Relay &r, std::uint64_t now) {
         invite.order = h.invited;
         send(r, invite);
     }
+    if (h.mode) {
+        auto mode = message(Kind::mode, r.local, h.id);
+        mode.challenge = h.mode->key; mode.series = h.mode->flag; mode.value = static_cast<std::int32_t>(h.mode->players);
+        send(r, mode);
+    }
     auto m = message(Kind::offer, r.local, h.id);
-    m.series = h.series; m.placement = h.placement; m.settings = h.settings; m.order = h.members;
+    m.series = h.mode ? std::string(mode_series) : h.series;
+    m.placement = h.placement; m.settings = h.settings; m.order = h.members;
     const auto before = r.outgoing.size();
     send(r, m);
     if (r.outgoing.size() == before) {
@@ -300,6 +319,27 @@ void send_offer(Relay &r, std::uint64_t now) {
     h.next_offer = now + offer_interval_ms;
 }
 // The drop is gone without having started (cancelled, left, replaced, world change).
+// News for the plugin whose mode a flag is (custom_modes.h).
+void mode_news(const ModeTag &mode, std::string action, std::uint64_t leader, bool host, std::uint64_t player = 0,
+               std::vector<std::uint64_t> players = {}) {
+    custom_throwdowns::News news;
+    news.action = std::move(action);
+    news.leader = leader;
+    news.host = host;
+    news.player = player;
+    news.players = std::move(players);
+    custom_throwdowns::post(mode.key, std::move(news));
+}
+void publish_mode_players(Relay &r) {
+    std::map<std::uint32_t, std::vector<std::uint64_t>> players;
+    if (r.hosted && r.hosted->mode) {
+        auto &list = players[r.hosted->id];
+        list.push_back(r.local);
+        list.insert(list.end(), r.hosted->members.begin(), r.hosted->members.end());
+    }
+    std::lock_guard lock(r.mutex);
+    r.mode_players = std::move(players);
+}
 void close_hosted(Relay &r) {
     if (r.hosted && r.hosted->relayed && !r.hosted->started) {
         send(r, message(Kind::close, r.local, r.hosted->id));
@@ -480,7 +520,8 @@ void on_local(Relay &r, ThrowdownLocalAction &a, std::uint64_t now) {
         if (!r.hosted || r.hosted->id != a.mmid) {
             close_hosted(r);
             Hosted h;
-            h.id = a.mmid; h.series = a.series; h.relayed = relayed_mode(a.series);
+            h.id = a.mmid; h.series = a.series; h.relayed = relayed_mode(a.series) || !a.mode.empty();
+            if (!a.mode.empty()) h.mode = ModeTag{a.mode, a.flag, std::clamp<std::uint32_t>(a.mode_players, 1, mode_queue_capacity)};
             r.hosted = std::move(h);
             if (r.hosted->relayed)
                 note("your {} (MMID {:#x}) is shown to the other players.", a.series, a.mmid);
@@ -502,9 +543,12 @@ void on_local(Relay &r, ThrowdownLocalAction &a, std::uint64_t now) {
                 m.joined = true;
                 send(r, message(Kind::join, key.leader, key.id));
                 note("you joined a linked {} (MMID {:#x}).", m.series, m.mmid);
+                if (m.mode) mode_news(*m.mode, "joined", key.leader, false, r.local);
             }
         break;
     case Local::left:
+        for (const auto &[key, m] : r.mirrors)
+            if (m.joined && m.mode) mode_news(*m.mode, "left", key.leader, false, r.local);
         leave_mirrors(r, 0);
         if (r.hosted && !r.hosted->started) close_hosted(r); // the host leaving destroys its queue
         break;
@@ -513,6 +557,8 @@ void on_local(Relay &r, ThrowdownLocalAction &a, std::uint64_t now) {
             std::vector<std::uint64_t> order{r.local};
             order.insert(order.end(), r.hosted->members.begin(), r.hosted->members.end());
             send_start(r, std::move(order));
+            // A mode's flag is done with: its plugin runs the match (custom_placement.cpp).
+            if (r.hosted->mode) r.hosted.reset();
         }
         break;
     case Local::destroy_requested:
@@ -648,7 +694,7 @@ void on_beacon_message(Relay &r, std::uint64_t sender, const ThrowdownMessage &m
 void on_message(Relay &r, std::uint64_t sender, const ThrowdownMessage &m, std::uint64_t now) {
     if (!r.peers.contains(sender)) return;
     if (m.kind == Kind::beacon) { on_beacon_message(r, sender, m); return; }
-    if (m.kind >= Kind::challenge_start && m.kind != Kind::invite) { on_challenge_message(r, sender, m, now); return; }
+    if (m.kind >= Kind::challenge_start && m.kind != Kind::invite && m.kind != Kind::mode) { on_challenge_message(r, sender, m, now); return; }
     const Key key{m.leader, m.id};
     const auto mirror = r.mirrors.find(key);
     switch (m.kind) {
@@ -659,8 +705,20 @@ void on_message(Relay &r, std::uint64_t sender, const ThrowdownMessage &m, std::
         if (!contains(m.order, r.local) && mirror != r.mirrors.end()) destroy_mirror(r, mirror->second, now);
         return;
     }
+    case Kind::mode: {
+        if (m.leader != sender) return;
+        r.mode_tags[key] = ModeTag{m.challenge, m.series, static_cast<std::uint32_t>(m.value)};
+        return;
+    }
     case Kind::offer: {
-        if (m.leader != sender || !relayed_mode(m.series)) return;
+        if (m.leader != sender) return;
+        std::optional<ModeTag> mode;
+        if (m.series == mode_series) {
+            // A plugin mode's flag: shown only where that plugin has the mode too.
+            const auto tag = r.mode_tags.find(key);
+            if (tag == r.mode_tags.end() || !custom_throwdowns::find(tag->second.key)) return;
+            mode = tag->second;
+        } else if (!relayed_mode(m.series)) return;
         if (const auto invite = r.invites.find(key); invite != r.invites.end() && !contains(invite->second, r.local)) return;
         if (mirror != r.mirrors.end()) {
             // A copy removed here (full, or left) stays removed while the leader keeps offering it.
@@ -674,15 +732,18 @@ void on_message(Relay &r, std::uint64_t sender, const ThrowdownMessage &m, std::
         for (auto &[other, copy] : r.mirrors)
             if (other.leader == m.leader) destroy_mirror(r, copy, now);
         Mirror copy;
-        copy.series = m.series; copy.placement = m.placement; copy.settings = m.settings;
+        copy.series = mode ? std::string(spot_battle_mode) : m.series;
+        copy.placement = m.placement; copy.settings = m.settings;
+        copy.mode = mode;
         for (const auto player : m.order)
             if (player != r.local && player != m.leader && !contains(copy.members, player)) copy.members.push_back(player);
         r.mirrors.emplace(key, std::move(copy));
-        note("{} is offered by another player (their MMID {:#x}); showing it here.", m.series, m.id);
+        note("{} is offered by another player (their MMID {:#x}); showing it here.", mode ? mode->key : m.series, m.id);
         return;
     }
     case Kind::close:
         if (m.leader != sender || mirror == r.mirrors.end()) return;
+        if (mirror->second.mode && mirror->second.joined) mode_news(*mirror->second.mode, "closed", key.leader, false, r.local);
         destroy_mirror(r, mirror->second, now);
         return;
     case Kind::join:
@@ -690,9 +751,12 @@ void on_message(Relay &r, std::uint64_t sender, const ThrowdownMessage &m, std::
             if (!r.hosted || r.hosted->id != m.id || r.hosted->started || !r.hosted->relayed ||
                 contains(r.hosted->members, sender) || (!r.hosted->invited.empty() && !contains(r.hosted->invited, sender)))
                 return;
+            // A mode's flag takes as many players as the mode does.
+            if (r.hosted->mode && 1 + r.hosted->members.size() >= r.hosted->mode->players) return;
             r.hosted->members.push_back(sender);
             add_to_hosted(r);
             note("a player joined your {} (virtual id {:#x}).", r.hosted->series, virtual_id(r, sender));
+            if (r.hosted->mode) mode_news(*r.hosted->mode, "joined", r.local, true, sender);
         } else if (mirror != r.mirrors.end()) {
             mirror_member(r, mirror->second, sender, now);
         }
@@ -714,8 +778,10 @@ void on_message(Relay &r, std::uint64_t sender, const ThrowdownMessage &m, std::
                 if (r.in_world) queue_throwdown_remove(virtual_id(r, sender));
             }
         };
-        if (m.leader == r.local && r.hosted && r.hosted->id == m.id && !r.hosted->started)
+        if (m.leader == r.local && r.hosted && r.hosted->id == m.id && !r.hosted->started) {
+            if (r.hosted->mode && contains(r.hosted->members, sender)) mode_news(*r.hosted->mode, "left", r.local, true, sender);
             remove(r.hosted->members, r.hosted->added);
+        }
         else if (mirror != r.mirrors.end() && mirror->second.state != Mirror::State::started)
             remove(mirror->second.members, mirror->second.added);
         return;
@@ -723,6 +789,13 @@ void on_message(Relay &r, std::uint64_t sender, const ThrowdownMessage &m, std::
     case Kind::start: {
         if (m.leader != sender || mirror == r.mirrors.end()) return;
         auto &copy = mirror->second;
+        if (copy.mode) {
+            // The leader's plugin starts its match: the copy's flag goes, and a joined player's
+            // plugin hears who plays.
+            if (copy.joined) mode_news(*copy.mode, "start", key.leader, false, r.local, m.order);
+            destroy_mirror(r, copy, now);
+            return;
+        }
         if (!copy.joined) { destroy_mirror(r, copy, now); return; }
         if (copy.state == Mirror::State::open) start_mirror(r, key, copy, m.order);
         else if (copy.state == Mirror::State::waiting || copy.state == Mirror::State::spawning) copy.start = m.order;
@@ -800,7 +873,7 @@ void on_spawned(Relay &r, std::uint64_t token, std::uint32_t mmid, std::uint32_t
             return;
         }
         m.mmid = mmid;
-        m.max_players = capacity;
+        m.max_players = m.mode ? m.mode->players : capacity;
         if (m.state == Mirror::State::gone) { // closed while it was spawning
             queue_throwdown_destroy(mmid);
             return;
@@ -1120,6 +1193,7 @@ void reset(Relay &r, bool destroy_copies, std::uint64_t now) {
         for (auto &[key, m] : r.mirrors) destroy_mirror(r, m, now);
     r.mirrors.clear();
     r.invites.clear();
+    r.mode_tags.clear();
     r.plugin_spawn.reset();
     r.spawn_refused.clear();
     r.declined.clear();
@@ -1151,7 +1225,12 @@ void update_peers(Relay &r, const ThrowdownRelayInput &in, std::uint64_t now) {
                 if (r.in_world) queue_throwdown_remove(id);
             }
         };
-        if (r.hosted && !r.hosted->started) drop(r.hosted->members, r.hosted->added);
+        if (r.hosted && !r.hosted->started) {
+            if (r.hosted->mode && contains(r.hosted->members, player)) mode_news(*r.hosted->mode, "left", r.local, true, player);
+            drop(r.hosted->members, r.hosted->added);
+        }
+        for (auto &[key, m] : r.mirrors)
+            if (key.leader == player && m.joined && m.mode) mode_news(*m.mode, "closed", key.leader, false, r.local);
         for (auto &[key, m] : r.mirrors) {
             if (key.leader == player) destroy_mirror(r, m, now);
             else if (m.state != Mirror::State::started) drop(m.members, m.added);
@@ -1336,7 +1415,9 @@ void maintain(Relay &r, std::uint64_t now) {
                 const auto host = virtual_id(r, key.leader);
                 if (!host) { m.state = Mirror::State::gone; m.gone_at = now; continue; }
                 m.token = r.next_token++;
-                if (queue_throwdown_spawn(m.token, host, m.series, m.placement, m.settings)) {
+                if (queue_throwdown_spawn(m.token, host, m.series, m.placement, m.settings,
+                                          m.mode && !m.mode->flag.empty() ? "ReSkate." + m.mode->flag : std::string{},
+                                          m.mode ? mode_queue_capacity : 0)) {
                     m.state = Mirror::State::spawning;
                     m.spawning_since = now;
                 }
@@ -1523,6 +1604,7 @@ std::vector<std::vector<std::uint8_t>> tick_throwdown_relay(std::uintptr_t base,
         update_celebration(r, now);
         publish_challenge_plan(r, input);
         publish_order(r);
+        publish_mode_players(r);
         follow_turn(r);
         // Who is up as the local client shows it: it changes seconds before the turn
         // start teleport, so that teleport already knows whether to land on foot.
@@ -1548,6 +1630,12 @@ void receive_throwdown_relay(std::uint64_t sender, std::span<const std::uint8_t>
     if (r.inbox.size() < 256) r.inbox.emplace_back(sender, std::vector<std::uint8_t>(message.begin(), message.end()));
 }
 
+std::vector<std::uint64_t> throwdown_relay_mode_players(std::uint32_t mmid) {
+    auto &r = relay();
+    std::lock_guard lock(r.mutex);
+    const auto found = r.mode_players.find(mmid);
+    return found == r.mode_players.end() ? std::vector<std::uint64_t>{} : found->second;
+}
 void throwdown_relay_local(ThrowdownLocalAction action) noexcept {
     try {
         auto &r = relay();

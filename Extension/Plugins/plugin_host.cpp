@@ -364,6 +364,14 @@ void Host::follow_game() {
                     data["position"] = Json::array({(*news.at)[0], (*news.at)[1], (*news.at)[2]});
                     data["heading"] = news.heading;
                 }
+                data["host"] = news.host;
+                if (news.leader) data["leader"] = std::to_string(news.leader);
+                if (news.player) data["player"] = std::to_string(news.player);
+                if (!news.players.empty()) {
+                    auto players = Json::array();
+                    for (const auto who : news.players) players.push_back(std::to_string(who));
+                    data["players"] = std::move(players);
+                }
                 plugin.game_event("throwdown_mode", "throwdowns", data);
             }
         });

@@ -1112,6 +1112,9 @@ struct WorldApi {
         mode.description = text_field(L, 1, "description");
         mode.art = text_field(L, 1, "art");
         mode.flag = text_field(L, 1, "flag");
+        mode.replaces = text_field(L, 1, "replaces");
+        if (!mode.replaces.empty() && mode.replaces != "skate" && mode.replaces != "spot_battle" && mode.replaces != "jam")
+            luaL_argerror(L, 1, "replaces is \"skate\", \"spot_battle\" or \"jam\"");
         for (const char c : mode.flag)
             if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') luaL_argerror(L, 1, "flag is letters, digits and _");
         lua_getfield(L, 1, "players");

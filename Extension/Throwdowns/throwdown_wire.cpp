@@ -15,6 +15,14 @@ bool valid_series(const std::string &series) noexcept {
                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
            });
 }
+// A plugin mode's key: the plugin's folder name, a /, and the mode's id.
+bool valid_mode_key(const std::string &key) noexcept {
+    return key.size() >= 3 && key.size() <= max_challenge_id && key.find('/') != std::string::npos &&
+           std::all_of(key.begin(), key.end(), [](char c) {
+               return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' ||
+                      c == '.' || c == '/' || c == ' ';
+           });
+}
 bool valid_challenge_id(const std::string &id) noexcept {
     return !id.empty() && id.size() <= max_challenge_id && std::all_of(id.begin(), id.end(), [](char c) {
         return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.';
@@ -84,6 +92,8 @@ bool valid_throwdown(const ThrowdownMessage &m) noexcept {
     case ThrowdownMessage::Kind::beacon:
         return m.leader && std::all_of(m.location.begin(), m.location.end(),
                                        [](float v) { return std::isfinite(v) && std::abs(v) < 1e6f; });
+    case ThrowdownMessage::Kind::mode:
+        return valid_mode_key(m.challenge) && (m.series.empty() || valid_series(m.series)) && m.value >= 1 && m.value <= 10;
     }
     return false;
 }
@@ -137,6 +147,13 @@ std::vector<std::uint8_t> encode_throwdown(const ThrowdownMessage &m) {
         if (m.add)
             for (const auto v : m.location) w.integer(std::bit_cast<std::uint32_t>(v), 4);
         break;
+    case ThrowdownMessage::Kind::mode:
+        w.integer(m.challenge.size(), 1);
+        w.bytes.insert(w.bytes.end(), m.challenge.begin(), m.challenge.end());
+        w.integer(m.series.size(), 1);
+        w.bytes.insert(w.bytes.end(), m.series.begin(), m.series.end());
+        w.integer(static_cast<std::uint32_t>(m.value), 1);
+        break;
     default: break;
     }
     return std::move(w.bytes);
@@ -147,7 +164,7 @@ std::optional<ThrowdownMessage> decode_throwdown(std::span<const std::uint8_t> b
         Reader r{bytes};
         ThrowdownMessage m;
         const auto kind = r.integer(1);
-        if (kind < 1 || kind > 16) return {};
+        if (kind < 1 || kind > 17) return {};
         m.kind = static_cast<ThrowdownMessage::Kind>(kind);
         m.leader = r.integer(8);
         m.id = static_cast<std::uint32_t>(r.integer(4));
@@ -214,6 +231,18 @@ std::optional<ThrowdownMessage> decode_throwdown(std::span<const std::uint8_t> b
             m.add = placed != 0;
             if (m.add)
                 for (auto &v : m.location) v = std::bit_cast<float>(static_cast<std::uint32_t>(r.integer(4)));
+            break;
+        }
+        case ThrowdownMessage::Kind::mode: {
+            const auto text = [&](std::size_t limit, std::string &out) {
+                const auto length = r.integer(1);
+                if (!r.ok || length > limit || length > bytes.size() - r.at) return false;
+                out.assign(reinterpret_cast<const char *>(bytes.data() + r.at), static_cast<std::size_t>(length));
+                r.at += static_cast<std::size_t>(length);
+                return true;
+            };
+            if (!text(max_challenge_id, m.challenge) || !text(max_throwdown_series, m.series)) return {};
+            m.value = static_cast<std::int32_t>(r.integer(1));
             break;
         }
         default: break;

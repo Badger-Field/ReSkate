@@ -37,6 +37,9 @@ void modes_are_checked_and_listed() {
     bad = one_up();
     bad.rows.push_back({custom_throwdowns::Row::Kind::slider, "huge", "Huge", 0, 100000, 1});
     check(!custom_throwdowns::set_mode(bad).empty(), "a slider has at most 600 steps");
+    bad = one_up();
+    bad.replaces = "bowling";
+    check(!custom_throwdowns::set_mode(bad).empty(), "replaces names a stock throwdown");
     const auto mode = custom_throwdowns::find("smokey/oneup");
     check(mode && mode->players == 6 && mode->rows[0].value == 1, "players and a choice are clamped");
     const auto settings = custom_throwdowns::settings("smokey/oneup");

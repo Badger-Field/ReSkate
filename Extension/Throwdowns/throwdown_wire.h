@@ -4,6 +4,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Messages that link the players' own throwdowns (analysis/throwdowns-native-mp.md).
@@ -32,7 +33,12 @@ struct ThrowdownMessage {
         beacon = 15,
         // A drop for chosen players only (a plugin's, reskate.throwdowns.host): order = who may see
         // and join the leader's drop `id`; sent before each of its offers.
-        invite = 16
+        invite = 16,
+        // The leader's drop `id` is the flag of a plugin's throwdown mode (custom_modes.h), sent
+        // before each of its offers: challenge = the mode ("plugin/mode"), series = its flag (may
+        // be empty), value = how many players it takes. Its offers' series is mode_series, which
+        // a ReSkate without plugin modes does not show.
+        mode = 17
     };
     Kind kind = Kind::offer;
     std::uint64_t leader{}; // Steam ID of the player hosting the throwdown
@@ -55,6 +61,7 @@ struct ThrowdownMessage {
     std::array<float, 16> location{};
     bool operator==(const ThrowdownMessage &) const = default;
 };
+inline constexpr std::string_view mode_series = "ReSkateMode";
 constexpr std::size_t max_throwdown_series = 48, max_throwdown_params = 1536, max_throwdown_order = 32,
                       max_throwdown_boards = 16, max_challenge_id = 96, max_challenge_criteria = 64,
                       challenge_criteria_size = 0x14, max_challenge_players = 4;

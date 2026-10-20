@@ -725,6 +725,19 @@ void throwdown_codec() {
         ThrowdownMessage m; m.kind = kind; m.leader = leader; m.id = 5;
         check(decode_throwdown(encode_throwdown(m)) == m, "Throwdown control message failed to round-trip");
     }
+    // A plugin mode's flag.
+    ThrowdownMessage mode;
+    mode.kind = ThrowdownMessage::Kind::mode; mode.leader = leader; mode.id = 0x7c8bf0b2;
+    mode.challenge = "SmokeyDawg58-ReSkate_Throwdown/oneup"; mode.series = "oneup"; mode.value = 6;
+    check(decode_throwdown(encode_throwdown(mode)) == mode, "Throwdown mode failed to round-trip");
+    auto stock_flag = mode; stock_flag.series.clear();
+    check(decode_throwdown(encode_throwdown(stock_flag)) == stock_flag, "A mode on Spot Battle's flag failed to round-trip");
+    auto no_plugin = mode; no_plugin.challenge = "oneup";
+    check(!valid_throwdown(no_plugin), "A mode without its plugin was valid");
+    auto crowded = mode; crowded.value = 11;
+    check(!valid_throwdown(crowded), "A mode for 11 players was valid");
+    auto spaced_flag = mode; spaced_flag.series = "one up";
+    check(!valid_throwdown(spaced_flag), "A flag name with a space was valid");
     // Coop challenges.
     ThrowdownMessage challenge;
     challenge.kind = ThrowdownMessage::Kind::challenge_start; challenge.leader = leader; challenge.id = 3;

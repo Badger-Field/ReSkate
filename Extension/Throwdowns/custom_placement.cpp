@@ -1,6 +1,7 @@
 #include "custom_placement.h"
 #include "custom_modes.h"
 #include "throwdown_lab.h"
+#include "throwdown_relay.h"
 #include "Extension/UI/NativeMenu/native_menu_data.h"
 #include "Engine/Core/Log/logging.h"
 #include <Windows.h>
@@ -35,6 +36,11 @@ void reset(Placement& p) {
 }
 void cleanup(Placement& p, std::uint64_t now) {
     if (p.step != Step::cleanup) p.sent = 0;
+    if (p.mmid && p.step == Step::waiting) {
+        ThrowdownLocalAction closed{ThrowdownLocalAction::Kind::destroy_requested};
+        closed.mmid = p.mmid;
+        throwdown_relay_local(std::move(closed));
+    }
     p.cancelling = true; p.step = Step::cleanup; p.until = now + 15000;
 }
 // News for the plugin, once per flag: cancelled before the flag was down.
@@ -122,6 +128,22 @@ std::string flag_key() {
     const auto mode = find(key);
     return mode ? mode->flag : std::string{};
 }
+std::optional<Offer> flag_offer() {
+    auto& p = placement();
+    std::string key;
+    std::uint32_t mmid{};
+    {
+        std::lock_guard lock(p.mutex);
+        if ((p.step != Step::waiting && p.step != Step::closing) || !p.at || !p.mmid || p.cancelling) return std::nullopt;
+        key = p.key;
+        mmid = p.mmid;
+    }
+    const auto mode = find(key);
+    if (!mode) return std::nullopt;
+    const auto values = settings(key);
+    const auto players = values.find("players");
+    return Offer{key, mode->flag, static_cast<std::uint32_t>(players == values.end() ? mode->players : players->second), mmid};
+}
 bool known_queue(std::uint32_t mmid) noexcept {
     auto& p = placement();
     std::lock_guard lock(p.mutex);
@@ -203,7 +225,16 @@ void waiting_start() noexcept {
     // Start can come before the setup page's exit has moved us to waiting.
     if ((p.step != Step::waiting && p.step != Step::closing) || !p.at || !p.mmid) return;
     if (!p.handed_off) { p.handed_off = true; tell(p, "placed"); }
-    tell(p, "start");
+    if (!p.key.empty() && !p.told) {
+        p.told = true;
+        custom_throwdowns::News news;
+        news.action = "start";
+        news.host = true;
+        news.players = throwdown_relay_mode_players(p.mmid);
+        if (!news.players.empty()) news.leader = news.players.front();
+        post(p.key, std::move(news));
+    }
+    throwdown_relay_local({ThrowdownLocalAction::Kind::force_started, {}, p.mmid});
     // The flag has done its job: the plugin runs the match from here.
     cleanup(p, GetTickCount64());
 }

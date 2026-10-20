@@ -571,6 +571,16 @@ Value picker_logo(const Context& c, Value tile, Value cat, bool stock, const std
     c.set(c.field(tile, 0x868043e1), std::array<float, 2>{424.f, 424.f});
     return logo;
 }
+// The stock throwdowns' places (S.K.A.T.E., Spot Battle, Skate Jam), each the
+// first mode that replaces it, or none.
+std::array<const custom_throwdowns::Mode*, 3> stock_places(const std::vector<custom_throwdowns::Mode>& modes) {
+    std::array<const custom_throwdowns::Mode*, 3> places{};
+    constexpr std::array<std::string_view, 3> names{"skate", "spot_battle", "jam"};
+    for (const auto& mode : modes)
+        for (unsigned i = 0; i < 3; ++i)
+            if (!places[i] && mode.replaces == names[i]) places[i] = &mode;
+    return places;
+}
 // SmokeyDawg58's 4-column logo grid in place of the three stock cards.
 void logo_picker(const Context& c, const std::vector<custom_throwdowns::Mode>& modes) {
     auto& s = state();
@@ -628,13 +638,18 @@ void logo_picker(const Context& c, const std::vector<custom_throwdowns::Mode>& m
                 "Throwdown grid tile model differs.");
         refs.push_back(inner.handle);
     };
-    for (const auto& tile : s.picker_stock) append_tile(tile);
-    for (const auto& mode : modes) {
+    const auto stock = stock_places(modes);
+    const auto mode_tile = [&](const custom_throwdowns::Mode& mode) {
         auto& card = s.mode_cards.at(mode.key());
         if (!card.logo.handle) card.logo = picker_logo(c, card.tile, card.category, mode.art.empty(), mode.name);
         mode_art(c, std::array{c.field(card.logo, 0x6e469d2a)}, mode.art);
         append_tile(card.tile);
-    }
+    };
+    for (unsigned i = 0; i < 3; ++i)
+        if (stock[i]) mode_tile(*stock[i]);
+        else append_tile(s.picker_stock[i]);
+    for (const auto& mode : modes)
+        if (std::none_of(stock.begin(), stock.end(), [&](const auto* m) { return m == &mode; })) mode_tile(mode);
     unsigned count{}, stride{};
     const auto previous = c.array(c.field(s.picker_grid, 0xf2c90867), 64, count, stride);
     require(stride == sizeof(Handle), "Throwdown grid item handle schema differs.");
@@ -653,8 +668,12 @@ void logo_picker(const Context& c, const std::vector<custom_throwdowns::Mode>& m
 void append_cards(const Context& c, const std::vector<custom_throwdowns::Mode>& modes) {
     auto& s = state();
     std::vector<Ref> rows;
-    for (const auto& o : s.originals) rows.push_back({0, o.tile.handle});
-    for (const auto& mode : modes) rows.push_back({0, s.mode_cards.at(mode.key()).tile.handle});
+    const auto stock = stock_places(modes);
+    for (unsigned i = 0; i < 3; ++i)
+        rows.push_back({0, stock[i] ? s.mode_cards.at(stock[i]->key()).tile.handle : s.originals[i].tile.handle});
+    for (const auto& mode : modes)
+        if (std::none_of(stock.begin(), stock.end(), [&](const auto* m) { return m == &mode; }))
+            rows.push_back({0, s.mode_cards.at(mode.key()).tile.handle});
     const bool scale = !modes.empty();
     if (scale != s.cards_scaled) {
         s.cards_scaled = scale;
