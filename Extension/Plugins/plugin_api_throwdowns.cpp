@@ -349,6 +349,16 @@ struct KitApi {
         if (!(speed == 0 || (speed >= 1 && speed <= 30))) luaL_argerror(L, 1, "a cruise speed is 1 to 30 m/s, or 0 for none");
         return result(L, game(plugin).cruise(plugin.id(), static_cast<float>(speed), lua_toboolean(L, 2) != 0));
     }
+    // set_velocity(velocity, add): the board's velocity (m/s, in the world) set, or added to, by the
+    // next physics step with the skater on its board, on the ground or in the air.
+    static int set_velocity(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "skater.control", "reskate.skater.set_velocity");
+        const auto v = position_of(L, 1, "a velocity");
+        for (const auto a : v)
+            if (!(std::abs(a) <= 100)) luaL_argerror(L, 1, "a velocity is at most 100 m/s on each axis");
+        return result(L, game(plugin).set_velocity(plugin.id(), v, lua_toboolean(L, 2) != 0));
+    }
     static int hold(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "skater.control", "reskate.skater.hold");
@@ -369,6 +379,6 @@ void KitApi::install(Plugin&, lua_State* L) {
     lua_pop(L, 1);
     add_functions(L, "files", {{"list", files_list}, {"read", files_read}, {"write", files_write}, {"remove", files_remove}});
     add_functions(L, "ui", {{"dialog", dialog}, {"close_dialog", close_dialog}});
-    add_functions(L, "skater", {{"push", push}, {"push_wait", push_wait}, {"push_reset", push_reset}, {"hold", hold}, {"cruise", cruise}});
+    add_functions(L, "skater", {{"push", push}, {"push_wait", push_wait}, {"push_reset", push_reset}, {"hold", hold}, {"cruise", cruise}, {"set_velocity", set_velocity}});
 }
 }

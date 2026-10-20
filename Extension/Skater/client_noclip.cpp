@@ -407,6 +407,54 @@ void apply_push_velocity(std::uintptr_t core) noexcept {
         request.pending.store(false,std::memory_order_release);
     }catch(...){}
 }
+// A plugin's velocity (set_plugin_velocity): written, or added, by the next physics step that has the
+// local skater on its board, on the ground or in the air, within 500 ms. It rides on the trainer's
+// skater (set_push_speed), as cruise control does.
+struct PluginVelocity {
+    std::mutex mutex;
+    std::array<float, 3> velocity{};
+    bool add{};
+    ULONGLONG expires{};
+    std::atomic<bool> pending{};
+};
+PluginVelocity& plugin_velocity() { static auto* value = new PluginVelocity; return *value; }
+void apply_plugin_velocity(std::uintptr_t core) noexcept {
+    auto& v = plugin_velocity();
+    if (!v.pending.load(std::memory_order_acquire)) return;
+    std::unique_lock lock(v.mutex, std::try_to_lock);
+    if (!lock) return;
+    const ULONGLONG ticks = GetTickCount64();
+    if (ticks >= v.expires) {
+        v.pending.store(false, std::memory_order_release);
+        return;
+    }
+    auto& p = push_speed();
+    if (ticks >= p.expires.load(std::memory_order_acquire)) return;
+    SourceLastError error;
+    auto& state = source_state();
+    if (!state.initialized.load(std::memory_order_acquire) || state.busy.test_and_set(std::memory_order_acquire)) return;
+    SourceBusyScope scope{state.busy};
+    try {
+        const auto bodies = debug_noclip_bodies(state.trial.base, p.client, p.entity);
+        if (bodies.core != core || bodies.offboard || bodies.parts.empty()) return;
+        SourceReader reader;
+        if (reader.value<std::uint8_t>(p.entity, 0x7e0) != 0) return; // teleporting
+        std::array<std::array<float, 3>, 32> velocities{};
+        std::array<std::uint32_t, 32> flags{};
+        const auto count = std::min<std::size_t>(bodies.parts.size(), velocities.size());
+        for (std::size_t i = 0; i < count; ++i) {
+            velocities[i] = reader.value<std::array<float, 3>>(bodies.parts[i], 0x70);
+            flags[i] = reader.value<std::uint32_t>(bodies.parts[i], 0x60);
+        }
+        reader.verify();
+        for (std::size_t i = 0; i < count; ++i) {
+            for (std::size_t a = 0; a < 3; ++a) velocities[i][a] = v.add ? velocities[i][a] + v.velocity[a] : v.velocity[a];
+            body_write(bodies.parts[i] + 0x70, velocities[i]);
+            body_write(bodies.parts[i] + 0x60, flags[i] | 8u);
+        }
+        v.pending.store(false, std::memory_order_release);
+    } catch (...) {}
+}
 void noclip_physics_update(std::uintptr_t core) {
     const auto original = source_state().velocity_update_original.load(std::memory_order_acquire);
     if (original) original(core);
@@ -414,6 +462,7 @@ void noclip_physics_update(std::uintptr_t core) {
     trainer_apply_jump_scale(core);
     trainer_push_speed(core);
     apply_push_velocity(core);
+    apply_plugin_velocity(core);
 }
 bool noclip_motion_target(std::uintptr_t rig, std::uintptr_t context,
     const std::array<float,16>* supplied, std::array<float,16>& target) noexcept {
@@ -550,6 +599,14 @@ bool queue_jump_scale(std::uintptr_t client, std::uintptr_t entity, float factor
         j.pending.store(true, std::memory_order_release);
         return true;
     } catch (...) { return false; }
+}
+void set_plugin_velocity(const std::array<float, 3>& velocity, bool add) noexcept {
+    auto& v = client_source::detail::plugin_velocity();
+    std::lock_guard lock(v.mutex);
+    v.velocity = velocity;
+    v.add = add;
+    v.expires = GetTickCount64() + 500;
+    v.pending.store(true, std::memory_order_release);
 }
 void set_plugin_cruise(float speed, bool may_slow) noexcept {
     auto& p = push_speed();

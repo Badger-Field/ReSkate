@@ -34,6 +34,7 @@
 #include "Extension/Objects/ParkEditor/park_editor_runtime.h"
 #include "Extension/Profile/local_profile_runtime.h"
 #include "Extension/Settings/named_settings.h"
+#include "Engine/Game/Settings/multiplayer_settings_lock.h"
 #include "Extension/Skater/ai_skaters.h"
 #include "Extension/Skater/no_bail.h"
 #include "Extension/Throwdowns/native_throwdowns.h"
@@ -67,6 +68,72 @@
 #include <set>
 
 namespace dingosdk::plugins {
+// Game settings plugins hold (reskate.settings.set): what each found and wrote. Client thread (the
+// game's update thread, which named settings need).
+namespace held_settings {
+namespace {
+struct Held {
+    std::string plugin, name, found, ours;
+};
+std::vector<Held>& list() {
+    static auto* value = new std::vector<Held>; // held settings may still be out at exit
+    return *value;
+}
+bool failed(const std::string& result) { return result.starts_with("error: "); }
+std::string why_of(const std::string& result) { return failed(result) ? result.substr(7) : result; }
+// Put back what was found, unless the setting no longer holds ours (changed elsewhere: it stays).
+void put_back(const Held& h) {
+    if (named_setting_value(h.name) == h.ours) (void)change_named_setting(h.name, h.found, false);
+}
+}
+std::string set(std::string_view plugin, std::string_view name, std::optional<std::string> value) {
+    auto& held = list();
+    const auto at = std::find_if(held.begin(), held.end(), [&](const Held& h) { return console::equal(h.name, name); });
+    if (!value) {
+        if (at != held.end() && at->plugin == plugin) {
+            put_back(*at);
+            held.erase(at);
+        }
+        return {};
+    }
+    const auto now = named_setting_value(name);
+    if (!now) return "no game setting is called \"" + std::string(name) + "\"";
+    if (at != held.end() && at->plugin != plugin) return at->plugin + " holds " + at->name;
+    if (multiplayer_settings_locked() && locked_in_multiplayer(name))
+        return std::string(name) + " changes how the game plays, so it cannot be changed during a multiplayer session";
+    if (at == held.end() && std::count_if(held.begin(), held.end(), [&](const Held& h) { return h.plugin == plugin; }) >= 32)
+        return "a plugin holds at most 32 settings";
+    const auto result = change_named_setting(name, *value, false);
+    if (failed(result)) return why_of(result);
+    const auto ours = named_setting_value(name).value_or(*value);
+    if (at != held.end()) at->ours = ours;
+    else held.push_back({std::string(plugin), std::string(name), *now, ours});
+    return {};
+}
+void release(std::string_view plugin) {
+    auto& held = list();
+    for (auto it = held.end(); it != held.begin();) {
+        --it;
+        if (it->plugin == plugin) {
+            put_back(*it);
+            it = held.erase(it);
+        }
+    }
+}
+}
+void tick_plugin_settings() noexcept {
+    try {
+        if (!multiplayer_settings_locked()) return;
+        auto& held = held_settings::list();
+        for (auto it = held.begin(); it != held.end();) {
+            if (locked_in_multiplayer(it->name)) {
+                held_settings::put_back(*it);
+                it = held.erase(it);
+            } else ++it;
+        }
+    } catch (...) {}
+}
+
 namespace {
 // A request on the queue the console's own debug commands use; its outcome shows in the console's
 // model a tick later, so "" here means it was queued.
@@ -330,6 +397,9 @@ public:
         return p;
     }
     std::optional<std::string> setting(std::string_view name) override { return named_setting_value(name); }
+    std::string set_setting(std::string_view plugin, std::string_view name, std::optional<std::string> value) override {
+        return held_settings::set(plugin, name, std::move(value));
+    }
     std::vector<std::string> setting_names() override { return named_setting_names(); }
 
     // ---- input -------------------------------------------------------------------------------------------
@@ -653,6 +723,12 @@ public:
         set_plugin_cruise(speed, may_slow);
         return {};
     }
+    std::string set_velocity(std::string_view, const Vec3& velocity, bool add) override {
+        if (multiplayer_session_active() && !session_boosts_allowed()) return "the host has turned boosts off";
+        if (multiplayer::local_throwdown_active() && !competition_stock_physics()) return "not while a throwdown runs";
+        set_plugin_velocity(velocity, add);
+        return {};
+    }
     std::string hide_pad(std::string_view plugin, const PadHidden& h) override {
         if (!grind_exit::available()) return "hiding pad controls is unavailable for this game build";
         grind_exit::hide(plugin, {h.left_trigger, h.right_trigger, h.left_x_grinding, h.right_stick, h.left_stick_click, h.right_stick_click});
@@ -783,6 +859,23 @@ public:
         screen_look::slap();
         return {};
     }
+    std::string skater_pose(std::string_view plugin, const std::vector<JointOffset>& offsets, float weight) override {
+        const auto now = GetTickCount64();
+        if (!poser_.empty() && poser_ != plugin && now < pose_at_ + 300) return offsets.empty() ? std::string{} : poser_ + " poses the skater";
+        if (offsets.empty()) {
+            if (poser_ == plugin) {
+                skater_animation::pose({}, 1);
+                poser_.clear();
+            }
+            return {};
+        }
+        poser_ = plugin;
+        pose_at_ = now;
+        std::vector<skater_animation::PoseOffset> out;
+        for (const auto& o : offsets) out.push_back({o.joint, o.rotation, o.scale});
+        skater_animation::pose(std::move(out), weight);
+        return {};
+    }
     std::string skater_reach(std::string_view plugin, std::optional<Reach> goal) override {
         const auto now = GetTickCount64();
         if (!reacher_.empty() && reacher_ != plugin && now < reach_at_ + 300) {
@@ -805,6 +898,35 @@ public:
         g.weight = goal->weight;
         skater_animation::reach(g);
         return {};
+    }
+    static Tuning tuning_of(const trainer::TuningValue& v) {
+        const char* kind = v.kind == trainer::Kind::integer ? "integer"
+                         : v.kind == trainer::Kind::flag ? "flag"
+                         : v.kind == trainer::Kind::curve || v.kind == trainer::Kind::graph ? "multiplier" : "number";
+        return {v.id, v.label, v.group, kind, v.value, v.stock, v.tuner};
+    }
+    std::optional<Tuning> tuning(std::string_view id, std::string& why) override {
+        const auto v = trainer::tuning_value(id, &why);
+        if (!v) return std::nullopt;
+        return tuning_of(*v);
+    }
+    std::vector<Tuning> find_tuning(std::string_view text, std::size_t most) override {
+        std::vector<Tuning> out;
+        for (const auto& v : trainer::find_tuning(text, most)) out.push_back(tuning_of(v));
+        return out;
+    }
+    std::string tune(std::string_view plugin, std::string_view id, std::optional<double> value) override {
+        return trainer::plugin_tune(plugin, id, value);
+    }
+    std::optional<JointPlace> skater_joint(std::uint64_t player, std::uint16_t joint) override {
+        if (!player) {
+            const auto at = skater_animation::joint(joint);
+            if (!at) return std::nullopt;
+            return JointPlace{at->position, at->rotation, at->scale[0]};
+        }
+        const auto at = plugin_feed::joint_place(player, joint);
+        if (!at) return std::nullopt;
+        return JointPlace{at->position, at->rotation, at->scale};
     }
     std::optional<HandPlace> skater_hand(bool left) override {
         const auto placed = skater_animation::hand(left ? arm_reach::Hand::left : arm_reach::Hand::right);
@@ -1177,8 +1299,10 @@ public:
         xray::prepare(plugin, false);
         hud_corner::release(plugin);
         game_speed::ask(plugin, 1.0f);
+        held_settings::release(plugin);
         grind_exit::release(plugin);
         trick_rewrite::release(plugin);
+        trainer::release_plugin_tunes(plugin);
         if (reacher_ == plugin) {
             skater_animation::reach(std::nullopt);
             reacher_.clear();
@@ -1186,6 +1310,10 @@ public:
         if (looker_ == plugin) {
             screen_look::clear();
             looker_.clear();
+        }
+        if (poser_ == plugin) {
+            skater_animation::pose({}, 1);
+            poser_.clear();
         }
         if (const auto seen = telemetry_seen_.find(plugin); seen != telemetry_seen_.end()) telemetry_seen_.erase(seen);
         plugin_feed::release_tags(std::string(plugin));
@@ -1218,6 +1346,8 @@ private:
     std::map<std::string, VariantRead, std::less<>> variant_reads_;
     std::vector<EnabledMod> enabled_mods_;
     std::string reacher_; // the plugin holding the skater's arm (skater_reach)
+    std::string poser_;   // the plugin turning the skater's joints (skater_pose)
+    std::uint64_t pose_at_{};
     std::string looker_;  // the plugin whose look is on the screen (screen_look)
     std::uint64_t look_at_{};
     std::uint64_t reach_at_{};

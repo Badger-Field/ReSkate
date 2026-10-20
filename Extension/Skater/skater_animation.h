@@ -45,6 +45,15 @@ std::shared_ptr<const Clip> take_recording();
 // An arm reaching (arm_reach.h), after any clip, in the pose drawn and sent to the other players;
 // none ends it. It holds for 0.3 s: set it every tick. Unlike clips it is allowed in a throwdown.
 void reach(std::optional<arm_reach::Goal> goal);
+// Joints turned (in their own frame) and scaled on top of the animation and any clip, before any
+// reach, in the pose drawn and sent; `weight` 0..1 of the way. Joints 0 and 1 (the skater's world
+// placement) are left alone. It holds for 0.3 s: set it every tick; empty ends it.
+struct PoseOffset {
+    std::uint16_t joint{};
+    anim_studio::Quat rotation{0, 0, 0, 1};
+    float scale{1};
+};
+void pose(std::vector<PoseOffset> offsets, float weight);
 // Where a joint (of the 395) was in the world in the last pose evaluated, after any clip and reach;
 // empty without a skater. Asking keeps that joint read for two seconds, so the first ask comes back
 // empty; at most 32 joints are read at once.

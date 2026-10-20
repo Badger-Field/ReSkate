@@ -425,6 +425,9 @@ public:
     virtual Progress progress() { return {}; }
     virtual std::optional<std::string> setting(std::string_view) { return std::nullopt; }
     virtual std::vector<std::string> setting_names() { return {}; }
+    // A game setting held at `value` while the plugin keeps it, then put back as it was found
+    // (reskate.settings.set); no value lets go. One plugin holds a setting at a time.
+    virtual std::string set_setting(std::string_view /*plugin*/, std::string_view /*name*/, std::optional<std::string> /*value*/) { return unavailable; }
     // ---- camera ------------------------------------------------------------------------------------
     // The view from a pose (rows right, up, back and position, as follow_camera.h builds them) with
     // a vertical field of view in degrees (0 the camera's own). One plugin holds it at a time, and
@@ -472,12 +475,43 @@ public:
         float weight{1};
     };
     virtual std::string skater_reach(std::string_view /*plugin*/, std::optional<Reach>) { return unavailable; }
+    // Joints of the local skater turned (in their own frame) and scaled on top of the animation, in
+    // the pose drawn and sent (Extension/Skater/skater_animation.h pose); held 0.3 s, so set every
+    // tick; empty ends it. One plugin at a time.
+    struct JointOffset {
+        std::uint16_t joint{};
+        std::array<float, 4> rotation{0, 0, 0, 1};
+        float scale{1};
+    };
+    virtual std::string skater_pose(std::string_view /*plugin*/, const std::vector<JointOffset>&, float /*weight*/) { return unavailable; }
     // Where a hand joint of the local skater is in the world, as last evaluated (after any reach).
     struct HandPlace {
         Vec3 position{};
         std::array<float, 4> rotation{0, 0, 0, 1};
     };
     virtual std::optional<HandPlace> skater_hand(bool /*left*/) { return std::nullopt; }
+    // Where a joint (0..394) of a skater is in the world: player 0 the local skater as its pose was
+    // last evaluated, else another player's as the session draws it. Asking keeps it read for two
+    // seconds, so the first ask comes back empty.
+    struct JointPlace {
+        Vec3 position{};
+        std::array<float, 4> rotation{0, 0, 0, 1};
+        float scale{1};
+    };
+    virtual std::optional<JointPlace> skater_joint(std::uint64_t /*player*/, std::uint16_t /*joint*/) { return std::nullopt; }
+    // The physics tuning's values, as the trainer has them (Extension/Trainer/trainer.h): read,
+    // found by words, and set over the player's own while the plugin keeps them (never saved).
+    struct Tuning {
+        std::string id, label, group, kind; // kind: number, integer, flag, multiplier
+        double value{}, stock{};
+        std::string tuner; // the plugin whose value it is, if any
+    };
+    virtual std::optional<Tuning> tuning(std::string_view /*id*/, std::string& why) {
+        why = unavailable;
+        return std::nullopt;
+    }
+    virtual std::vector<Tuning> find_tuning(std::string_view /*text*/, std::size_t /*most*/) { return {}; }
+    virtual std::string tune(std::string_view /*plugin*/, std::string_view /*id*/, std::optional<double> /*value*/) { return unavailable; }
     virtual std::string replace_trick(std::string_view /*plugin*/, std::string /*trick*/, std::string /*pop*/, ClipRef, float /*speed*/) {
         return unavailable;
     }
@@ -550,6 +584,9 @@ public:
     // left/right while the skater grinds.
     // The skater carried up to a speed (m/s, 0 off) for the next 300 ms, eased down to it with may_slow.
     virtual std::string cruise(std::string_view /*plugin*/, float /*speed*/, bool /*may_slow*/) { return unavailable; }
+    // The board's velocity set (or `add`ed to) by the next physics step with the skater on its board,
+    // within 500 ms.
+    virtual std::string set_velocity(std::string_view /*plugin*/, const Vec3& /*velocity*/, bool /*add*/) { return unavailable; }
     // What of the pad the game does not see (reskate.input.hide): the triggers, the left stick's
     // sideways while grinding, the right stick and the stick clicks.
     struct PadHidden {

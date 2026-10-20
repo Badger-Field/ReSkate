@@ -266,6 +266,68 @@ int prepare(lua_State* L) {
     return 0;
 }
 
+// physics.tuning(id): one tuning value, {id, label, group, kind, value, stock, tuner}, or nil and why.
+void push_tuning(lua_State* L, const Game::Tuning& t) {
+    lua_createtable(L, 0, 7);
+    const auto text = [&](const char* field, const std::string& value) {
+        lua_pushlstring(L, value.data(), value.size());
+        lua_setfield(L, -2, field);
+    };
+    text("id", t.id);
+    text("label", t.label);
+    text("group", t.group);
+    text("kind", t.kind);
+    lua_pushnumber(L, t.value);
+    lua_setfield(L, -2, "value");
+    lua_pushnumber(L, t.stock);
+    lua_setfield(L, -2, "stock");
+    if (!t.tuner.empty()) text("tuner", t.tuner);
+}
+std::string tuning_id(lua_State* L, int index) {
+    std::size_t length{};
+    const char* id = luaL_checklstring(L, index, &length);
+    if (length == 0 || length > 200) luaL_argerror(L, index, "a tuning value's id is 1 to 200 characters");
+    return {id, length};
+}
+int tuning(lua_State* L) {
+    auto& plugin = allowed(L, "skater.read", "reskate.physics.tuning");
+    std::string why;
+    const auto t = game_of(plugin).tuning(tuning_id(L, 1), why);
+    if (!t) {
+        lua_pushnil(L);
+        lua_pushlstring(L, why.data(), why.size());
+        return 2;
+    }
+    push_tuning(L, *t);
+    return 1;
+}
+// physics.find(text): the values whose id has every word of `text`, at most 64.
+int find_tuning(lua_State* L) {
+    auto& plugin = allowed(L, "skater.read", "reskate.physics.find");
+    std::size_t length{};
+    const char* text = luaL_checklstring(L, 1, &length);
+    if (length > 200) luaL_argerror(L, 1, "at most 200 characters");
+    const auto found = game_of(plugin).find_tuning({text, length}, 64);
+    lua_createtable(L, static_cast<int>(found.size()), 0);
+    for (std::size_t i = 0; i < found.size(); ++i) {
+        push_tuning(L, found[i]);
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    return 1;
+}
+// physics.tune(id, value): the value over the player's own while the plugin keeps it; nil lets go.
+int tune(lua_State* L) {
+    auto& plugin = allowed(L, "skater.control", "reskate.physics.tune");
+    const auto id = tuning_id(L, 1);
+    std::optional<double> value;
+    if (lua_type(L, 2) == LUA_TBOOLEAN) value = lua_toboolean(L, 2) ? 1.0 : 0.0;
+    else if (!lua_isnoneornil(L, 2)) {
+        value = luaL_checknumber(L, 2);
+        if (!std::isfinite(*value) || std::abs(*value) > 1e6) luaL_argerror(L, 2, "a finite number within a million");
+    }
+    return result(L, game_of(plugin).tune(plugin.id(), id, value));
+}
+
 // ---- tricks --------------------------------------------------------------------------------------
 // tricks.feed(on): skate.'s trick list, entry by entry, as trick_notes events while on.
 int trick_feed(lua_State* L) {
@@ -391,7 +453,8 @@ void install_services_api(Plugin&, lua_State* L) {
     add_functions(L, "input", {{"pad_bits", pad_bits}, {"key", key}, {"wheel", wheel}, {"mouse", mouse}, {"game_buttons", game_buttons}, {"allowed", input_allowed}, {"focus", focus}});
     add_functions(L, "session", {{"spectate", spectate}, {"world", world}});
     add_functions(L, "camera", {{"free", free_camera}, {"pad_flight", pad_flight}});
-    add_functions(L, "physics", {{"competition", competition}, {"stock_ready", stock_ready}, {"prepare", prepare}});
+    add_functions(L, "physics", {{"competition", competition}, {"stock_ready", stock_ready}, {"prepare", prepare}, {"tuning", tuning},
+                                 {"find", find_tuning}, {"tune", tune}});
     add_functions(L, "tricks", {{"feed", trick_feed}, {"gesture", gesture}, {"label", label}, {"record_as", record_as}});
     add_functions(L, "mods", {{"content", content}, {"read_content", read_content}});
 }

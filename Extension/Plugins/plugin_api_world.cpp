@@ -453,18 +453,7 @@ struct WorldApi {
             if (!lua_isnil(L, -1)) attach->player = player_of(L, lua_gettop(L));
             lua_pop(L, 1);
             lua_getfield(L, 5, "joint");
-            if (lua_type(L, -1) == LUA_TSTRING) {
-                static constexpr std::pair<std::string_view, std::uint16_t> named[] = {
-                    {"right_hand", 49}, {"left_hand", 278}, {"head", 103}, {"hips", 7}, {"spine", 42}};
-                const std::string_view name = lua_tostring(L, -1);
-                const auto at = std::find_if(std::begin(named), std::end(named), [&](const auto& n) { return n.first == name; });
-                if (at == std::end(named)) luaL_error(L, "a joint is a number 0 to 394, or right_hand, left_hand, head, hips or spine");
-                attach->joint = at->second;
-            } else {
-                const double joint = luaL_checknumber(L, -1);
-                if (!(joint >= 0 && joint <= 394) || joint != static_cast<int>(joint)) luaL_error(L, "a joint is a number 0 to 394, or right_hand, left_hand, head, hips or spine");
-                attach->joint = static_cast<std::uint16_t>(joint);
-            }
+            attach->joint = joint_of(L, lua_gettop(L));
             lua_pop(L, 1);
         }
         return result(L, game(plugin).entity_set(plugin.id(), id, asset, matrix, lua_toboolean(L, 4) != 0, attach));
@@ -860,6 +849,89 @@ struct WorldApi {
         }
         lua_pop(L, 1);
         return result(L, game(plugin).skater_reach(plugin.id(), goal));
+    }
+    // A skater's joint: a number 0..394 of the animation skeleton, or one of a few names.
+    static std::uint16_t joint_of(lua_State* L, int index) {
+        if (lua_type(L, index) == LUA_TSTRING) {
+            static constexpr std::pair<std::string_view, std::uint16_t> named[] = {
+                {"right_hand", 49}, {"left_hand", 278}, {"head", 103}, {"hips", 7}, {"spine", 42}};
+            const std::string_view name = lua_tostring(L, index);
+            const auto at = std::find_if(std::begin(named), std::end(named), [&](const auto& n) { return n.first == name; });
+            if (at == std::end(named)) luaL_error(L, "a joint is a number 0 to 394, or right_hand, left_hand, head, hips or spine");
+            return at->second;
+        }
+        const double joint = luaL_checknumber(L, index);
+        if (!(joint >= 0 && joint <= 394) || joint != static_cast<int>(joint)) luaL_error(L, "a joint is a number 0 to 394, or right_hand, left_hand, head, hips or spine");
+        return static_cast<std::uint16_t>(joint);
+    }
+    static int push_joint(lua_State* L, const std::optional<Game::JointPlace>& at) {
+        if (!at) {
+            lua_pushnil(L);
+            return 1;
+        }
+        lua_createtable(L, 0, 3);
+        push_position(L, at->position);
+        lua_setfield(L, -2, "position");
+        push_quaternion(L, at->rotation);
+        lua_setfield(L, -2, "rotation");
+        lua_pushnumber(L, at->scale);
+        lua_setfield(L, -2, "scale");
+        return 1;
+    }
+    // skater.pose({[joint] = {rotation = {x, y, z, w} | angles = vector (degrees), scale = n}, ...}, weight):
+    // joints turned in their own frame and scaled on top of the animation for 0.3 s; nil ends it.
+    static int skater_pose(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "skater.animation", "reskate.skater.pose");
+        std::vector<Game::JointOffset> offsets;
+        if (!lua_isnoneornil(L, 1)) {
+            luaL_checktype(L, 1, LUA_TTABLE);
+            lua_pushnil(L);
+            while (lua_next(L, 1)) {
+                Game::JointOffset o;
+                o.joint = joint_of(L, -2);
+                if (o.joint < 2) luaL_error(L, "joints 0 and 1 place the skater in the world: they cannot be posed");
+                luaL_checktype(L, -1, LUA_TTABLE);
+                const int at = lua_gettop(L);
+                lua_getfield(L, at, "rotation");
+                if (!lua_isnil(L, -1)) o.rotation = quaternion_at(L, lua_gettop(L));
+                lua_pop(L, 1);
+                lua_getfield(L, at, "angles");
+                if (!lua_isnil(L, -1)) {
+                    const auto a = position_of(L, lua_gettop(L), "a joint's angles");
+                    o.rotation = anim_studio::from_euler({a[0], a[1], a[2]});
+                }
+                lua_pop(L, 1);
+                lua_getfield(L, at, "scale");
+                if (!lua_isnil(L, -1)) {
+                    const double s = luaL_checknumber(L, -1);
+                    if (!(s >= 0 && s <= 10)) luaL_error(L, "a joint's scale is 0 to 10");
+                    o.scale = static_cast<float>(s);
+                }
+                lua_pop(L, 1);
+                if (std::any_of(offsets.begin(), offsets.end(), [&](const auto& e) { return e.joint == o.joint; }))
+                    luaL_error(L, "joint %d is posed twice", static_cast<int>(o.joint));
+                if (offsets.size() >= 64) luaL_error(L, "at most 64 joints are posed at once");
+                offsets.push_back(o);
+                lua_pop(L, 1);
+            }
+        }
+        const double weight = luaL_optnumber(L, 2, 1);
+        if (!(weight >= 0 && weight <= 1)) luaL_argerror(L, 2, "a weight is 0 to 1");
+        return result(L, game(plugin).skater_pose(plugin.id(), offsets, static_cast<float>(weight)));
+    }
+    // skater.joint(joint): {position, rotation, scale} of one of the local skater's joints, or nil.
+    static int skater_joint(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "skater.read", "reskate.skater.joint");
+        return push_joint(L, game(plugin).skater_joint(0, joint_of(L, 1)));
+    }
+    // session.joint(player, joint): the same of another player's skater, as this game draws it.
+    static int session_joint(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "session.skaters", "reskate.session.joint");
+        const auto player = player_of(L, 1);
+        return push_joint(L, game(plugin).skater_joint(player, joint_of(L, 2)));
     }
     // skater.hand(side): {position, rotation} of that hand joint in the world as last drawn, or nil.
     static int hand(lua_State* L) {
@@ -1511,6 +1583,17 @@ struct WorldApi {
         else lua_pushnil(L);
         return 1;
     }
+    // settings.set(name, value): a game setting held at `value` while the plugin keeps it; nil lets go.
+    static int setting_set(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "settings.write", "reskate.settings.set");
+        const auto name = checked_text(L, 1, 120, "a setting's name");
+        std::optional<std::string> value;
+        if (lua_type(L, 2) == LUA_TBOOLEAN) value = lua_toboolean(L, 2) ? "true" : "false";
+        else if (lua_type(L, 2) == LUA_TNUMBER) value = std::format("{}", lua_tonumber(L, 2));
+        else if (!lua_isnoneornil(L, 2)) value = checked_text(L, 2, 200, "a setting's value");
+        return result(L, game(plugin).set_setting(plugin.id(), name, std::move(value)));
+    }
     static int setting_names(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "settings.read", "reskate.settings.names");
@@ -1764,7 +1847,7 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     lua_setfield(L, -2, "__metatable");
     lua_setfield(L, LUA_REGISTRYINDEX, "reskate.permissions");
     add_functions(L, "skater", {{"state", state}, {"noclip", noclip}, {"boost", boost}, {"freeze", freeze}, {"wipeout", wipeout}, {"xray", xray},
-                                {"grind_exit", grind_exit}, {"reach", reach}, {"hand", hand}});
+                                {"grind_exit", grind_exit}, {"reach", reach}, {"hand", hand}, {"joint", skater_joint}, {"pose", skater_pose}});
     add_functions(L, "board", {{"motion", board_motion}, {"bones", board_bones}, {"set", board_set}, {"hide", board_hide}, {"clear", board_clear},
                                {"park", board_park}, {"fit", board_fit}, {"toss", board_toss}});
     add_functions(L, "camera", {{"look", camera_look}, {"set", camera_set}, {"follow", camera_follow}, {"release", camera_release}, {"held", camera_held}, {"get", camera_get}});
@@ -1777,7 +1860,7 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     add_functions(L, "world", {{"set_time", set_time}, {"set_control", set_control}, {"set_park", set_park}});
     add_functions(L, "travel", {{"locations", locations}, {"levels", levels}, {"go", go}, {"load", load}});
     add_functions(L, "ai", {{"spawn", ai_spawn}, {"clear", ai_clear}, {"count", ai_count}});
-    add_functions(L, "session", {{"skaters", skaters}, {"tag", tag}});
+    add_functions(L, "session", {{"skaters", skaters}, {"tag", tag}, {"joint", session_joint}});
     add_functions(L, "voice", {{"set_volume", voice_volume}});
     add_functions(L, "chat", {{"send", chat_send}, {"notice", chat_local}});
     add_functions(L, "animation", {{"play", animation_play}, {"stop", animation_stop}, {"playing", animation_playing}, {"replace", animation_replace},
@@ -1791,7 +1874,7 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     add_functions(L, "music", {{"current", current}, {"play", play}, {"pause", pause}, {"next", next}, {"previous", previous},
                                {"game", game_current}, {"game_next", game_next}});
     add_functions(L, "progression", {{"get", progress}});
-    add_functions(L, "settings", {{"game", setting}, {"names", setting_names}});
+    add_functions(L, "settings", {{"game", setting}, {"names", setting_names}, {"set", setting_set}});
     add_functions(L, "input", {{"bind", bind}, {"flight", input_flight}, {"gamepad", input_gamepad}, {"joystick", input_joystick}, {"capture", input_capture},
                                {"hide", input_hide}});
     add_functions(L, "ui", {{"screen", screen}, {"open", open}, {"close", close}});

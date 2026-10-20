@@ -145,6 +145,22 @@ struct FakeGame final : Game {
         return {};
     }
     std::optional<MouseMotion> mouse_motion(std::string_view) override { return MouseMotion{3, -2, 1}; }
+    std::string skater_pose(std::string_view plugin, const std::vector<JointOffset>& offsets, float weight) override {
+        std::string text = std::format("pose {} {:.2f}", plugin, weight);
+        auto sorted = offsets;
+        std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.joint < b.joint; });
+        for (const auto& o : sorted) text += std::format(" {}:{:.2f},{:.2f},{:.2f},{:.2f}x{:.2f}", o.joint, o.rotation[0], o.rotation[1], o.rotation[2], o.rotation[3], o.scale);
+        calls.push_back(text);
+        return {};
+    }
+    std::string set_setting(std::string_view plugin, std::string_view name, std::optional<std::string> value) override {
+        calls.push_back(std::format("setting {} {} {}", plugin, name, value ? *value : std::string("none")));
+        return {};
+    }
+    std::string set_velocity(std::string_view plugin, const Vec3& v, bool add) override {
+        calls.push_back(std::format("velocity {} {:.1f} {:.1f} {:.1f}{}", plugin, v[0], v[1], v[2], add ? " add" : ""));
+        return {};
+    }
     std::string skater_reach(std::string_view plugin, std::optional<Reach> r) override {
         calls.push_back(r ? std::format("reach {} {} {:.1f} {:.1f} {:.1f} {} {:.2f}", plugin, r->left ? "left" : "right", r->at[0], r->at[1], r->at[2],
                                         r->rotation.has_value(), r->weight)
@@ -161,6 +177,32 @@ struct FakeGame final : Game {
                                         l->text[0], l->text[1], l->text[2], l->text[3], l->text[4])
                           : std::format("look {} none", plugin));
         return {};
+    }
+    std::map<std::string, Tuning> tunings{{"physicsmode.jumpmaxheight", {"PhysicsMode.JumpMaxHeight", "Jump height", "Jumps", "number", 1.2, 1.2, ""}},
+                                          {"physicsmode.autopushenabled", {"PhysicsMode.AutoPushEnabled", "Auto push", "Push", "flag", 0, 0, ""}}};
+    std::optional<Tuning> tuning(std::string_view id, std::string& why) override {
+        std::string key(id);
+        for (auto& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        const auto at = tunings.find(key);
+        if (at == tunings.end()) {
+            why = "no tuning value is called \"" + std::string(id) + "\"";
+            return std::nullopt;
+        }
+        return at->second;
+    }
+    std::vector<Tuning> find_tuning(std::string_view text, std::size_t most) override {
+        std::vector<Tuning> out;
+        for (const auto& [key, t] : tunings)
+            if (key.find(text) != std::string::npos && out.size() < most) out.push_back(t);
+        return out;
+    }
+    std::string tune(std::string_view plugin, std::string_view id, std::optional<double> value) override {
+        calls.push_back(value ? std::format("tune {} {} {:.2f}", plugin, id, *value) : std::format("tune {} {} none", plugin, id));
+        return {};
+    }
+    std::optional<JointPlace> skater_joint(std::uint64_t player, std::uint16_t joint) override {
+        if (player == 7 || joint == 300) return std::nullopt;
+        return JointPlace{{static_cast<float>(player), static_cast<float>(joint), 0}, {0, 0, 0, 1}, 1};
     }
     std::string screen_slap(std::string_view plugin) override {
         calls.push_back(std::format("slap {}", plugin));
@@ -1023,6 +1065,8 @@ void plugins_reach_cruise_and_read_the_mouse() {
         assert(h and h.position.x == 1 and h.position.z == 3 and h.rotation[4] == 1, "the right hand")
         assert(reskate.skater.hand("left") == nil and not pcall(reskate.skater.hand, "foot"))
         assert(reskate.skater.cruise(8, true) and reskate.skater.cruise(0))
+        assert(reskate.skater.set_velocity(vector.create(1, 5, -2)) and reskate.skater.set_velocity(vector.create(0, 3, 0), true))
+        assert(not pcall(reskate.skater.set_velocity, vector.create(0, 101, 0)), "100 m/s an axis")
         assert(not pcall(reskate.skater.cruise, 0.5) and not pcall(reskate.skater.cruise, 31), "1 to 30 m/s")
         local m = reskate.input.mouse()
         assert(m and m.x == 3 and m.y == -2 and m.wheel == 1, "the mouse")
@@ -1044,6 +1088,7 @@ void plugins_reach_cruise_and_read_the_mouse() {
               game.called("reach filmer none"),
           "The arm reaches, either hand, and lets go\n" + environment.all());
     check(game.called("cruise filmer 8.0 true") && game.called("cruise filmer 0.0 false"), "Cruise control on and off");
+    check(game.called("velocity filmer 1.0 5.0 -2.0") && game.called("velocity filmer 0.0 3.0 0.0 add"), "A velocity set, and one added");
     check(game.called("hide filmer false false false stick true false true"), "The right stick and its click kept from the game");
     check(game.called("look filmer 0.80 110 0.35 truetruetruefalsefalsetruefalsefalsefalsefalsetrue 2.0 [#REC|0:00:02||4:05 PM|OCT.20 2026]") &&
               game.called("slap filmer") && game.called("look filmer none"),
@@ -1056,6 +1101,58 @@ void plugins_reach_cruise_and_read_the_mouse() {
     ticks(host, environment, 1);
     check(environment.logged("[sneaky] false false false false false"),
           "skater.animation, skater.read, skater.control, input and overlay are needed\n" + environment.all());
+}
+
+// Reading a skater's joints, and the physics tuning read and set.
+void plugins_read_joints_and_tune_physics() {
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    const std::string main = R"(
+        local head = reskate.skater.joint("head")
+        assert(head and head.position.x == 0 and head.position.y == 103 and head.rotation[4] == 1 and head.scale == 1, "your head")
+        assert(reskate.skater.joint(300) == nil, "not known yet")
+        local theirs = reskate.session.joint("42", 49)
+        assert(theirs and theirs.position.x == 42 and theirs.position.y == 49, "their right hand")
+        assert(reskate.session.joint({id = "7"}, "hips") == nil)
+        assert(not pcall(reskate.skater.joint, 395) and not pcall(reskate.skater.joint, "elbow") and not pcall(reskate.session.joint, "me", 1))
+        local jump = reskate.physics.tuning("PhysicsMode.JumpMaxHeight")
+        assert(jump and jump.value == 1.2 and jump.stock == 1.2 and jump.kind == "number" and jump.label == "Jump height" and jump.tuner == nil)
+        local none, why = reskate.physics.tuning("nothing.here")
+        assert(none == nil and why:find("no tuning value"), why)
+        assert(#reskate.physics.find("physicsmode") == 2)
+        assert(reskate.physics.tune("PhysicsMode.JumpMaxHeight", 2.5) and reskate.physics.tune("PhysicsMode.AutoPushEnabled", true))
+        assert(reskate.physics.tune("PhysicsMode.JumpMaxHeight", nil))
+        assert(not pcall(reskate.physics.tune, "x", 0 / 0) and not pcall(reskate.physics.tune, "", 1))
+        assert(reskate.skater.pose({head = {scale = 0}, [44] = {angles = vector.create(0, 0, 90)}, [8] = {rotation = {0, 0, 0, 2}}}, 0.5))
+        assert(reskate.skater.pose(nil))
+        assert(not pcall(reskate.skater.pose, {[1] = {scale = 0}}), "the skater's placement")
+        assert(not pcall(reskate.skater.pose, {head = {scale = 11}}), "scale 0 to 10")
+        assert(not pcall(reskate.skater.pose, {head = {}}, 2), "weight 0 to 1")
+        assert(not pcall(reskate.skater.pose, {head = {}, [103] = {}}), "a joint once")
+        assert(reskate.settings.set("Camera.Height", 1.5) and reskate.settings.set("Chat.Show", true) and
+            reskate.settings.set("Render.Mode", "fast") and reskate.settings.set("Camera.Height", nil))
+        reskate.log("tuned")
+    )";
+    host.apply({package("tuner", {{manifest_file, manifest(R"("skater.read", "skater.control", "session.skaters", "settings.write", "skater.animation")")}, {"plugin/main.lua", main}})});
+    ticks(host, environment, 1);
+    running(host, "tuner", environment);
+    check(environment.logged("[tuner] tuned"), "A plugin reads joints and tunes physics\n" + environment.all());
+    check(game.called("tune tuner PhysicsMode.JumpMaxHeight 2.50") && game.called("tune tuner PhysicsMode.AutoPushEnabled 1.00") &&
+              game.called("tune tuner PhysicsMode.JumpMaxHeight none"),
+          "A value set, a flag set, and let go\n" + environment.all());
+    check(game.called("pose tuner 0.50 8:0.00,0.00,0.00,1.00x1.00 44:0.00,0.00,0.71,0.71x1.00 103:0.00,0.00,0.00,1.00x0.00") &&
+              game.called("pose tuner 1.00"),
+          "Joints posed: a head shrunk, one turned 90 degrees about Z, and off\n" + environment.all());
+    check(game.called("setting tuner Camera.Height 1.5") && game.called("setting tuner Chat.Show true") &&
+              game.called("setting tuner Render.Mode fast") && game.called("setting tuner Camera.Height none"),
+          "Game settings held and let go\n" + environment.all());
+    host.apply({package("sneaky", {{manifest_file, manifest(R"("skater.read")")}, {"plugin/main.lua", R"(
+        reskate.log(tostring(pcall(reskate.physics.tune, "PhysicsMode.JumpMaxHeight", 2)) .. " " .. tostring(pcall(reskate.session.joint, "42", 1)) ..
+            " " .. tostring(pcall(reskate.settings.set, "Camera.Height", 1)))
+    )"}})});
+    ticks(host, environment, 1);
+    check(environment.logged("[sneaky] false false false"), "skater.control, session.skaters and settings.write are needed\n" + environment.all());
 }
 
 void plugins_draw_on_the_overlay() {
@@ -2768,6 +2865,7 @@ int main() {
         plugins_draw_pictures();
         plugins_place_world_entities();
         plugins_reach_cruise_and_read_the_mouse();
+        plugins_read_joints_and_tune_physics();
         plugins_server_copies_are_the_authority();
         plugins_animate_the_skater();
         plugins_play_their_own_sounds();
