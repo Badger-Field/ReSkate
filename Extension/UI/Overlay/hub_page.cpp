@@ -1247,8 +1247,8 @@ void tools_page(Ui &ui, ImVec2 a, ImVec2 z) {
         }
         list.title("BOOSTS");
         {
-            constexpr std::array<float, 9> forward{1.f, 5.f, 10.f, 25.f, 50.f, 100.f, 150.f, 200.f, 300.f};
-            constexpr std::array<float, 8> up{1.f, 2.f, 3.f, 5.f, 8.f, 12.f, 18.f, 25.f};
+            constexpr std::array<float, 10> forward{0.f, 1.f, 5.f, 10.f, 25.f, 50.f, 100.f, 150.f, 200.f, 300.f};
+            constexpr std::array<float, 9> up{0.f, 1.f, 2.f, 3.f, 5.f, 8.f, 12.f, 18.f, 25.f};
             if (const int way = list.adjust("Forward boost", "+" + whole(d.forward_velocity_speed), debugging))
                 debug({DebugAction::set_forward_velocity_speed, false, stepped(d.forward_velocity_speed, forward, way)});
             if (const int way = list.adjust("Up boost", "+" + whole(d.up_velocity_speed), debugging))
