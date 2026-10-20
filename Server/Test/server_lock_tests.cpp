@@ -331,7 +331,7 @@ int run() {
     check(has(b.chat, "The server unlocked for you: nobail, boosts."), "Bailey was not told of the unlock");
     command("unlock Dana all");
     check(free(d) && d.permissions && (*d.permissions & role_movement), "Dana did not get their roster and movement back");
-    check(command("unlock Dana") == "Dana has none of noclip, nobail, boosts, tuning, objects locked.", "unlock with nothing locked");
+    check(command("unlock Dana") == "Dana has none of noclip, nobail, boosts, tuning, ollies, objects locked.", "unlock with nothing locked");
     check(command("lock Dana objects") == "Locked for Dana: objects.", "objects did not lock by name");
     check(command("unlock Dana") == "Unlocked for Dana: objects.", "a bare unlock did not take back objects");
 

@@ -954,7 +954,7 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
                 who = trim(who.substr(0, space));
             }
         if (who.empty() || !tools)
-            return lock ? "lock <player|SteamID64> <tool[,tool...]|all> (tools: noclip, nobail, boosts, tuning, objects)"
+            return lock ? "lock <player|SteamID64> <tool[,tool...]|all> (tools: noclip, nobail, boosts, tuning, ollies, objects)"
                         : "unlock <player|SteamID64> [<tool[,tool...]|all>]";
         auto *guest = target(who);
         if (guest && !guest->handshaken) guest = nullptr;
@@ -996,7 +996,7 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         if (argument.empty())
             return "throwdown-locks <tool[,tool...]|all>|off (now " + (config_.throwdown_locks ? lock_tools_text(config_.throwdown_locks) : std::string("off")) + ")";
         const auto tools = lower(argument) == "off" ? std::optional<std::uint8_t>(0) : parse_lock_tools(argument);
-        if (!tools) return "throwdown-locks <tool[,tool...]|all>|off (tools: noclip, nobail, boosts, tuning, objects)";
+        if (!tools) return "throwdown-locks <tool[,tool...]|all>|off (tools: noclip, nobail, boosts, tuning, ollies, objects)";
         // The players of a running throwdown get the new set at once: what it no longer locks
         // unlocked, what it now locks locked (none of it when it is turned off or on: then
         // update_throwdown_locks ends or starts theirs).

@@ -995,9 +995,9 @@ struct WorldApi {
     }
     // A player's permissions: player.permissions is what the server holds for them now, read-only;
     // permissions:clone() is a copy to change; player:apply_permissions(copy) makes it theirs.
-    static constexpr std::array<std::pair<const char*, bool Game::Permissions::*>, 5> permission_fields{{
+    static constexpr std::array<std::pair<const char*, bool Game::Permissions::*>, 6> permission_fields{{
         {"noclip", &Game::Permissions::noclip}, {"nobail", &Game::Permissions::nobail}, {"boosts", &Game::Permissions::boosts},
-        {"tuning", &Game::Permissions::tuning}, {"objects", &Game::Permissions::objects}}};
+        {"tuning", &Game::Permissions::tuning}, {"objects", &Game::Permissions::objects}, {"ollies", &Game::Permissions::ollies}}};
     static void push_permissions(lua_State* L, const Game::Permissions& permissions, bool readonly) {
         lua_createtable(L, 0, static_cast<int>(permission_fields.size()));
         for (const auto& [name, field] : permission_fields) {

@@ -292,7 +292,7 @@ public:
     // A player's permissions, true where they may: what the server holds for them now, or nothing
     // for one it cannot hold any for. Applying makes them exactly these.
     struct Permissions {
-        bool noclip = true, nobail = true, boosts = true, tuning = true, objects = true;
+        bool noclip = true, nobail = true, boosts = true, tuning = true, objects = true, ollies = true;
     };
     virtual std::optional<Permissions> permissions(std::uint64_t) { return std::nullopt; }
     virtual std::string apply_permissions(std::string_view /*plugin*/, std::uint64_t, const Permissions&) { return unavailable; }

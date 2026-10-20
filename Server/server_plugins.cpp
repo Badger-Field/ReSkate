@@ -70,12 +70,12 @@ class ServerGame final : public Game {
         if (!multiplayer::individual_steam_id(player)) return std::nullopt;
         const auto locks = host_.player_locks(player);
         return Permissions{!(locks & lock_noclip), !(locks & lock_nobail), !(locks & lock_boosts), !(locks & lock_tuning),
-                           !(locks & lock_objects)};
+                           !(locks & lock_objects), !(locks & lock_ollies)};
     }
     std::string apply_permissions(std::string_view plugin, std::uint64_t player, const Permissions &p) override {
         if (!multiplayer::individual_steam_id(player)) return "not a player's SteamID64";
         const auto locks = static_cast<std::uint8_t>((p.noclip ? 0 : lock_noclip) | (p.nobail ? 0 : lock_nobail) | (p.boosts ? 0 : lock_boosts) |
-                                                     (p.tuning ? 0 : lock_tuning) | (p.objects ? 0 : lock_objects));
+                                                     (p.tuning ? 0 : lock_tuning) | (p.objects ? 0 : lock_objects) | (p.ollies ? 0 : lock_ollies));
         host_.set_locks(player, locks, "plugin " + std::string(plugin));
         return {};
     }
