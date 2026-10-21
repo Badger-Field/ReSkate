@@ -675,9 +675,8 @@ void presets_card(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const 
     }
     card_end(p);
 }
-// The cheats and the addons that change how the skater plays (Skater > Cheats, Addons > Grind Exits, Board Break): listed in
-// QUICK SETTINGS, named on the MODIFIED line and turned back by RESET EVERYTHING like the trainer's own values. Road Rash and
-// Hall of Meat only show bails, so they never count.
+// The cheats that change how the skater plays (Skater > Cheats): listed in QUICK SETTINGS, named on the MODIFIED line and
+// turned back by RESET EVERYTHING like the trainer's own values.
 struct CheatLine {
     std::string name, value; // value: what it is set to, empty for a plain switch
     int addon{-1};           // where it lives: an Addons page, else Skater > Cheats
@@ -699,15 +698,7 @@ std::vector<CheatLine> cheat_lines(const Model &model) {
     boost("Off-board up boost", debug.offboard_up_velocity_speed, DebugAction::set_offboard_up_velocity_speed);
     if (debug.revert_boost)
         lines.push_back({"Revert Boost", std::format("x{:.1f}", debug.revert_boost_speed), -1, {DebugAction::set_revert_boost_enabled, false}});
-    if (const auto &grind = model.grind_exit; grind.available && grind.enabled) {
-        std::string value = grind.toe_heel ? "Toe / Heel" : "Left / Right";
-        if (grind.toe_heel) value += grind.stance == 2 ? ", goofy" : grind.stance == 1 ? ", regular" : ", no stance";
-        value += std::format(", pop-out {}%", grind.strength);
-        lines.push_back({"Grind exit triggers", value, addon_grind_exits, {}, "grindexit exits off"});
-    }
-    if (const auto &bb = model.board_break; bb.available && bb.enabled)
-        lines.push_back({"Board Break", std::format("break {}%, grip tape {}%, wear {}%, worn {:.0f}%", bb.sensitivity, bb.joined, bb.wear_rate, bb.worn * 100.0f),
-                         addon_board_break, {}, "boardbreak 0"});
+    // (Grind exits and Board Break are plugins now: their own pages say what they are set to.)
     return lines;
 }
 void cheat_off(SkateMenu &menu, const CallbacksV3 &callbacks, const CheatLine &line) {
