@@ -4,6 +4,7 @@
 #include "bootstrap.h"
 #include "Engine/Core/Hooks/hooks.h"
 #include "Engine/Core/Log/logging.h"
+#include "Engine/Core/Platform/game_instance.h"
 #include "Engine/Core/Profiling/profiler.h"
 #include "Extension/Settings/engine_tweaks.h"
 #include "Extension/Settings/replay_guard.h"
@@ -14,6 +15,9 @@
 #include "Extension/World/shader_registry_guard.h"
 #include "Extension/World/light_table_guard.h"
 #include "Extension/World/guid_table_guard.h"
+#include "Extension/World/texture_handle_guard.h"
+#include "Extension/World/physics_wake_guard.h"
+#include "Extension/World/streaming_copy_guard.h"
 #include "Extension/World/stack_check_report.h"
 #include "Extension/World/world_entities.h"
 #include "Extension/Music/music_inject.h"
@@ -108,6 +112,17 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         if (!validate_image(r.base)) {
             dingosdk::logging::write(dingosdk::logging::Level::critical, dingosdk::logging::Channel::runtime, "Game image validation failed.");
             return FALSE;
+        }
+        // Before anything is merged or opened in the folder: one game in it at a time
+        // (game_instance.h). The launcher checks first; this is two started at the same moment.
+        {
+            std::wstring game(32768, L'\0');
+            game.resize(GetModuleFileNameW(nullptr, game.data(), static_cast<DWORD>(game.size())));
+            if (!game.empty() && !dingosdk::game_instance::claim(std::filesystem::path(game).parent_path())) {
+                dingosdk::logging::write(dingosdk::logging::Level::critical, dingosdk::logging::Channel::runtime,
+                    "Another Skate is already running from this folder; this one does not start.");
+                return FALSE;
+            }
         }
         if (const auto& content = dingosdk::content_cache::catalogs(); content.available) {
             dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::assets,
@@ -347,6 +362,9 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         (void)dingosdk::shader_registry_guard::install(r.base);
         (void)dingosdk::light_table_guard::install(r.base);
         (void)dingosdk::guid_table_guard::install(r.base);
+        (void)dingosdk::texture_handle_guard::install(r.base);
+        (void)dingosdk::physics_wake_guard::install(r.base);
+        (void)dingosdk::streaming_copy_guard::install(r.base);
         (void)dingosdk::load_error_guard::install(r.base);
         (void)dingosdk::texture_handle_limit::install(r.base);
 #if !defined(DINGOSDK_LEAN_PLAYTEST)
@@ -403,9 +421,6 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
             std::string(global_offline_requested ? "true" : "false") + "}");
         const auto neighborhood_unlock_provider_observation =
             dingosdk::neighborhood_unlock_override_observation();
-        record(neighborhood_unlock_provider_observation.json);
-        r.last_neighborhood_unlock_override_observation =
-            neighborhood_unlock_provider_observation.json;
         const bool named_settings = dingosdk::initialize_named_settings(r.base);
         record("{\"event\":\"named_settings_initialized\",\"ready\":" + std::string(named_settings ? "true" : "false") + "}");
         const bool gameplay_settings = dingosdk::initialize_gameplay_settings_override(
