@@ -468,68 +468,42 @@ struct AirGravity {
     std::array<std::atomic<std::uintptr_t>, 8> records{};
     std::atomic<std::uint32_t> noted{};
     std::uintptr_t held{}; // physics thread: the record whose gravity is the trainer's now
-    // The landing countdown (below), physics thread: the flight's time at this gravity, when it started, what was written last.
-    float planned{-1}, written{-1};
-    LONGLONG started{};
+    std::uintptr_t searches{}; // physics thread: the landing searches' gravity (below) the trainer wrote, 0 when stock
 };
 AirGravity& air_gravity() {
     static auto* value = new AirGravity;
     return *value;
 }
-// The landing countdown. At the start of a flight the game plans when it will land with its own gravity and counts that
-// down (the animation graph's output block [[core+0x3b8]+0x10]+0xd8, copied each tick to context +0x18c0); the skater's
-// air pose follows it, reaching for the ground as it runs out. Measured on flat ground (2026-10-18, scripted ollie): the
-// game plans 0.576 s at every gravity; at x2 the wheels touched at 0.38 s with 0.21 s still on it, the body about 34 cm
-// into the ground first; at x3 0.26 s left and a bail: the late, stuttering landing players see. So with another gravity
-// the countdown is set to the time this flight takes to come down to the height the game planned for:
-// d = v t - 9.8 t^2 / 2 at the game's planned time, solved again with the trainer's gravity.
-constexpr std::uintptr_t core_animation_offset = 0x3b8, animation_output_offset = 0x10, output_landing_countdown = 0xd8;
-constexpr std::uintptr_t context_landing_countdown = 0x18c0, flight_record_velocity = 0x1890;
-void air_gravity_countdown(AirGravity& g, std::uintptr_t core, std::uintptr_t context, std::uintptr_t record, float factor) {
+// The landing searches. Where a flight lands, and when, the game finds by walking trajectories through the world
+// (reckoning__set_launch 0x4752aa0 every 7 steps in the air, the grind searches 0x47fb08f, 0x4803148); the gravity of each
+// walk is copied from the trajectory query manager (the object at rva 0x7785da8, +0x30, (0, -9.8, 0)) into the query
+// (0x4787820, +0xd0). The air state then follows the record it chose and lands at its step, and the animation counts
+// down to it (TimeToLand). 0.8.1 set only that countdown again, for flat ground; on a real jump the record the skater
+// followed was still planned at 9.8, so the landing stayed late (a player at x1.25, 2026-10-21). So the manager's gravity
+// is the trainer's while it holds one, and goes back to the game's when it lets go: every search then plans with it.
+constexpr std::uintptr_t query_manager = 0x7785da8, query_manager_gravity = 0x30;
+// mov rcx, [rip + query_manager] in the reckoning's query launch (0x473e280): this build's manager.
+constexpr std::uintptr_t query_manager_load = 0x473e312;
+constexpr unsigned char query_manager_load_bytes[]{0x48, 0x8b, 0x0d, 0x8f, 0x7a, 0x04, 0x03};
+void air_gravity_searches(AirGravity& g, std::uintptr_t base, float wanted) {
+    static const bool known = std::memcmp(reinterpret_cast<const void*>(base + query_manager_load), query_manager_load_bytes,
+                                          sizeof(query_manager_load_bytes)) == 0;
+    if (!known) return;
     SourceReader reader;
-    const auto animation = reader.pointer(core, core_animation_offset);
+    const auto manager = reader.pointer(base + query_manager);
     reader.verify();
-    if (!animation) return;
-    const auto output = reader.pointer(animation, animation_output_offset);
+    if (!manager) return;
+    const auto now = reader.value<std::array<float, 3>>(manager, query_manager_gravity);
     reader.verify();
-    if (!output) return;
-    const float game = reader.value<float>(output, output_landing_countdown);
-    const float up = reader.value<float>(record, flight_record_velocity + 4);
-    reader.verify();
-    if (!std::isfinite(game) || !std::isfinite(up)) return;
-    LARGE_INTEGER clock{}, rate{};
-    QueryPerformanceCounter(&clock);
-    QueryPerformanceFrequency(&rate);
-    // A new plan: the game set the countdown again (higher than what was written last, or nothing written yet).
-    if (game > 0.02f && game < 10.0f && (g.written < 0 || game > g.written + 0.05f)) {
-        const float gravity = -game_gravity * factor, drop = up * game + 0.5f * game_gravity * game * game;
-        const float root = up * up - 2.0f * gravity * drop;
-        g.planned = root >= 0 ? (up + std::sqrt(root)) / gravity : -1.0f;
-        if (!(g.planned > 0) || g.planned > 10.0f) g.planned = -1.0f;
-        g.started = clock.QuadPart;
-        g.written = -1;
-    }
-    if (!(g.planned > 0)) return;
-    // Changed by the game since (a landing, another state): this flight's plan is over.
-    if (g.written >= 0 && std::abs(game - g.written) > 0.05f) {
-        g.planned = -1.0f;
-        g.written = -1;
-        return;
-    }
-    const float left = std::max(0.0f, g.planned - static_cast<float>(clock.QuadPart - g.started) / static_cast<float>(rate.QuadPart));
-    body_write(output + output_landing_countdown, left);
-    body_write(context + context_landing_countdown, left);
-    g.written = left;
-    if (left <= 0) {
-        g.planned = -1.0f;
-        g.written = -1;
-    }
+    if (now[0] != 0 || now[2] != 0 || !(now[1] < -0.1f) || !(now[1] > -250.0f)) return;
+    if (now[1] != wanted) body_write(manager + query_manager_gravity + 4, wanted);
+    g.searches = wanted == game_gravity ? 0 : manager;
 }
 void trainer_air_gravity(std::uintptr_t core) noexcept {
     auto& g = air_gravity();
     float factor = g.factor.load(std::memory_order_relaxed);
     if (GetTickCount64() >= g.expires.load(std::memory_order_acquire)) factor = 1;
-    if (factor == 1 && !g.held) return;
+    if (factor == 1 && !g.held && !g.searches) return;
     SourceLastError error;
     auto& state = source_state();
     if (!state.initialized.load(std::memory_order_acquire) || state.busy.test_and_set(std::memory_order_acquire)) return;
@@ -537,6 +511,7 @@ void trainer_air_gravity(std::uintptr_t core) noexcept {
     try {
         const auto bodies = debug_noclip_bodies(state.trial.base, g.client.load(std::memory_order_relaxed), g.entity.load(std::memory_order_relaxed));
         if (bodies.core != core || !bodies.context) return;
+        bool found = false;
         for (const auto& slot : g.records) {
             const auto record = slot.load(std::memory_order_relaxed);
             if (!record) continue;
@@ -549,13 +524,13 @@ void trainer_air_gravity(std::uintptr_t core) noexcept {
             const float wanted = game_gravity * factor;
             if (now[1] != wanted) body_write(record + flight_record_gravity + 4, wanted);
             g.held = factor == 1 ? 0 : record;
-            if (factor != 1) {
-                g.steps.fetch_add(1, std::memory_order_relaxed);
-                air_gravity_countdown(g, core, bodies.context, record, factor);
-            }
-            return;
+            if (factor != 1) g.steps.fetch_add(1, std::memory_order_relaxed);
+            found = true;
+            break;
         }
-        g.held = 0;
+        if (!found) g.held = 0;
+        // The searches follow the trainer's gravity while it is on, in the air or not (a search starts at the launch).
+        if (factor != 1 || g.searches) air_gravity_searches(g, state.trial.base, game_gravity * factor);
     } catch (...) {}
 }
 // ---- revert boost ------------------------------------------------------------------------------
