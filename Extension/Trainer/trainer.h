@@ -124,7 +124,7 @@ struct View {
     bool gravity_live{true}; // false: this game build's gravity is not where the trainer knows it
     bool gravity_landing_own{}; // landings are planned with gravity_landing, not with gravity
     float gravity_landing{1};   // x the game's own gravity, for the game's landing plans
-    float gravity_timing{};     // 0: the game's animation timing in the air; 1: the timing at the game's own gravity
+    float gravity_timing{1};    // 0: the game's animation timing in the air; 1 (default): the timing at the game's own gravity
     float grind_side{1};    // the sideways part of a pop out of a grind
     float grind_push{};     // Skate 3's pop: m/s sideways at full stick (0: none)
     float grind_range{}; // Skate 3's turn: the left stick turns the board on a grind up to this many degrees (0: off)

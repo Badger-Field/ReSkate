@@ -192,7 +192,7 @@ struct State {
     // Advanced gravity: the gravity the game plans landings with (own off: the same as gravity), and how far the air
     // animations keep the timing they have at the game's gravity (0 the game's, 1 all the way).
     bool gravity_landing_own{};
-    float gravity_landing{1}, gravity_timing{};
+    float gravity_landing{1}, gravity_timing{1};
     float grind_side{1};    // the sideways part of a pop out of a grind or slide
     float grind_push{};     // Skate 3's pop: this many m/s sideways at full stick, the way the stick points (0: none)
     // Skate 3's turn on a grind: the left stick alone turns the board, up to this many degrees either way (0: off, the
@@ -428,7 +428,8 @@ void load_store() {
             s.gravity = std::clamp(o.value("gravity", 1.0f), gravity_low, gravity_high);
             s.gravity_landing_own = o.value("gravity_landing_own", false);
             s.gravity_landing = std::clamp(o.value("gravity_landing", 1.0f), gravity_low, gravity_high);
-            s.gravity_timing = std::clamp(o.value("gravity_timing", 0.0f), 0.0f, 1.0f);
+            // (0.8.5 saved its default 0 as "gravity_timing"; the default is 1 since 0.8.6, under a new key.)
+            s.gravity_timing = std::clamp(o.value("gravity_animation_timing", 1.0f), 0.0f, 1.0f);
             s.grind_side = std::clamp(o.value("grind_side", 1.0f), 0.0f, 1.0e6f);
             s.grind_push = std::clamp(o.value("grind_push", 0.0f), -1.0e6f, 1.0e6f);
             // (grind_lean, grind_turn and grind_tip were levers of earlier builds that did nothing: read past.)
@@ -532,7 +533,7 @@ void save_store() {
         options["gravity"] = s.gravity;
         options["gravity_landing_own"] = s.gravity_landing_own;
         options["gravity_landing"] = s.gravity_landing;
-        options["gravity_timing"] = s.gravity_timing;
+        options["gravity_animation_timing"] = s.gravity_timing;
         options["grind_side"] = s.grind_side;
         options["grind_push"] = s.grind_push;
         options["grind_range"] = s.grind_range;
@@ -1203,7 +1204,7 @@ const std::vector<Setup> &setups() {
         toggle("trick.underflip_split", topic_pop, &s.underflip_split);
         toggle("trick.gravity_landing_own", topic_pop, &s.gravity_landing_own);
         real("trick.gravity_landing", topic_pop, &s.gravity_landing, 1.0f, gravity_low, gravity_high);
-        real("trick.gravity_timing", topic_pop, &s.gravity_timing, 0.0f, 0.0f, 1.0f);
+        real("trick.gravity_timing", topic_pop, &s.gravity_timing, 1.0f, 0.0f, 1.0f);
         for (std::size_t i = 0; i < flip_tricks.size(); ++i) {
             real("trick." + std::string(flip_tricks[i].key), topic_pop, &s.flip_trick[i], 1.0f, flip_low, flip_high);
             all->back().title = std::string(flip_tricks[i].label) + (i >= first_underflip_slot ? ": underflip speed" : ": flip speed");

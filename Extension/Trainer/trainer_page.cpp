@@ -62,7 +62,7 @@ struct Page {
     std::uint64_t share_serial{}; // the last `preset export` put on the clipboard
     bool share_seen{};
     bool show_page{}, show_cheats{};
-    float gravity_edit{1}, gravity_landing_edit{1}, gravity_timing_edit{};
+    float gravity_edit{1}, gravity_landing_edit{1}, gravity_timing_edit{1};
     bool gravity_editing{}, gravity_landing_editing{}, gravity_timing_editing{};
     // QUICK SETTINGS: what is changed (kind 0 a section's line, 1 a dial, 2 one of the trainer's settings, 3 a value).
     struct QuickItem {
@@ -1249,21 +1249,24 @@ void trick_heights(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const
         return true;
     };
     const bool gravity_shown = slider("Gravity", "gravity", view.gravity, p.gravity_edit, p.gravity_editing,
-               "Gravity in the air, on the board and on foot. 1 is the game's own. At 0.5 the same pop goes twice as high and hangs twice as long; at 2 you "
-               "drop twice as fast. It acts in the air only: rolling down a hill, grinds and a bailed skater are the game's own. The game aims an air off a "
-               "ramp back at the ramp with its own gravity, so with another gravity a vert air can come down somewhere else. It takes hold at once.",
+               "Gravity in the air, on the board and on foot. 1 is the game's own.\n\n"
+               "At 0.5 the same pop goes twice as high and hangs twice as long; at 2 you drop twice as fast.\n\n"
+               "It acts in the air only: rolling down a hill, grinds and a bailed skater are the game's own. The game aims an air off a "
+               "ramp back at the ramp with its own gravity, so with another gravity a vert air can come down somewhere else.\n\n"
+               "It takes hold at once. Advanced gravity below times the tricks and landings for it.",
                3.0f);
     if (gravity_shown && view.gravity != 1.0f && !view.gravity_live)
         ImGui::TextDisabled("On foot this game build keeps its own gravity: the setting acts on the board only.");
     if (gravity_shown && ImGui::TreeNodeEx("Advanced gravity", ImGuiTreeNodeFlags_SpanAvailWidth |
-                                           (view.gravity_landing_own || view.gravity_timing > 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0))) {
+                                           (view.gravity_landing_own || view.gravity_timing != 1.0f ? ImGuiTreeNodeFlags_DefaultOpen : 0))) {
         // Animation timing: 0 .. 1, not a multiplier.
-        field(menu, view.gravity_timing > 0 ? "Animation timing  *" : "Animation timing",
-              "How the skater's tricks and landings are timed in the air when Gravity is not 1. 0 is the game's own: it fits a trick into "
-              "the time to land, but cannot hurry a catch, so with more gravity a catch can still be playing when the wheels touch and "
-              "the landing stutters. 1 plays the skater's animations faster by just as much as the flight is shorter (slower when it is "
-              "longer), so tricks, catches and landings look as they do at the game's own gravity; flips turn faster with it. In "
-              "between, part of the way.");
+        field(menu, view.gravity_timing != 1.0f ? "Animation timing  *" : "Animation timing",
+              "How the skater's tricks and landings are timed in the air when Gravity is not 1.\n\n"
+              "1 (the default): the skater's animations play faster by just as much as the flight is shorter (slower when it is "
+              "longer), so tricks, catches and landings look as they do at the game's own gravity. Flips turn faster with it.\n\n"
+              "0: the game's own timing. It fits a trick into the time to land but cannot hurry a catch, so with more gravity a "
+              "catch can still be playing when the wheels touch and the landing stutters.\n\n"
+              "In between: part of the way.");
         ImGui::PushID("gravity_timing");
         float timing = p.gravity_timing_editing ? p.gravity_timing_edit : view.gravity_timing;
         const bool moved = console_style() ? slider_float("##timing", &timing, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)
@@ -1281,12 +1284,14 @@ void trick_heights(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const
             trainer_command(menu, callbacks, std::format("option gravity_landing_own {}", own ? 1 : 0));
         if (ImGui::IsItemHovered())
             wrapped_tooltip("%s", "The game plans every landing (where you come down, when, and the time its animations count down to) "
-                                  "with a gravity. Off: with Gravity, so the plan matches the flight. On: with Landing gravity below; a "
-                                  "plan with less gravity than the flight lands late (the board goes into the ground first), with more "
-                                  "it reaches for the ground early.");
+                                  "with a gravity.\n\n"
+                                  "Off: with Gravity, so the plan matches the flight.\n\n"
+                                  "On: with Landing gravity below. A plan with less gravity than the flight lands late (the board goes "
+                                  "into the ground first); with more it reaches for the ground early.");
         if (own)
             slider("Landing gravity", "gravity_landing", view.gravity_landing, p.gravity_landing_edit, p.gravity_landing_editing,
-                   "The gravity the game plans landings with, as a multiple of its own. Set it to Gravity for landings that match the flight.",
+                   "The gravity the game plans landings with, as a multiple of its own.\n\n"
+                   "Set it to Gravity for landings that match the flight.",
                    3.0f, false, true);
         ImGui::TreePop();
     }
