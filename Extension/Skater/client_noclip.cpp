@@ -469,6 +469,12 @@ struct AirGravity {
     std::atomic<std::uint32_t> noted{};
     std::uintptr_t held{}; // physics thread: the record whose gravity is the trainer's now
     std::uintptr_t searches{}; // physics thread: the landing searches' gravity (below) the trainer wrote, 0 when stock
+    // The landing searches' gravity (0: factor), and how far the air animations keep the game's timing (0 .. 1).
+    std::atomic<float> landing{}, timing{};
+    // The rate that does it now, and the countdown seen last (physics thread).
+    std::atomic<float> animation_rate{1};
+    float countdown{-1};
+    LONGLONG countdown_moved{};
 };
 AirGravity& air_gravity() {
     static auto* value = new AirGravity;
@@ -499,11 +505,57 @@ void air_gravity_searches(AirGravity& g, std::uintptr_t base, float wanted) {
     if (now[1] != wanted) body_write(manager + query_manager_gravity + 4, wanted);
     g.searches = wanted == game_gravity ? 0 : manager;
 }
+// Air animations at the game's timing. The game fits a trick into the flight by the time to land (the animation's
+// countdown, [[core+0x3b8]+0x10]+0xd8): the clips' time is warped toward it, but the catch at most to its own speed
+// (animation-timelines.md, the type-3 windows: up to 1.5, then up to 1.0). A flight shorter than the game's gravity
+// would make it (x1.31 on flat ground: a quarter shorter) so lands with the catch still playing: the stutter players
+// see. With "timing" at 1 the skater's clips run faster by the time this flight would take at 9.8 over the time it
+// takes, so the game sees the flight it planned for and its animations come out as they would at x1; between 0 and 1
+// part of the way. The countdown is planned with the landing gravity, the flight falls with the trainer's.
+constexpr std::uintptr_t core_animation_offset = 0x3b8, animation_output_offset = 0x10, output_landing_countdown = 0xd8;
+constexpr std::uintptr_t flight_record_velocity = 0x1890;
+void air_gravity_animation(AirGravity& g, std::uintptr_t core, std::uintptr_t record, float factor, float landing, float timing) {
+    SourceReader reader;
+    const auto animation = reader.pointer(core, core_animation_offset);
+    reader.verify();
+    const auto output = animation ? reader.pointer(animation, animation_output_offset) : 0;
+    reader.verify();
+    float countdown = output ? reader.value<float>(output, output_landing_countdown) : -1.0f;
+    const float up = reader.value<float>(record, flight_record_velocity + 4);
+    reader.verify();
+    if (!std::isfinite(countdown) || countdown > 10.0f) countdown = -1.0f;
+    LARGE_INTEGER clock{}, rate{};
+    QueryPerformanceCounter(&clock);
+    QueryPerformanceFrequency(&rate);
+    if (countdown != g.countdown) g.countdown_moved = clock.QuadPart;
+    // A new plan (the countdown set again, higher): the rate for this flight, from the drop it plans for.
+    if (countdown > 0.02f && std::isfinite(up) && (g.countdown <= 0 || countdown > g.countdown + 0.05f)) {
+        const float drop = up * countdown + 0.5f * game_gravity * landing * countdown * countdown;
+        // The time to come down that far with a gravity of g x the game's.
+        const auto flight = [&](float g) {
+            const float root = up * up + 2.0f * game_gravity * g * drop;
+            return root >= 0 ? (up + std::sqrt(root)) / (-game_gravity * g) : -1.0f;
+        };
+        const float stock = flight(1.0f), real = flight(factor);
+        const float full = stock > 0 && real > 0 ? std::clamp(stock / real, 0.25f, 4.0f) : 1.0f;
+        g.animation_rate.store(1.0f + (full - 1.0f) * timing, std::memory_order_relaxed);
+    }
+    g.countdown = countdown;
+    // Landed, or the countdown has stood still (a bail, another state): the game's own rate.
+    const bool still = clock.QuadPart - g.countdown_moved > rate.QuadPart / 10;
+    if (!(countdown > 0) || still) g.animation_rate.store(1.0f, std::memory_order_relaxed);
+}
 void trainer_air_gravity(std::uintptr_t core) noexcept {
     auto& g = air_gravity();
     float factor = g.factor.load(std::memory_order_relaxed);
-    if (GetTickCount64() >= g.expires.load(std::memory_order_acquire)) factor = 1;
-    if (factor == 1 && !g.held && !g.searches) return;
+    float landing = g.landing.load(std::memory_order_relaxed);
+    const float timing = g.timing.load(std::memory_order_relaxed);
+    if (GetTickCount64() >= g.expires.load(std::memory_order_acquire)) factor = 1, landing = 1;
+    if (!(landing > 0)) landing = factor;
+    if (factor == 1 && landing == 1 && !g.held && !g.searches) {
+        g.animation_rate.store(1.0f, std::memory_order_relaxed);
+        return;
+    }
     SourceLastError error;
     auto& state = source_state();
     if (!state.initialized.load(std::memory_order_acquire) || state.busy.test_and_set(std::memory_order_acquire)) return;
@@ -525,12 +577,17 @@ void trainer_air_gravity(std::uintptr_t core) noexcept {
             if (now[1] != wanted) body_write(record + flight_record_gravity + 4, wanted);
             g.held = factor == 1 ? 0 : record;
             if (factor != 1) g.steps.fetch_add(1, std::memory_order_relaxed);
+            if (factor != 1 && timing > 0) air_gravity_animation(g, core, record, factor, landing, timing);
+            else g.animation_rate.store(1.0f, std::memory_order_relaxed);
             found = true;
             break;
         }
-        if (!found) g.held = 0;
-        // The searches follow the trainer's gravity while it is on, in the air or not (a search starts at the launch).
-        if (factor != 1 || g.searches) air_gravity_searches(g, state.trial.base, game_gravity * factor);
+        if (!found) {
+            g.held = 0;
+            g.animation_rate.store(1.0f, std::memory_order_relaxed);
+        }
+        // The searches plan with the landing gravity while one is set, in the air or not (a search starts at the launch).
+        if (landing != 1 || g.searches) air_gravity_searches(g, state.trial.base, game_gravity * landing);
     } catch (...) {}
 }
 // ---- revert boost ------------------------------------------------------------------------------
@@ -1060,12 +1117,19 @@ void set_push_speed(std::uintptr_t client, std::uintptr_t entity, float factor, 
     p.factor.store(factor > 0.02f && factor <= 1.0e6f ? factor : 1.0f, std::memory_order_relaxed);
     p.expires.store(GetTickCount64() + 500, std::memory_order_release);
 }
-void set_air_gravity(std::uintptr_t client, std::uintptr_t entity, float factor) noexcept {
+void set_air_gravity(std::uintptr_t client, std::uintptr_t entity, float factor, float landing, float timing) noexcept {
     auto& g = air_gravity();
+    g.landing.store(std::isfinite(landing) && landing >= 0.02f && landing <= 20.0f ? landing : 0.0f, std::memory_order_relaxed);
+    g.timing.store(std::isfinite(timing) ? std::clamp(timing, 0.0f, 1.0f) : 0.0f, std::memory_order_relaxed);
     g.client.store(client, std::memory_order_relaxed);
     g.entity.store(entity, std::memory_order_relaxed);
     g.factor.store(std::isfinite(factor) && factor >= 0.02f && factor <= 20.0f ? factor : 1.0f, std::memory_order_relaxed);
     g.expires.store(GetTickCount64() + 500, std::memory_order_release);
+}
+float air_animation_rate() noexcept {
+    auto& g = air_gravity();
+    if (!(g.timing.load(std::memory_order_relaxed) > 0) || GetTickCount64() >= g.expires.load(std::memory_order_acquire)) return 1.0f;
+    return g.animation_rate.load(std::memory_order_relaxed);
 }
 std::uint32_t air_gravity_steps() noexcept { return air_gravity().steps.load(std::memory_order_relaxed); }
 void note_flight_record(std::uintptr_t trajectory) noexcept {
