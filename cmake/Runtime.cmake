@@ -208,6 +208,9 @@ add_library(dingosdk_runtime SHARED
     Extension/Customization/item_origins.cpp
     Extension/Customization/local_customization_runtime.cpp
     Extension/Customization/item_browser.cpp
+    Extension/Customization/worn_items.cpp
+    Extension/Rendering/Capture/capture_runtime.cpp
+    Extension/Rendering/Capture/capture_commands.cpp
     Extension/Progression/local_entitlement_trigger_runtime.cpp
     Extension/Progression/local_neighborhood_runtime.cpp
     Extension/Customization/local_player_card_runtime.cpp
@@ -399,3 +402,4 @@ if(EXISTS "${dingosdk_startup_art}")
         "STARTUP_SPLASH RCDATA \"${dingosdk_startup_art_native}\"\n")
     target_sources(dingosdk_runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/startup_art.rc")
 endif()
+target_link_libraries(dingosdk_runtime PRIVATE dingosdk_capture)
