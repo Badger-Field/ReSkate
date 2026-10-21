@@ -41,7 +41,11 @@ void set_plugin_cruise(float speed, bool may_slow) noexcept;
 void set_plugin_velocity(const std::array<float, 3>& velocity, bool add) noexcept;
 // Trainer: gravity in the air on the board as a multiple of the game's own (1 leaves the skater alone). Publish every
 // client tick: it expires after 500 ms. `air_gravity_steps` counts the physics steps it acted on.
-void set_air_gravity(std::uintptr_t client, std::uintptr_t entity, float factor) noexcept;
+// landing: the gravity the game plans landings with, as a multiple of its own (0: the same as factor). timing: 0 the game's
+// own animation timing in the air, 1 the timing the flight would have at the game's gravity (air_animation_rate is the
+// rate that gives it, 1 on the ground).
+void set_air_gravity(std::uintptr_t client, std::uintptr_t entity, float factor, float landing = 0, float timing = 0) noexcept;
+float air_animation_rate() noexcept;
 std::uint32_t air_gravity_steps() noexcept;
 // Trainer: the game has just launched a flight with this trajectory object (any skater's; any thread).
 void note_flight_record(std::uintptr_t trajectory) noexcept;

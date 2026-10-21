@@ -203,6 +203,10 @@ struct State {
     float manual_height{1}; // the pop out of a manual
     float gravity{1};       // x the game's own gravity, in the air on the board
     bool gravity_live{true}; // this build's gravity constants are the known ones
+    // Advanced gravity: the gravity the game plans landings with (own off: the same as gravity), and how far the air
+    // animations keep the timing they have at the game's gravity (0 the game's, 1 all the way).
+    bool gravity_landing_own{};
+    float gravity_landing{1}, gravity_timing{1};
     float grind_side{1};    // the sideways part of a pop out of a grind or slide
     float grind_push{};     // Skate 3's pop: this many m/s sideways at full stick, the way the stick points (0: none)
     // Skate 3's turn on a grind: the left stick alone turns the board, up to this many degrees either way (0: off, the
@@ -436,6 +440,10 @@ void load_store() {
             s.nocomply_height = std::clamp(o.value("nocomply_height", 1.0f), height_low, height_high);
             s.manual_height = std::clamp(o.value("manual_height", 1.0f), height_low, height_high);
             s.gravity = std::clamp(o.value("gravity", 1.0f), gravity_low, gravity_high);
+            s.gravity_landing_own = o.value("gravity_landing_own", false);
+            s.gravity_landing = std::clamp(o.value("gravity_landing", 1.0f), gravity_low, gravity_high);
+            // (0.8.5 saved its default 0 as "gravity_timing"; the default is 1 since 0.8.6, under a new key.)
+            s.gravity_timing = std::clamp(o.value("gravity_animation_timing", 1.0f), 0.0f, 1.0f);
             s.grind_side = std::clamp(o.value("grind_side", 1.0f), 0.0f, 1.0e6f);
             s.grind_push = std::clamp(o.value("grind_push", 0.0f), -1.0e6f, 1.0e6f);
             // (grind_lean, grind_turn and grind_tip were levers of earlier builds that did nothing: read past.)
@@ -537,6 +545,9 @@ void save_store() {
         options["nocomply_height"] = s.nocomply_height;
         options["manual_height"] = s.manual_height;
         options["gravity"] = s.gravity;
+        options["gravity_landing_own"] = s.gravity_landing_own;
+        options["gravity_landing"] = s.gravity_landing;
+        options["gravity_animation_timing"] = s.gravity_timing;
         options["grind_side"] = s.grind_side;
         options["grind_push"] = s.grind_push;
         options["grind_range"] = s.grind_range;
@@ -1199,6 +1210,9 @@ const std::vector<Setup> &setups() {
         toggle("trick.flip_pop", topic_pop, &s.flip_pop);
         toggle("trick.flip_flick", topic_pop, &s.flip_flick);
         toggle("trick.underflip_split", topic_pop, &s.underflip_split);
+        toggle("trick.gravity_landing_own", topic_pop, &s.gravity_landing_own);
+        real("trick.gravity_landing", topic_pop, &s.gravity_landing, 1.0f, gravity_low, gravity_high);
+        real("trick.gravity_timing", topic_pop, &s.gravity_timing, 1.0f, 0.0f, 1.0f);
         for (std::size_t i = 0; i < flip_tricks.size(); ++i) {
             real("trick." + std::string(flip_tricks[i].key), topic_pop, &s.flip_trick[i], 1.0f, flip_low, flip_high);
             all->back().title = std::string(flip_tricks[i].label) + (i >= first_underflip_slot ? ": underflip speed" : ": flip speed");
@@ -1245,7 +1259,8 @@ const std::vector<Setup> &setups() {
             all->back().high = high;
         }
         constexpr std::pair<std::string_view, std::string_view> titles[]{
-            {"trick.flip_speed", "Flip trick speed"}, {"trick.underflip_speed", "Underflip speed"}, {"trick.manual_height", "Manual pop height"}, {"trick.gravity", "Gravity"},
+            {"trick.flip_speed", "Flip trick speed"}, {"trick.underflip_speed", "Underflip speed"}, {"trick.manual_height", "Manual pop height"}, {"trick.gravity", "Gravity"}, {"trick.gravity_landing_own", "Gravity: landings planned with their own gravity"}, {"trick.gravity_landing", "Landing gravity"},
+            {"trick.gravity_timing", "Animation timing"},
             {"trick.nocomply_height", "No comply height"}, {"trick.boneless_height", "Boneless height"}, {"trick.hippy_height", "Hippy jump height"},
             {"trick.offboard_height", "Off-board jump height"}, {"trick.pump_power", "Pump power"}, {"trick.revert_boost", "Board bending boost"},
             {"trick.flip_advanced", "Advanced trick speed"}, {"trick.flip_pop", "Slow flips pop higher"}, {"trick.flip_flick", "Flick tricks at full speed"},
@@ -2469,6 +2484,9 @@ void build_view() {
     next->manual_height = s.manual_height;
     next->gravity = s.gravity;
     next->gravity_live = s.gravity_live;
+    next->gravity_landing_own = s.gravity_landing_own;
+    next->gravity_landing = s.gravity_landing;
+    next->gravity_timing = s.gravity_timing;
     next->grind_side = s.grind_side;
     next->grind_push = s.grind_push;
     next->grind_range = s.grind_range;
@@ -2908,8 +2926,12 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool playing, const std::s
         }
         {
             // Gravity: the game's own under a host's physics or with boosts off. Both levers let go by themselves.
-            float board = s.enforced || (multiplayer_session_active() && !session_boosts_allowed()) ? 1.0f : s.gravity, foot = board;
-            set_air_gravity(client, s.entity, board);
+            const bool stock_gravity = s.enforced || (multiplayer_session_active() && !session_boosts_allowed());
+            float board = stock_gravity ? 1.0f : s.gravity, foot = board;
+            // Under a host's physics or with boosts off the advanced levers let go with the gravity.
+            const bool own = board != 1.0f || (s.gravity_landing_own && s.gravity_landing != 1.0f);
+            set_air_gravity(client, s.entity, board, !own || stock_gravity ? 1.0f : s.gravity_landing_own ? s.gravity_landing : 0.0f,
+                            board == 1.0f ? 0.0f : s.gravity_timing);
             air_gravity_now = board;
             if (const bool live = set_foot_gravity(foot); live != s.gravity_live) {
                 s.gravity_live = live;
@@ -3470,6 +3492,16 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
             if (!value) return "error: gravity needs a multiplier, 1 = the game's own (0.5 floats, 2 drops fast).";
             if (!editable(&why)) return "error: " + why;
             s.gravity = std::clamp(static_cast<float>(*value), gravity_low, gravity_high);
+        } else if (name == "gravity_landing") {
+            const auto value = number(arg(1));
+            if (!value) return "error: gravity_landing needs a multiplier: the gravity the game plans landings with (gravity_landing_own 1 uses it).";
+            if (!editable(&why)) return "error: " + why;
+            s.gravity_landing = std::clamp(static_cast<float>(*value), gravity_low, gravity_high);
+        } else if (name == "gravity_timing") {
+            const auto value = number(arg(1));
+            if (!value) return "error: gravity_timing needs 0 (the game's animation timing) to 1 (the timing at the game's own gravity).";
+            if (!editable(&why)) return "error: " + why;
+            s.gravity_timing = std::clamp(static_cast<float>(*value), 0.0f, 1.0f);
         } else if (name == "pump_power") {
             const auto value = number(arg(1));
             if (!value) return "error: pump_power needs a multiplier, 1 = what the game's own pump gains.";
@@ -3487,7 +3519,7 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
             if (!value) return "error: return_delay needs seconds.";
             s.return_delay = std::clamp(static_cast<float>(*value), 0.0f, 3600.0f);
         } else if (!flag(arg(1), on)) {
-            return "error: usage: trainer option hud|hud_jump|auto_return|pad|flip_advanced|flip_pop|flip_flick|underflip_split|log 0|1";
+            return "error: usage: trainer option hud|hud_jump|auto_return|pad|flip_advanced|flip_pop|flip_flick|underflip_split|gravity_landing_own|log 0|1";
         } else if (name == "hud") s.hud = on;
         else if (name == "hud_jump") s.hud_jump = on;
         else if (name == "auto_return") s.auto_return = on;
@@ -3507,6 +3539,9 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
         } else if (name == "underflip_split") {
             if (on && !editable(&why)) return "error: " + why;
             s.underflip_split = on;
+        } else if (name == "gravity_landing_own") {
+            if (on && !editable(&why)) return "error: " + why;
+            s.gravity_landing_own = on;
         }
         else if (name == "log") {
             set_logging(on);
