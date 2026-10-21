@@ -458,6 +458,10 @@ Clip Library::load(std::string_view asked) const {
     }
     Clip clip;
     clip.joints = skeleton_joints;
+    // A joint the clip has no position for keeps the skater's own (his build), as the game does.
+    clip.turned_only.assign(skeleton_joints, 1);
+    for (const auto& b : bound)
+        if (b.dof.part == 't') clip.turned_only[b.dof.joint] = 0;
     const auto frames = static_cast<std::size_t>(std::lround(duration)) + 1;
     clip.times.reserve(frames);
     clip.frames.reserve(frames * skeleton_joints);

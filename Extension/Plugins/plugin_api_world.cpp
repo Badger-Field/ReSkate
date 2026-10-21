@@ -954,6 +954,7 @@ struct WorldApi {
         if (!(from >= 0 && to > from)) luaL_error(L, "a trim is from 0 or more to later than that");
         auto clip = std::make_shared<anim_studio::Clip>();
         clip->joints = source->joints;
+        clip->turned_only = source->turned_only;
         const bool board = source->board.size() == source->times.size();
         float first = -1;
         for (std::size_t i = 0; i < source->times.size(); ++i) {

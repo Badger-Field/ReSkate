@@ -607,6 +607,9 @@ void on_animation(std::uintptr_t component) noexcept {
             l.custom.resize(layout.count);
             std::copy(l.pose.begin(), l.pose.end(), l.custom.begin());
             clip->sample(t, std::span<Joint>(l.custom.data(), std::min<std::size_t>(l.custom.size(), clip->joints)));
+            // A joint the clip only turns stands where the skater's own build has it.
+            for (std::size_t i = 0; i < std::min<std::size_t>(l.custom.size(), clip->joints); ++i)
+                if (clip->keeps_position(i)) l.custom[i].position = l.pose[i].position;
             Joint rel;
             const bool has_board = clip->sample_board(t, rel);
             if (snap->play && snap->play->floor && clip == snap->play->clip.get() && clip->joints > left_foot_joint)
@@ -621,6 +624,7 @@ void on_animation(std::uintptr_t component) noexcept {
                 auto& j = l.pose[i];
                 const auto& c = l.custom[i];
                 j.rotation = slerp(j.rotation, c.rotation, weight);
+                if (clip->keeps_position(i)) continue; // the skater's own build
                 for (std::size_t k = 0; k < 3; ++k) j.position[k] += (c.position[k] - j.position[k]) * weight;
             }
             first = 2;
@@ -755,7 +759,10 @@ void hide_in_room(std::uintptr_t animation_interface, bool skater) noexcept {
         if (!(std::abs(at[i] - room_spot[i]) < room_reach[i])) return;
     if (skater) {
         room_seen_at.store(now_seconds(), std::memory_order_release);
-        if (b[1].scale[0] >= 0.01f) {
+        // Its facing is taken while the walk looks for it, not once our skater shows: the Skaters page
+        // still turns its own skater when the mouse drags (the plugin orbiting its camera), and ours
+        // turned with it and sprang back when the drag ended.
+        if (b[1].scale[0] >= 0.01f && !hide) {
             const auto placed = compose(joint_of(b[0]), joint_of(b[1]));
             std::lock_guard lock(room_facing_mutex);
             room_facing = placed.rotation;
@@ -839,10 +846,22 @@ void on_board_render(std::uintptr_t animation_interface, std::uintptr_t /*render
                 weight = pb.weight;
             }
         }
+        // The trucks and wheels (every bone under the deck's mount) as they were when a clip took the
+        // board: the game's board physics goes on moving them for its own deck, which the clip turns and
+        // flips somewhere else, and they shook. Held, they ride the deck. The render thread's own.
+        static std::array<NativeBone, board_bones> held{};
+        static bool holding = false;
+        if (weight <= 0) holding = false;
         if (weight > 0) {
             const auto layout = multiplayer::read_native_pose_layout(peek, l.base.load(std::memory_order_acquire), bh, 64);
             std::array<NativeBone, board_bones> b{};
             if (layout.buffer && layout.count == board_bones && peek(layout.buffer, b.data(), sizeof(b))) {
+                if (!holding) {
+                    held = b;
+                    holding = true;
+                }
+                (void)poke(layout.buffer + (board_mount + 1) * sizeof(NativeBone), &held[board_mount + 1],
+                           (board_bones - board_mount - 1) * sizeof(NativeBone));
                 const auto now_mount = compose(board_parent(b), joint_of(b[board_mount]));
                 Joint want = target;
                 want.rotation = slerp(now_mount.rotation, target.rotation, weight);

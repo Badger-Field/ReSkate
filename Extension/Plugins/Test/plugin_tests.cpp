@@ -450,6 +450,8 @@ struct FakeGame final : Game {
     InputFocus focus_now{};
     std::optional<std::uint32_t> pad_bits(bool) override { return pad_bits_now; }
     InputFocus input_focus() override { return focus_now; }
+    std::optional<Cursor> cursor_now;
+    std::optional<Cursor> cursor() override { return cursor_now; }
     void dialog_close(std::string_view plugin, std::string_view id) override { calls.push_back(std::format("dialog close {} {}", plugin, id)); }
     std::string skater_push(std::string_view plugin, const Vec3& v) override {
         calls.push_back(std::format("push {} {:.0f} {:.0f} {:.0f}", plugin, v[0], v[1], v[2]));
@@ -2386,6 +2388,25 @@ void animator_studio_records_and_saves() {
     std::cout << std::format("animator-studio: {:.3f} ms a tick open (its budget is 2 ms)\n", studio_ms);
     check(studio_ms < 2, "It stays within its time");
     running(host, "animator-studio", environment);
+    // The middle mouse button pans the camera: it moves sideways, looking the same way.
+    const auto last_camera = [&] {
+        std::string last;
+        for (const auto& c : game.calls)
+            if (c.starts_with("camera animator-studio")) last = c;
+        return last;
+    };
+    const auto camera_before = last_camera();
+    game.cursor_now = Game::Cursor{1300, 300, 0, false, false, true, false};
+    ticks(host, environment, 2);
+    game.cursor_now->x = 1500;
+    ticks(host, environment, 2);
+    game.cursor_now->middle = false;
+    ticks(host, environment, 2);
+    const auto camera_after = last_camera();
+    check(!camera_before.empty() && camera_before != camera_after &&
+              camera_before.substr(camera_before.find(" back")) == camera_after.substr(camera_after.find(" back")),
+          "The middle button pans: " + camera_before + " -> " + camera_after);
+    game.cursor_now.reset();
     // Its own checks: the editing, the key maths against the baked clip, and every screen drawn.
     environment.lines.clear();
     check(host.run_console("studio test"), "studio test runs\n" + environment.all());
