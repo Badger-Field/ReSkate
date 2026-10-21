@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.6 - 2026-10-21
+
+Built on ReSkate 2.1.1, like 0.8.3.
+
+- **Animation timing is 1 by default.** Players found the flat ground landing stutter with more gravity goes away with
+  Animation timing at 1, so moving Gravity off 1 now gives tricks and landings their normal-gravity timing at once.
+  Advanced gravity is still there to change it. A 0 saved by 0.8.5 is not kept: everyone starts at 1.
+- **Tooltips in paragraphs.** The Gravity and Advanced gravity tooltips break into short paragraphs.
+
 ## v0.8.5 - 2026-10-21
 
 Built on ReSkate 2.1.1, like 0.8.3.
