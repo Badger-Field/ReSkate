@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.8.4 - 2026-10-21
+
+Built on ReSkate 2.1.1, like 0.8.3.
+
+- **Landings at other gravities.** With Gravity at anything but x1, landings could still come late and stutter on real
+  jumps (0.8.1 fixed it only for flat ground). The game plans each landing by searching trajectories with its own
+  gravity, and the skater follows the trajectory it picks; that search now uses the trainer's gravity, so the skater
+  lands where and when the flight actually comes down. Grind searches from the air use it too.
+- **Grind lock-on 0 is no lock-on.** The dial now also sets how far grinds reach from the air, so at 0 the board is no
+  longer pulled onto a rail in flight (over a gap, over water). Above x1 grinds reach further from the air as well.
+
 ## v0.8.3 - 2026-10-20
 
 Built on ReSkate 2.1.1 (same game build as 2.1.0).
