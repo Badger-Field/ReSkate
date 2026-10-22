@@ -1752,9 +1752,9 @@ struct WorldApi {
         return 1;
     }
     // ---- server: what only the session's authority does ----------------------------------------------
-    static Plugin& authority(lua_State* L, const char* what) {
+    static Plugin& authority(lua_State* L, const char* what, const char* permission = "server") {
         auto& plugin = plugin_of(L);
-        need(L, plugin, "server", what);
+        need(L, plugin, permission, what);
         if (!plugin.services_.authority())
             luaL_error(L, "%s is for the plugin's server copy (reskate.side is \"server\": \"side\" \"server\" or \"both\" in reskate-plugin.json)", what);
         if (!within(plugin.services_.now_ms(), plugin.server_second_, plugin.server_calls_, 20)) luaL_error(L, "more than 20 server calls in a second");
@@ -1794,6 +1794,51 @@ struct WorldApi {
     static int server_unban(lua_State* L) {
         auto& plugin = authority(L, "reskate.server.unban");
         return result(L, game(plugin).unban(player_of(L, 1)));
+    }
+    // ---- server.parks: a dedicated server's park mods -----------------------------------------------
+    // parks(): {name, map, here (fits the map running now), spawned, objects, minutes_left}[];
+    // park_spawn(name, minutes?): for that long (1-1440), or until removed; park_remove(name).
+    static std::string park_name(lua_State* L, int index) {
+        const std::string name = luaL_checkstring(L, index);
+        const bool ok = !name.empty() && name.size() <= 16 && std::all_of(name.begin(), name.end(), [](char c) {
+            return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+        });
+        if (!ok) luaL_argerror(L, index, "a park mod's name: 1 to 16 of a-z 0-9 - _");
+        return name;
+    }
+    static int server_parks(lua_State* L) {
+        auto& plugin = authority(L, "reskate.server.parks", "server.parks");
+        const auto parks = game(plugin).server_parks();
+        lua_createtable(L, static_cast<int>(parks.size()), 0);
+        for (std::size_t i = 0; i < parks.size(); ++i) {
+            const auto& p = parks[i];
+            lua_createtable(L, 0, 6);
+            lua_pushlstring(L, p.name.data(), p.name.size());
+            lua_setfield(L, -2, "name");
+            lua_pushlstring(L, p.map.data(), p.map.size());
+            lua_setfield(L, -2, "map");
+            lua_pushboolean(L, p.here);
+            lua_setfield(L, -2, "here");
+            lua_pushboolean(L, p.spawned);
+            lua_setfield(L, -2, "spawned");
+            lua_pushinteger(L, static_cast<int>(p.objects));
+            lua_setfield(L, -2, "objects");
+            lua_pushinteger(L, static_cast<int>(p.minutes_left));
+            lua_setfield(L, -2, "minutes_left");
+            lua_rawseti(L, -2, static_cast<int>(i + 1));
+        }
+        return 1;
+    }
+    static int server_park_spawn(lua_State* L) {
+        auto& plugin = authority(L, "reskate.server.park_spawn", "server.parks");
+        const auto name = park_name(L, 1);
+        const auto minutes = lua_isnoneornil(L, 2) ? 0 : luaL_checkinteger(L, 2);
+        if (!lua_isnoneornil(L, 2) && (minutes < 1 || minutes > 1440)) luaL_argerror(L, 2, "minutes, 1 to 1440 (none: until removed)");
+        return result(L, game(plugin).spawn_park(plugin.id(), name, static_cast<unsigned>(minutes)));
+    }
+    static int server_park_remove(lua_State* L) {
+        auto& plugin = authority(L, "reskate.server.park_remove", "server.parks");
+        return result(L, game(plugin).remove_park(plugin.id(), park_name(L, 1)));
     }
     // A player's permissions: player.permissions is what the server holds for them now, read-only;
     // permissions:clone() is a copy to change; player:apply_permissions(copy) makes it theirs.
@@ -2483,7 +2528,8 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     add_functions(L, "outfit", {{"set", outfit_set}, {"clear", outfit_clear}, {"find", outfit_find}, {"slots", outfit_slots}, {"status", outfit_status}});
     add_functions(L, "audio", {{"play", audio_play}, {"set", audio_set}, {"stop", audio_stop}, {"playing", audio_playing}});
     add_functions(L, "server", {{"kick", server_kick}, {"say", server_say}, {"tell", server_tell}, {"move", server_move},
-                                {"ban", server_ban}, {"unban", server_unban}});
+                                {"ban", server_ban}, {"unban", server_unban}, {"parks", server_parks}, {"park_spawn", server_park_spawn},
+                                {"park_remove", server_park_remove}});
     add_functions(L, "throwdowns", {{"state", throwdown_state}, {"host", throwdown_host}, {"cancel", throwdown_cancel}, {"hosting", throwdown_hosting},
                                     {"mode", throwdown_mode}, {"remove_mode", throwdown_remove_mode}});
     add_functions(L, "music", {{"current", current}, {"play", play}, {"pause", pause}, {"next", next}, {"previous", previous},
