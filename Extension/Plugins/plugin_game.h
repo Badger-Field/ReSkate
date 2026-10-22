@@ -583,6 +583,18 @@ public:
     };
     virtual std::optional<Permissions> permissions(std::uint64_t) { return std::nullopt; }
     virtual std::string apply_permissions(std::string_view /*plugin*/, std::uint64_t, const Permissions&) { return unavailable; }
+    // A dedicated server's park mods (server.parks): those it has set up, whether each fits the map
+    // running now and is spawned (its objects, and minutes left; 0 until removed). Spawning one (for
+    // `minutes`, 0 until removed) or removing it goes as the server's own park-mod does.
+    struct ServerPark {
+        std::string name, map;
+        bool here{}, spawned{};
+        std::size_t objects{};
+        unsigned minutes_left{};
+    };
+    virtual std::vector<ServerPark> server_parks() { return {}; }
+    virtual std::string spawn_park(std::string_view /*plugin*/, std::string_view /*name*/, unsigned /*minutes*/) { return unavailable; }
+    virtual std::string remove_park(std::string_view /*plugin*/, std::string_view /*name*/) { return unavailable; }
     // ---- skater.animation: clips on the local skater's body (Extension/Skater/skater_animation.h) ------
     // One plugin plays at a time; none while a throwdown runs. A replacement plays when the game does
     // `trick` ("kickflip") with that pop ("" any, "low", "mid", "high"); a null clip takes it away.

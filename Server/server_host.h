@@ -95,6 +95,19 @@ class Host {
     std::vector<SkaterPose> skater_poses() const;
     void drop(std::uint64_t id, const std::string &reason, const std::string &detail = {});
     void change_map(std::string_view map); // a level name, level path or destination
+    // The park mods set up (maps.park_mods), for the server's plugins: which fit the map running
+    // now, and which are spawned, with how many objects and minutes left (0: until removed).
+    struct ParkStatus {
+        std::string name, map;
+        bool here{}, spawned{};
+        std::size_t objects{};
+        unsigned minutes_left{};
+    };
+    std::vector<ParkStatus> park_status() const;
+    // One spawned (for `minutes`, 0 until removed) or removed for a server plugin, as "park-mod add"
+    // and "remove" do, with their checks and limits and their "[parks]" lines logged "by plugin
+    // <id>": "" when it is done, else why not.
+    std::string plugin_park(std::string_view plugin, bool spawn, std::string_view name, unsigned minutes);
     // A plugin message from the server's plugins (server_plugins.h) to one player, or everyone (0).
     void send_plugin_message(std::uint64_t to, const std::vector<std::uint8_t> &bytes);
 
@@ -538,6 +551,7 @@ class Host {
     ObjectState park_objects_; // never reset: its revisions only grow, so no game holds a newer one
     std::uint64_t park_object_ids_{};
     bool by_vote_{}; // a passed custom vote's command is running (as the console)
+    std::string by_plugin_; // a server plugin's park-mod is running (plugin_park): "plugin <id>"
     std::string park_mod_command(std::string_view argument, std::uint64_t admin);
     void publish_parks();
     void remove_parks(std::string_view reason); // all of them, with the reason for the log

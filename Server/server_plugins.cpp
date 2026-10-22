@@ -80,6 +80,15 @@ class ServerGame final : public Game {
         host_.set_locks(player, locks, "plugin " + std::string(plugin));
         return {};
     }
+    std::vector<ServerPark> server_parks() override {
+        std::vector<ServerPark> result;
+        for (auto &p : host_.park_status()) result.push_back({std::move(p.name), std::move(p.map), p.here, p.spawned, p.objects, p.minutes_left});
+        return result;
+    }
+    std::string spawn_park(std::string_view plugin, std::string_view name, unsigned minutes) override {
+        return host_.plugin_park(plugin, true, name, minutes);
+    }
+    std::string remove_park(std::string_view plugin, std::string_view name) override { return host_.plugin_park(plugin, false, name, 0); }
     // The skaters of the players in the world, as their latest poses put them. The server has
     // no skater of its own, so this is every player's.
     std::vector<PeerSkater> peer_skaters() override {

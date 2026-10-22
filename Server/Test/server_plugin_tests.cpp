@@ -1,7 +1,7 @@
 // The dedicated server's plugins (server_plugins.cpp) with the server's host, over a transport
 // that is not Steam's and simulated players: what a server plugin sees of the players' skaters.
 //
-//   dingosdk_server_plugin_tests
+//   dingosdk_server_plugin_tests <Server/Test/fixtures/park_mods>
 #include "Server/server_host.h"
 #include "Extension/Multiplayer/Net/pose_batch.h"
 #include "Extension/Multiplayer/Net/pose_codec.h"
@@ -164,10 +164,12 @@ struct Player {
     }
 };
 
-int run() {
+int run(const std::filesystem::path &fixtures) {
     const auto root = std::filesystem::temp_directory_path() / "reskate_server_plugin_tests";
     std::filesystem::remove_all(root);
     std::filesystem::create_directories(root / "Mods");
+    for (const auto *folder : {"popular skate 2 street park", "mixed park"})
+        std::filesystem::copy(fixtures / folder, root / "Mods" / folder, std::filesystem::copy_options::recursive);
     load_levels(root / "Mods"); // the retail maps
     ServerConfig config;
     config.file = root / "server" / "ReSkateServer.json";
@@ -175,6 +177,7 @@ int run() {
     config.auto_update = false;
     config.activity_log = false;
     config.roles = default_roles();
+    config.park_mods = {{"street", "popular skate 2 street park", "San Vansterdam", "bam"}, {"plaza", "mixed park", "Isle of Grom", "grom"}};
     check(config_error(config).empty(), "The test's config was refused: " + config_error(config));
 
     // A plugin that prints the skaters it sees every 20th tick (a second here), and one without
@@ -204,6 +207,10 @@ int run() {
             local ok, why = pcall(reskate.session.skaters)
             reskate.console.print(ok and "blind saw them" or "blind refused: " .. tostring(why))
         end)
+        reskate.console.command("blind parks", "park mods without server.parks", function()
+            local ok, why = pcall(reskate.server.parks)
+            reskate.console.print(ok and "blind listed parks" or "blind parks refused: " .. tostring(why))
+        end)
     )");
 
     // One that says what the level is, and when it changes.
@@ -216,6 +223,31 @@ int run() {
         reskate.on("tick", function()
             ticks += 1
             if ticks % 20 == 0 then reskate.console.print("level " .. reskate.level.current().name) end
+        end)
+    )");
+
+    // One that lists, spawns and removes park mods when the console asks it to.
+    write(root / "Plugins" / "parker" / "reskate-plugin.json",
+          R"({"api": 1, "entry": "plugin/main.lua", "side": "server", "permissions": ["console", "server.parks"]})");
+    write(root / "Plugins" / "parker" / "plugin" / "main.lua", R"(
+        reskate.console.command("parker", "park mods, for the test", function(args)
+            local verb, name = args[1], args[2]
+            if verb == "list" then
+                for _, p in ipairs(reskate.server.parks()) do
+                    reskate.console.print(string.format("park %s on %s, here %s, spawned %s, %d objects, %d min left", p.name, p.map,
+                        tostring(p.here), tostring(p.spawned), p.objects, p.minutes_left))
+                end
+            elseif verb == "spawn" then
+                local ok, why = reskate.server.park_spawn(name, tonumber(args[3]))
+                reskate.console.print("spawn " .. name .. ": " .. (ok and "done" or why))
+            elseif verb == "remove" then
+                local ok, why = reskate.server.park_remove(name)
+                reskate.console.print("remove " .. name .. ": " .. (ok and "done" or why))
+            elseif verb == "bad" then
+                local named = pcall(reskate.server.park_spawn, "Street; map grom")
+                local timed = pcall(reskate.server.park_spawn, "street", 5000)
+                reskate.console.print("bad " .. (named and "name taken" or "name refused") .. ", " .. (timed and "minutes taken" or "minutes refused"))
+            end
         end)
     )");
 
@@ -288,10 +320,42 @@ int run() {
     run_for(1100000);
     check(has(log, "skater 76561198000000001 at 10.0 2.0 -30.0 facing 1.00, stale"), "A skater's age did not grow without poses");
 
+    // Park mods: listed with whether they fit this map; spawned and removed through park-mod's own
+    // checks, logged by the plugin's name.
+    const auto plugin_command = [&](std::string_view line) {
+        log.clear();
+        check(host.command(line) == "Ran by a plugin.", std::string(line) + " did not reach the plugin");
+    };
+    plugin_command("parker list");
+    check(has(log, "park street on San Vansterdam, here true, spawned false, 0 objects, 0 min left"), "street is not listed as it is");
+    check(has(log, "park plaza on Isle of Grom, here false, spawned false"), "plaza is not listed as on another map");
+    plugin_command("parker spawn street 5");
+    check(has(log, "spawn street: done"), "The plugin could not spawn street");
+    check(has(log, "[parks] street spawned (") && has(log, "5 min) by plugin parker"), "The spawn was not logged as the plugin's");
+    plugin_command("parker list");
+    check(has(log, "park street on San Vansterdam, here true, spawned true, ") && has(log, " objects, 5 min left"),
+          "street is not listed as spawned for 5 min");
+    plugin_command("parker spawn street");
+    check(has(log, "spawn street: street is already spawned."), "A spawned park was spawned again");
+    plugin_command("parker spawn plaza");
+    check(has(log, "spawn plaza: plaza belongs on Isle of Grom"), "A park for another map was spawned");
+    plugin_command("parker spawn nothing");
+    check(has(log, "spawn nothing: there is no park mod called \"nothing\""), "A park that is not set up was spawned");
+    plugin_command("parker bad");
+    check(has(log, "bad name refused, minutes refused"), "A bad park name or time was taken");
+    plugin_command("parker remove street");
+    check(has(log, "remove street: done") && has(log, "[parks] street removed (by plugin parker)"), "The plugin could not remove street");
+    plugin_command("parker remove street");
+    check(has(log, "remove street: street is not spawned."), "A park not spawned was removed");
+    plugin_command("blind parks");
+    check(has(log, "blind parks refused: ") && has(log, "server.parks"), "A plugin without server.parks listed the parks");
+
     // The level, as players' games name it, and its change heard when the server changes it.
     const auto *first = find_level(config.map);
     const auto other = std::find_if(levels().begin(), levels().end(), [&](const auto &l) { return l.asset != first->asset; });
     check(first && other != levels().end(), "The test needs two retail maps");
+    log.clear();
+    run_for(1100000);
     check(has(log, "level " + first->asset), "level.current() is not the server's map: " + first->asset);
     host.change_map(other->name);
     log.clear();
@@ -305,8 +369,12 @@ int run() {
 }
 } // namespace
 
-int main() {
-    const int result = run();
+int main(int argc, char **argv) {
+    if (argc < 2) {
+        std::fprintf(stderr, "Usage: dingosdk_server_plugin_tests <Server/Test/fixtures/park_mods>\n");
+        return 2;
+    }
+    const int result = run(argv[1]);
     if (result == 0) std::printf("server plugin tests passed\n");
     return result;
 }

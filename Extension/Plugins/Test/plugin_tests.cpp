@@ -510,6 +510,15 @@ struct FakeGame final : Game {
         calls.push_back(std::format("announce {} {}", plugin, text));
         return {};
     }
+    std::vector<ServerPark> server_parks() override { return {{"street", "San Vansterdam", true, true, 12, 5}, {"plaza", "Isle of Grom", false, false, 0, 0}}; }
+    std::string spawn_park(std::string_view plugin, std::string_view name, unsigned minutes) override {
+        calls.push_back(std::format("park spawn {} {} {}", plugin, name, minutes));
+        return name == "plaza" ? "plaza belongs on Isle of Grom, and the server is on San Vansterdam." : std::string{};
+    }
+    std::string remove_park(std::string_view plugin, std::string_view name) override {
+        calls.push_back(std::format("park remove {} {}", plugin, name));
+        return {};
+    }
     std::optional<CameraView> camera_view() override { return CameraView{{1, 2, 3}, {0, 0, 1}, 60}; }
     std::string set_camera(std::string_view plugin, const std::array<float, 16>& pose, float fov) override {
         calls.push_back(std::format("camera {} {:.1f} {:.1f} {:.1f} back {:.2f} {:.2f} {:.2f} fov {:.0f}", plugin, pose[12], pose[13], pose[14],
@@ -1952,6 +1961,46 @@ void plugins_server_copies_are_the_authority() {
     check(player.logged("[mode-p] player heard state hello server true"), "and players' copies hear it from the server\n" + player.all());
     running(server_host, "mode-s", server);
     running(player_host, "mode-p", player);
+}
+
+// A dedicated server's park mods, for a server copy with server.parks: listed, spawned and removed
+// as the server's park-mod does. Not for a copy without the permission, nor for a player's copy.
+void plugins_server_copies_spawn_park_mods() {
+    TestEnvironment server, player, blind;
+    const std::string main = R"(
+        reskate.console.command("parks", "x", function()
+            local list = reskate.server.parks()
+            assert(#list == 2 and list[1].name == "street" and list[1].here and list[1].spawned and list[1].objects == 12 and list[1].minutes_left == 5)
+            assert(list[2].map == "Isle of Grom" and not list[2].here and not list[2].spawned)
+            assert(reskate.server.park_spawn("street", 30))
+            assert(reskate.server.park_spawn("street"))
+            local ok, why = reskate.server.park_spawn("plaza")
+            assert(not ok and why:find("belongs on Isle of Grom"), why)
+            assert(reskate.server.park_remove("street"))
+            assert(not pcall(reskate.server.park_spawn, "Street"), "a park mod's name, lower case")
+            assert(not pcall(reskate.server.park_spawn, "street 5; map grom"), "one name and nothing else")
+            assert(not pcall(reskate.server.park_spawn, "street", 0), "minutes 1 to 1440")
+            assert(not pcall(reskate.server.park_spawn, "street", 1441), "minutes 1 to 1440")
+            reskate.log("parks done")
+        end)
+    )";
+    const auto parks = [&](const char* id, const char* permissions, const char* side) {
+        return package(id, {{manifest_file, manifest(permissions, side)}, {"plugin/main.lua", main}});
+    };
+    Host server_host(server, Side::server), player_host(player, Side::client), blind_host(blind, Side::server);
+    server_host.apply({parks("parks-s", R"("console", "server.parks")", "server")});
+    player_host.apply({parks("parks-p", R"("console", "server.parks")", "client")});
+    blind_host.apply({parks("parks-b", R"("console", "server")", "server")});
+    for (auto* host : {&server_host, &player_host, &blind_host}) host->run_console("parks");
+    check(server.logged("[parks-s] parks done"), "A server copy could not use the park mods\n" + server.all());
+    check(server.fake.called("park spawn parks-s street 30") && server.fake.called("park spawn parks-s street 0") &&
+              server.fake.called("park spawn parks-s plaza 0") && server.fake.called("park remove parks-s street"),
+          "The spawns and removal did not reach the server, by the plugin's id");
+    check(!server.fake.called("park spawn parks-s Street") && !server.fake.called("park spawn parks-s street 1441"), "A refused call reached the server");
+    check(!player.logged("parks done") && player.all().find("server copy") != std::string::npos,
+          "A player's copy used the server's park mods\n" + player.all());
+    check(!blind.logged("parks done") && blind.all().find("server.parks") != std::string::npos,
+          "A plugin without server.parks used the park mods\n" + blind.all());
 }
 
 // Clips on the skater's body: from the package or recorded, played, replacing a trick.
@@ -3623,6 +3672,7 @@ int main() {
         run(plugins_edit_clips);
         run(animator_studio_records_and_saves);
         run(plugins_server_copies_are_the_authority);
+        run(plugins_server_copies_spawn_park_mods);
         run(plugins_animate_the_skater);
         run(plugins_play_their_own_sounds);
         run(plugins_have_menu_panels);

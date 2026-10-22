@@ -151,7 +151,7 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
             dingosdk_lz4 dingosdk_zstd dingosdk_miniz dingosdk_word_filter OpenSSL::Crypto dingosdk_plugins dl pthread)
     endif()
     add_test(NAME server_locks COMMAND dingosdk_server_lock_tests)
-    # What the server's plugins see of the server: its players' skaters.
+    # What the server's plugins see of the server and do there: its players' skaters, its map, its park mods.
     add_executable(dingosdk_server_plugin_tests Server/Test/server_plugin_tests.cpp Server/server_host.cpp Server/server_party.cpp
         Extension/Multiplayer/Session/party_book.cpp Server/server_config.cpp Server/server_update.cpp Server/server_release.cpp
         $<$<BOOL:${WIN32}>:Launcher/updater.cpp> Server/global_bans.cpp Server/server_words.cpp Extension/Multiplayer/developer_identity.cpp
@@ -169,7 +169,7 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
         target_link_libraries(dingosdk_server_plugin_tests PRIVATE dingosdk_launcher_support dingosdk_world_layer_scan dingosdk_json
             dingosdk_lz4 dingosdk_zstd dingosdk_miniz dingosdk_word_filter OpenSSL::Crypto dingosdk_plugins dl pthread)
     endif()
-    add_test(NAME server_plugins COMMAND dingosdk_server_plugin_tests)
+    add_test(NAME server_plugins COMMAND dingosdk_server_plugin_tests "${PROJECT_SOURCE_DIR}/Server/Test/fixtures/park_mods")
     add_executable(dingosdk_server_release_tests Server/Test/server_release_tests.cpp Server/server_release.cpp)
     target_include_directories(dingosdk_server_release_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     target_link_libraries(dingosdk_server_release_tests PRIVATE dingosdk_json)
