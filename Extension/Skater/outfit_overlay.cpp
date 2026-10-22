@@ -6,6 +6,7 @@
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Vfs/content_catalogs.h"
 #include "Extension/World/load_error_guard.h"
+#include "Extension/Skater/layer_materials.h"
 #include <Windows.h>
 #include <algorithm>
 #include <array>
@@ -63,7 +64,7 @@ struct State {
     std::set<std::string> good, bad;      // "slot|item" (lower case): loaded / did not load
     bool memory_read{};
     std::map<std::uintptr_t, std::vector<std::uintptr_t>> native_categories; // catalog item -> its own
-    std::string layer_note;
+    std::string layer_note, logged_note, logged_wait; // the notes last put in the log
     std::map<std::string, std::string> found; // installed items by ending
     bool own{}, dirty{}, worn{};
     std::uintptr_t skater{}, component{}, slots_of{};
@@ -172,6 +173,24 @@ void add_category(const SkaterItems& m, std::uintptr_t asset, std::uintptr_t wan
     SkaterItems::check(WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(asset + 0x20), &elements, sizeof(elements), &done) &&
                            done == sizeof(elements),
                        "Cannot write the item's categories.");
+}
+// The appearance presets of an installed item, each with the material its own builder puts it on
+// (layer_materials.h), from its catalog entry: the asset's name ("Items/cust_bottoms/Own_..."), its
+// item data (+0x28) and that data's AssetPaths (+0x98: {name, type} pairs of 16 bytes).
+void add_presets(const SkaterItems& m, const std::string& item, std::vector<std::pair<std::string, const char*>>& out) {
+    const auto asset = catalog_asset(m, item);
+    if (!asset) return;
+    const auto name = m.text(m.ptr(asset, 0x18));
+    const auto first = name.find('/'), second = first == std::string::npos ? first : name.find('/', first + 1);
+    if (second == std::string::npos) return;
+    const auto folder = std::string_view(name).substr(first + 1, second - first - 1);
+    const auto data = m.ptr(asset, 0x28);
+    if (!data) return;
+    const auto paths = m.ptr(data, 0x98);
+    const auto count = m.count(paths, 16, 32);
+    for (std::size_t i = 0; i < count; ++i)
+        if (const auto material = layer_materials::material_of(folder, m.get<std::int32_t>(paths, i * 16 + 8)))
+            out.emplace_back(m.text(m.ptr(paths, i * 16)), material);
 }
 // Every owner's layers, in one list: owners by name, each in its own order, none twice.
 std::vector<std::string> all_layers(const State& s) {
@@ -293,15 +312,33 @@ void wear(State& s, const SkaterItems& m, std::uintptr_t skater, std::uint64_t n
     std::string note;
     for (const auto& one : left) note += (note.empty() ? "not worn: " : ", ") + one;
     if (waiting) note += std::format("{}{} more to try on", note.empty() ? "" : "; ", waiting);
+    if (note != s.logged_note && !note.empty())
+        logging::log(logging::Level::info, logging::Channel::skater, "Outfit layers: {}.", note);
+    s.logged_note = note;
     s.layer_note = std::move(note);
     s.worn = worn || !s.placed.empty();
     if (!changed) return;
+    // Before the skater is built again: which presets are of items on top, and their own materials.
+    std::vector<std::pair<std::string, const char*>> presets;
+    for (const auto& [i, item] : s.placed) {
+        try {
+            add_presets(m, item, presets);
+        } catch (const std::exception&) {}
+    }
+    layer_materials::set(std::move(presets));
     const auto failed_loads = load_error_guard::described();
     skater_items::apply(m, component, recipe);
     s.own = true;
     s.component = component;
     s.applied = now;
     if (trial) s.trial = Trial{*trial, now, failed_loads};
+    if (!wanted.empty() || !s.placed.empty()) {
+        std::string where;
+        for (const auto& [i, item] : s.placed)
+            where += std::format("{}{} in {}", where.empty() ? "" : ", ", item, i < slots.size() ? slots[i].name : std::string("its slot"));
+        logging::log(logging::Level::info, logging::Channel::skater, "Outfit layers: {} on top{}{}{}.", s.placed.size(), where.empty() ? "" : ": ", where,
+                     trial ? std::format(" ({} on trial in its slot)", trial->second) : std::string());
+    }
 }
 // A layer on trial: once its time is up, it stays (it loaded) or comes off (the game described a
 // failed load meanwhile) and that slot is not tried for it again.
@@ -311,6 +348,8 @@ void judge(State& s, const SkaterItems& m, std::uintptr_t skater, std::uint64_t 
     const auto slots = slot_infos(m, m.resource(component));
     const auto key = pair_key(trial.placement.first < slots.size() ? slots[trial.placement.first].name : std::string{}, trial.placement.second);
     if (load_error_guard::described() == trial.failed_loads) {
+        logging::log(logging::Level::info, logging::Channel::skater, "Outfit layers: {} loads from {}.", trial.placement.second,
+                     trial.placement.first < slots.size() ? slots[trial.placement.first].name : std::string("its slot"));
         remember(s, true, key);
         s.trial.reset();
         s.dirty = true;
@@ -429,6 +468,7 @@ std::vector<Slot> slots() {
 void tick() noexcept {
     auto& s = state();
     if (s.wanted.empty() && s.layers.empty() && !s.own) {
+        if (!s.placed.empty()) layer_materials::set({});
         s.placed.clear();
         s.layer_note.clear();
         return;
@@ -479,6 +519,11 @@ void tick() noexcept {
         s.status = std::format("{} item(s) worn", s.wanted.size() + s.placed.size());
     } catch (const std::exception& error) {
         s.status = std::string("waiting: ") + error.what();
+        // Once for each reason, while there are items on top: what keeps them off.
+        if (!s.layers.empty() && s.logged_wait != error.what()) {
+            s.logged_wait = error.what();
+            logging::log(logging::Level::info, logging::Channel::skater, "Outfit layers: waiting ({}).", error.what());
+        }
     } catch (...) {
     }
 }
