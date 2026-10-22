@@ -395,7 +395,10 @@ void profiles_page(const Fonts& fonts, ModsPanel& panel, HWND window, float heig
 
         ImGui::SetCursorScreenPos(ImVec2(start.x, start.y + tall + S(12)));
         ImGui::BeginDisabled(busy);
+        // The label as far from the box as the settings page has it (an item's spacing, not the inner one).
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, ImGui::GetStyle().ItemInnerSpacing.y));
         if (ImGui::Checkbox("Keep my other mods on when loading a profile", &panel.profiles.keep_others)) store(panel);
+        ImGui::PopStyleVar();
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("On: a profile switches its own mods on and leaves the rest as they are.\n"
