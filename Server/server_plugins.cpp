@@ -210,6 +210,9 @@ void ServerPlugins::tick(std::uint64_t now_us) {
         }
         const double dt = s.last_tick ? static_cast<double>(now_us - s.last_tick) / 1000.0 : 0;
         s.last_tick = now_us;
+        // The map the server runs, so plugins hear level_unloading and level_loaded when it
+        // changes, as a game's plugins do (when the server changes it; players load it after).
+        s.plugins.set_level(s.server.map_level());
         s.plugins.tick(dt);
         for (auto &bytes : std::exchange(s.environment.outbox, {})) s.server.send_plugin_message(wire::to_of(bytes), bytes);
     } catch (const std::exception &error) {

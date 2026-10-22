@@ -240,6 +240,11 @@ void Host::fetching(Guest &guest) {
 }
 std::string Host::invite() const { return format_invite({id_, secret_}); }
 std::string Host::map_name() const { return map_label(config_.map); }
+std::string Host::map_level() const {
+    const auto destination = map_destination(config_.map);
+    const auto split = destination.find('|');
+    return split == std::string::npos ? destination : destination.substr(split + 1);
+}
 std::string Host::wire_map_label() const { // players without the map's mod still see its name
     auto label = map_name();
     cut_text(label, max_member_name);

@@ -47,6 +47,9 @@ class Host {
 
     std::string invite() const;
     std::string map_name() const;
+    // The level players load for the map, as their games name it: a destination's level, after
+    // its "|". What the server's plugins see as reskate.level.current().
+    std::string map_level() const;
     // "maps reload": reads Mods again and says what changed. Also after a map was updated.
     std::string reload_maps();
     // The mod folder of the map in play while anyone is on (an update leaves it alone), or

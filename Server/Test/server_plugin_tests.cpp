@@ -206,6 +206,19 @@ int run() {
         end)
     )");
 
+    // One that says what the level is, and when it changes.
+    write(root / "Plugins" / "follower" / "reskate-plugin.json",
+          R"({"api": 1, "entry": "plugin/main.lua", "side": "server", "permissions": ["console"]})");
+    write(root / "Plugins" / "follower" / "plugin" / "main.lua", R"(
+        reskate.on("level_unloading", function(name) reskate.console.print("unloading " .. name) end)
+        reskate.on("level_loaded", function(name) reskate.console.print("loaded " .. name) end)
+        local ticks = 0
+        reskate.on("tick", function()
+            ticks += 1
+            if ticks % 20 == 0 then reskate.console.print("level " .. reskate.level.current().name) end
+        end)
+    )");
+
     std::vector<std::string> log;
     SteamTransport transport;
     Host host(config, transport, [&](const std::string &line) { log.push_back(line); });
@@ -274,6 +287,18 @@ int run() {
     log.clear();
     run_for(1100000);
     check(has(log, "skater 76561198000000001 at 10.0 2.0 -30.0 facing 1.00, stale"), "A skater's age did not grow without poses");
+
+    // The level, as players' games name it, and its change heard when the server changes it.
+    const auto *first = find_level(config.map);
+    const auto other = std::find_if(levels().begin(), levels().end(), [&](const auto &l) { return l.asset != first->asset; });
+    check(first && other != levels().end(), "The test needs two retail maps");
+    check(has(log, "level " + first->asset), "level.current() is not the server's map: " + first->asset);
+    host.change_map(other->name);
+    log.clear();
+    run_for(1100000);
+    check(has(log, "unloading " + first->asset) && has(log, "loaded " + other->asset), "The plugin did not hear the map change");
+    check(has(log, "level " + other->asset) && !has(log, "level " + first->asset), "level.current() did not follow the map change");
+    check(!has(log, "skaters 2"), "Skaters stayed on the old map's places after the map changed");
     if (failures)
         for (const auto &line : log) std::fprintf(stderr, "log: %s\n", line.c_str());
     return failures ? 1 : 0;
