@@ -53,5 +53,13 @@ std::string install(const std::filesystem::path& mods_root, const std::filesyste
 // Moves Mods/<name> to the Recycle Bin. Throws a user-facing message.
 void remove(const std::filesystem::path& mods_root, const std::string& name);
 
+// The installed mods a pack brought in that nothing else needs, to offer with its uninstall:
+// the folders the manifest.json of a mod in `removing` lists as dependencies ("Namespace-Name-1.2.3"
+// is the folder Namespace-Name), and theirs in turn, without the ones `removing` already has and
+// without any that a mod staying installed (the rest of `installed`) still lists. In `installed`'s
+// order; an unreadable manifest lists nothing.
+std::vector<std::string> orphaned_dependencies(const std::filesystem::path& mods_root,
+    const std::vector<std::string>& removing, const std::vector<std::string>& installed);
+
 
 } // namespace dingosdk::launcher_mods

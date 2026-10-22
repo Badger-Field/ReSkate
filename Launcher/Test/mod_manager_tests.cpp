@@ -466,6 +466,30 @@ int main() {
               "Only a retired mod is left out");
     }
 
+    // A mod pack's dependencies: what it brought in and nothing else needs, through their own dependencies.
+    {
+        const auto packs = root / L"pack-mods";
+        const auto manifest = [&](const char* folder, const char* dependencies) {
+            write(packs / folder / "manifest.json",
+                  std::string(R"({"name":"x","version_number":"1.0.0","dependencies":)") + dependencies + "}");
+        };
+        manifest("Me-Pack", R"(["Team-A-1.0.0","Team-B-2.0.0","Team-Gone-1.0.0"])");
+        manifest("Team-A", R"(["Team-C-1.0.0"])");
+        manifest("Team-B", "[]");
+        manifest("Team-C", "[]");
+        manifest("Me-Other", R"(["team-b-2.0.0"])");
+        manifest("Team-D", "[]");
+        const std::vector<std::string> all{"Team-D", "Team-C", "Me-Other", "Team-B", "Team-A", "Me-Pack"};
+        check(launcher_mods::orphaned_dependencies(packs, {"Me-Pack"}, all) == std::vector<std::string>{"Team-C", "Team-A"},
+              "A pack's dependencies (and theirs) were not offered, or one another mod needs was");
+        check(launcher_mods::orphaned_dependencies(packs, {"Me-Pack", "Me-Other"}, all) ==
+                  std::vector<std::string>{"Team-C", "Team-B", "Team-A"},
+              "A dependency only removed mods need was not offered");
+        check(launcher_mods::orphaned_dependencies(packs, {"Team-D"}, all).empty(), "A mod without dependencies offered some");
+        check(launcher_mods::orphaned_dependencies(packs, {"Me-Pack", "Team-A"}, all) == std::vector<std::string>{"Team-C"},
+              "A dependency removed already was offered again");
+    }
+
     std::error_code ignored;
     fs::remove_all(root, ignored);
     if (failures) {

@@ -436,6 +436,79 @@ std::string install(const fs::path& mods, const fs::path& source, bool replace,
     }
 }
 
+namespace {
+// The mod folders `folder`'s manifest.json lists as dependencies, folded to lower case.
+std::vector<std::string> listed_dependencies(const fs::path& folder) {
+    std::vector<std::string> result;
+    try {
+        std::string text;
+        {
+            std::ifstream input(folder / mods::manifest_file, std::ios::binary);
+            if (!input) return result;
+            text.assign(std::istreambuf_iterator<char>(input), {});
+        }
+        if (text.starts_with("\xef\xbb\xbf")) text.erase(0, 3);
+        const auto json = Json::parse(text, JsonLimits{1024 * 1024, 16, 65536});
+        if (!json.is_object() || !json.contains("dependencies") || !json.at("dependencies").is_array()) return result;
+        for (const auto& item : json.at("dependencies")) {
+            if (!item.is_string()) continue;
+            const auto& name = item.string();
+            // Namespace-Name-1.2.3: the folder is everything before the version.
+            const auto dash = name.rfind('-');
+            if (dash == std::string::npos || name.find('-') == dash) continue;
+            result.push_back(lower(std::string_view(name).substr(0, dash)));
+        }
+    } catch (...) {
+        result.clear();
+    }
+    return result;
+}
+}
+
+std::vector<std::string> orphaned_dependencies(const fs::path& mods, const std::vector<std::string>& removing,
+                                               const std::vector<std::string>& installed) {
+    std::vector<std::string> folded;
+    for (const auto& name : installed) folded.push_back(lower(name));
+    const auto is_installed = [&](const std::string& name) { return std::find(folded.begin(), folded.end(), name) != folded.end(); };
+    std::vector<std::string> gone;
+    for (const auto& name : removing) gone.push_back(lower(name));
+    const auto listed = [&](const std::string& name) {
+        const auto at = std::find(folded.begin(), folded.end(), name);
+        return at == folded.end() ? std::vector<std::string>{} : listed_dependencies(mods / from_utf8(installed[at - folded.begin()]));
+    };
+    // Everything the removed mods bring in, through their dependencies' dependencies.
+    std::vector<std::string> candidates, queue = gone;
+    while (!queue.empty()) {
+        const auto name = queue.back();
+        queue.pop_back();
+        for (const auto& dependency : listed(name))
+            if (is_installed(dependency) && std::find(gone.begin(), gone.end(), dependency) == gone.end() &&
+                std::find(candidates.begin(), candidates.end(), dependency) == candidates.end()) {
+                candidates.push_back(dependency);
+                queue.push_back(dependency);
+            }
+    }
+    // What a mod that stays still lists stays too, with what that one lists in turn.
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (std::size_t i = 0; i < folded.size(); ++i) {
+            const auto& name = folded[i];
+            if (std::find(gone.begin(), gone.end(), name) != gone.end() ||
+                std::find(candidates.begin(), candidates.end(), name) != candidates.end())
+                continue;
+            for (const auto& dependency : listed(name))
+                if (const auto at = std::find(candidates.begin(), candidates.end(), dependency); at != candidates.end()) {
+                    candidates.erase(at);
+                    changed = true;
+                }
+        }
+    }
+    std::vector<std::string> result;
+    for (std::size_t i = 0; i < folded.size(); ++i)
+        if (std::find(candidates.begin(), candidates.end(), folded[i]) != candidates.end()) result.push_back(installed[i]);
+    return result;
+}
+
 void remove(const fs::path& mods, const std::string& name) {
     if (!mods::valid_mod_name(name)) fail("\"" + name + "\" is not a mod folder.");
     const auto target = mods / from_utf8(name);

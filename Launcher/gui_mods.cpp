@@ -1910,24 +1910,45 @@ void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, Mo
     if (!panel.conflict_name.empty() && !ImGui::IsPopupOpen("Replace mod")) ImGui::OpenPopup("Replace mod");
     ImGui::SetNextWindowSize(ImVec2(S(460), 0));
     if (ImGui::BeginPopupModal(uninstall, nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
-        const auto names = panel.confirm_remove;
+        const auto chosen = panel.confirm_remove;
         const auto title = [&](const std::string& name) -> const std::string& {
             for (const auto& entry : entries)
                 if (entry.mod.name == name) return entry.mod.title;
             return name;
         };
+        // A mod pack's dependencies stay installed unless asked: offer the ones nothing else needs.
+        if (panel.remove_extras_for != chosen) {
+            std::vector<std::string> everything;
+            for (const auto& entry : entries) everything.push_back(entry.mod.name);
+            panel.remove_extras = launcher_mods::orphaned_dependencies(panel.root, chosen, everything);
+            panel.remove_extras_for = chosen;
+            panel.remove_extras_on = true;
+        }
+        auto names = chosen;
+        if (panel.remove_extras_on) names.insert(names.end(), panel.remove_extras.begin(), panel.remove_extras.end());
         std::uint64_t bytes{};
         for (const auto& name : names)
             if (const auto found = panel.sizes.find(name); found != panel.sizes.end()) bytes += found->second;
         ImGui::PushTextWrapPos(0);
-        if (names.size() == 1) {
-            ImGui::Text("Uninstall \"%s\"? Its folder goes to the Recycle Bin.", title(names.front()).c_str());
+        if (chosen.size() == 1) {
+            ImGui::Text("Uninstall \"%s\"? Its folder goes to the Recycle Bin.", title(chosen.front()).c_str());
         } else {
-            ImGui::Text("Uninstall these %d mods? Their folders go to the Recycle Bin.", static_cast<int>(names.size()));
+            ImGui::Text("Uninstall these %d mods? Their folders go to the Recycle Bin.", static_cast<int>(chosen.size()));
             ImGui::Spacing();
-            const std::size_t listed = std::min<std::size_t>(names.size(), 8);
-            for (std::size_t i = 0; i < listed; ++i) ImGui::TextDisabled("%s", title(names[i]).c_str());
-            if (names.size() > listed) ImGui::TextDisabled("and %d more", static_cast<int>(names.size() - listed));
+            const std::size_t listed = std::min<std::size_t>(chosen.size(), 8);
+            for (std::size_t i = 0; i < listed; ++i) ImGui::TextDisabled("%s", title(chosen[i]).c_str());
+            if (chosen.size() > listed) ImGui::TextDisabled("and %d more", static_cast<int>(chosen.size() - listed));
+        }
+        if (!panel.remove_extras.empty()) {
+            ImGui::Spacing();
+            const auto count = static_cast<int>(panel.remove_extras.size());
+            const auto label = count == 1 ? std::string("Also uninstall the mod it brought in, which nothing else needs")
+                                          : std::format("Also uninstall the {} mods it brought in, which nothing else needs", count);
+            ImGui::Checkbox(label.c_str(), &panel.remove_extras_on);
+            const std::size_t listed = std::min<std::size_t>(panel.remove_extras.size(), 8);
+            for (std::size_t i = 0; i < listed; ++i) ImGui::TextDisabled("%s", title(panel.remove_extras[i]).c_str());
+            if (panel.remove_extras.size() > listed)
+                ImGui::TextDisabled("and %d more", static_cast<int>(panel.remove_extras.size() - listed));
         }
         if (bytes) ImGui::TextDisabled("That frees %s.", size_text(bytes).c_str());
         ImGui::PopTextWrapPos();
@@ -1935,6 +1956,7 @@ void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, Mo
         // Escape (and a controller's B) answers Cancel, never the destructive choice.
         if (ImGui::Button("Cancel", ImVec2(S(110), 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             panel.confirm_remove.clear();
+            panel.remove_extras_for.clear();
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
@@ -1970,6 +1992,7 @@ void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, Mo
             panel.message = message;
             panel.message_error = error;
             panel.confirm_remove.clear();
+            panel.remove_extras_for.clear();
             ImGui::CloseCurrentPopup();
         }
         pop_primary_button();
