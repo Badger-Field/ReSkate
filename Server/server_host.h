@@ -82,6 +82,14 @@ class Host {
     std::uint8_t player_locks(std::uint64_t id) const { return locks_of(id); }
     std::uint8_t set_locks(std::uint64_t id, std::uint8_t locks, const std::string &source);
     std::optional<std::array<float, 3>> player_position(std::uint64_t steam_id) const;
+    // Where each player in the world last said their skater was (their latest pose's root), and
+    // how long ago that arrived: what the server's plugins see of the skaters.
+    struct SkaterPose {
+        std::uint64_t id{};
+        Transform root;
+        std::uint64_t age_us{};
+    };
+    std::vector<SkaterPose> skater_poses() const;
     void drop(std::uint64_t id, const std::string &reason, const std::string &detail = {});
     void change_map(std::string_view map); // a level name, level path or destination
     // A plugin message from the server's plugins (server_plugins.h) to one player, or everyone (0).

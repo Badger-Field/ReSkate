@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <format>
 #include <map>
 
@@ -78,6 +79,18 @@ class ServerGame final : public Game {
                                                      (p.tuning ? 0 : lock_tuning) | (p.objects ? 0 : lock_objects) | (p.ollies ? 0 : lock_ollies));
         host_.set_locks(player, locks, "plugin " + std::string(plugin));
         return {};
+    }
+    // The skaters of the players in the world, as their latest poses put them. The server has
+    // no skater of its own, so this is every player's.
+    std::vector<PeerSkater> peer_skaters() override {
+        std::vector<PeerSkater> result;
+        for (const auto &s : host_.skater_poses()) {
+            const auto &q = s.root.rotation;
+            // The rotation's +Z about world up, as a client's plugin_game_runtime.cpp reads it.
+            const float heading = std::atan2(2 * (q[0] * q[2] + q[3] * q[1]), 1 - 2 * (q[0] * q[0] + q[1] * q[1]));
+            result.push_back({s.id, s.root.position, heading, static_cast<double>(s.age_us) / 1000.0});
+        }
+        return result;
     }
     // Through the console's own ban and unban, so they keep its checks and save the bans file.
     std::string ban(std::uint64_t player) override {

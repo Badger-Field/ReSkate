@@ -215,6 +215,14 @@ std::optional<std::array<float, 3>> Host::player_position(std::uint64_t steam_id
     return std::nullopt;
 }
 
+std::vector<Host::SkaterPose> Host::skater_poses() const {
+    std::vector<SkaterPose> list;
+    for (const auto &[id, guest] : guests_)
+        if (guest && guest->handshaken && guest->world_ready && guest->latest_root && guest->pose_arrival && now_ >= guest->pose_arrival)
+            list.push_back({id, *guest->latest_root, now_ - guest->pose_arrival});
+    return list;
+}
+
 // A player without the map is downloading it: the clock they are loading against starts over
 // each time they say so, for as long as map_fetch_limit_us from the first time. A slot is still
 // never held for good, and a player who stops saying it has the usual time to load.
