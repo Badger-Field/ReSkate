@@ -406,6 +406,12 @@ if(DINGOSDK_BUILD_ANIMATION_STUDIO_TESTS)
     target_include_directories(dingosdk_arm_reach_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     target_link_libraries(dingosdk_arm_reach_tests PRIVATE dingosdk_json)
     add_test(NAME arm_reach COMMAND dingosdk_arm_reach_tests)
+    # Something carried (reskate.skater.carry): held out, aimed, both hands, crouched with the feet kept.
+    add_executable(dingosdk_carry_tests Extension/Skater/Test/carry_tests.cpp Extension/Skater/carry.cpp Extension/Skater/arm_reach.cpp
+        Extension/AnimationStudio/anim_core.cpp)
+    target_include_directories(dingosdk_carry_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_link_libraries(dingosdk_carry_tests PRIVATE dingosdk_json)
+    add_test(NAME carry COMMAND dingosdk_carry_tests)
 endif()
 option(DINGOSDK_BUILD_REPLAY_KEYFRAMES_TESTS "Build replay keyframe smoothing regression tests" OFF)
 if(DINGOSDK_BUILD_REPLAY_KEYFRAMES_TESTS)
