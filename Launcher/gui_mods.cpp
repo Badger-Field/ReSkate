@@ -1909,6 +1909,9 @@ void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, Mo
     if (!panel.confirm_remove.empty() && !ImGui::IsPopupOpen(uninstall)) ImGui::OpenPopup(uninstall);
     if (!panel.conflict_name.empty() && !ImGui::IsPopupOpen("Replace mod")) ImGui::OpenPopup("Replace mod");
     ImGui::SetNextWindowSize(ImVec2(S(460), 0));
+    // Centred every frame by its size now: its height changes with the dependencies it lists, and placed
+    // only when it appears it would keep the last one's (a short confirmation after a long one sat high).
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal(uninstall, nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
         const auto chosen = panel.confirm_remove;
         const auto title = [&](const std::string& name) -> const std::string& {
