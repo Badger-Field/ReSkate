@@ -1922,10 +1922,15 @@ void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, Mo
             for (const auto& entry : entries) everything.push_back(entry.mod.name);
             panel.remove_extras = launcher_mods::orphaned_dependencies(panel.root, chosen, everything);
             panel.remove_extras_for = chosen;
-            panel.remove_extras_on = true;
+            panel.remove_extras_picked.assign(panel.remove_extras.size(), 1);
         }
         auto names = chosen;
-        if (panel.remove_extras_on) names.insert(names.end(), panel.remove_extras.begin(), panel.remove_extras.end());
+        int picked = 0;
+        for (std::size_t i = 0; i < panel.remove_extras.size(); ++i)
+            if (panel.remove_extras_picked[i]) {
+                names.push_back(panel.remove_extras[i]);
+                ++picked;
+            }
         std::uint64_t bytes{};
         for (const auto& name : names)
             if (const auto found = panel.sizes.find(name); found != panel.sizes.end()) bytes += found->second;
@@ -1942,17 +1947,32 @@ void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, Mo
         if (!panel.remove_extras.empty()) {
             ImGui::Spacing();
             const auto count = static_cast<int>(panel.remove_extras.size());
-            const auto label = count == 1 ? std::string("Uninstall 1 modpack dependency?")
-                                          : std::format("Uninstall {} modpack dependencies?", count);
-            // The label as far from the box as the settings page has it (an item's spacing, not the inner one).
+            const auto label = picked == count || picked == 0
+                ? (count == 1 ? std::string("Uninstall 1 modpack dependency?") : std::format("Uninstall {} modpack dependencies?", count))
+                : std::format("Uninstall {} of {} modpack dependencies?", picked, count);
+            // The labels as far from their boxes as the settings page has them (an item's spacing, not the inner one).
             ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, ImGui::GetStyle().ItemInnerSpacing.y));
-            ImGui::Checkbox(label.c_str(), &panel.remove_extras_on);
+            // The first box ticks or unticks them all; it shows a mark of its own while only some are ticked.
+            bool all = picked == count;
+            ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, picked > 0 && picked < count);
+            if (ImGui::Checkbox((label + "###all_extras").c_str(), &all))
+                std::fill(panel.remove_extras_picked.begin(), panel.remove_extras_picked.end(), static_cast<char>(all));
+            ImGui::PopItemFlag();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Mods it brought in that no other installed mod needs. Untick any to keep.");
+            // One box each, in a list that scrolls past eight.
+            const float row = ImGui::GetFrameHeightWithSpacing();
+            const float shown = std::min<float>(static_cast<float>(count), 8.0f) * row + ImGui::GetStyle().WindowPadding.y;
+            ImGui::Indent(S(28));
+            ImGui::BeginChild("##extras", ImVec2(0, shown), ImGuiChildFlags_NavFlattened);
+            for (std::size_t i = 0; i < panel.remove_extras.size(); ++i) {
+                ImGui::PushID(static_cast<int>(i));
+                bool on = panel.remove_extras_picked[i] != 0;
+                if (ImGui::Checkbox(title(panel.remove_extras[i]).c_str(), &on)) panel.remove_extras_picked[i] = on;
+                ImGui::PopID();
+            }
+            ImGui::EndChild();
+            ImGui::Unindent(S(28));
             ImGui::PopStyleVar();
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Mods it brought in that no other installed mod needs");
-            const std::size_t listed = std::min<std::size_t>(panel.remove_extras.size(), 8);
-            for (std::size_t i = 0; i < listed; ++i) ImGui::TextDisabled("%s", title(panel.remove_extras[i]).c_str());
-            if (panel.remove_extras.size() > listed)
-                ImGui::TextDisabled("and %d more", static_cast<int>(panel.remove_extras.size() - listed));
         }
         if (bytes) ImGui::TextDisabled("That frees %s.", size_text(bytes).c_str());
         ImGui::PopTextWrapPos();
