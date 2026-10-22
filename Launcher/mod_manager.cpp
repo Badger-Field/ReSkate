@@ -456,13 +456,76 @@ std::vector<std::string> listed_dependencies(const fs::path& folder) {
             // Namespace-Name-1.2.3: the folder is everything before the version.
             const auto dash = name.rfind('-');
             if (dash == std::string::npos || name.find('-') == dash) continue;
-            result.push_back(lower(std::string_view(name).substr(0, dash)));
+            // (A long name installs cut to the longest folder name, as thunderstore::folder_for has it.)
+            result.push_back(lower(std::string_view(name).substr(0, std::min(dash, mods::maximum_mod_name))));
         }
     } catch (...) {
         result.clear();
     }
     return result;
 }
+
+Json read_brought_in(const fs::path& mods) {
+    try {
+        std::ifstream input(mods / brought_in_file, std::ios::binary);
+        if (!input) return Json::object();
+        const std::string text{std::istreambuf_iterator<char>(input), {}};
+        auto json = Json::parse(text, JsonLimits{4 * 1024 * 1024, 8, 65536});
+        return json.is_object() ? json : Json::object();
+    } catch (...) {
+        return Json::object();
+    }
+}
+
+void write_brought_in(const fs::path& mods, const Json& json) {
+    const auto target = mods / brought_in_file;
+    auto temporary = target;
+    temporary += L".tmp";
+    {
+        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+        if (!output) throw std::runtime_error("Could not write " + utf8(target.filename().wstring()) + ".");
+        output << json.dump(2) << '\n';
+    }
+    std::error_code error;
+    fs::rename(temporary, target, error);
+    if (error) throw std::runtime_error("Could not write " + utf8(target.filename().wstring()) + ".");
+}
+}
+
+std::vector<std::string> brought_in(const fs::path& mods, const std::string& pack) {
+    std::vector<std::string> result;
+    const auto json = read_brought_in(mods);
+    for (const auto& [name, list] : json.items())
+        if (lower(name) == lower(pack) && list.is_array())
+            for (const auto& item : list)
+                if (item.is_string() && mods::valid_mod_name(item.string())) result.push_back(item.string());
+    return result;
+}
+
+void record_brought_in(const fs::path& mods, const std::string& pack, const std::vector<std::string>& dependencies) {
+    if (dependencies.empty()) return;
+    auto json = read_brought_in(mods);
+    auto names = brought_in(mods, pack);
+    for (const auto& name : dependencies)
+        if (std::none_of(names.begin(), names.end(), [&](const std::string& have) { return lower(have) == lower(name); }))
+            names.push_back(name);
+    auto list = Json::array();
+    for (const auto& name : names) list.push_back(Json(name));
+    for (auto it = json.items().begin(); it != json.items().end();)
+        it = lower(it->first) == lower(pack) ? json.items().erase(it) : std::next(it);
+    json.items()[pack] = std::move(list);
+    write_brought_in(mods, json);
+}
+
+void forget_brought_in(const fs::path& mods, const std::vector<std::string>& removed) {
+    auto json = read_brought_in(mods);
+    bool changed = false;
+    for (auto it = json.items().begin(); it != json.items().end();) {
+        const bool gone = std::any_of(removed.begin(), removed.end(), [&](const std::string& name) { return lower(name) == lower(it->first); });
+        if (gone) { it = json.items().erase(it); changed = true; }
+        else ++it;
+    }
+    if (changed) write_brought_in(mods, json);
 }
 
 std::vector<std::string> orphaned_dependencies(const fs::path& mods, const std::vector<std::string>& removing,
@@ -476,18 +539,16 @@ std::vector<std::string> orphaned_dependencies(const fs::path& mods, const std::
         const auto at = std::find(folded.begin(), folded.end(), name);
         return at == folded.end() ? std::vector<std::string>{} : listed_dependencies(mods / from_utf8(installed[at - folded.begin()]));
     };
-    // Everything the removed mods bring in, through their dependencies' dependencies.
-    std::vector<std::string> candidates, queue = gone;
-    while (!queue.empty()) {
-        const auto name = queue.back();
-        queue.pop_back();
-        for (const auto& dependency : listed(name))
+    // What the removed mods brought in when they were installed (their dependencies' dependencies too):
+    // only these, so a mod that was installed before them is never offered.
+    std::vector<std::string> candidates;
+    for (const auto& pack : removing)
+        for (const auto& name : brought_in(mods, pack)) {
+            const auto dependency = lower(name);
             if (is_installed(dependency) && std::find(gone.begin(), gone.end(), dependency) == gone.end() &&
-                std::find(candidates.begin(), candidates.end(), dependency) == candidates.end()) {
+                std::find(candidates.begin(), candidates.end(), dependency) == candidates.end())
                 candidates.push_back(dependency);
-                queue.push_back(dependency);
-            }
-    }
+        }
     // What a mod that stays still lists stays too, with what that one lists in turn.
     for (bool changed = true; changed;) {
         changed = false;

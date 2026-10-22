@@ -1942,9 +1942,13 @@ void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, Mo
         if (!panel.remove_extras.empty()) {
             ImGui::Spacing();
             const auto count = static_cast<int>(panel.remove_extras.size());
-            const auto label = count == 1 ? std::string("Also uninstall the mod it brought in, which nothing else needs")
-                                          : std::format("Also uninstall the {} mods it brought in, which nothing else needs", count);
+            const auto label = count == 1 ? std::string("Uninstall 1 modpack dependency?")
+                                          : std::format("Uninstall {} modpack dependencies?", count);
+            // The label as far from the box as the settings page has it (an item's spacing, not the inner one).
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, ImGui::GetStyle().ItemInnerSpacing.y));
             ImGui::Checkbox(label.c_str(), &panel.remove_extras_on);
+            ImGui::PopStyleVar();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Mods it brought in that no other installed mod needs");
             const std::size_t listed = std::min<std::size_t>(panel.remove_extras.size(), 8);
             for (std::size_t i = 0; i < listed; ++i) ImGui::TextDisabled("%s", title(panel.remove_extras[i]).c_str());
             if (panel.remove_extras.size() > listed)
@@ -1981,6 +1985,7 @@ void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, Mo
             };
             const auto first = removed.empty() ? std::string() : title(removed.front());
             std::erase_if(entries, [&](const auto& entry) { return gone(entry.mod.name); });
+            if (!removed.empty()) launcher_mods::forget_brought_in(panel.root, removed);
             if (!removed.empty()) save(panel);
             auto message = !failure.empty() ? failure
                 : removed.size() == 1 ? "Uninstalled " + first + ". It is in the Recycle Bin if you want it back."
