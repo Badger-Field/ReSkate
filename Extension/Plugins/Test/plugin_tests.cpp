@@ -1,5 +1,6 @@
 // The plugin host apart from the game: manifests, the reskate API, storage, modules, hot reload,
 // and the sandbox against plugins written to break it (loops, memory, error floods, escapes).
+#include "Extension/Plugins/plugin_content.h"
 #include "Extension/Plugins/plugin_discovery.h"
 #include "Extension/Plugins/plugin_host.h"
 #include "Extension/Plugins/plugin_manifest.h"
@@ -2893,6 +2894,54 @@ void a_plugin_reads_the_content_folder_it_names() {
     check(environment.printed("content ok") && game.called("content list parks"), "The plugin reads its content folder\n" + environment.all());
 }
 
+// What the game and a dedicated server read for mods.content (plugin_content.h), from real folders:
+// every mod folder in a Mods folder by name, each one's files under the folder asked for, and the
+// limits a plugin cannot get past.
+void content_is_read_from_the_mod_folders() {
+    namespace content = dingosdk::plugins::content;
+    const auto mods = scratch / "content mods";
+    const auto write = [](const std::filesystem::path& file, const std::string& text) {
+        std::filesystem::create_directories(file.parent_path());
+        std::ofstream(file, std::ios::binary) << text;
+    };
+    write(mods / "b_track" / "parks" / "start.json", "{}");
+    write(mods / "b_track" / "parks" / "deep" / "a" / "b" / "c" / "level4.json", "{}");
+    write(mods / "b_track" / "parks" / "deep" / "a" / "b" / "c" / "d" / "level5.json", "{}");
+    write(mods / "b_track" / "parks" / "half.tmp", "");
+    write(mods / "b_track" / "parks" / "big.json", std::string((1u << 20) + 1, ' '));
+    write(mods / "b_track" / "manifest.json", R"({"name": "B Track", "version_number": "1.0.0"})");
+    write(mods / "A_Park" / "parks" / "z.json", "zz");
+    write(mods / "A_Park" / "reskate-levels.json", "{}");
+    write(mods / "no parks" / "manifest.json", "not JSON");
+    write(mods / ".reskate_plugin_data" / "parks" / "secret.json", "{}");
+    write(mods / "loose.json", "{}");
+
+    const auto found = content::mod_folders(mods);
+    check(found.size() == 3 && found[0].name == "A_Park" && found[1].name == "b_track" && found[2].name == "no parks",
+          "Every mod folder, by name, none hidden");
+    check(found[0].title == "A_Park" && found[1].title == "B Track" && found[2].title == "no parks", "titled as their manifest names them");
+    check(content::mod_folders(scratch / "no such folder").empty(), "No Mods folder, no mods");
+
+    std::vector<Game::ContentFile> files;
+    content::list(found, "parks", files);
+    std::string listed;
+    for (const auto& file : files) listed += std::format("{}:{}:{} ", file.mod, file.path, file.size);
+    check(listed == std::format("A_Park:z.json:2 b_track:big.json:{} b_track:deep/a/b/c/level4.json:2 b_track:start.json:2 ", (1u << 20) + 1),
+          "Mod by mod, sorted, four folders deep at most, no .tmp: " + listed);
+
+    std::string text;
+    check(content::read(found, "B_TRACK", "parks", "start.json", text).empty() && text == "{}", "A file is read, the mod named in any case");
+    check(content::read(found, "b_track", "parks", "missing.json", text) == "not found", "A missing file");
+    check(content::read(found, "b_track", "parks", "big.json", text) == "the file is larger than 1 MB", "A file over 1 MB");
+    check(content::read(found, "nobody", "parks", "start.json", text) == "no such mod is on", "A mod that is not there");
+    check(content::read(found, ".reskate_plugin_data", "parks", "secret.json", text) == "no such mod is on", "A hidden folder is no mod");
+
+    for (int i = 0; i < 1005; ++i) write(mods / "c_many" / "parks" / std::format("{:04}.json", i), "");
+    files.clear();
+    content::list(content::mod_folders(mods), "parks", files);
+    check(files.size() == content::most_files, std::format("At most {} files, {} listed", content::most_files, files.size()));
+}
+
 void board_break_snaps_the_board_on_a_slam() {
     TestEnvironment environment;
     std::filesystem::remove_all(scratch / "storage" / "board-break");
@@ -3896,6 +3945,7 @@ int main() {
         run(dual_stick_edits_the_companions_settings);
         run(rock_to_fakie_relabels_and_records_the_stall);
         run(a_plugin_reads_the_content_folder_it_names);
+        run(content_is_read_from_the_mod_folders);
         run(board_break_snaps_the_board_on_a_slam);
         run(fpv_drone_flies_and_follows);
         run(hall_of_meat_scores_a_bail);

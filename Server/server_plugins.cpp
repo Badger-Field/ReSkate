@@ -1,5 +1,6 @@
 #include "server_plugins.h"
 #include "server_host.h"
+#include "Extension/Plugins/plugin_content.h"
 #include "Extension/Plugins/plugin_host.h"
 #include "Extension/Plugins/plugin_manifest.h"
 #include "Extension/Plugins/plugin_wire.h"
@@ -101,6 +102,15 @@ class ServerGame final : public Game {
         }
         return result;
     }
+    // mods.content: every mod folder in the server's Mods, as a game reads its enabled mods. The
+    // server has no load order or mods.json of its own; the folders come by name, as for its maps.
+    std::string content_list(std::string_view folder, std::vector<ContentFile> &files) override {
+        content::list(mod_folders(), folder, files);
+        return {};
+    }
+    std::string content_read(std::string_view mod, std::string_view folder, std::string_view path, std::string &text) override {
+        return content::read(mod_folders(), mod, folder, path, text);
+    }
     // Through the console's own ban and unban, so they keep its checks and save the bans file.
     std::string ban(std::uint64_t player) override {
         const auto answer = host_.command("ban " + std::to_string(player));
@@ -116,6 +126,15 @@ class ServerGame final : public Game {
     }
 
   private:
+    // Read again at most every 2 s: a plugin may list them every tick.
+    const std::vector<content::Mod> &mod_folders() {
+        const auto now = std::chrono::steady_clock::now();
+        if (!mods_read_ || now - *mods_read_ >= std::chrono::seconds(2)) {
+            mods_read_ = now;
+            mods_ = content::mod_folders(host_.config().mods);
+        }
+        return mods_;
+    }
     bool present(std::uint64_t player) const {
         for (const auto &p : host_.player_list())
             if (p.id == player) return true;
@@ -123,6 +142,8 @@ class ServerGame final : public Game {
     }
     Host &host_;
     ServerPlugins::Log log_;
+    std::vector<content::Mod> mods_;
+    std::optional<std::chrono::steady_clock::time_point> mods_read_;
 };
 
 class ServerEnvironment final : public Environment {

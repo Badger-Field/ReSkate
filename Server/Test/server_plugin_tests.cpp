@@ -211,6 +211,10 @@ int run(const std::filesystem::path &fixtures) {
             local ok, why = pcall(reskate.server.parks)
             reskate.console.print(ok and "blind listed parks" or "blind parks refused: " .. tostring(why))
         end)
+        reskate.console.command("blind content", "mod content without mods.read", function()
+            local ok, why = pcall(reskate.mods.content, "parks")
+            reskate.console.print(ok and "blind listed content" or "blind content refused: " .. tostring(why))
+        end)
     )");
 
     // One that says what the level is, and when it changes.
@@ -248,6 +252,22 @@ int run(const std::filesystem::path &fixtures) {
                 local timed = pcall(reskate.server.park_spawn, "street", 5000)
                 reskate.console.print("bad " .. (named and "name taken" or "name refused") .. ", " .. (timed and "minutes taken" or "minutes refused"))
             end
+        end)
+    )");
+
+    // One that reads the parks folder of the mods the server has, as a game's plugin reads its
+    // enabled mods'.
+    write(root / "Plugins" / "reader" / "reskate-plugin.json",
+          R"({"api": 1, "entry": "plugin/main.lua", "side": "server", "permissions": ["console", "mods.read"], "content": ["parks"]})");
+    write(root / "Plugins" / "reader" / "plugin" / "main.lua", R"(
+        reskate.console.command("reader", "mod content, for the test", function()
+            for _, f in ipairs(assert(reskate.mods.content("parks"))) do
+                reskate.console.print(string.format("content %s (%s) %s %d", f.mod, f.title, f.path, f.size))
+            end
+            local text = assert(reskate.mods.read_content("mixed park", "parks", "grom.park.json"))
+            reskate.console.print("read " .. #text .. " " .. tostring(text:find('"reskate-park"', 1, true) ~= nil))
+            local missing, why = reskate.mods.read_content("mixed park", "parks", "nothing.json")
+            reskate.console.print("missing " .. tostring(missing) .. " " .. why)
         end)
     )");
 
@@ -349,6 +369,20 @@ int run(const std::filesystem::path &fixtures) {
     check(has(log, "remove street: street is not spawned."), "A park not spawned was removed");
     plugin_command("blind parks");
     check(has(log, "blind parks refused: ") && has(log, "server.parks"), "A plugin without server.parks listed the parks");
+
+    // The mods the server has, read through mods.content as a game reads its enabled mods.
+    const auto size_of = [&](const char *mod, const char *file) {
+        return std::to_string(std::filesystem::file_size(root / "Mods" / mod / "parks" / file));
+    };
+    plugin_command("reader");
+    check(has(log, "content mixed park (mixed park) grom.park.json " + size_of("mixed park", "grom.park.json")) &&
+              has(log, "content popular skate 2 street park (popular skate 2 street park) bam.park.json " +
+                           size_of("popular skate 2 street park", "bam.park.json")),
+          "The server's mods' parks folders were not listed");
+    check(has(log, "read " + size_of("mixed park", "grom.park.json") + " true"), "A park mod's file was not read");
+    check(has(log, "missing nil not found"), "A missing file was not \"not found\"");
+    plugin_command("blind content");
+    check(has(log, "blind content refused: ") && has(log, "mods.read"), "A plugin without mods.read listed the mods' content");
 
     // The level, as players' games name it, and its change heard when the server changes it.
     const auto *first = find_level(config.map);
