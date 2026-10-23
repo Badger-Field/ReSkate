@@ -556,6 +556,31 @@ struct FakeGame final : Game {
         calls.push_back(std::format("park remove {} {}", plugin, name));
         return {};
     }
+    static std::string players_text(const std::vector<std::uint64_t>& players) {
+        std::string text;
+        for (const auto id : players) text += (text.empty() ? "" : ",") + std::to_string(id);
+        return text.empty() ? "all" : text;
+    }
+    std::string server_card(std::string_view plugin, const std::vector<std::uint64_t>& players, std::string_view text, unsigned seconds) override {
+        calls.push_back(std::format("card {} {} {} {}", plugin, players_text(players), text, seconds));
+        return {};
+    }
+    std::uint32_t next_poll = 41;
+    std::string server_poll(std::string_view plugin, const std::vector<std::uint64_t>& players, std::string_view question,
+                            const std::vector<std::string>& answers, unsigned seconds, std::uint32_t& id) override {
+        std::string listed;
+        for (const auto& answer : answers) listed += (listed.empty() ? "" : "|") + answer;
+        calls.push_back(std::format("poll {} {} {} {} {}", plugin, players_text(players), question, listed, seconds));
+        if (players == std::vector<std::uint64_t>{9}) return "that player is not on the server";
+        id = next_poll++;
+        return {};
+    }
+    std::string server_poll_close(std::string_view plugin, std::uint32_t id) override {
+        calls.push_back(std::format("poll close {} {}", plugin, id));
+        return {};
+    }
+    std::vector<PollNews> poll_news;
+    std::vector<PollNews> take_poll_news() override { return std::exchange(poll_news, {}); }
     std::optional<CameraView> camera_view() override { return CameraView{{1, 2, 3}, {0, 0, 1}, 60}; }
     std::string set_camera(std::string_view plugin, const std::array<float, 16>& pose, float fov) override {
         calls.push_back(std::format("camera {} {:.1f} {:.1f} {:.1f} back {:.2f} {:.2f} {:.2f} fov {:.0f}", plugin, pose[12], pose[13], pose[14],
@@ -2114,6 +2139,69 @@ void plugins_server_copies_spawn_park_mods() {
           "A player's copy used the server's park mods\n" + player.all());
     check(!blind.logged("parks done") && blind.all().find("server.parks") != std::string::npos,
           "A plugin without server.parks used the park mods\n" + blind.all());
+}
+
+// Cards and polls on players' screens, for a server copy with "server": for a player, a list of
+// them or "all", with checked text, and each answer or close coming back as an event to the plugin
+// that asked. Not for a copy without the permission, nor for a player's copy.
+void plugins_server_copies_show_cards_and_polls() {
+    TestEnvironment server, player, blind;
+    const std::string main = R"(
+        local heard = pcall(reskate.on, "poll_answer", function(e)
+            reskate.log(string.format("answer %d %s %d %s", e.id, e.player, e.answer, e.text))
+        end)
+        pcall(reskate.on, "poll_closed", function(e) reskate.log(string.format("closed %d %s %s", e.id, e.player, e.why)) end)
+        if not heard then reskate.log("no poll events") end
+        reskate.console.command("cards", "x", function()
+            assert(reskate.server.card("all", "Race in 30 s"))
+            assert(reskate.server.card({"7", {id = "8"}}, "Ready?", 5))
+            assert(reskate.server.card({id = "7"}, "Go"))
+            local id = assert(reskate.server.poll("all", "Next track?", {"Docks", "Hill"}, {seconds = 20}))
+            assert(id == 41, tostring(id))
+            assert(reskate.server.poll("7", "Again?", {"Yes", "No", "Later"}) == 42)
+            local none, why = reskate.server.poll("9", "Anyone?", {"a", "b"})
+            assert(none == nil and why == "that player is not on the server", tostring(why))
+            assert(reskate.server.poll_close(41))
+            assert(not pcall(reskate.server.card, "all", ""), "a card says something")
+            assert(not pcall(reskate.server.card, "all", string.rep("x", 121)), "120 characters at most")
+            assert(not pcall(reskate.server.card, "all", "x", 0), "1 to 60 s")
+            assert(not pcall(reskate.server.card, "all", "x", 61), "1 to 60 s")
+            assert(not pcall(reskate.server.card, "everyone", "x"), "a player, a list of them or all")
+            assert(not pcall(reskate.server.card, {}, "x"), "at least one player")
+            assert(not pcall(reskate.server.poll, "all", "", {"a", "b"}), "a question")
+            assert(not pcall(reskate.server.poll, "all", "q?", {"only one"}), "2 to 6 answers")
+            assert(not pcall(reskate.server.poll, "all", "q?", {"1", "2", "3", "4", "5", "6", "7"}), "2 to 6 answers")
+            assert(not pcall(reskate.server.poll, "all", "q?", {"a", string.rep("x", 49)}), "48 characters an answer at most")
+            assert(not pcall(reskate.server.poll, "all", "q?", {"a", ""}), "an answer says something")
+            assert(not pcall(reskate.server.poll, "all", "q?", {"a", "b"}, {seconds = 4}), "5 to 300 s")
+            assert(not pcall(reskate.server.poll_close, "x"), "a poll's id")
+            reskate.log("cards done")
+        end)
+    )";
+    const auto cards = [&](const char* id, const char* permissions, const char* side) {
+        return package(id, {{manifest_file, manifest(permissions, side)}, {"plugin/main.lua", main}});
+    };
+    Host server_host(server, Side::server), player_host(player, Side::client), blind_host(blind, Side::server);
+    server_host.apply({cards("cards-s", R"("console", "server")", "server")});
+    player_host.apply({cards("cards-p", R"("console", "server")", "client")});
+    blind_host.apply({cards("cards-b", R"("console")", "server")});
+    for (auto* host : {&server_host, &player_host, &blind_host}) host->run_console("cards");
+    check(server.logged("[cards-s] cards done"), "A server copy could not show cards and polls\n" + server.all());
+    for (const auto* call : {"card cards-s all Race in 30 s 0", "card cards-s 7,8 Ready? 5", "card cards-s 7 Go 0",
+                             "poll cards-s all Next track? Docks|Hill 20", "poll cards-s 7 Again? Yes|No|Later 0", "poll close cards-s 41"})
+        check(server.fake.called(call), std::string("The server was asked: ") + call + "\n" + server.all());
+    check(!server.fake.called("card cards-s all  0") && !server.fake.called("poll cards-s all q? only one 0"), "A refused call reached the server");
+    // Answers and closes, each to the plugin that asked.
+    server.fake.poll_news = {{"cards-s", 41, 7, 2, "Hill", ""}, {"cards-s", 42, 7, 0, "", "timeout"}, {"someone", 50, 8, 1, "Docks", ""}};
+    ticks(server_host, server, 1);
+    check(server.logged("[cards-s] answer 41 7 2 Hill") && server.logged("[cards-s] closed 42 7 timeout"),
+          "The plugin hears its polls answered and closed\n" + server.all());
+    check(!server.logged("answer 50"), "and only its own");
+    check(!player.logged("cards done") && player.all().find("server copy") != std::string::npos,
+          "A player's copy showed cards\n" + player.all());
+    check(!blind.logged("cards done") && blind.all().find("\"server\"") != std::string::npos && blind.logged("no poll events"),
+          "A plugin without server showed cards or heard polls\n" + blind.all());
+    running(server_host, "cards-s", server);
 }
 
 // Clips on the skater's body: from the package or recorded, played, replacing a trick.
@@ -3926,6 +4014,7 @@ int main() {
         run(animator_studio_records_and_saves);
         run(plugins_server_copies_are_the_authority);
         run(plugins_server_copies_spawn_park_mods);
+        run(plugins_server_copies_show_cards_and_polls);
         run(plugins_animate_the_skater);
         run(plugins_play_their_own_sounds);
         run(plugins_have_menu_panels);

@@ -90,6 +90,21 @@ class ServerGame final : public Game {
         return host_.plugin_park(plugin, true, name, minutes);
     }
     std::string remove_park(std::string_view plugin, std::string_view name) override { return host_.plugin_park(plugin, false, name, 0); }
+    // Cards and polls on the players' screens, as the roster carries the server's own.
+    std::string server_card(std::string_view plugin, const std::vector<std::uint64_t> &players, std::string_view text, unsigned seconds) override {
+        return host_.plugin_card(plugin, players, text, seconds);
+    }
+    std::string server_poll(std::string_view plugin, const std::vector<std::uint64_t> &players, std::string_view question,
+                            const std::vector<std::string> &answers, unsigned seconds, std::uint32_t &id) override {
+        return host_.plugin_poll(plugin, players, question, answers, seconds, id);
+    }
+    std::string server_poll_close(std::string_view plugin, std::uint32_t id) override { return host_.plugin_poll_close(plugin, id); }
+    std::vector<PollNews> take_poll_news() override {
+        std::vector<PollNews> news;
+        for (auto &n : host_.take_poll_news()) news.push_back({std::move(n.plugin), n.id, n.player, n.answer, std::move(n.text), std::move(n.why)});
+        return news;
+    }
+    void release(std::string_view plugin) override { host_.plugin_screens_release(plugin); }
     // The skaters of the players in the world, as their latest poses put them. The server has
     // no skater of its own, so this is every player's.
     std::vector<PeerSkater> peer_skaters() override {
