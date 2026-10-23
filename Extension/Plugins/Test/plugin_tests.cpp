@@ -1741,11 +1741,17 @@ void plugins_draw_on_the_overlay() {
             local on = d:world_to_screen(vector.create(1, 0, -10))
             assert(on and math.abs(on.x - 1060) < 0.01 and math.abs(on.z - 10) < 0.01, "world_to_screen")
             assert(d:world_to_screen(vector.create(0, 0, 5)) == nil, "behind the camera")
+            -- Just in front of the camera and off to the side the point is millions of pixels
+            -- out, which d:poly would refuse.
+            assert(d:world_to_screen(vector.create(1000, 0, -0.06)) == nil, "far off the screen")
+            assert(d:world_to_screen(vector.create(0, 1000, -0.06)) == nil, "far above the screen")
+            assert(d:world_to_screen(vector.create(1, 0, -0.06)), "off the screen but drawable")
             assert(d:size().x == 1920 and d:size().y == 1080)
             assert(not pcall(d.text, d, vector.create(0, 0, 0), "x", {colour = "red"}), "a colour by name")
             assert(not pcall(d.text, d, vector.create(0 / 0, 0, 0), "x"), "NaN")
             assert(not pcall(d.poly, d, {vector.create(0, 0, 0)}), "a polygon of one point")
             assert(not pcall(d.text, d, vector.create(0, 0, 0), string.rep("x", 600)), "a long text")
+            reskate.log("drawn")
         end)
         reskate.console.command("outside", "x", function()
             local ok, err = pcall(saved.text, saved, vector.create(0, 0, 0), "x")
@@ -1769,6 +1775,7 @@ void plugins_draw_on_the_overlay() {
     running(host, "painter", environment);
     check(environment.layers.size() == 1 && environment.layers[0].plugin == "painter" && environment.layers[0].shapes.size() == 8,
           "Its shapes are handed to the overlay each tick\n" + environment.all());
+    check(environment.logged("drawn"), "and the draw handler ran to its end\n" + environment.all());
     const auto& first = environment.layers[0].shapes[0];
     check(first.kind == plugin_ui::Shape::Kind::text && first.text == "hello" && first.style.colour == 0xff0080ff &&
           first.style.size == 24 && first.style.align == 1, "with their style (colours as ImGui keeps them)");
