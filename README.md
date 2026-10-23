@@ -135,6 +135,29 @@ accepts `park random` from its console or an admin.
 | The game's own settings and saves | `%LOCALAPPDATA%\ReSkate\Game\` (kept apart from the normal game) |
 | Launcher settings | `ReSkateLauncher.settings.json` beside the launcher |
 
+### Troubleshooting
+
+**My antivirus says ReSkate is a virus.** It is a false alarm. ReSkate has to load itself into the game as
+it starts, and antivirus programs distrust anything that does that, most of all new programs they have not
+seen much of yet. Only download ReSkate from this page's
+[Releases](https://github.com/Dingo-Shenanigans/ReSkate/releases). If your antivirus removed a file, you can
+bring it back: Windows Security → Protection history → find ReSkate → Restore. An error about SHA-256 right
+after an update usually means the antivirus took the new file.
+
+**The launcher says it cannot run from Steam's skate. folder.** Move `ReSkateLauncher.exe` and `ReSkate.dll`
+into a new, empty folder of their own and run the launcher from there (see [Getting started](#getting-started)).
+
+**The ReSkate menu (Insert) doesn't open.** ReSkate isn't running. On Windows, always start the game with
+**PLAY** in the ReSkate launcher: pressing Play on skate. in Steam starts the normal game, without ReSkate.
+On Linux and macOS, use the launch option in [Linux (Proton)](#linux-proton) or
+[MACOS-SETUP.md](MACOS-SETUP.md).
+
+**The game crashes.** Turn your mods off and try again first: many crashes come from mods. If it still
+crashes, [open an issue](https://github.com/Dingo-Shenanigans/ReSkate/issues/new/choose) with your ReSkate
+version, when it happened and what you were doing, and attach `logs\ReSkate.log`. With **Send crash reports**
+on (it is by default), the crash details have already been sent; see
+[Crash reports and privacy](#crash-reports-and-privacy) for what is sent and how to turn it off.
+
 ## Mods
 
 - Install mods from the launcher's **MODS** page: browse Thunderstore, or drag a `.zip` or folder onto the
