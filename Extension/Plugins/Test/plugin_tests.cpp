@@ -2134,6 +2134,10 @@ void plugins_server_copies_see_roles() {
     server_host.apply({roles("roles-s", R"("console", "session.read", "server")", "server")});
     player_host.apply({roles("roles-p", R"("console", "session.read", "server")", "client")});
     blind_host.apply({roles("roles-b", R"("console", "session.read")", "server")});
+    // a tick first: the host takes the session's players then (Host::follow_session), so they are there to ask
+    ticks(server_host, server, 1);
+    ticks(player_host, player, 1);
+    ticks(blind_host, blind, 1);
     for (auto* host : {&server_host, &player_host, &blind_host}) host->run_console("roles");
     check(server.logged("[roles-s] roles done"), "A server copy could not read the players' roles\n" + server.all());
     check(!player.logged("roles done") && player.all().find("server copy") != std::string::npos,
