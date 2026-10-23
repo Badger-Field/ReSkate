@@ -141,7 +141,9 @@ struct WorldApi {
         if (!shape.across && !shape.along && !shape.up) luaL_argerror(L, 2, "a launch's shape sets across, along or up");
         return result(L, game(plugin).shape_launch(plugin.id(), from, shape));
     }
-    // board.motion(): the board's velocity in the last physics step, or nil.
+    // board.motion(): the board's velocity and spin in the last physics step, and where it and its deck
+    // were last drawn in the world (bone 1, the board's place, is drawn in the world; the deck is bone 3
+    // on bone 2 on it), or nil.
     static int board_motion(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "skater.read", "reskate.board.motion");
@@ -150,9 +152,41 @@ struct WorldApi {
             lua_pushnil(L);
             return 1;
         }
-        lua_createtable(L, 0, 1);
+        lua_createtable(L, 0, 4);
         push_position(L, *v);
         lua_setfield(L, -2, "velocity");
+        if (const auto spin = game(plugin).board_spin()) {
+            push_position(L, *spin);
+            lua_setfield(L, -2, "spin");
+        }
+        if (const auto bones = game(plugin).board_bones()) {
+            const auto push_place = [&](const anim_studio::Joint& at, const char* field) {
+                lua_createtable(L, 0, 2);
+                push_position(L, at.position);
+                lua_setfield(L, -2, "position");
+                push_quaternion(L, at.rotation);
+                lua_setfield(L, -2, "rotation");
+                lua_setfield(L, -2, field);
+            };
+            const auto joint = [&](int b) {
+                const auto& bone = (*bones)[static_cast<std::size_t>(b)];
+                anim_studio::Joint j;
+                j.position = bone.position;
+                j.rotation = anim_studio::normalised(bone.rotation);
+                return j;
+            };
+            // A child placed on its parent: turned by it, and moved by it from its own position.
+            const auto on = [](const anim_studio::Joint& parent, const anim_studio::Joint& child) {
+                anim_studio::Joint out;
+                const auto moved = anim_studio::rotate(parent.rotation, child.position);
+                out.position = {parent.position[0] + moved[0], parent.position[1] + moved[1], parent.position[2] + moved[2]};
+                out.rotation = anim_studio::normalised(anim_studio::multiply(parent.rotation, child.rotation));
+                return out;
+            };
+            const auto place = joint(1);
+            push_place(place, "place");
+            push_place(on(on(place, joint(2)), joint(3)), "deck");
+        }
         return 1;
     }
     // ---- camera -------------------------------------------------------------------------------------

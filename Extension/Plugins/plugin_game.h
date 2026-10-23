@@ -783,6 +783,8 @@ public:
     // ---- the skater's physics -----------------------------------------------------------------------
     virtual SkaterNews take_skater_news() { return {}; }
     virtual std::optional<Vec3> board_velocity() { return std::nullopt; }
+    // Its spin in that step: angular velocity in the world, radians a second.
+    virtual std::optional<Vec3> board_spin() { return std::nullopt; }
     virtual std::optional<SlamNews> last_slam() { return std::nullopt; }
     // Every physics step since the last tick (kept once asked for: at most 512).
     virtual std::vector<PhysicsStep> take_physics_steps() { return {}; }

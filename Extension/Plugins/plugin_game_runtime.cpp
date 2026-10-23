@@ -812,6 +812,7 @@ public:
         pad_hide::hide(plugin, {h.left_trigger, h.right_trigger, h.left_x_grinding, h.right_stick, h.left_stick_click, h.right_stick_click});
         return {};
     }
+    std::optional<Vec3> board_spin() override { return skater_events::board_spin(); }
     std::optional<Vec3> board_velocity() override {
         skater_events::want();
         return skater_events::board_velocity();

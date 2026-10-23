@@ -248,6 +248,7 @@ struct FakeGame final : Game {
         return {};
     }
     std::optional<Vec3> board_velocity() override { return Vec3{1, -2, 3}; }
+    std::optional<Vec3> board_spin() override { return Vec3{0, 4, 0}; }
     std::optional<SlamNews> last_slam() override { return SlamNews{7.5f, 12, 100}; }
     std::string wipeout(float force) override {
         calls.push_back(std::format("wipeout {:.1f}", force));
@@ -2249,6 +2250,10 @@ void the_wider_set_reaches_the_game() {
         end)
         reskate.console.command("physics", "x", function()
             assert(reskate.board.motion().velocity.y == -2)
+            local m = reskate.board.motion()
+            assert(m.spin.y == 4, "the board's spin")
+            assert(m.place.position.y == 0 and m.place.rotation[4] == 1, "where the board is")
+            assert(math.abs(m.deck.position.y - 0.1) < 1e-6, "and its deck, on the board's place")
             assert(reskate.skater.wipeout(2))
             local again, two = reskate.skater.wipeout(2)
             assert(not again and two:find("2 s"), "one wipeout every 2 s")
