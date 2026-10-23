@@ -596,6 +596,15 @@ public:
     };
     virtual std::optional<Permissions> permissions(std::uint64_t) { return std::nullopt; }
     virtual std::string apply_permissions(std::string_view /*plugin*/, std::uint64_t, const Permissions&) { return unavailable; }
+    // A player's role on a dedicated server (data/roles.json): its name, its rank (0 to 1000), and
+    // whether it gives any of the server's commands. Nothing for a player with no role, nor where
+    // there are no roles (a lobby's host).
+    struct Role {
+        std::string name;
+        int rank{};
+        bool staff{};
+    };
+    virtual std::optional<Role> role(std::uint64_t) { return std::nullopt; }
     // A dedicated server's park mods (server.parks): those it has set up, whether each fits the map
     // running now and is spawned (its objects, and minutes left; 0 until removed). Spawning one (for
     // `minutes`, 0 until removed) or removing it goes as the server's own park-mod does.

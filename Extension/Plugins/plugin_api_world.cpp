@@ -2152,14 +2152,30 @@ struct WorldApi {
         const auto player = player_of(L, 1);
         return result(L, game(plugin).apply_permissions(plugin.id(), player, permissions_of(L, 2)));
     }
-    // A player table's own names: permissions (read when asked, so always the server's now) and
-    // apply_permissions. Anything else a player table does not have is nil.
+    // player.role: {name, rank, staff}, read-only, or nil for a player with no role.
+    static int player_role(lua_State* L) {
+        auto& plugin = authority(L, "player.role");
+        const auto role = game(plugin).role(player_of(L, 1));
+        if (!role) return 0;
+        lua_createtable(L, 0, 3);
+        lua_pushlstring(L, role->name.data(), role->name.size());
+        lua_setfield(L, -2, "name");
+        lua_pushinteger(L, role->rank);
+        lua_setfield(L, -2, "rank");
+        lua_pushboolean(L, role->staff);
+        lua_setfield(L, -2, "staff");
+        lua_setreadonly(L, -1, true);
+        return 1;
+    }
+    // A player table's own names: permissions and role (read when asked, so always the server's
+    // now) and apply_permissions. Anything else a player table does not have is nil.
     static int player_index(lua_State* L) {
         const char* key = lua_type(L, 2) == LUA_TSTRING ? lua_tostring(L, 2) : "";
         if (std::string_view(key) == "apply_permissions") {
             lua_pushcfunction(L, player_apply_permissions, "apply_permissions");
             return 1;
         }
+        if (std::string_view(key) == "role") return player_role(L);
         if (std::string_view(key) != "permissions") return 0;
         auto& plugin = authority(L, "player.permissions");
         const auto permissions = game(plugin).permissions(player_of(L, 1));
