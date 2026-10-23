@@ -138,6 +138,18 @@ struct Player {
         p.world_ready = true;
         wire().inbound.push_back({id, encode_wire(p), now});
     }
+    void chat(std::uint64_t now, const std::string &text) {
+        auto p = header(PacketKind::chat, now);
+        p.text = text;
+        wire().inbound.push_back({id, encode_wire(p), now});
+    }
+    // The latest roster the server sent this player (and forgets what else it sent).
+    std::optional<Packet> roster() {
+        std::optional<Packet> latest;
+        for (const auto &bytes : std::exchange(wire().sent[id], {}))
+            if (auto p = decode_wire(bytes); p && p->kind == PacketKind::roster) latest = std::move(p);
+        return latest;
+    }
     void pose(std::uint64_t now) {
         for (const auto &bytes : std::exchange(wire().sent[id], {}))
             if (const auto read = pose_batch::Ack::read(bytes)) upload.ack(*read);
@@ -213,6 +225,10 @@ int run(const std::filesystem::path &fixtures) {
             local ok, why = pcall(reskate.server.parks)
             reskate.console.print(ok and "blind listed parks" or "blind parks refused: " .. tostring(why))
         end)
+        reskate.console.command("blind content", "mod content without mods.read", function()
+            local ok, why = pcall(reskate.mods.content, "parks")
+            reskate.console.print(ok and "blind listed content" or "blind content refused: " .. tostring(why))
+        end)
     )");
 
     // One that says what the level is, and when it changes.
@@ -276,6 +292,40 @@ int run(const std::filesystem::path &fixtures) {
             local p = reskate.session.players()[1]
             local ok, why = pcall(function() return p.role end)
             reskate.console.print(ok and "rankless saw a role" or "rankless refused: " .. tostring(why))
+        end)
+    )");
+
+    // One that reads the parks folder of the mods the server has, as a game's plugin reads its
+    // enabled mods'.
+    write(root / "Plugins" / "reader" / "reskate-plugin.json",
+          R"({"api": 1, "entry": "plugin/main.lua", "side": "server", "permissions": ["console", "mods.read"], "content": ["parks"]})");
+    write(root / "Plugins" / "reader" / "plugin" / "main.lua", R"(
+        reskate.console.command("reader", "mod content, for the test", function()
+            for _, f in ipairs(assert(reskate.mods.content("parks"))) do
+                reskate.console.print(string.format("content %s (%s) %s %d", f.mod, f.title, f.path, f.size))
+            end
+            local text = assert(reskate.mods.read_content("mixed park", "parks", "grom.park.json"))
+            reskate.console.print("read " .. #text .. " " .. tostring(text:find('"reskate-park"', 1, true) ~= nil))
+            local missing, why = reskate.mods.read_content("mixed park", "parks", "nothing.json")
+            reskate.console.print("missing " .. tostring(missing) .. " " .. why)
+        end)
+    )");
+
+    // One that asks players and shows them cards, and says what came back.
+    write(root / "Plugins" / "asker" / "reskate-plugin.json",
+          R"({"api": 1, "entry": "plugin/main.lua", "side": "server", "permissions": ["console", "server"]})");
+    write(root / "Plugins" / "asker" / "plugin" / "main.lua", R"(
+        reskate.on("poll_answer", function(e) reskate.console.print(string.format("answer %s %d %s", e.player, e.answer, e.text)) end)
+        reskate.on("poll_closed", function(e) reskate.console.print(string.format("closed %s %s", e.player, e.why)) end)
+        reskate.console.command("asker", "cards and polls, for the test", function(args)
+            local who = args[2] == "all" and "all" or args[2]
+            if args[1] == "poll" then
+                local id, why = reskate.server.poll(who, "Next track?", {"Docks", "Hill"}, {seconds = tonumber(args[3]) or 30})
+                reskate.console.print("poll " .. tostring(id or why))
+            elseif args[1] == "card" then
+                local ok, why = reskate.server.card(who, "Race in 30 s", 5)
+                reskate.console.print("card " .. tostring(ok or why))
+            end
         end)
     )");
 
@@ -390,6 +440,60 @@ int run(const std::filesystem::path &fixtures) {
     plugin_command("blind parks");
     check(has(log, "blind parks refused: ") && has(log, "server.parks"), "A plugin without server.parks listed the parks");
 
+    // The mods the server has, read through mods.content as a game reads its enabled mods.
+    const auto size_of = [&](const char *mod, const char *file) {
+        return std::to_string(std::filesystem::file_size(root / "Mods" / mod / "parks" / file));
+    };
+    plugin_command("reader");
+    check(has(log, "content mixed park (mixed park) grom.park.json " + size_of("mixed park", "grom.park.json")) &&
+              has(log, "content popular skate 2 street park (popular skate 2 street park) bam.park.json " +
+                           size_of("popular skate 2 street park", "bam.park.json")),
+          "The server's mods' parks folders were not listed");
+    check(has(log, "read " + size_of("mixed park", "grom.park.json") + " true"), "A park mod's file was not read");
+    check(has(log, "missing nil not found"), "A missing file was not \"not found\"");
+    plugin_command("blind content");
+    check(has(log, "blind content refused: ") && has(log, "mods.read"), "A plugin without mods.read listed the mods' content");
+
+    // Cards and polls: each player's own roster carries them, over the server's; a player's answer
+    // (as the game sends it, "/2") comes back to the plugin, and so does a poll that ran out.
+    const auto first_id = std::to_string(players[0].id), second_id = std::to_string(players[1].id);
+    for (auto &p : players) p.roster();
+    plugin_command("asker card " + first_id);
+    check(has(log, "card true"), "The plugin could not show a card");
+    plugin_command("asker poll all 10");
+    check(has(log, "poll ") && !has(log, "poll nil"), "The plugin could not ask everyone");
+    run_for(200000);
+    auto first_roster = players[0].roster(), second_roster = players[1].roster();
+    check(first_roster && first_roster->announcement.text == "Race in 30 s" && first_roster->announcement.seconds == 5,
+          "The first player's roster has no card");
+    check(second_roster && second_roster->announcement.text.empty(), "The second player was shown the first player's card");
+    for (auto *r : {&first_roster, &second_roster})
+        check(*r && (*r)->vote.label == "Next track?" && (*r)->vote.answers == std::vector<std::string>{"Docks", "Hill"} &&
+                  (*r)->vote.kind == server_vote_poll && (*r)->vote.outcome == vote_running && (*r)->vote.seconds == 10,
+              "A player's roster has no poll");
+    const auto poll_id = first_roster ? first_roster->vote.id : 0;
+    check(poll_id && second_roster && second_roster->vote.id == poll_id, "The poll is not one for everyone");
+    log.clear();
+    players[0].chat(now, "/2");
+    run_for(200000);
+    check(has(log, "answer " + first_id + " 2 Hill"), "The plugin did not hear the answer");
+    first_roster = players[0].roster();
+    check(first_roster && first_roster->vote.id != poll_id, "The answered poll stayed on the player's screen");
+    players[0].chat(now, "/1");
+    run_for(200000);
+    check(!has(log, "answer " + first_id + " 1"), "A poll was answered twice");
+    log.clear();
+    run_for(10000000);
+    check(has(log, "closed " + second_id + " timeout") && !has(log, "closed " + first_id), "The unanswered poll did not run out");
+    second_roster = players[1].roster();
+    check(second_roster && second_roster->vote.id != poll_id && second_roster->announcement.text.empty(), "The poll stayed after it ran out");
+    plugin_command("asker poll " + second_id);
+    plugin_command("asker poll " + second_id);
+    run_for(200000);
+    check(has(log, "closed " + second_id + " replaced"), "A new poll did not replace the player's earlier one");
+    plugin_command("asker poll 76561198000000099");
+    check(has(log, "poll that player is not on the server"), "A poll for nobody here was asked");
+
     // The level, as players' games name it, and its change heard when the server changes it.
     const auto *first = find_level(config.map);
     const auto other = std::find_if(levels().begin(), levels().end(), [&](const auto &l) { return l.asset != first->asset; });
@@ -403,6 +507,11 @@ int run(const std::filesystem::path &fixtures) {
     check(has(log, "unloading " + first->asset) && has(log, "loaded " + other->asset), "The plugin did not hear the map change");
     check(has(log, "level " + other->asset) && !has(log, "level " + first->asset), "level.current() did not follow the map change");
     check(!has(log, "skaters 2"), "Skaters stayed on the old map's places after the map changed");
+    // A player who leaves with a poll open: the plugin hears it closed.
+    log.clear();
+    host.drop(players[1].id, "testing");
+    run_for(200000);
+    check(has(log, "closed " + second_id + " left"), "A poll stayed open for a player who left");
     if (failures)
         for (const auto &line : log) std::fprintf(stderr, "log: %s\n", line.c_str());
     return failures ? 1 : 0;
