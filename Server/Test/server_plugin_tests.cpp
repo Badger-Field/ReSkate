@@ -1,5 +1,6 @@
 // The dedicated server's plugins (server_plugins.cpp) with the server's host, over a transport
-// that is not Steam's and simulated players: what a server plugin sees of the players' skaters.
+// that is not Steam's and simulated players: what a server plugin sees of the players' skaters
+// and roles.
 //
 //   dingosdk_server_plugin_tests <Server/Test/fixtures/park_mods>
 #include "Server/server_host.h"
@@ -177,6 +178,7 @@ int run(const std::filesystem::path &fixtures) {
     config.auto_update = false;
     config.activity_log = false;
     config.roles = default_roles();
+    config.roles.players[76561198000000001ULL] = "moderator"; // the second player has the default role
     config.park_mods = {{"street", "popular skate 2 street park", "San Vansterdam", "bam"}, {"plaza", "mixed park", "Isle of Grom", "grom"}};
     check(config_error(config).empty(), "The test's config was refused: " + config_error(config));
 
@@ -251,6 +253,32 @@ int run(const std::filesystem::path &fixtures) {
         end)
     )");
 
+    // One that says each player's role, and one without server that may not know them.
+    write(root / "Plugins" / "ranks" / "reskate-plugin.json",
+          R"({"api": 1, "entry": "plugin/main.lua", "side": "server", "permissions": ["console", "session.read", "server"]})");
+    write(root / "Plugins" / "ranks" / "plugin" / "main.lua", R"(
+        reskate.console.command("ranks", "players' roles, for the test", function()
+            for _, p in ipairs(reskate.session.players()) do
+                local role = p.role
+                if role then
+                    reskate.console.print(string.format("role %s %s rank %d staff %s", p.id, role.name, role.rank, tostring(role.staff)))
+                    reskate.console.print(pcall(function() role.rank = 1000 end) and "role changed" or "role read-only")
+                elseif not p.server then
+                    reskate.console.print("role " .. p.id .. " none")
+                end
+            end
+        end)
+    )");
+    write(root / "Plugins" / "rankless" / "reskate-plugin.json",
+          R"({"api": 1, "entry": "plugin/main.lua", "side": "server", "permissions": ["console", "session.read"]})");
+    write(root / "Plugins" / "rankless" / "plugin" / "main.lua", R"(
+        reskate.console.command("rankless", "roles without server", function()
+            local p = reskate.session.players()[1]
+            local ok, why = pcall(function() return p.role end)
+            reskate.console.print(ok and "rankless saw a role" or "rankless refused: " .. tostring(why))
+        end)
+    )");
+
     std::vector<std::string> log;
     SteamTransport transport;
     Host host(config, transport, [&](const std::string &line) { log.push_back(line); });
@@ -320,12 +348,24 @@ int run(const std::filesystem::path &fixtures) {
     run_for(1100000);
     check(has(log, "skater 76561198000000001 at 10.0 2.0 -30.0 facing 1.00, stale"), "A skater's age did not grow without poses");
 
-    // Park mods: listed with whether they fit this map; spawned and removed through park-mod's own
-    // checks, logged by the plugin's name.
+    // Roles: the one given (moderator), the server's default (player) for the other, read-only;
+    // and nothing for a plugin without server.
     const auto plugin_command = [&](std::string_view line) {
         log.clear();
         check(host.command(line) == "Ran by a plugin.", std::string(line) + " did not reach the plugin");
     };
+    plugin_command("ranks");
+    check(has(log, "role 76561198000000001 moderator rank 50 staff true"), "The moderator's role is not what the server gave them");
+    check(has(log, "role 76561198000000002 player rank 0 staff false"), "A player given no role does not have the default role");
+    check(has(log, "role read-only") && !has(log, "role changed"), "A plugin changed a player's role table");
+    host.command("role 76561198000000002 admin");
+    plugin_command("ranks");
+    check(has(log, "role 76561198000000002 admin rank 100 staff true"), "A role given while they are on was not seen");
+    plugin_command("rankless");
+    check(has(log, "rankless refused: ") && has(log, "server"), "A plugin without server saw a role");
+
+    // Park mods: listed with whether they fit this map; spawned and removed through park-mod's own
+    // checks, logged by the plugin's name.
     plugin_command("parker list");
     check(has(log, "park street on San Vansterdam, here true, spawned false, 0 objects, 0 min left"), "street is not listed as it is");
     check(has(log, "park plaza on Isle of Grom, here false, spawned false"), "plaza is not listed as on another map");

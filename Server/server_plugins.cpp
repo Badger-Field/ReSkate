@@ -80,6 +80,13 @@ class ServerGame final : public Game {
         host_.set_locks(player, locks, "plugin " + std::string(plugin));
         return {};
     }
+    // The role they have (the one given them, or the server's default role), here or not.
+    std::optional<Role> role(std::uint64_t player) override {
+        if (!multiplayer::individual_steam_id(player)) return std::nullopt; // the server itself has none
+        const auto *held = host_.player_role(player);
+        if (!held) return std::nullopt;
+        return Role{held->name, held->rank, server::staff(held)};
+    }
     std::vector<ServerPark> server_parks() override {
         std::vector<ServerPark> result;
         for (auto &p : host_.park_status()) result.push_back({std::move(p.name), std::move(p.map), p.here, p.spawned, p.objects, p.minutes_left});

@@ -85,6 +85,8 @@ class Host {
     std::uint8_t player_locks(std::uint64_t id) const { return locks_of(id); }
     std::uint8_t set_locks(std::uint64_t id, std::uint8_t locks, const std::string &source);
     std::optional<std::array<float, 3>> player_position(std::uint64_t steam_id) const;
+    // The role a player has (data/roles.json: given them, or the default), here or not; or none.
+    const Role *player_role(std::uint64_t id) const { return role_of(id); }
     // Where each player in the world last said their skater was (their latest pose's root), and
     // how long ago that arrived: what the server's plugins see of the skaters.
     struct SkaterPose {

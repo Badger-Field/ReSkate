@@ -546,6 +546,10 @@ struct FakeGame final : Game {
         calls.push_back(std::format("announce {} {}", plugin, text));
         return {};
     }
+    std::optional<Role> role(std::uint64_t player) override {
+        if (player == 1) return Role{"moderator", 50, true};
+        return std::nullopt;
+    }
     std::vector<ServerPark> server_parks() override { return {{"street", "San Vansterdam", true, true, 12, 5}, {"plaza", "Isle of Grom", false, false, 0, 0}}; }
     std::string spawn_park(std::string_view plugin, std::string_view name, unsigned minutes) override {
         calls.push_back(std::format("park spawn {} {} {}", plugin, name, minutes));
@@ -2106,6 +2110,40 @@ void plugins_server_copies_spawn_park_mods() {
           "A player's copy used the server's park mods\n" + player.all());
     check(!blind.logged("parks done") && blind.all().find("server.parks") != std::string::npos,
           "A plugin without server.parks used the park mods\n" + blind.all());
+}
+
+// A player's role, for a server copy with server: read-only, nil for one with none. Not for a copy
+// without the permission, nor for a player's copy.
+void plugins_server_copies_see_roles() {
+    TestEnvironment server, player, blind;
+    for (auto* environment : {&server, &player, &blind}) environment->session_now = {true, false, {{1, "Ann", false, false}, {2, "Bob", false, false}}};
+    const std::string main = R"(
+        reskate.console.command("roles", "x", function()
+            local ann, bob = reskate.session.players()[1], reskate.session.players()[2]
+            local role = ann.role
+            assert(role and role.name == "moderator" and role.rank == 50 and role.staff == true)
+            assert(not pcall(function() role.rank = 1000 end), "read-only")
+            assert(bob.role == nil, "nil with no role")
+            reskate.log("roles done")
+        end)
+    )";
+    const auto roles = [&](const char* id, const char* permissions, const char* side) {
+        return package(id, {{manifest_file, manifest(permissions, side)}, {"plugin/main.lua", main}});
+    };
+    Host server_host(server, Side::server), player_host(player, Side::client), blind_host(blind, Side::server);
+    server_host.apply({roles("roles-s", R"("console", "session.read", "server")", "server")});
+    player_host.apply({roles("roles-p", R"("console", "session.read", "server")", "client")});
+    blind_host.apply({roles("roles-b", R"("console", "session.read")", "server")});
+    // a tick first: the host takes the session's players then (Host::follow_session), so they are there to ask
+    ticks(server_host, server, 1);
+    ticks(player_host, player, 1);
+    ticks(blind_host, blind, 1);
+    for (auto* host : {&server_host, &player_host, &blind_host}) host->run_console("roles");
+    check(server.logged("[roles-s] roles done"), "A server copy could not read the players' roles\n" + server.all());
+    check(!player.logged("roles done") && player.all().find("server copy") != std::string::npos,
+          "A player's copy read the players' roles\n" + player.all());
+    check(!blind.logged("roles done") && blind.all().find("\"server\"") != std::string::npos,
+          "A plugin without server read the players' roles\n" + blind.all());
 }
 
 // Clips on the skater's body: from the package or recorded, played, replacing a trick.
@@ -3870,6 +3908,7 @@ int main() {
         run(animator_studio_records_and_saves);
         run(plugins_server_copies_are_the_authority);
         run(plugins_server_copies_spawn_park_mods);
+        run(plugins_server_copies_see_roles);
         run(plugins_animate_the_skater);
         run(plugins_play_their_own_sounds);
         run(plugins_have_menu_panels);
