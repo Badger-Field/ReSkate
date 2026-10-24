@@ -25,12 +25,13 @@ struct MergedTable {
     std::vector<std::byte> resourceMeta;
     std::size_t added{};       // rows taken from the edits
     std::size_t conflicts{};   // rows two edits disagreed on; the first won
-    std::size_t outside{};     // rows left out: outside or incompatible program graph
+    std::size_t outside{};     // rows left out: they point past the base's programs
 };
 
-// resourceMeta holds program, relocation and lookup sizes. Each mod's bounded
-// graph keeps its own heap and relocations. Added material rows receive remapped
-// program indices; the base's rows and program data remain unchanged.
+// The selected bundle contributor owns the retained program graph. Merge only
+// aliases whose program heap and relocation bytes match it exactly. No program
+// records or relocations are interpreted, copied or rebased. `outside` includes
+// rows from incompatible graphs as well as out-of-range indices.
 [[nodiscard]] MergedTable merge_program_lookup(const Table& base, std::span<const Table> edits);
 
 [[nodiscard]] MergedTable merge_texture_lookup(const Table& base, std::span<const Table> edits);

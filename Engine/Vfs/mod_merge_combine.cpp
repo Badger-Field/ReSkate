@@ -1137,20 +1137,29 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                                 std::to_string(clash.first) + " preset(s) share a short name with another mod's, e.g. " +
                                 clash.second + "; they are registered by their full path only");
                     } else if (shaderTable) {
-                        // Each mod aliases new material keys onto shader programs
-                        // and texture sets the base already ships, so the union of
-                        // the rows they added is exactly right.
+                        // Texture rows use the stock union. Program rows must
+                        // address the graph already selected for this bundle.
                         std::vector<fb::shader::Table> tables;
                         for (std::size_t index = 0; index < editBytes.size(); ++index)
                             tables.push_back({editBytes[index], edits[index]->resourceMeta});
-                        const fb::shader::Table baseTable{baseBytes, baseCopy->resourceMeta};
+                        // Preserve the selected contributor's program graph and its
+                        // bundle ownership. A base-table union would discard its
+                        // custom programs; importing foreign heaps is unsafe.
+                        const Contribution* retained = baseCopy;
+                        for (const auto& contribution : found->second)
+                            if (contribution.sha1 == entry.asset.sha1) retained = &contribution;
+                        const auto retainedBytes = decode(*retained);
+                        const fb::shader::Table baseTable =
+                            entry.asset.resourceType == fb::shader::programLookupType
+                                ? fb::shader::Table{retainedBytes, retained->resourceMeta}
+                                : fb::shader::Table{baseBytes, baseCopy->resourceMeta};
                         const auto table = entry.asset.resourceType == fb::shader::programLookupType
                             ? fb::shader::merge_program_lookup(baseTable, tables)
                             : fb::shader::merge_texture_lookup(baseTable, tables);
                         if (table.outside)
                             report.notes.push_back(entry.asset.name + ": " + std::to_string(table.outside) +
-                                " material row(s) left out: outside or incompatible with the retained shader programs; "
-                                "their indices cannot safely address this shader database");
+                                " material row(s) left out: they point past the shader programs the game ships, "
+                                "which the game would read outside its shader database");
                         if (!table.added) continue;
                         rebuilt = table.resource;
                         entry.asset.resourceMeta = table.resourceMeta;

@@ -5,8 +5,6 @@
 #include "mod_merge.h"
 #include "mod_conflicts.h"
 #include "native_db.h"
-#include "game_bundles.h"
-#include "variant_additions.h"
 #include "Engine/Core/Json/json.h"
 #include "Engine/Game/Build/supported_build.h"
 
@@ -105,49 +103,6 @@ bool lists_bundle(const fs::path& mod, const std::vector<std::string>& bundles) 
             if (bytes.find(bundle) != std::string::npos) return true;
     }
     return false;
-}
-// A private cosmetic can add models to a deck's native delivery bundle without
-// replacing the shared deck. Keep those additions where the engine loads them;
-// unreadable bundles or any changed/dropped original still trigger displacement.
-bool only_adds_to_variant_bundles(const fs::path& game, const fs::path& mod,
-                                const std::vector<std::string>& displaced) noexcept {
-    try {
-        const auto layout = vfs::read_layout(mod / L"layout.toc");
-        vfs::GameArchives archives(mod, layout.root);
-        vfs::GameData original(game);
-        std::error_code error;
-        bool checked{};
-        for (fs::directory_iterator at(mod / L"Win32", error), end; !error && at != end; at.increment(error)) {
-            if (!at->is_regular_file(error) || at->path().extension() != L".toc") continue;
-            std::ifstream file(at->path(), std::ios::binary | std::ios::ate);
-            const auto size = file.tellg();
-            if (size < 0 || size > 64 * 1024 * 1024) return false;
-            file.seekg(0);
-            std::vector<char> bytes(static_cast<std::size_t>(size));
-            if (!file.read(bytes.data(), static_cast<std::streamsize>(bytes.size()))) return false;
-            const auto toc = frostbite::read_toc(std::as_bytes(std::span(bytes)));
-            std::optional<frostbite::TocDocument> base_toc;
-            for (const auto& bundle : toc.bundles) {
-                const auto name = lower(bundle.name);
-                if (std::ranges::none_of(displaced, [&](const auto& stem) { return name.find(stem) != std::string::npos; })) continue;
-                if (!base_toc) base_toc = original.read_toc("Win32/" + at->path().filename().string());
-                const auto base_bundle = original.read_bundle(*base_toc, bundle.name);
-                if (!base_bundle) return false;
-                const auto region = frostbite::read_bundle_region(bundle.region);
-                frostbite::BinaryBundle incoming;
-                if (!region.inlineManifest.empty()) incoming = frostbite::read_binary_bundle(region.inlineManifest);
-                else {
-                    if (region.files.empty()) return false;
-                    const auto& manifest = region.files.front();
-                    incoming = archives.read_manifest(manifest.location.patch ? mod : game / L"Data",
-                        manifest.location, manifest.offset, manifest.size, game);
-                }
-                if (!preserves_variant_bundle(base_bundle->manifest, incoming)) return false;
-                checked = true;
-            }
-        }
-        return !error && checked;
-    } catch (...) { return false; }
 }
 // The choices of variant are kept beside ReSkate's other files for the user, so that they are there
 // before the profile is: the mods are put together as the game starts.
@@ -416,10 +371,6 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
             result.notes.push_back("Variants: " + list.entries.front().mod.name + " loads first, so it is the one of " + owner + "'s in the game");
             for (auto entry = list.entries.begin() + 1; entry != list.entries.end(); ++entry) {
                 if (!entry->enabled || (!of_owner(*entry) && !lists_bundle(entry->mod.directory, declared.displaces))) continue;
-                if (!of_owner(*entry) && only_adds_to_variant_bundles(data_root, entry->mod.directory, declared.displaces)) {
-                    result.notes.push_back("Variants: " + entry->mod.name + " only adds assets to the displaced bundle; original assets are unchanged");
-                    continue;
-                }
                 entry->enabled = false;
                 result.set_aside.push_back(entry->mod.name);
                 result.notes.push_back("Variants: " + entry->mod.name + (of_owner(*entry) ? " is another of " + owner + "'s" : " brings what they replace") +
