@@ -41,6 +41,7 @@ void register_trainer_commands(Commands &registry) {
         {"classes", "The game's tuning classes the trainer found in memory (diagnostic)", "[find]", false},
         {"refresh", "Refresh the skater's cached copy of the tuning (diagnostic)", nullptr, false},
         {"dump", "Write every tuning value to a text file", nullptr, false},
+        {"livedump", "Write what the game holds now (live tuning, class values, assist settings) to tuning-live-<name>.txt (diagnostic)", "[name]", false},
         {"selftest", "Check the trainer against the running game", nullptr, false},
     };
     for (const auto &verb : verbs) {

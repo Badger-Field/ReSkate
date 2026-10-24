@@ -53,6 +53,15 @@ extern "C" std::uint64_t DingoSDKOverlayGrindStickLeaned() noexcept;
 namespace dingosdk::trainer {
 namespace {
 namespace tuning = dingosdk::physics_tuning;
+// A float the game holds at `at`, or false where that memory is gone (diagnostics only).
+bool peek_float(std::uintptr_t at, float &value) noexcept {
+    __try {
+        value = *reinterpret_cast<const float *>(at);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
 namespace kit = dingosdk::throwdowns::kit;
 // A plugin match blocks markers and returns, unless it lets teleports through (its own).
 bool match_blocks_markers() noexcept {
@@ -2476,6 +2485,16 @@ void build_view() {
         next->rows.push_back({e.id, e.label, e.group, e.kind, e.value, e.stock, e.touched, e.frozen, e.detail, std::string(friendly), rank, topic,
                               trial, e.used});
         next->rows.back().help = essential_help(e.key);
+        // Grind Assist (the game's own setting, the first row of GRINDS) works in the game's grind code on top of these: at 0, 50
+        // and 100 every tuning and class value read the same (trainer livedump, 2026-10-24), so it changes none of them.
+        static constexpr std::string_view assisted[]{"physicsmode.grindlockdist", "physicsgrindsair.maxdist50_50", "physicsgrindsair.maxdist5_0",
+                                                     "physicsgrindsair.maxdisttipslide", "physicsgrindsair.maxdistboardslide",
+                                                     "physicstrajectory.grindlandingmaxangle", "physicstrajectory.grindmaxspeedsqr",
+                                                     "physicstrajectory.grindmaxspeeddownontogrind", "physicstrajectory.scoregrind"};
+        if (std::ranges::find(assisted, e.key) != std::end(assisted))
+            next->rows.back().help += std::string(next->rows.back().help.empty() ? "" : " ") +
+                "Your game's Grind Assist setting (Grind lock-on, the first row of GRINDS) also helps grinds lock on: it works on top of "
+                "this value and does not change it.";
         if (e.touched) {
             ++next->touched;
             ++next->changed[topic];
@@ -3668,6 +3687,41 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
         std::string result;
         for (const auto &[id, ticks] : s.states) result += std::format("{}{}: {}", result.empty() ? "" : ", ", id, ticks);
         return result.empty() ? "No physics state seen yet." : "Physics states seen (id: ticks): " + result;
+    }
+    if (v == "livedump") {
+        // Diagnostic: what the game itself holds right now (its live tuning, and the first copy of each class value), not the
+        // trainer's own numbers: `trainer livedump <name>` before and after changing one of the game's settings shows what
+        // that setting changes. Writes tuning-live-<name>.txt.
+        const auto name = arg(0).empty() ? std::string("now") : arg(0);
+        if (std::ranges::any_of(name, [](char c) { return !std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_'; }))
+            return "error: a name of letters, digits, - and _.";
+        tuning::Values live;
+        if (!tuning::read_live(s.base, live)) return "error: the game's tuning is not loaded.";
+        const auto directory = data_directory();
+        std::error_code error;
+        std::filesystem::create_directories(directory, error);
+        std::ofstream file(directory / std::filesystem::path("tuning-live-" + name + ".txt"), std::ios::binary | std::ios::trunc);
+        if (!file) return "error: could not write the list.";
+        std::size_t count{};
+        for (const auto &e : s.entries) {
+            double now{};
+            if (e.class_field >= 0) {
+                FieldCopy copy{};
+                if (class_field_copies(static_cast<std::size_t>(e.class_field), &copy, 1) == 0 || !copy.address) continue;
+                float value{};
+                if (!peek_float(copy.address, value)) continue;
+                now = value;
+            } else if (e.kind == Kind::curve || e.kind == Kind::graph || static_cast<std::size_t>(e.offset) + e.size > live.image.size()) {
+                continue;
+            } else {
+                now = read_field(live.image, e);
+            }
+            file << std::format("{}\t{:.6g}\n", e.id, now);
+            ++count;
+        }
+        for (const auto key : {grind_assist_setting, std::string_view("egf_intentpumpingassistamount")})
+            if (const auto held = profile_runtime::local_game_option(key)) file << std::format("setting:{}\t{:.6g}\n", key, *held);
+        return std::format("Wrote {} live values to {}.", count, path_utf8(directory / std::filesystem::path("tuning-live-" + name + ".txt")));
     }
     if (v == "dump") {
         const auto directory = data_directory();
