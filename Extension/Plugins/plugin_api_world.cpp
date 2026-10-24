@@ -1777,7 +1777,9 @@ struct WorldApi {
     }
     // parameters(part): {{key = "873f48af36e50d59", name = "graphic", type = "colour", value = {r, g, b}}, ...}
     // as the part's material holds them now, or nil without a board. A number's value is a number, an
-    // integer's an integer, a switch's true or false.
+    // integer's an integer, a switch's true or false. A colour or a number the equipped item's mod
+    // declares (reskate-materials.json) that the material does not hold yet comes with inherited =
+    // true and its shader's default as its value; set_parameter adds a declared colour.
     static int board_parameters(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "board", "reskate.board.parameters");
@@ -1818,12 +1820,18 @@ struct WorldApi {
                 lua_pushboolean(L, p.integer != 0);
                 lua_setfield(L, -2, "value");
             }
+            if (p.inherited) {
+                lua_pushboolean(L, 1);
+                lua_setfield(L, -2, "inherited");
+            }
             lua_rawseti(L, -2, ++at);
         }
         return 1;
     }
     // set_parameter(part, key, value): a colour {r, g, b} (0 to 1) or a number held on the part until
-    // cleared, on this screen; an integer or a switch is only read.
+    // cleared, on this screen; an integer or a switch is only read. A colour the equipped item's mod
+    // declares is added to the material and goes back to its declared default when let go, or when
+    // that item is no longer on the board.
     static int board_set_parameter(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "board", "reskate.board.set_parameter");
@@ -2883,6 +2891,7 @@ struct WorldApi {
 void install_world_api(Plugin& plugin, lua_State* L) { WorldApi::install(plugin, L); }
 
 void WorldApi::install(Plugin& plugin, lua_State* L) {
+    if (plugin.has("board")) game(plugin).prepare_board();
     (void)plugin;
     // The metatables of player tables (push_player) and of permissions; their own stay hidden.
     lua_createtable(L, 0, 2);

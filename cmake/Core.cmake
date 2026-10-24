@@ -108,6 +108,7 @@ if(WIN32)
         Engine/Vfs/mod_merge_grid.cpp
         Engine/Vfs/mod_merge_load_screens.cpp
         Engine/Vfs/mod_music.cpp
+        Engine/Vfs/mod_materials.cpp
         Engine/Vfs/mod_scoring.cpp
         Engine/Vfs/mod_store_copies.cpp
         Engine/Vfs/mod_item_sources.cpp

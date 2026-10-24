@@ -19,6 +19,7 @@
 #include "Extension/Skater/skater_events.h"
 #include "Extension/Skater/outfit_overlay.h"
 #include "Extension/Skater/board_pose.h"
+#include "Extension/Multiplayer/Remote/native_skater.h"
 #include "Extension/Customization/board_material.h"
 #include "Engine/Vfs/mod_catalog.h"
 #include "Engine/Core/Log/logging.h"
@@ -500,7 +501,13 @@ public:
         return thrower_ == plugin ? multiplayer::throwdown_relay_host_status() : std::string{};
     }
     // ---- board -----------------------------------------------------------------------------------------
+    void prepare_board() override {
+        if (board_hooks_ready_) return;
+        std::string detail;
+        board_hooks_ready_ = multiplayer::install_entity_hooks(base_, detail);
+    }
     std::optional<std::array<BoardBone, 16>> board_bones() override {
+        if (!board_hooks_ready_) return std::nullopt;
         const auto drawn = board_pose::read();
         if (!drawn) return std::nullopt;
         std::array<BoardBone, 16> out{};
@@ -528,7 +535,7 @@ public:
             using board_material::Kind;
             const char* type = p.kind == Kind::colour ? "colour" : p.kind == Kind::number ? "number" : p.kind == Kind::integer ? "integer"
                              : p.kind == Kind::toggle ? "switch" : "other";
-            out.push_back({p.key, type, p.value, p.integer});
+            out.push_back({p.key, type, p.value, p.integer, p.inherited});
         }
         return out;
     }
@@ -1809,6 +1816,7 @@ private:
     }
 
     std::uintptr_t base_;
+    bool board_hooks_ready_{};
     std::string capture_owner_, capture_file_; // the plugin whose capture it is, and where it saved to
     std::string camera_holder_, follower_, camera_status_;
     std::array<float, 16> camera_pose_{};
