@@ -14,8 +14,6 @@
 #include <string>
 #include <thread>
 
-namespace dingosdk::capture { bool depth_mask(const PixelView&, Rect, Image&); }
-
 // Captures without the game (reskate.capture): matting, resizing, the card, the file formats, and a
 // recording of a turning board or skater found, cut out and saved.
 // Run with the folder of the menu fonts (External/fonts) as the first argument to test the card too,
@@ -452,7 +450,7 @@ void test_depth_cut() {
 }
 
 // The cut by the game's depth: a skater standing on a floor that curves away at the sides. Shoes only
-// 3% nearer than the floor under them are kept (they went missing, 2026-10-24); the curved floor is
+// 0.5% nearer than the floor under them are kept (they went missing, 2026-10-24); the curved floor is
 // not taken for the skater.
 void test_depth_cut_contact() {
     constexpr std::uint32_t w = 200, h = 150;
@@ -482,7 +480,36 @@ void test_depth_cut_contact() {
     expect(floor == 0, "a backdrop curving away is not taken for the subject");
 }
 
+
+// A wide shallow foreground and far depth outliers must not bias the floor fit,
+// including the floor directly under the subject where sole recovery can grow.
+void test_depth_cut_wide_and_far() {
+    constexpr std::uint32_t w=800,h=200;
+    for (bool far : {false,true}) {
+        std::vector<float> depth(std::size_t{w}*h);
+        std::vector<std::uint8_t> pixels(std::size_t{w}*h*4,90);
+        for (std::uint32_t y=0;y<h;++y) for (std::uint32_t x=0;x<w;++x) {
+            const double t=(2.0*x+1)/w-1;
+            double d=100-25*t*t;
+            if (x>=300 && x<500 && y>=20 && y<130) d*=.6;
+            if (x>=200 && x<600 && y>=130 && y<140) d*=.97;
+            if (far && x>=650 && x<660) d=9000000;
+            depth[std::size_t{y}*w+x]=static_cast<float>(1/d);
+        }
+        Image picture(w,h);
+        const PixelView frame{pixels.data(),w,h,w*4,true,reinterpret_cast<const std::uint8_t*>(depth.data()),w*4};
+        expect(depth_mask(frame,{0,0,w,h},picture),"wide subject has a depth cut-out");
+        for (std::uint32_t y=130;y<140;++y) for (std::uint32_t x=205;x<595;++x)
+            expect(picture.at(x,y)[3]==255,"wide 3%-nearer shoes survive a curved floor fit");
+        for (std::uint32_t y=140;y<h;++y) for (std::uint32_t x=0;x<w;++x)
+            expect(picture.at(x,y)[3]==0,"floor directly beneath subject stays transparent");
+        for (std::uint32_t y=0;y<h;++y) for (std::uint32_t x=650;x<660;++x)
+            expect(picture.at(x,y)[3]==0,"far depth outliers never become foreground");
+    }
+}
+
 int main(int argc, char** argv) {
+    test_depth_cut_wide_and_far();
     test_depth_cut_contact();
     test_depth_cut();
     test_matte();

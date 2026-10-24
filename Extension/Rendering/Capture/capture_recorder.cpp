@@ -47,6 +47,7 @@ bool depth_mask(const PixelView& frame, Rect area, Image& picture) {
     const auto border = std::max<std::uint32_t>(2, w * 6 / 100);
     std::vector<float> distance(w), edge;
     std::vector<std::uint8_t> aside(w), near_floor(std::size_t{w} * h);
+    std::vector<int> intervals(std::size_t{w} + 1);
     float behind = 0;
     std::array<double, 3> fit{};
     bool have_fit = false;
@@ -62,27 +63,46 @@ bool depth_mask(const PixelView& frame, Rect area, Image& picture) {
             std::nth_element(edge.begin(), edge.begin() + static_cast<std::ptrdiff_t>(edge.size() / 2), edge.end());
             behind = edge[edge.size() / 2];
         }
-        // Set aside what is clearly in front, and a border round it.
-        std::fill(aside.begin(), aside.end(), std::uint8_t{0});
+        // Expand foreground intervals in linear time rather than filling a
+        // wide border separately for every foreground pixel on the render thread.
+        std::fill(intervals.begin(), intervals.end(), 0);
         for (std::uint32_t x = 0; x < w; ++x)
-            if (distance[x] > 0 && behind > 0 && distance[x] < behind * 0.92f)
-                for (auto k = x > border ? x - border : 0u; k < std::min(w, x + border + 1); ++k) aside[k] = 1;
-        // Least squares a + b t + c t^2 over the rest, t across the row from -1 to 1 (Cramer's rule).
-        double s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, r0 = 0, r1 = 0, r2 = 0;
+            if (distance[x] > 0 && behind > 0 && distance[x] < behind * 0.92f) {
+                ++intervals[x > border ? x - border : 0u];
+                --intervals[std::min(w, x + border + 1)];
+            }
+        int covered = 0;
         for (std::uint32_t x = 0; x < w; ++x) {
-            if (aside[x] || distance[x] <= 0) continue;
-            const double t = (2.0 * x + 1) / w - 1, t2 = t * t, v = distance[x];
-            s0 += 1, s1 += t, s2 += t2, s3 += t2 * t, s4 += t2 * t2, r0 += v, r1 += v * t, r2 += v * t2;
+            covered += intervals[x];
+            aside[x] = covered != 0;
         }
-        const double det = s0 * (s2 * s4 - s3 * s3) - s1 * (s1 * s4 - s3 * s2) + s2 * (s1 * s3 - s2 * s2);
-        if (s0 >= w / 8.0 && std::abs(det) > 1e-9) {
-            fit[0] = (r0 * (s2 * s4 - s3 * s3) - s1 * (r1 * s4 - s3 * r2) + s2 * (r1 * s3 - s2 * r2)) / det;
-            fit[1] = (s0 * (r1 * s4 - r2 * s3) - r0 * (s1 * s4 - s3 * s2) + s2 * (s1 * r2 - r1 * s2)) / det;
-            fit[2] = (s0 * (s2 * r2 - s3 * r1) - s1 * (s1 * r2 - r1 * s2) + r0 * (s1 * s3 - s2 * s2)) / det;
-            have_fit = true;
-        } else if (behind > 0) {
-            fit = {behind, 0, 0}; // too little of the backdrop seen on this row: the outer columns' distance
-            have_fit = true;
+        // Anchor the initial curve to the outer backdrop, so wide shallow shoes
+        // cannot pull it towards themselves. Refine over the row only with
+        // samples agreeing with that anchor. Far props/holes never enter sums.
+        const auto solve = [&](bool edges_only, const std::array<double, 3>& reference) {
+            double s0=0,s1=0,s2=0,s3=0,s4=0,r0=0,r1=0,r2=0;
+            for (std::uint32_t x=0; x<w; ++x) {
+                const double value=distance[x], t=(2.0*x+1)/w-1, t2=t*t;
+                if (aside[x] || value<=0 || behind<=0 || value<behind*.92 || value>behind*1.5) continue;
+                if (edges_only && x>=margin && x<w-margin) continue;
+                const double predicted=reference[0]+reference[1]*t+reference[2]*t2;
+                if (!edges_only && (predicted<=0 || std::abs(value-predicted)>predicted*.015)) continue;
+                s0+=1; s1+=t; s2+=t2; s3+=t2*t; s4+=t2*t2; r0+=value; r1+=value*t; r2+=value*t2;
+            }
+            const double det=s0*(s2*s4-s3*s3)-s1*(s1*s4-s3*s2)+s2*(s1*s3-s2*s2);
+            if (s0<6 || std::abs(det)<=1e-9) return false;
+            const std::array<double,3> result{
+                (r0*(s2*s4-s3*s3)-s1*(r1*s4-s3*r2)+s2*(r1*s3-s2*r2))/det,
+                (s0*(r1*s4-r2*s3)-r0*(s1*s4-s3*s2)+s2*(s1*r2-r1*s2))/det,
+                (s0*(s2*r2-s3*r1)-s1*(s1*r2-r1*s2)+r0*(s1*s3-s2*s2))/det};
+            if (!std::all_of(result.begin(),result.end(),[](double v){return std::isfinite(v);})) return false;
+            fit=result;
+            have_fit=true;
+            return true;
+        };
+        if (behind>0) {
+            fit={behind,0,0}; have_fit=true;
+            if (solve(true,fit)) { const auto anchor=fit; (void)solve(false,anchor); }
         }
         for (std::uint32_t x = 0; x < w; ++x) {
             const double t = (2.0 * x + 1) / w - 1;
