@@ -1,4 +1,5 @@
 #include "Engine/Vfs/mod_catalog.h"
+#include "Engine/Vfs/variant_additions.h"
 #include "Engine/Game/Build/supported_build.h"
 #include <Windows.h>
 #include <algorithm>
@@ -30,7 +31,48 @@ bool aside(const mods::Catalog &catalog, std::string_view name) {
 }
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 2) {
+        const auto text = std::string(argv[1]);
+        const auto path = fs::path(std::u8string(reinterpret_cast<const char8_t*>(text.data()), text.size()));
+        const auto catalog = mods::load_catalog(path, {}, false);
+        for (const auto& note : catalog.notes) std::cout << note << '\n';
+        for (const auto& mod : catalog.mods) std::cout << "enabled: " << mod.name << '\n';
+        return catalog.issue.empty() ? 0 : 1;
+    }
+    {
+        frostbite::BinaryBundle base;
+        frostbite::BundleAsset asset;
+        asset.name = "shared/deck";
+        base.ebx.push_back(asset);
+        asset.kind = frostbite::AssetKind::resource;
+        asset.resourceId = 123;
+        asset.resourceMeta = {std::byte{7}};
+        base.resources.push_back(asset);
+        asset.kind = frostbite::AssetKind::chunk;
+        asset.guid.bytes[0] = std::byte{1};
+        base.chunks.push_back(asset);
+        auto addition = base;
+        asset.name = "creator/private-deck";
+        asset.kind = frostbite::AssetKind::ebx;
+        addition.ebx.push_back(asset);
+        check(mods::preserves_variant_bundle(base, addition), "Private additions should preserve variant compatibility");
+        auto changed = addition;
+        changed.resources[0].sha1.bytes[0] = std::byte{1};
+        check(!mods::preserves_variant_bundle(base, changed), "Changed shared mesh must still displace the mod");
+        changed = addition;
+        changed.chunks[0].logicalSize = 1;
+        check(!mods::preserves_variant_bundle(base, changed), "Changed native chunk metadata must be refused");
+        changed = addition;
+        changed.ebx.clear();
+        check(!mods::preserves_variant_bundle(base, changed), "Dropped original blueprint must be refused");
+        changed = addition;
+        changed.resources[0].resourceMeta[0] = std::byte{8};
+        check(!mods::preserves_variant_bundle(base, changed), "Changed native resource metadata must be refused");
+        changed = addition;
+        changed.ebx.push_back(changed.ebx.front());
+        check(!mods::preserves_variant_bundle(base, changed), "Ambiguous duplicate stock assets must be refused");
+    }
     wchar_t temp[MAX_PATH]{};
     GetTempPathW(MAX_PATH, temp);
     const auto root = fs::path(temp) / ("reskate-mod-variants-" + std::to_string(GetCurrentProcessId()));

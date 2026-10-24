@@ -1149,8 +1149,8 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                             : fb::shader::merge_texture_lookup(baseTable, tables);
                         if (table.outside)
                             report.notes.push_back(entry.asset.name + ": " + std::to_string(table.outside) +
-                                " material row(s) left out: they point past the shader programs the game ships, "
-                                "which the game would read outside its shader database");
+                                " material row(s) left out: outside or incompatible with the retained shader programs; "
+                                "their indices cannot safely address this shader database");
                         if (!table.added) continue;
                         rebuilt = table.resource;
                         entry.asset.resourceMeta = table.resourceMeta;
