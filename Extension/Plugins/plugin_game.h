@@ -806,8 +806,6 @@ public:
         std::array<float, 4> rotation{0, 0, 0, 1};
         Vec3 scale{1, 1, 1};
     };
-    // Install native board observation before entering a timed Lua call.
-    virtual void prepare_board() {}
     virtual std::optional<std::array<BoardBone, 16>> board_bones() { return std::nullopt; }
     virtual std::string board_set(std::string_view /*plugin*/, int, const BoardBone&, bool /*world*/) { return unavailable; }
     // `everyone`: hidden from the other players too, not only on this screen.

@@ -36,6 +36,12 @@ MaterialParameter parameter(const Json& entry) {
         throw std::runtime_error("a parameter's guid is 32 hex digits");
     const auto type = entry.at("type").string();
     const auto& fallback = entry.at("default");
+    auto guid=entry.at("guid").string();
+    std::transform(guid.begin(),guid.end(),guid.begin(),[](unsigned char c){return static_cast<char>(c>='A'&&c<='F'?c+32:c);});
+    const auto expected=(type=="colour"||type=="color")?"59ff5e88":"2d5cb62b";
+    if(guid.substr(16,8)!=expected || guid.substr(24,4)!="0100")
+        throw std::runtime_error("parameter GUID must match its declared type and have count 1");
+
     if (type == "colour" || type == "color") {
         out.colour = true;
         if (!fallback.is_array() || fallback.size() != 3) throw std::runtime_error("a colour's default is [r, g, b]");
@@ -72,7 +78,7 @@ bool material_parameter_key(const std::string& guid, std::uint64_t& key, std::ui
 
 std::vector<MaterialDeclaration> parse_material_declarations(const std::string& mod, const std::string& json) {
     const auto root = Json::parse(json);
-    if (!root.is_object() || !root.contains("schema") || !root.at("schema").is_number() || root.at("schema").get<int>() != 1 ||
+    if (!root.is_object() || !root.contains("schema") || !root.at("schema").is_number_integer() || root.at("schema").get<int>() != 1 ||
         !root.contains("materials") || !root.at("materials").is_array())
         throw std::runtime_error("expected schema 1 with a materials array");
     const auto& list = root.at("materials");

@@ -62,8 +62,6 @@ struct FakeGame final : Game {
         return ending == "roadrash_leg1" ? "RoadRash_Leg1" : "";
     }
     std::vector<OutfitSlot> outfit_slots() override { return {{"tattoo_legl", "", {0.5f, 1}}, {"moles", "moles_empty", {}}}; }
-    int board_preparations{};
-    void prepare_board() override { ++board_preparations; }
     std::optional<std::array<BoardBone, 16>> board_bones() override {
         std::array<BoardBone, 16> bones{};
         bones[3].position = {0, 0.1f, 0};
@@ -99,7 +97,7 @@ struct FakeGame final : Game {
         for (const auto key : declared_keys) declaration.parameters.push_back({key, static_cast<std::uint16_t>(key), true, {.5f, .5f, .5f}});
         declaration.parameters.push_back({declared_number, 0x4242, false, {.25f, 0, 0}});
         auto never_sold = [](std::string_view) { return false; };
-        found.declared = detail::declared_for({declaration}, Part::deck, declared_deck ? "Example_Deck" : "Plain_Deck", never_sold);
+        found.declared = detail::declared_for({declaration}, Part::deck, declared_deck ? "Example_Deck" : "Plain_Deck", never_sold, "Example");
         return found;
     }
     bool declared_holds_deck(int part) const { return declared_rules && part == 0; }
@@ -2478,15 +2476,6 @@ void web_requests_go_only_to_listed_domains() {
     check(environment.logged("many more than 4 web requests waiting"), "4 waiting at most\n" + environment.all());
 }
 
-void board_observation_is_prepared_only_with_permission() {
-    TestEnvironment environment;
-    Host host(environment, Side::client);
-    host.apply({script("plain", "assert(reskate)")});
-    check(environment.fake.board_preparations == 0, "No board preparation without permission");
-    host.apply({script("boardreader", "assert(reskate.board.bones())", R"("board")")});
-    running(host, "boardreader", environment);
-    check(environment.fake.board_preparations == 1, "Board observation is prepared before the script reads its pose");
-}
 
 void declared_board_colours_through_the_api() {
     TestEnvironment environment;
@@ -4251,7 +4240,6 @@ int main() {
         run(plugins_call_and_hear_each_other);
         run(web_requests_go_only_to_listed_domains);
         run(the_wider_set_reaches_the_game);
-        run(board_observation_is_prepared_only_with_permission);
         run(declared_board_colours_through_the_api);
         run(key_names_become_binds);
         run(level_events_reach_plugins);

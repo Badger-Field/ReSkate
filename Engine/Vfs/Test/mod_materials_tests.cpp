@@ -58,7 +58,7 @@ int main() try {
                 "parameters": [
                     {"guid": "1af346775c032d5b59ff5e88010069b6", "type": "colour", "default": [0.5, 0.5, 0.5]},
                     {"guid": "126f57aa15de0b5859ff5e8801003944", "type": "color", "default": [0, 0, 0]},
-                    {"guid": "d317d1d20f5c745159ff5e880100dcb0", "type": "number", "default": -2.5}
+                    {"guid": "d317d1d20f5c74512d5cb62b0100dcb0", "type": "number", "default": -2.5}
                 ]
             }]
         })");
@@ -109,6 +109,9 @@ int main() try {
           "A part is one of the board's");
 
     // The wrong shape is refused whole.
+    check(refused(R"({"schema":1.5,"materials":[]})"),"Fractional schema rejected");
+    check(refused(with_parameter(R"({"guid":"1af346775c032d5b2d5cb62b010069b6","type":"colour","default":[0,0,0]})")),"GUID type must match declared colour");
+    check(refused(with_parameter(R"({"guid":"1af346775c032d5b59ff5e88020069b6","type":"colour","default":[0,0,0]})")),"GUID count must be one");
     check(refused("{}"), "A document without a schema");
     check(refused(R"({"schema":2,"materials":[]})"), "or of another schema");
     check(refused(R"({"schema":1,"materials":[{"part":"deck","items":[],"parameters":[]}]})"), "A material with no items");

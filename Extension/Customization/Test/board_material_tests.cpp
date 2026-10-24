@@ -294,28 +294,30 @@ std::vector<mods::MaterialDeclaration> declared_declarations() {
 auto never_sold = [](std::string_view) { return false; };
 detail::Found declared_found(Board& board) {
     auto found = board.walk();
-    found.declared = detail::declared_for(declared_declarations(), Part::deck, "example_deck", never_sold);
+    found.declared = detail::declared_for(declared_declarations(), Part::deck, "example_deck", never_sold, "Example");
     return found;
 }
 
 void declarations_follow_the_equipped_item() {
     const auto all = declared_declarations();
-    const auto deck = detail::declared_for(all, Part::deck, "EXAMPLE_DECK", never_sold);
+    const auto deck = detail::declared_for(all, Part::deck, "EXAMPLE_DECK", never_sold, "Example");
     check(deck.size() == 9 && deck[0].key == liquid[0].key && deck[0].identity == liquid[0].identity && deck[0].kind == Kind::colour &&
               deck[0].fallback == Colour{.5f, .5f, .5f} && deck[8].kind == Kind::number,
           "The equipped item's declarations apply (its key in any case)");
-    check(detail::declared_for(all, Part::deck, "Some_Other_Deck", never_sold).empty(), "another deck's do not");
-    check(detail::declared_for(all, Part::grip, "Example_Deck", never_sold).empty(), "nor another part's");
-    check(detail::declared_for(all, Part::deck, "", never_sold).empty(), "nor an empty slot's");
+    check(detail::declared_for(all, Part::deck, "Some_Other_Deck", never_sold, "Example").empty(), "another deck's do not");
+    check(detail::declared_for(all, Part::grip, "Example_Deck", never_sold, "Example").empty(), "nor another part's");
+    check(detail::declared_for(all, Part::deck, "", never_sold, "Example").empty(), "nor an empty slot's");
     auto sold = [](std::string_view) { return true; };
-    check(detail::declared_for(all, Part::deck, "Example_Deck", sold).empty(), "An item the game sells (or one it cannot tell) takes none");
+    check(detail::declared_for(all, Part::deck, "Example_Deck", sold, "Example").empty(), "An item the game sells (or one it cannot tell) takes none");
     // Two mods giving one key differently: which shader is right cannot be told, so neither.
     auto both = all;
     both.push_back({"Other", "deck", {"Example_Deck"}, {{liquid[0].key, 1, true, {0, 0, 0}}, {liquid[1].key, liquid[1].identity, true, {.5f, .5f, .5f}}}});
-    const auto merged = detail::declared_for(both, Part::deck, "Example_Deck", never_sold);
-    check(std::none_of(merged.begin(), merged.end(), [](const detail::Declared& d) { return d.key == liquid[0].key; }) &&
+    check(detail::declared_for(all,Part::deck,"Example_Deck",never_sold,"Other").empty(),"Other mod cannot declare this item");
+    check(detail::declared_for(all,Part::deck,"Example_Deck",never_sold,"").empty(),"Unknown ownership is refused");
+    const auto merged = detail::declared_for(both, Part::deck, "Example_Deck", never_sold, "Example");
+    check(std::any_of(merged.begin(), merged.end(), [](const detail::Declared& d) { return d.key == liquid[0].key; }) &&
               std::count_if(merged.begin(), merged.end(), [](const detail::Declared& d) { return d.key == liquid[1].key; }) == 1,
-          "A key two mods declare differently is left out; one they agree on is kept once");
+          "Another mod cannot suppress the owner's declarations");
 }
 
 void lists_and_refuses_declared() {
@@ -461,6 +463,8 @@ void a_change_of_deck_lets_go() {
     detail::apply(saved, holds, changed, write, publish, insert);
     check(inserts == 1 && saved.empty(), "A declared hold is not carried onto an incompatible deck");
     // A board being dressed: nothing is let go or written while the recipe is on its way.
+    changed.declarations_pending[0]=true;
+    check(detail::drop_undeclared(holds,changed)==0 && holds.size()==1,"Rebuilding materials retain declared holds while settling");
     changed.pending = true;
     check(detail::drop_undeclared(holds, changed) == 0 && holds.size() == 1, "nor let go while the board is being dressed");
     // Back on the declared-input deck it applies again.

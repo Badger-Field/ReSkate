@@ -2891,7 +2891,6 @@ struct WorldApi {
 void install_world_api(Plugin& plugin, lua_State* L) { WorldApi::install(plugin, L); }
 
 void WorldApi::install(Plugin& plugin, lua_State* L) {
-    if (plugin.has("board")) game(plugin).prepare_board();
     (void)plugin;
     // The metatables of player tables (push_player) and of permissions; their own stay hidden.
     lua_createtable(L, 0, 2);

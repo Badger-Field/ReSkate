@@ -76,6 +76,7 @@ struct Found {
     std::vector<Material> materials;
     bool pending{}; // a recipe on its way: nothing is written
     std::vector<Declared> declared; // what the equipped items' mods declare (declarations below)
+    std::array<bool,4> declarations_pending{};
 };
 // Each part's named material on the board's slot controllers; the deck slot holds two.
 struct Target {
@@ -331,13 +332,14 @@ void apply(std::vector<Saved>& saved, const std::vector<Hold>& holds, const Foun
 
 // ---- declarations ---------------------------------------------------------------------------------
 // The declarations of the item equipped on `part` (its key, as the game names it; any case), from
-// every enabled mod's reskate-materials.json. A key two declarations give differently is left out:
+// the owning enabled mod's reskate-materials.json. Other mods cannot grant or suppress keys.
+// A key two declarations from the owner give differently is left out:
 // which shader is right cannot be told. `sold` says whether the game sells an item (or cannot tell
 // yet): its declarations never apply.
 template <class Sold>
-std::vector<Declared> declared_for(const std::vector<mods::MaterialDeclaration>& declarations, Part part, std::string_view item, Sold& sold) {
+std::vector<Declared> declared_for(const std::vector<mods::MaterialDeclaration>& declarations, Part part, std::string_view item, Sold& sold, std::string_view owner) {
     std::vector<Declared> out;
-    if (item.empty() || sold(item)) return out;
+    if (item.empty() || owner.empty() || sold(item)) return out;
     const auto folded = [](std::string_view text) {
         std::string s(text);
         for (auto& c : s) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c);
@@ -346,7 +348,7 @@ std::vector<Declared> declared_for(const std::vector<mods::MaterialDeclaration>&
     const auto wanted = folded(item);
     std::vector<std::uint64_t> conflicting;
     for (const auto& d : declarations) {
-        if (d.part != part_names[static_cast<std::size_t>(part)]) continue;
+        if (d.mod != owner || d.part != part_names[static_cast<std::size_t>(part)]) continue;
         if (std::none_of(d.items.begin(), d.items.end(), [&](const std::string& i) { return folded(i) == wanted; })) continue;
         for (const auto& p : d.parameters) {
             const Declared next{part, p.key, p.identity, p.colour ? Kind::colour : Kind::number, p.fallback};
@@ -380,7 +382,7 @@ inline bool settled(Gate& gate, std::string_view item, std::uintptr_t material, 
 inline std::size_t drop_undeclared(std::vector<Hold>& holds, const Found& live) {
     if (live.pending) return 0;
     return std::erase_if(holds, [&](const Hold& h) {
-        if (!h.declared) return false;
+        if (!h.declared || live.declarations_pending[static_cast<std::size_t>(h.part)]) return false;
         const auto* d = declared(live, h.part, h.key);
         return !d || d->kind != h.kind;
     });
