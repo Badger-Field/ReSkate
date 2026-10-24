@@ -2201,6 +2201,26 @@ void trainer_page(SkateMenu &menu, const Model &model, const CallbacksV3 &callba
         bool open{};
         while (take_fold_change(id, open)) trainer_command(menu, callbacks, std::format("fold {} {}", id, open ? 1 : 0));
     }
+    // A session that sets everyone's physics: said in large type over everything else, so nobody tunes a game that
+    // ignores it (the owner's ask, 2026-10-24).
+    if (view->session_enforced || view->session_stock) {
+        const ImVec4 amber(1.0f, 0.75f, 0.3f, 1.0f);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.35f, 0.18f, 0.0f, 0.92f));
+        ImGui::PushStyleColor(ImGuiCol_Border, amber);
+        ImGui::BeginChild("server-physics", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding);
+        if (menu.heading) ImGui::PushFont(menu.heading);
+        ImGui::TextColored(amber, "%s", view->session_stock ? "MATCH PHYSICS: THE GAME'S OWN" : "SERVER PHYSICS IN USE");
+        if (menu.heading) ImGui::PopFont();
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(view->session_stock
+                                   ? "This match skates on the game's own physics for everyone. Your trainer settings, presets and boosts do "
+                                     "nothing until the match ends; they are kept for afterwards."
+                                   : "This multiplayer game's host or server sets everyone's physics. Your trainer settings, presets and "
+                                     "boosts do nothing here; you skate with theirs. Your own setup comes back when you leave.");
+        ImGui::PopTextWrapPos();
+        ImGui::EndChild();
+        ImGui::PopStyleColor(2);
+    }
     // Everything that changes how the game plays, said in words. The first parts are the trainer's own; the cheats,
     // grind exits, Board Break and the game speed are ReSkate's and count all the same.
     const double speed = game_speed(model);

@@ -97,6 +97,7 @@ struct View {
     bool editable{};     // false while a session's host sets everyone's physics (the host's apply)
     std::string blocked; // the reason shown on locked rows
     bool session_enforced{}; // a guest where the host (or the server) sets everyone's physics
+    bool session_stock{};    // a match that skates on the game's own physics (competition_stock_physics)
     bool boosts_blocked{};   // a session whose host turned boosts off: the trick extras are the game's own
     std::vector<Row> rows;
     std::vector<std::string> groups;

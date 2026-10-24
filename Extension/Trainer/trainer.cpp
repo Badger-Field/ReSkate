@@ -2460,6 +2460,7 @@ void build_view() {
     next->last = s.last;
     next->editable = editable(&next->blocked);
     next->session_enforced = s.enforced;
+    next->session_stock = s.competition;
     next->boosts_blocked = !s.enforced && multiplayer_session_active() && !session_boosts_allowed();
     next->rows.reserve(s.entries.size());
     for (const auto &e : s.entries) {
