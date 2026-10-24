@@ -536,6 +536,37 @@ void preset_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const tr
 // ---- the first section: every kind of preset, and everything that is changed in one list ---------
 // One of the trainer's own settings (a trick height, a grind switch, a bending rule ...) as a row that changes it.
 void setup_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const trainer::View &view, const trainer::SetupRow &row) {
+    if (console_style()) {
+        // Full screen: the controls the sections use (a mouse-only drag box here could not be changed from a pad).
+        ImGui::PushID(row.key.c_str());
+        const bool can = view.editable && callbacks.queue_console_command;
+        const auto stock = row.kind == trainer::setup_mode ? std::string("left to the game") : row.kind == trainer::setup_switch ? std::string(row.stock != 0 ? "on" : "off")
+                                                                                                                                  : number(row.stock);
+        const auto hint = std::format("One of the trainer's own settings ({}). The game's own: {}. Go to shows it where it lives, with its explanation.", row.key, stock);
+        if (row.kind == trainer::setup_switch) {
+            bool on = row.value != 0;
+            if (toggle_row(menu, row.title.c_str(), hint.c_str(), on, can)) trainer_command(menu, callbacks, std::format("setup {} {}", row.key, on ? 1 : 0));
+        } else if (row.kind == trainer::setup_mode) {
+            static constexpr const char *modes[]{"The game's own", "Held off", "Held on"};
+            int mode = row.value < 0 ? 0 : row.value != 0 ? 2 : 1;
+            field(menu, row.title.c_str(), hint.c_str());
+            ImGui::BeginDisabled(!can);
+            if (ImGui::Combo("##value", &mode, modes, 3)) trainer_command(menu, callbacks, std::format("setup {} {}", row.key, mode - 1));
+            ImGui::EndDisabled();
+        } else {
+            field(menu, (row.value != row.stock ? row.title + "  *" : row.title).c_str(), hint.c_str());
+            double value = row.value;
+            const double size = std::max({std::abs(row.stock), std::abs(row.value), 0.05});
+            set_console_step(size * 0.02);
+            // The bar spans a sensible range around the game's own (stepping on past its ends, or the box beside it, goes further).
+            const double low = std::max(row.low, row.stock > 0 ? 0.0 : -size * 4), high = std::min(row.high, row.stock > 0 ? row.stock * 4 : size * 4);
+            ImGui::BeginDisabled(!can);
+            if (slider_double("##value", &value, low, std::max(high, low + 1e-6), "%.4g")) trainer_command(menu, callbacks, std::format("setup {} {}", row.key, number(value)));
+            ImGui::EndDisabled();
+        }
+        ImGui::PopID();
+        return;
+    }
     ImGui::PushID(row.key.c_str());
     ImGui::Dummy(ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight())); // where a value's lock box is
     ImGui::SameLine();
