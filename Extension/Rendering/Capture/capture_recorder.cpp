@@ -31,32 +31,66 @@ Image opaque_image(const PixelView& view) {
 }
 } // namespace
 
-// What turns, by the game's depth: nearer than the backdrop behind it. The backdrop's distance for
-// each row is that of the area's outer columns (the backdrop, or the floor where the row meets it:
-// the camera is level, so the floor is about as far all along a row), and what is 8% nearer
-// than that is the board or skater. The game's UI is never in the depth, and neither are a colour's
-// likeness to the backdrop or the floor's reflection. Into `picture`'s alpha; false when the depth
-// shows nothing there.
+// What turns, by the game's depth: nearer than the backdrop behind it. The game's UI is never in the
+// depth, and neither are a colour's likeness to the backdrop or the floor's reflection.
+//
+// The backdrop's distance is fitted along each row: everything clearly nearer than the row's outer
+// columns (8%) is set aside with a wide border round it, and a curve (quadratic across the row) is
+// fitted to the distance of the rest, the backdrop or the floor, curved as a studio backdrop is.
+// Against that fit, anything 1.5% nearer is in front. A shoe on the floor is only centimetres
+// nearer than the floor behind it: the rough per-row guess with an 8% margin cut shoes away where
+// they met the floor (2026-10-24). Into `picture`'s alpha; false when the depth shows nothing there.
 bool depth_mask(const PixelView& frame, Rect area, Image& picture) {
     if (!frame.depth || picture.width != area.width || picture.height != area.height) return false;
     const auto w = area.width, h = area.height;
     const auto margin = std::max<std::uint32_t>(2, w * 6 / 100);
-    std::vector<float> edge;
+    const auto border = std::max<std::uint32_t>(2, w * 6 / 100);
+    std::vector<float> distance(w), edge;
+    std::vector<std::uint8_t> aside(w), near_floor(std::size_t{w} * h);
     float behind = 0;
+    std::array<double, 3> fit{};
+    bool have_fit = false;
     std::size_t found = 0;
     for (std::uint32_t y = 0; y < h; ++y) {
         edge.clear();
-        for (std::uint32_t x = 0; x < w; x = x + 1 == margin ? w - margin : x + 1) {
+        for (std::uint32_t x = 0; x < w; ++x) {
             const float d = frame.depth_at(area.x + x, area.y + y);
-            if (d > 1e-7f) edge.push_back(1.0f / d);
+            distance[x] = d > 1e-7f ? 1.0f / d : 0.0f; // 0: nothing there (the sky, the far plane)
+            if ((x < margin || x >= w - margin) && distance[x] > 0) edge.push_back(distance[x]);
         }
         if (!edge.empty()) {
             std::nth_element(edge.begin(), edge.begin() + static_cast<std::ptrdiff_t>(edge.size() / 2), edge.end());
             behind = edge[edge.size() / 2];
         }
+        // Set aside what is clearly in front, and a border round it.
+        std::fill(aside.begin(), aside.end(), std::uint8_t{0});
+        for (std::uint32_t x = 0; x < w; ++x)
+            if (distance[x] > 0 && behind > 0 && distance[x] < behind * 0.92f)
+                for (auto k = x > border ? x - border : 0u; k < std::min(w, x + border + 1); ++k) aside[k] = 1;
+        // Least squares a + b t + c t^2 over the rest, t across the row from -1 to 1 (Cramer's rule).
+        double s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, r0 = 0, r1 = 0, r2 = 0;
         for (std::uint32_t x = 0; x < w; ++x) {
-            const float d = frame.depth_at(area.x + x, area.y + y);
-            const bool in_front = d > 1e-7f && (behind <= 0 || 1.0f / d < behind * 0.92f);
+            if (aside[x] || distance[x] <= 0) continue;
+            const double t = (2.0 * x + 1) / w - 1, t2 = t * t, v = distance[x];
+            s0 += 1, s1 += t, s2 += t2, s3 += t2 * t, s4 += t2 * t2, r0 += v, r1 += v * t, r2 += v * t2;
+        }
+        const double det = s0 * (s2 * s4 - s3 * s3) - s1 * (s1 * s4 - s3 * s2) + s2 * (s1 * s3 - s2 * s2);
+        if (s0 >= w / 8.0 && std::abs(det) > 1e-9) {
+            fit[0] = (r0 * (s2 * s4 - s3 * s3) - s1 * (r1 * s4 - s3 * r2) + s2 * (r1 * s3 - s2 * r2)) / det;
+            fit[1] = (s0 * (r1 * s4 - r2 * s3) - r0 * (s1 * s4 - s3 * s2) + s2 * (s1 * r2 - r1 * s2)) / det;
+            fit[2] = (s0 * (s2 * r2 - s3 * r1) - s1 * (s1 * r2 - r1 * s2) + r0 * (s1 * s3 - s2 * s2)) / det;
+            have_fit = true;
+        } else if (behind > 0) {
+            fit = {behind, 0, 0}; // too little of the backdrop seen on this row: the outer columns' distance
+            have_fit = true;
+        }
+        for (std::uint32_t x = 0; x < w; ++x) {
+            const double t = (2.0 * x + 1) / w - 1;
+            const double backdrop = fit[0] + fit[1] * t + fit[2] * t * t;
+            const bool in_front = distance[x] > 0 && (!have_fit || backdrop <= 0 || distance[x] < backdrop * 0.985);
+            // Weak depth evidence is only used by the bounded sole extension
+            // below, never to seed a new foreground region on the floor.
+            near_floor[std::size_t{y} * w + x] = distance[x] > 0 && have_fit && backdrop > 0 && distance[x] < backdrop * 0.997;
             picture.at(x, y)[3] = in_front ? 255 : 0;
             found += in_front;
         }
@@ -83,12 +117,15 @@ bool depth_mask(const PixelView& frame, Rect area, Image& picture) {
             auto* p = picture.at(x, y);
             int off = 0;
             for (int c = 0; c < 3; ++c) off = std::max(off, std::abs(p[c] - floor_colour[y][static_cast<std::size_t>(c)]));
-            if (off <= 24) break;
+            // Captured soles can be just 0.5% nearer and close to the floor's
+            // colour. Continue an established column with that depth evidence.
+            if (off <= 24 && !near_floor[std::size_t{y} * w + x]) break;
             p[3] = 255;
         }
     }
     return found > 64;
 }
+
 
 // Keeps only what turned, and says where it is. What moves over the turn (opaque and unlike the
 // first frame) is the subject; what is solid in any frame, changes at all, and is joined to that is
