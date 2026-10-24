@@ -140,6 +140,16 @@ std::string number(double value) { return std::format("{:.6g}", value); }
 void trainer_command(SkateMenu &menu, const CallbacksV3 &callbacks, const std::string &text) {
     send_console(menu, callbacks, "trainer " + text);
 }
+// A name the player typed, as one console argument: quoted, with its quotes and backslashes escaped (a preset called
+// Andy's would otherwise open a quote the console never sees closed, and nothing was saved).
+std::string console_arg(std::string_view name) {
+    std::string out = "\"";
+    for (const char c : name) {
+        if (c == '"' || c == '\\' || c == '\'') out += '\\';
+        out += c;
+    }
+    return out + '"';
+}
 
 // The rows EVERY VALUE and a search show.
 void filter_rows(Page &p, const trainer::View &view) {
@@ -342,7 +352,7 @@ void preset_switch(SkateMenu &menu, const CallbacksV3 &callbacks, const trainer:
     if (preset.active) ImGui::PushStyleColor(ImGuiCol_Button, skate_theme::blue);
     const bool pressed = ImGui::Button(preset.name.c_str());
     if (preset.active) ImGui::PopStyleColor();
-    if (pressed) trainer_command(menu, callbacks, std::string(preset.active ? "preset remove " : "preset apply ") + preset.name);
+    if (pressed) trainer_command(menu, callbacks, std::string(preset.active ? "preset remove " : "preset apply ") + console_arg(preset.name));
     if (ImGui::IsItemHovered() && !preset.note.empty()) wrapped_tooltip("%s", preset.note.c_str());
 }
 // A built-in preset as a dial: one multiplier that moves everything the preset moves.
@@ -398,7 +408,7 @@ void dial_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const trai
     if (preset.active) ImGui::PushStyleColor(ImGuiCol_Button, skate_theme::blue);
     const bool pressed = ImGui::Button(preset.name.c_str(), ImVec2(button, 0));
     if (preset.active) ImGui::PopStyleColor();
-    if (pressed) trainer_command(menu, callbacks, std::string(preset.active ? "preset remove " : "preset apply ") + preset.name);
+    if (pressed) trainer_command(menu, callbacks, std::string(preset.active ? "preset remove " : "preset apply ") + console_arg(preset.name));
     if (ImGui::IsItemHovered()) wrapped_tooltip("%s", preset.note.c_str());
     if (moved) {
         ImGui::SameLine();
@@ -442,14 +452,14 @@ void preset_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const tr
         ImGui::PushStyleColor(ImGuiCol_Button, skate_theme::blue);
         if (ImGui::Button("Turn off")) {
             clear_edits(p);
-            trainer_command(menu, callbacks, "preset remove " + picked->name);
+            trainer_command(menu, callbacks, "preset remove " + console_arg(picked->name));
         }
         ImGui::PopStyleColor();
         tip("Puts everything this preset set back to the game's own.");
     } else {
         if (ImGui::Button("Load") && picked) {
             clear_edits(p);
-            trainer_command(menu, callbacks, "preset apply " + picked->name);
+            trainer_command(menu, callbacks, "preset apply " + console_arg(picked->name));
         }
         tip("Sets every value and setting saved in this preset. Press RESET EVERYTHING first to get exactly the preset and nothing else.");
     }
@@ -460,7 +470,7 @@ void preset_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const tr
     tip("A name for the preset you are about to save.");
     ImGui::SameLine();
     ImGui::BeginDisabled(!p.preset_name[0] || view.stock);
-    if (ImGui::Button("Save")) trainer_command(menu, callbacks, std::string("preset save ") + p.preset_name.data());
+    if (ImGui::Button("Save")) trainer_command(menu, callbacks, std::string("preset save ") + console_arg(p.preset_name.data()));
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         wrapped_tooltip("%s", view.stock ? "Nothing is changed, so there is nothing to save yet."
@@ -480,10 +490,10 @@ void preset_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const tr
         ImGui::PushID(preset->name.c_str());
         if (preset->active) {
             ImGui::PushStyleColor(ImGuiCol_Button, skate_theme::blue);
-            if (ImGui::Button("Turn off", ImVec2(button, 0))) trainer_command(menu, callbacks, "preset remove " + preset->name);
+            if (ImGui::Button("Turn off", ImVec2(button, 0))) trainer_command(menu, callbacks, "preset remove " + console_arg(preset->name));
             ImGui::PopStyleColor();
         } else if (ImGui::Button("Load", ImVec2(button, 0))) {
-            trainer_command(menu, callbacks, "preset apply " + preset->name);
+            trainer_command(menu, callbacks, "preset apply " + console_arg(preset->name));
         }
         tip("Load sets every value and setting saved in this preset. Turn off puts those back to the game's own.");
         ImGui::SameLine();
@@ -495,10 +505,10 @@ void preset_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const tr
         if (ImGui::SmallButton("This map")) trainer_command(menu, callbacks, "profile set " + preset->name);
         tip("Loads this preset by itself every time this map loads.");
         ImGui::SameLine();
-        if (ImGui::SmallButton("Share")) trainer_command(menu, callbacks, "preset export " + preset->name);
+        if (ImGui::SmallButton("Share")) trainer_command(menu, callbacks, "preset export " + console_arg(preset->name));
         if (ImGui::IsItemHovered()) wrapped_tooltip("Copies this preset to the clipboard as one line of text. Paste it in a chat;\nanyone with the trainer can import it.");
         ImGui::SameLine();
-        if (ImGui::SmallButton("Delete")) trainer_command(menu, callbacks, "preset delete " + preset->name);
+        if (ImGui::SmallButton("Delete")) trainer_command(menu, callbacks, "preset delete " + console_arg(preset->name));
         tip("Removes this preset from your list.");
         ImGui::PopID();
     }
@@ -659,7 +669,7 @@ void presets_card(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const 
         for (const auto &preset : view.presets) {
             if (!preset.builtin || preset.name == "Stock" || preset.name.starts_with("Skate 3") || preset.name.starts_with("Transition:")) continue;
             if (button(preset.name.c_str(), preset.active, preset.note.c_str()))
-                trainer_command(menu, callbacks, std::string(preset.active ? "preset remove " : "preset apply ") + preset.name);
+                trainer_command(menu, callbacks, std::string(preset.active ? "preset remove " : "preset apply ") + console_arg(preset.name));
         }
         begin("Yours", "The presets you saved or imported. Save, share and delete them in the row above the tabs.");
         bool own = false;
@@ -668,7 +678,7 @@ void presets_card(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const 
             own = true;
             ImGui::PushID(preset.name.c_str());
             if (button(preset.name.c_str(), preset.active, preset.active ? "On. Press to put what it set back to the game's own." : "Press to load it on top of what is set now."))
-                trainer_command(menu, callbacks, std::string(preset.active ? "preset remove " : "preset apply ") + preset.name);
+                trainer_command(menu, callbacks, std::string(preset.active ? "preset remove " : "preset apply ") + console_arg(preset.name));
             ImGui::PopID();
         }
         if (!own) ImGui::TextDisabled("none yet: set the game up, then name it and Save in the row above the tabs");
