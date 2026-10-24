@@ -58,6 +58,10 @@ class Host {
     // nothing; and whether "maps update" was typed since this was last asked.
     std::string map_folder_in_play() const;
     bool take_map_update_request() { return std::exchange(map_update_requested_, false); }
+    // The plugins players are told to have ("plugins.required"): the config's, less those a
+    // check on Thunderstore found are not plugins (refuse_plugins).
+    std::vector<std::string> required_plugins() const;
+    void refuse_plugins(std::set<std::string> refused) { refused_plugins_ = std::move(refused); }
     unsigned players() const;
     std::uint64_t secret() const { return secret_; }
     // The UDP port players may connect straight to, or 0 (config connection).
@@ -315,6 +319,7 @@ class Host {
     SteamTransport &transport_;
     Log log_;
     bool map_update_requested_{};
+    std::set<std::string> refused_plugins_;
     ActivityLog activity_; // what players do, for the console (config_.activity_log)
     // The running player vote (server_votes.cpp), and when each player may start another.
     // A poll is one too: it has answers instead of yes and no, and runs nothing (but the console's poll-run).

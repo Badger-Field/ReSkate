@@ -322,6 +322,14 @@ void Host::fetching(Guest &guest) {
     else if (guest.travel_since) guest.travel_since = now_;
 }
 std::string Host::invite() const { return format_invite({id_, secret_}); }
+std::vector<std::string> Host::required_plugins() const {
+    std::vector<std::string> out;
+    for (const auto &plugin : config_.required_plugins)
+        if (!refused_plugins_.contains(plugin)) out.push_back(plugin);
+    // (The config is checked as it is read; one edited in since is sent only when it is valid.)
+    return multiplayer::valid_required_plugins(out) ? out : std::vector<std::string>{};
+}
+
 std::string Host::map_name() const { return map_label(config_.map); }
 std::string Host::map_level() const {
     const auto destination = map_destination(config_.map);
@@ -1376,6 +1384,7 @@ void Host::receive(std::uint64_t peer, std::span<const std::uint8_t> bytes, std:
             offer.destination = map_destination(config_.map);
             offer.map_label = wire_map_label();
             offer.map_package = map_package(config_.map);
+            offer.required_plugins = required_plugins();
             offer.challenge = link->password_challenge;
             offer.map_authorized = authorized;
             send_required(*link, encode_wire(offer));
