@@ -536,7 +536,7 @@ void setup_row(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const tra
     ImGui::PopStyleColor();
     if (ImGui::IsItemHovered())
         wrapped_tooltip("One of the trainer's own settings (%s). The game's own: %s. Go to shows it where it lives, with its explanation.", row.key.c_str(),
-                        row.kind == trainer::setup_mode ? "left to the game" : row.kind == trainer::setup_switch ? "off" : number(row.stock).c_str());
+                        row.kind == trainer::setup_mode ? "left to the game" : row.kind == trainer::setup_switch ? (row.stock != 0 ? "on" : "off") : number(row.stock).c_str());
     ImGui::SameLine(column);
     const float reset = ImGui::CalcTextSize("Reset").x + ImGui::GetStyle().FramePadding.x * 2;
     ImGui::BeginDisabled(!view.editable || !callbacks.queue_console_command);
@@ -1316,7 +1316,7 @@ void trick_heights(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const
     }
     if (!view.flip_live && (view.flip_speed != 1.0f || view.flip_advanced || view.flip_flick) && wanted("Flip trick speed"))
         ImGui::TextDisabled("Finding the flip animations: flip speeds take hold about 15 seconds after a level loads.");
-    if (wanted("Flip trick speed") || wanted("Slow flips pop higher") || wanted("Flick tricks at full speed")) {
+    if (wanted("Flip trick speed") || wanted("Slow flips pop higher") || wanted("Flick tricks at full speed") || wanted("Flip landing limit")) {
         bool pop = view.flip_pop;
         if (ImGui::Checkbox("Slow flips pop higher, so they land clean", &pop)) trainer_command(menu, callbacks, std::format("option flip_pop {}", pop ? 1 : 0));
         if (ImGui::IsItemHovered())
@@ -1333,6 +1333,13 @@ void trick_heights(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const
                                   "half way round. With this every flip trick turns as if the flick was a full one: with 'Slow flips pop higher' "
                                   "they all get the same pop and all come round in it. It works at every flip trick speed. With it on a slow "
                                   "flick no longer gives a slow flip.");
+        bool limit = view.flip_limit;
+        if (ImGui::Checkbox("Flip landing limit", &limit)) trainer_command(menu, callbacks, std::format("option flip_limit {}", limit ? 1 : 0));
+        if (ImGui::IsItemHovered())
+            wrapped_tooltip("%s", "The game's own rule: a flip trick still turning just before the landing (about 1/6 s) is hurried "
+                                  "round so it lands bolts. Shuvits and 360 shuvits lean on it most, since they turn slowly. Ticked is the "
+                                  "game's own. Untick it to let slowed flips stay slow right to the ground: a trick that is not round "
+                                  "by then lands as it is, so pair it with 'Slow flips pop higher'. Unticked counts as modified.");
     }
     if (wanted(advanced_label)) {
         bool on = view.flip_advanced;

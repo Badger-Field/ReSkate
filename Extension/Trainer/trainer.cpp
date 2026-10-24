@@ -163,6 +163,7 @@ struct State {
     bool flip_advanced{};
     bool flip_pop{}; // a slowed flip trick pops higher, so it has the air time it needs
     bool flip_flick{}; // a slow flick of the stick turns the board as fast as a full one
+    bool flip_limit{true}; // the game's flip landing limit: a flip still turning near the landing is hurried round
     bool grind_watch{}; // the grind card is asking what the game's switches read (`trainer grind watch`)
     std::map<std::string, bool, std::less<>> folds; // the menu's sections and cards the player has opened or closed
     std::array<float, flip_tricks.size()> flip_trick = [] {
@@ -471,6 +472,7 @@ void load_store() {
             s.flip_advanced = o.value("flip_advanced", false);
             s.flip_pop = o.value("flip_pop", false);
             s.flip_flick = o.value("flip_flick", false);
+            s.flip_limit = o.value("flip_landing_limit", true);
             for (std::size_t i = 0; i < flip_tricks.size(); ++i)
                 s.flip_trick[i] = std::clamp(o.value(std::string(flip_tricks[i].key), 1.0f), flip_low, flip_high);
             s.boneless_height = std::clamp(o.value("boneless_height", 1.0f), height_low, height_high);
@@ -573,6 +575,7 @@ void save_store() {
         options["flip_advanced"] = s.flip_advanced;
         options["flip_pop"] = s.flip_pop;
         options["flip_flick"] = s.flip_flick;
+        options["flip_landing_limit"] = s.flip_limit;
         for (std::size_t i = 0; i < flip_tricks.size(); ++i)
             if (s.flip_trick[i] != 1.0f) options[std::string(flip_tricks[i].key)] = s.flip_trick[i];
         options["boneless_height"] = s.boneless_height;
@@ -1209,6 +1212,8 @@ const std::vector<Setup> &setups() {
         toggle("trick.flip_advanced", topic_pop, &s.flip_advanced);
         toggle("trick.flip_pop", topic_pop, &s.flip_pop);
         toggle("trick.flip_flick", topic_pop, &s.flip_flick);
+        toggle("trick.flip_limit", topic_pop, &s.flip_limit);
+        all->back().stock = 1; // the game's own: on
         toggle("trick.underflip_split", topic_pop, &s.underflip_split);
         toggle("trick.gravity_landing_own", topic_pop, &s.gravity_landing_own);
         real("trick.gravity_landing", topic_pop, &s.gravity_landing, 1.0f, gravity_low, gravity_high);
@@ -1263,7 +1268,7 @@ const std::vector<Setup> &setups() {
             {"trick.gravity_timing", "Animation timing"},
             {"trick.nocomply_height", "No comply height"}, {"trick.boneless_height", "Boneless height"}, {"trick.hippy_height", "Hippy jump height"},
             {"trick.offboard_height", "Off-board jump height"}, {"trick.pump_power", "Pump power"}, {"trick.revert_boost", "Board bending boost"},
-            {"trick.flip_advanced", "Advanced trick speed"}, {"trick.flip_pop", "Slow flips pop higher"}, {"trick.flip_flick", "Flick tricks at full speed"},
+            {"trick.flip_advanced", "Advanced trick speed"}, {"trick.flip_pop", "Slow flips pop higher"}, {"trick.flip_flick", "Flick tricks at full speed"}, {"trick.flip_limit", "Flip landing limit"},
             {"trick.underflip_split", "Underflip speed: under part only"},
             {"grind.side", "Grind pop: side force"}, {"grind.push", "Grind pop: push with stick (m/s)"}, {"grind.range", "Grinds: left stick turn range (deg)"},
             {"transition.lean", "Transition: lean into the ramp"}, {"transition.carry", "Transition: roll off at your angle"},
@@ -2511,6 +2516,7 @@ void build_view() {
     next->flip_advanced = s.flip_advanced;
     next->flip_pop = s.flip_pop;
     next->flip_flick = s.flip_flick;
+    next->flip_limit = s.flip_limit;
     next->flip_trick = s.flip_trick;
     next->flip_advanced_blocked = s.flip_advanced && extras_blocked();
     next->flip_live = s.flip_live;
@@ -2747,17 +2753,17 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool playing, const std::s
                 find_classes();
             }
         }
-        flip_speed_in_use(s.boosts.flip != 1.0f || s.flip_advanced || s.flip_trick[late_flip_slot] != 1.0f || s.flip_flick || underflip_in_force() != 1.0f ||
+        flip_speed_in_use(s.boosts.flip != 1.0f || s.flip_advanced || s.flip_trick[late_flip_slot] != 1.0f || s.flip_flick || !s.flip_limit || underflip_in_force() != 1.0f ||
                           underflip_split_in_force());
         // The speed itself goes straight to the trick in the air (drive_flip_speed); the flip curves
         // are only scaled where that number cannot be reached.
         want_flip_speed(s.flip_live ? 1.0f : s.boosts.flip);
         // The player's own choice, and only where their own trick settings count: not under a
         // host's enforced physics or in a session that has turned boosts off.
-        // A flip asked to be slow is slow from the start: the game's rule would hurry it round before
-        // the landing, so it is held off for as long as the speed in force is under the game's own.
-        const bool slow = (s.flip_drive.active ? s.flip_drive.factor : s.boosts.flip) < 1.0f;
-        want_flip_gate(extras_blocked() || !slow ? flip_gate_stock : flip_gate_off);
+        // The game's flip landing limit hurries a flip that is still turning round before the landing. It stays the
+        // game's own unless the player unticks it (Flip landing limit): it was once dropped whenever a flip was slowed
+        // at all, and a flip speed of 0.99 then left the slow-turning shuvits half way round (reported 2026-10-24).
+        want_flip_gate(extras_blocked() || s.flip_limit ? flip_gate_stock : flip_gate_off);
         if (s.boosts.flip != s.flip_applied) {
             // The catch times follow the flip speed (want_class).
             s.flip_applied = s.boosts.flip;
@@ -3519,13 +3525,13 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
             if (!value) return "error: return_delay needs seconds.";
             s.return_delay = std::clamp(static_cast<float>(*value), 0.0f, 3600.0f);
         } else if (!flag(arg(1), on)) {
-            return "error: usage: trainer option hud|hud_jump|auto_return|pad|flip_advanced|flip_pop|flip_flick|underflip_split|gravity_landing_own|log 0|1";
+            return "error: usage: trainer option hud|hud_jump|auto_return|pad|flip_advanced|flip_pop|flip_flick|flip_limit|underflip_split|gravity_landing_own|log 0|1";
         } else if (name == "hud") s.hud = on;
         else if (name == "hud_jump") s.hud_jump = on;
         else if (name == "auto_return") s.auto_return = on;
         else if (name == "pad") s.pad_shortcuts = on;
         else if (name == "pad_menu") return "That switch is gone: LB + RB + R3 is the game's bail. Open the menu with Insert.";
-        else if (name == "flip_gate") return "That switch is gone: a flip set slower than the game's own stays slow by itself.";
+        else if (name == "flip_gate") return "That switch is now option flip_limit (Flip landing limit).";
         else if (name == "catch_at") return "That switch is gone: it did not work reliably. Use the flip trick speed.";
         else if (name == "flip_pop") {
             if (on && !editable(&why)) return "error: " + why;
@@ -3533,6 +3539,9 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
         } else if (name == "flip_flick") {
             if (on && !editable(&why)) return "error: " + why;
             s.flip_flick = on;
+        } else if (name == "flip_limit") {
+            if (!on && !editable(&why)) return "error: " + why;
+            s.flip_limit = on;
         } else if (name == "flip_advanced") {
             if (on && !editable(&why)) return "error: " + why;
             s.flip_advanced = on;

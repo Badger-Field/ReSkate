@@ -151,6 +151,7 @@ struct View {
     bool flip_advanced{};     // each flip trick also has a speed of its own
     bool flip_pop{};          // a slowed flip trick pops higher
     bool flip_flick{};        // a slow flick turns the board as fast as a full one
+    bool flip_limit{true};    // the game's flip landing limit (unticked: a flip near the landing is not hurried round)
     std::array<float, flip_tricks.size()> flip_trick{}; // those, in the order of flip_tricks
     bool flip_advanced_blocked{};       // ticked, but this session's rules keep the game's own flips
     bool flip_live{};                   // the game's flip states are found: the speeds act
