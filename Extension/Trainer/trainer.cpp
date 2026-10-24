@@ -164,6 +164,7 @@ struct State {
     bool flip_pop{}; // a slowed flip trick pops higher, so it has the air time it needs
     bool flip_flick{}; // a slow flick of the stick turns the board as fast as a full one
     bool flip_limit{true}; // the game's flip landing limit: a flip still turning near the landing is hurried round
+    bool air_reach_fixed{}; // the turned-up reach from the air that Sticky Grinds saved before 2026-10-24 is cleared (once)
     bool grind_watch{}; // the grind card is asking what the game's switches read (`trainer grind watch`)
     std::map<std::string, bool, std::less<>> folds; // the menu's sections and cards the player has opened or closed
     std::array<float, flip_tricks.size()> flip_trick = [] {
@@ -473,6 +474,7 @@ void load_store() {
             s.flip_pop = o.value("flip_pop", false);
             s.flip_flick = o.value("flip_flick", false);
             s.flip_limit = o.value("flip_landing_limit", true);
+            s.air_reach_fixed = o.value("air_reach_fixed", false);
             for (std::size_t i = 0; i < flip_tricks.size(); ++i)
                 s.flip_trick[i] = std::clamp(o.value(std::string(flip_tricks[i].key), 1.0f), flip_low, flip_high);
             s.boneless_height = std::clamp(o.value("boneless_height", 1.0f), height_low, height_high);
@@ -576,6 +578,7 @@ void save_store() {
         options["flip_pop"] = s.flip_pop;
         options["flip_flick"] = s.flip_flick;
         options["flip_landing_limit"] = s.flip_limit;
+        options["air_reach_fixed"] = s.air_reach_fixed;
         for (std::size_t i = 0; i < flip_tricks.size(); ++i)
             if (s.flip_trick[i] != 1.0f) options[std::string(flip_tricks[i].key)] = s.flip_trick[i];
         options["boneless_height"] = s.boneless_height;
@@ -916,6 +919,24 @@ void adopt(const tuning::Values &live) {
             e.value = e.stock;
         }
         if (e.touched) apply_entry(e);
+    }
+    // Grind lock-on turned up (0.8.4 to 0.8.6) doubled the reach from the air too, which steered pops near rails onto them.
+    // The dial moves only the lock-on distance now; the reach it saved turned up goes back to the game's own, once.
+    if (!s.air_reach_fixed) {
+        std::size_t cleared{};
+        constexpr std::string_view reach[]{"physicstrajectory.scoregrind", "physicsgrindsair.maxdist50_50", "physicsgrindsair.maxdist5_0",
+                                           "physicsgrindsair.maxdisttipslide", "physicsgrindsair.maxdistboardslide"};
+        for (const auto key : reach) {
+            auto *e = find_entry(key);
+            if (!e || e->frozen || !(e->value > e->stock)) continue;
+            for (auto &[name, preset] : s.user)
+                if (const auto held = preset.find(e->key); held != preset.end() && held->second > e->stock) preset.erase(held);
+            set_entry(*e, e->stock);
+            ++cleared;
+        }
+        s.air_reach_fixed = true;
+        s.save_due = true;
+        if (cleared) say(logging::Level::info, std::format("Trainer: {} turned-up grind reach values from the air are the game's own again.", cleared));
     }
     // A linked value saved by itself (before links existed, or edited in the file) still
     // drives its graphs.
