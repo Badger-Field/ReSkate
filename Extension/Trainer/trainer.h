@@ -137,6 +137,7 @@ struct View {
     bool tr_spine{};
     std::array<std::int8_t, transition_settings.size()> tr_setting{};
     std::array<int, transition_options.size()> tr_option{}; // the game's own options, as the game holds them now
+    int grind_assist{-1}; // the game's own Grind Assist as the game holds it (-1: not saved in the profile yet)
     // What the player's own game settings hold for the settings the trainer can force (0 off / 1 on).
     std::array<std::int8_t, grind_settings.size()> grind_own{};
     std::array<std::int8_t, transition_settings.size()> tr_own{};

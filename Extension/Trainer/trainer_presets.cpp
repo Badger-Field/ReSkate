@@ -365,7 +365,7 @@ PresetDial preset_dial(std::string_view name) {
         {"Fast Flips", "Body flip speed", topic_pop},
         {"Fast Spins", "Body spin speed", topic_pop},
         {"Hard To Bail", "Bail resistance (higher: harder to bail)", topic_bails},
-        {"Sticky Grinds", "Grind lock-on", topic_grinds},
+        {"Sticky Grinds", "", topic_grinds}, // a switch: Grind lock-on is the game's own Grind Assist (the owner's ask, 2026-10-24)
         {"Slick Grinds", "Grind friction", topic_grinds},
         {"Moon Jump", "On foot: jump height", topic_foot},
         {"Fast On Foot", "On foot: sprint speed", topic_foot},

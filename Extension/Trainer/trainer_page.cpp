@@ -1088,10 +1088,29 @@ void topic_body(SkateMenu &menu, const Model &model, const CallbacksV3 &callback
         ImGui::EndDisabled();
         from_trickline({"trick-pops", "trick-spins"});
         break;
-    case trainer::topic_grinds:
+    case trainer::topic_grinds: {
+        // Grind lock-on is the game's own Grind Assist: the same number as its Settings menu, changed from either place. Never
+        // MODIFIED, in no preset or reset, and the player's own in any session (the owner's ask, 2026-10-24).
+        ImGui::PushID("grind-assist");
+        const char *help = "Your game's own Grind Assist, the same number as in its Settings menu: change it here or there. How much the game "
+                           "helps the board onto a rail or ledge. It is your setting, so it never counts as MODIFIED and no preset or reset "
+                           "changes it. The lock-on distance, the reach from the air and the lock-on speeds and angle are the game's tuning "
+                           "values, in the rows of this section.";
+        field(menu, "Grind lock-on (GAME SETTING: Grind Assist)", help);
+        if (view.grind_assist < 0) {
+            ImGui::TextDisabled("not saved yet: set it once in the game's Settings");
+        } else {
+            double assist = view.grind_assist;
+            ImGui::BeginDisabled(!callbacks.queue_console_command);
+            if (slider_double("##assist", &assist, 0.0, 100.0, "%.0f")) trainer_command(menu, callbacks, std::format("grind assist {:.0f}", assist));
+            ImGui::EndDisabled();
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) wrapped_tooltip("%s", help);
+        ImGui::PopID();
         from_trickline({"grind-feel", "grind-stick", "grind-exits"});
         dials_card(menu, callbacks, p, view, topic, can_edit);
         break;
+    }
     case trainer::topic_trickline:
         from_trickline({"trickline", "trick-revert"});
         // Dark Pop is ReSkate's own switch (not a tuning value), so it is live even where the tuning is locked.

@@ -245,6 +245,7 @@ struct State {
         return a;
     }();
     std::uint64_t tr_option_at{};
+    int grind_assist{-1}; // the game's own Grind Assist (grind_assist_setting), read with the options above
     // What the player's own game settings hold for the settings the trainer can force (read with the options above):
     // a row that is not forced shows this, not the game's default.
     std::array<std::int8_t, grind_settings.size()> grind_own = [] {
@@ -2289,6 +2290,10 @@ void drive_transition(std::uintptr_t base, std::uintptr_t client, std::uint64_t 
     if (now >= s.tr_option_at) {
         // The game's own options: whatever its Settings menu (or the trainer) last set.
         s.tr_option_at = now + 500;
+        if (const auto held = profile_runtime::local_game_option(grind_assist_setting); (held ? static_cast<int>(std::lround(*held)) : -1) != s.grind_assist) {
+            s.grind_assist = held ? static_cast<int>(std::lround(*held)) : -1;
+            s.view_due = true;
+        }
         for (std::size_t i = 0; i < transition_options.size(); ++i) {
             const auto held = profile_runtime::local_game_option(transition_options[i].setting);
             const int value = held ? static_cast<int>(std::lround(*held)) : transition_options[i].stock;
@@ -2531,6 +2536,7 @@ void build_view() {
     next->grind_own = s.grind_own;
     next->tr_own = s.tr_own;
     next->tr_option = s.tr_option;
+    next->grind_assist = s.grind_assist;
     next->offboard_height = s.offboard_height;
     next->flip_speed = s.flip_speed;
     next->underflip_speed = s.underflip_speed;
@@ -3398,8 +3404,18 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
     if (v == "transition") return transition_command(a);
     if (v == "foot") return foot_command(a);
     if (v == "grind") {
-        // trainer grind | grind watch 0|1 | grind side <x> | grind <key>|all game|off|on
+        // trainer grind | grind watch 0|1 | grind side <x> | grind assist <0-100> | grind <key>|all game|off|on
         const auto what = lower(arg(0)), to = lower(arg(1));
+        if (what == "assist") {
+            // The player's own game setting, as its Settings menu sets it: in any session, never part of presets or resets.
+            const auto value = number(to);
+            if (!value || !(*value >= 0 && *value <= 100)) return "error: usage: trainer grind assist <0 to 100> (the game's own Grind Assist)";
+            if (!profile_runtime::set_local_game_option(grind_assist_setting, std::round(*value), false)) return "error: the game's settings are not ready yet.";
+            s.grind_assist = static_cast<int>(std::lround(*value));
+            s.tr_option_at = 0; // read back from the game on the next tick
+            s.view_due = true;
+            return std::format("Grind Assist (the game's own setting) is {}.", s.grind_assist);
+        }
         const auto word = [](std::int8_t value) { return value < 0 ? "-" : value ? "on" : "off"; };
         if (what.empty()) {
             std::string out = std::format("Side force off grinds x {:.2f}.", s.grind_side);
