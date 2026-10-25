@@ -57,6 +57,8 @@ struct Contribution {
     fb::Sha1 sha1;
     std::vector<std::byte> resourceMeta;
     bool base{};
+    std::uint64_t resourceId{};
+    std::uint32_t resourceType{};
 };
 
 // Region files run parallel to the manifest's ebx, then resources, then chunks.
@@ -986,7 +988,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
             if (const auto original = repairedFrom.find(firstFile + position); original != repairedFrom.end()) {
                 // Repaired above: what this mod changed is its copy as it ships it.
                 state.history[id].push_back({&root, original->second.first, original->second.second,
-                                             entry.asset.resourceMeta, isBase});
+                                             entry.asset.resourceMeta, isBase, entry.asset.resourceId, entry.asset.resourceType});
             } else if (combinable && !isBase && state.matches_game_copy(id, entry.asset.sha1)) {
                 ++report.unchangedCopies;
             } else if (combinable) {
@@ -997,7 +999,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                     if (const auto* directory = store.find_directory(unshifted.location.installChunk))
                         unshift(*placement, *directory, unshifted.location.archive, unshifted.offset);
                 state.history[id].push_back(
-                    {&root, unshifted, entry.asset.sha1, entry.asset.resourceMeta, isBase});
+                    {&root, unshifted, entry.asset.sha1, entry.asset.resourceMeta, isBase, entry.asset.resourceId, entry.asset.resourceType});
             }
             if (isBase) state.baseSha.insert_or_assign(id, entry.asset.sha1);
             const auto at = state.seen.find(id);
@@ -1148,19 +1150,56 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                         const Contribution* retained = baseCopy;
                         for (const auto& contribution : found->second)
                             if (contribution.sha1 == entry.asset.sha1) retained = &contribution;
-                        const auto retainedBytes = decode(*retained);
+                        const auto* selected = retained;
+                        auto retainedBytes = decode(*retained);
+                        const fb::shader::Table stockTable{baseBytes, baseCopy->resourceMeta};
+                        if (entry.asset.resourceType == fb::shader::programLookupType &&
+                            fb::shader::only_stock_aliases({retainedBytes, retained->resourceMeta}, stockTable)) {
+                            // A stock-alias edit owns no new programs. It must not
+                            // erase a graph another contributor already delivers
+                            // to this same bundle. Highest custom contributor wins.
+                            for (std::size_t i = 0; i < edits.size(); ++i) {
+                                const fb::shader::Table candidate{editBytes[i], edits[i]->resourceMeta};
+                                if (fb::shader::only_stock_aliases(candidate, stockTable) ||
+                                    !fb::shader::preserves_stock_programs(candidate, stockTable)) continue;
+                                bool dependenciesRetained = true;
+                                bool bytecodeDelivered = false;
+                                for (const auto& resource : state.assets) {
+                                    if (resource.asset.kind != fb::AssetKind::resource ||
+                                        resource.asset.resourceType == fb::shader::programLookupType ||
+                                        resource.asset.resourceType == fb::shader::textureLookupType ||
+                                        fb::bundle_ref::is_table(resource.asset.name)) continue;
+                                    const auto key = asset_key(resource.asset);
+                                    const auto history = state.history.find(key);
+                                    if (history == state.history.end()) continue;
+                                    const auto shipped = state.baseSha.find(key);
+                                    for (const auto& copy : history->second) {
+                                        if (copy.root != edits[i]->root || copy.base ||
+                                            (shipped != state.baseSha.end() && copy.sha1 == shipped->second)) continue;
+                                        if (copy.resourceType == fb::shader::bytecodeType) bytecodeDelivered = true;
+                                        if (copy.sha1 != resource.asset.sha1 ||
+                                            copy.resourceMeta != resource.asset.resourceMeta ||
+                                            copy.resourceId != resource.asset.resourceId ||
+                                            copy.resourceType != resource.asset.resourceType) dependenciesRetained = false;
+                                    }
+                                }
+                                if (!dependenciesRetained || !bytecodeDelivered) continue;
+                                retained = edits[i];
+                                retainedBytes = editBytes[i];
+                            }
+                        }
                         const fb::shader::Table baseTable =
                             entry.asset.resourceType == fb::shader::programLookupType
                                 ? fb::shader::Table{retainedBytes, retained->resourceMeta}
                                 : fb::shader::Table{baseBytes, baseCopy->resourceMeta};
                         const auto table = entry.asset.resourceType == fb::shader::programLookupType
-                            ? fb::shader::merge_program_lookup(baseTable, tables)
+                            ? fb::shader::merge_program_lookup(baseTable, tables, {baseBytes, baseCopy->resourceMeta})
                             : fb::shader::merge_texture_lookup(baseTable, tables);
                         if (table.outside)
                             report.notes.push_back(entry.asset.name + ": " + std::to_string(table.outside) +
                                 " material row(s) left out: their graph or indices do not match the retained "
                                 "bundle shader database");
-                        if (!table.added) continue;
+                        if (!table.added && retained == selected) continue;
                         rebuilt = table.resource;
                         entry.asset.resourceMeta = table.resourceMeta;
                         what = std::to_string(table.added) + " material row(s)";
