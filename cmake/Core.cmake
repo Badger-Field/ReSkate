@@ -96,6 +96,7 @@ target_link_libraries(dingosdk_game_archives PUBLIC dingosdk_native_db dingosdk_
 if(WIN32)
     add_library(dingosdk_mods STATIC
         Engine/Vfs/mod_catalog.cpp
+        Engine/Vfs/variant_additions_native.cpp
         Engine/Vfs/mod_merge.cpp
         Engine/Vfs/mod_merge_files.cpp
         Engine/Vfs/mod_merge_stamp.cpp
