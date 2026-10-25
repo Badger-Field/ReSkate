@@ -1,6 +1,7 @@
 #pragma once
 #include "developer_board_material.h"
 #include "Engine/Vfs/mod_materials.h"
+#include "Engine/Vfs/mod_item_sources.h"
 #include <cstring>
 #include <format>
 #include <optional>
@@ -331,6 +332,11 @@ void apply(std::vector<Saved>& saved, const std::vector<Hold>& holds, const Foun
 }
 
 // ---- declarations ---------------------------------------------------------------------------------
+template<class Items, class Reserved>
+bool declared_item_restricted(std::string_view item, bool available, const Items& items, Reserved&& reserved) {
+    const auto key = mods::item_key(item);
+    return !available || items.contains(key) || key.starts_with("dev_") || key.starts_with("own_dev_") || reserved(item);
+}
 // The declarations of the item equipped on `part` (its key, as the game names it; any case), from
 // the owning enabled mod's reskate-materials.json. Other mods cannot grant or suppress keys.
 // A key two declarations from the owner give differently is left out:
@@ -340,16 +346,11 @@ template <class Sold>
 std::vector<Declared> declared_for(const std::vector<mods::MaterialDeclaration>& declarations, Part part, std::string_view item, Sold& sold, std::string_view owner) {
     std::vector<Declared> out;
     if (item.empty() || owner.empty() || sold(item)) return out;
-    const auto folded = [](std::string_view text) {
-        std::string s(text);
-        for (auto& c : s) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c);
-        return s;
-    };
-    const auto wanted = folded(item);
+    const auto wanted = mods::item_key(item);
     std::vector<std::uint64_t> conflicting;
     for (const auto& d : declarations) {
         if (d.mod != owner || d.part != part_names[static_cast<std::size_t>(part)]) continue;
-        if (std::none_of(d.items.begin(), d.items.end(), [&](const std::string& i) { return folded(i) == wanted; })) continue;
+        if (std::none_of(d.items.begin(), d.items.end(), [&](const std::string& i) { return mods::item_key(i) == wanted; })) continue;
         for (const auto& p : d.parameters) {
             const Declared next{part, p.key, p.identity, p.colour ? Kind::colour : Kind::number, p.fallback};
             const auto at = std::find_if(out.begin(), out.end(), [&](const Declared& o) { return o.key == p.key; });

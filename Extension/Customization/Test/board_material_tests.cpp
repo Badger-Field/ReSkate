@@ -484,6 +484,14 @@ void declarations_wait_for_the_board_to_settle() {
 } // namespace
 
 int main() {
+    const std::map<std::string, int> stock{{"free_stock", 1}, {"paid_stock", 1}};
+    const auto not_reserved = [](std::string_view) { return false; };
+    check(detail::declared_item_restricted("FREE_STOCK", true, stock, not_reserved), "free stock cannot grant declarations");
+    check(detail::declared_item_restricted("paid_stock", true, stock, not_reserved), "paid stock cannot grant declarations");
+    check(detail::declared_item_restricted("OWN_DEV_TEST", true, stock, not_reserved), "developer items cannot grant declarations");
+    check(detail::declared_item_restricted("own_private", false, stock, not_reserved), "unknown stock catalogue state fails closed");
+    check(!detail::declared_item_restricted("own_private", true, stock, not_reserved), "a non-stock private item can proceed to ownership checks");
+    check(detail::declared_item_restricted("own_reserved", true, stock, [](std::string_view) { return true; }), "reservation policy is still applied");
     walks_the_board();
     refuses_what_picks_the_look();
     holds_and_puts_back();

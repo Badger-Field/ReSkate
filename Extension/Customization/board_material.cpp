@@ -7,6 +7,8 @@
 #include "Engine/Vfs/content_catalogs.h"
 #include "Engine/Vfs/mod_catalog.h"
 #include "Engine/Vfs/mod_item_sources.h"
+#include "Engine/Vfs/material_declaration_refresh.h"
+#include "Engine/Core/Platform/shared_file.h"
 #include "Extension/Multiplayer/Remote/native_pose_layout.h"
 #include "Extension/Multiplayer/Remote/native_skater.h"
 #include <Windows.h>
@@ -105,13 +107,12 @@ bool setter_matches(State& s) {
 // ---- declarations: every enabled mod's reskate-materials.json -------------------------------------------
 // Read on a thread of their own and again only when a file changes, as the mods' music is
 // (local_music_assets.cpp): the game's frame never waits on the disk.
-struct DeclarationSet {
-    std::vector<mods::MaterialDeclaration> materials;
-    std::vector<mods::ItemSource> sources;
-};
+using DeclarationSet = mods::MaterialDeclarations;
 struct Declarations {
     std::mutex mutex;
     std::shared_ptr<const DeclarationSet> ready;
+    mods::MaterialDeclarationRefresh refresh;
+    std::string error;
     bool reading{};
     std::uint64_t looked{};
 };
@@ -119,49 +120,70 @@ Declarations& declarations() {
     static auto* value = new Declarations;
     return *value;
 }
-DeclarationSet read_declarations() {
+std::vector<mods::DeclarationFileStamp> declaration_signature(const std::vector<mods::ModSource>& sources,
+                                                            const std::filesystem::path& root) {
+    std::vector<mods::DeclarationFileStamp> signature;
+    signature.push_back(mods::declaration_file_stamp(root / mods::order_file));
+    signature.back().revision = mods::active_sources_revision();
+    signature.push_back(mods::declaration_file_stamp(root / mods::generated_folder / mods::item_sources_file));
+    for (const auto& source : sources)
+        signature.push_back(mods::declaration_file_stamp(source.directory / L"reskate-materials.json", source.name));
+    return signature;
+}
+DeclarationSet read_declarations(const std::vector<mods::DeclarationFileStamp>& signature) {
     DeclarationSet result;
-    const auto active=mods::load_catalog(mods::catalog().data_root,{},false);
-    result.sources=mods::read_item_sources(active.root/L".reskate"/mods::item_sources_file);
-    for (const auto& mod : active.mods) {
-        const auto path = mod.directory / L"reskate-materials.json";
-        std::error_code error;
-        if (!std::filesystem::is_regular_file(path, error) || std::filesystem::file_size(path, error) > 64 * 1024) continue;
-        try {
-            std::ifstream in(path, std::ios::binary);
-            auto read = mods::parse_material_declarations(mod.name, std::string((std::istreambuf_iterator<char>(in)), {}));
-            std::size_t count{};
-            for (const auto& d : read) count += d.parameters.size();
-            logging::log(logging::Level::info, logging::Channel::customization,
-                         "Board parameters: {} declares {} shader input{} for its items.", mod.name, count, count == 1 ? "" : "s");
-            std::move(read.begin(), read.end(), std::back_inserter(result.materials));
-        } catch (const std::exception& failure) {
-            logging::log(logging::Level::warning, logging::Channel::customization,
-                         "Board parameters: {}'s reskate-materials.json is left out: {}", mod.name, failure.what());
-        }
+    result.revision = signature[0].revision;
+    const auto has_declarations = std::any_of(signature.begin() + 2, signature.end(), [](const auto& file) { return file.present; });
+    if (!has_declarations) return result;
+    auto sources = mods::read_item_sources_checked(signature[1].path);
+    if (!sources) throw std::runtime_error("Item ownership could not be read; retaining previous declarations");
+    result.sources = std::move(*sources);
+    for (std::size_t at = 2; at < signature.size(); ++at) {
+        const auto& file = signature[at];
+        if (!file.present) continue;
+        auto read = mods::parse_material_declarations(file.owner, read_shared_text(file.path, 64 * 1024));
+        std::move(read.begin(), read.end(), std::back_inserter(result.materials));
     }
     return result;
 }
 void read_declarations_now() noexcept {
     auto& d = declarations();
     std::shared_ptr<const DeclarationSet> read;
+    std::string failure;
     try {
-        read = std::make_shared<const DeclarationSet>(read_declarations());
-    } catch (...) {}
-    std::lock_guard lock(d.mutex);
-    if (read) {
-        d.ready = std::move(read);
-    } else if (!d.ready) {
-        d.ready = std::make_shared<const DeclarationSet>();
+        const auto sources = mods::active_mod_sources();
+        const auto root = mods::catalog().root;
+        const auto signature = declaration_signature(sources, root);
+        const bool changed = d.refresh.update(signature, [&] {
+            auto next = read_declarations(signature);
+            if (sources != mods::active_mod_sources() || signature != declaration_signature(sources, root))
+                throw std::runtime_error("Content changed during declaration refresh; retaining previous declarations");
+            return next;
+        });
+        read = d.refresh.value();
+        if (changed)
+            logging::log(logging::Level::info, logging::Channel::customization,
+                         "Board parameters: refreshed {} material declaration(s).", read->materials.size());
+    } catch (const std::exception& error) {
+        failure = error.what();
+    } catch (...) {
+        failure = "Declaration refresh failed; retaining previous declarations";
     }
+    std::lock_guard lock(d.mutex);
+    if (read) d.ready = std::move(read);
+    else if (!d.ready) d.ready = std::make_shared<const DeclarationSet>();
+    if (!failure.empty() && failure != d.error)
+        logging::log(logging::Level::warning, logging::Channel::customization, "Board parameters: {}", failure);
+    d.error = std::move(failure);
     d.reading = false;
 }
-// What was last read, and a read started when the last began two seconds ago or more.
+// Only file metadata and the applied source snapshot are polled. Unchanged
+// polls never parse declarations, reload the catalogue, or unpack built-ins.
 std::shared_ptr<const DeclarationSet> current_declarations() {
     auto& d = declarations();
     std::lock_guard lock(d.mutex);
     const auto now = GetTickCount64();
-    if (!d.reading && (!d.ready || now - d.looked >= 2000)) {
+    if (!d.reading && (!d.looked || now - d.looked >= 2000)) {
         d.reading = true;
         d.looked = now;
         try {
@@ -170,14 +192,16 @@ std::shared_ptr<const DeclarationSet> current_declarations() {
             d.reading = false;
         }
     }
+    // Keep old values for recovery, but never grant declarations from a source
+    // snapshot belonging to mods that are no longer the running catalogue.
+    if (d.ready && d.ready->revision != mods::active_sources_revision()) return {};
     return d.ready;
 }
-// All stock/developer items are excluded, free or paid. Unknown catalogue
-// state is refused too; ownership is additionally checked against item sources.
+// Stock/developer entries and unknown catalogue state cannot grant inputs.
 bool sold(std::string_view item) {
-    std::string key(item); for(auto& c:key)if(c>='A'&&c<='Z')c=static_cast<char>(c+32);
-    const auto& catalog=content_cache::catalogs();
-    return !catalog.available || catalog.items.contains(key) || key.starts_with("dev_") || key.starts_with("own_dev_") || profile_runtime::reserved_cosmetic(item);
+    const auto& catalog = content_cache::catalogs();
+    return detail::declared_item_restricted(item, catalog.available, catalog.items,
+        [](std::string_view key) { return profile_runtime::reserved_cosmetic(key); });
 }
 constexpr std::array<std::string_view, part_names.size()> worn_slots{"Deck", "Grip tape", "Trucks", "Wheels"};
 
@@ -185,7 +209,10 @@ constexpr std::array<std::string_view, part_names.size()> worn_slots{"Deck", "Gr
 // have settled (detail::settled).
 void declare(State& s, detail::Found& found) {
     const auto all = current_declarations();
-    if (!all) { found.pending=true; return; }
+    if (!all) {
+        found.pending = true;
+        return;
+    }
     const auto now = GetTickCount64();
     if (now - s.worn_at >= 250 || s.worn.empty()) {
         s.worn = worn_items::worn_board(false);
@@ -199,15 +226,12 @@ void declare(State& s, detail::Found& found) {
         for (const auto& m : found.materials)
             if (static_cast<std::size_t>(m.part) == part) { material = m.address; break; }
         if (!detail::settled(s.gates[part], item, material, now) || found.pending) {
-            found.declarations_pending[part]=true;
+            found.declarations_pending[part] = true;
             continue;
         }
         auto is_sold = [](std::string_view i) { return sold(i); };
-        std::string key(item);for(auto& c:key)if(c>='A'&&c<='Z')c=static_cast<char>(c+32);
-        std::string_view owner;
-        for(const auto& source:all->sources) {
-            if(std::find(source.keys.begin(),source.keys.end(),key)!=source.keys.end()){owner=source.mod;break;}
-        }
+        const auto owner = mods::item_source_owner(all->sources, item);
+
         auto add = detail::declared_for(all->materials, static_cast<Part>(part), item, is_sold, owner);
         // Report a hot-reloaded declaration even when the worn item did not change.
         if (s.reported_items[part] != item || s.reported_counts[part] != add.size()) {

@@ -11,6 +11,7 @@
 #include <Windows.h>
 #include <shellapi.h>
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -141,10 +142,12 @@ using VariantMap = std::map<std::string, std::string, std::less<>>;
 struct VariantsApplied {
     VariantMap in_play;
     std::vector<std::string> set_aside;
+    std::vector<ModSource> sources;
 };
 std::mutex variants_mutex;
 std::optional<VariantMap> chosen_variants;
 std::optional<VariantsApplied> applied_variants;
+std::atomic<std::uint64_t> applied_revision{};
 VariantMap read_choices() {
     VariantMap out;
     const auto path = variants_file();
@@ -251,9 +254,23 @@ std::vector<std::string> set_aside_for_variants() {
 void variants_applied(const Catalog& catalog) noexcept {
     try {
         std::lock_guard lock(variants_mutex);
-        applied_variants = VariantsApplied{catalog.variants_in_play, catalog.set_aside};
+        std::vector<ModSource> sources;
+        for (const auto& mod : catalog.mods) sources.push_back({mod.name, mod.directory});
+        applied_variants = VariantsApplied{catalog.variants_in_play, catalog.set_aside, std::move(sources)};
+        applied_revision.fetch_add(1, std::memory_order_release);
     } catch (...) {}
 }
+
+std::vector<ModSource> active_mod_sources() {
+    {
+        std::lock_guard lock(variants_mutex);
+        if (applied_variants) return applied_variants->sources;
+    }
+    std::vector<ModSource> result;
+    for (const auto& mod : catalog().mods) result.push_back({mod.name, mod.directory});
+    return result;
+}
+std::uint64_t active_sources_revision() noexcept { return applied_revision.load(std::memory_order_acquire); }
 
 std::filesystem::path engine_data_root() noexcept {
     try {

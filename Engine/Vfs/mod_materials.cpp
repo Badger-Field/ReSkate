@@ -36,10 +36,12 @@ MaterialParameter parameter(const Json& entry) {
         throw std::runtime_error("a parameter's guid is 32 hex digits");
     const auto type = entry.at("type").string();
     const auto& fallback = entry.at("default");
-    auto guid=entry.at("guid").string();
-    std::transform(guid.begin(),guid.end(),guid.begin(),[](unsigned char c){return static_cast<char>(c>='A'&&c<='F'?c+32:c);});
-    const auto expected=(type=="colour"||type=="color")?"59ff5e88":"2d5cb62b";
-    if(guid.substr(16,8)!=expected || guid.substr(24,4)!="0100")
+    auto guid = entry.at("guid").string();
+    std::transform(guid.begin(), guid.end(), guid.begin(), [](unsigned char c) {
+        return static_cast<char>(c >= 'A' && c <= 'F' ? c + ('a' - 'A') : c);
+    });
+    const auto expected = (type == "colour" || type == "color") ? "59ff5e88" : "2d5cb62b";
+    if (guid.substr(16, 8) != expected || guid.substr(24, 4) != "0100")
         throw std::runtime_error("parameter GUID must match its declared type and have count 1");
 
     if (type == "colour" || type == "color") {
