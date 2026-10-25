@@ -33,7 +33,7 @@ struct Entry {
 struct State {
     std::mutex mutex;
     std::map<std::uint64_t, Entry> entries;
-    std::map<std::string, std::pair<std::uintptr_t, std::uint64_t>, std::less<>> assets;
+    std::map<std::string, AssetLookup, std::less<>> assets;
     Receivers receivers;
     DrawBudget budget;
     std::uintptr_t base{}, service{}, manager{}, world{}, entity{};
@@ -76,16 +76,13 @@ Entry* owned(State& s, std::string_view plugin, std::uint64_t id) {
     return usable(s) && it != s.entries.end() && it->second.owner == plugin ? &it->second : nullptr;
 }
 std::uintptr_t asset(State& s, const std::string& name) {
+    const auto find = game::native_data().find_asset;
+    if (!find) return 0;
     if (!s.assets.contains(name) && s.assets.size() >= 512) return 0;
-    auto& cached = s.assets[name];
-    const auto now = GetTickCount64();
-    if (cached.first || now < cached.second) return cached.first;
-    cached.second = now + 2000;
-    if (const auto find = game::native_data().find_asset)
-        for (std::uint16_t domain = 0; domain < fx::domain_count; ++domain)
-            if (pointer(s.base + addr::engine::domain_owners + sizeof(std::uintptr_t) * domain))
-                if (const auto found = find(domain, name.c_str())) { cached.first = found; break; }
-    return cached.first;
+    return s.assets[name].resolve(GetTickCount64(), [&](std::uint16_t domain) -> std::uintptr_t {
+        if (!pointer(s.base + addr::engine::domain_owners + sizeof(std::uintptr_t) * domain)) return 0;
+        return find(domain, name.c_str());
+    });
 }
 bool replaying(std::uintptr_t base) {
     namespace r = addr::replay_activity;

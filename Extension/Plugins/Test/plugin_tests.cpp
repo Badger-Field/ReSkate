@@ -949,6 +949,45 @@ void plugins_render_private_effects() {
     check(game.effects.empty(), "Stopping a failing VM releases its effects");
 }
 
+void failed_plugin_startup_releases_effects() {
+    for (const auto side : {Side::client, Side::server}) {
+        TestEnvironment environment;
+        const std::string suffix = side == Side::server ? "@server" : "";
+        const std::string owner = "effect-startup" + suffix;
+        Host host(environment, side, {}, suffix);
+        auto declaration = dingosdk::Json::parse(manifest(R"("effects", "console")", "both"));
+        declaration["effects"] = dingosdk::Json::array({"effects/reskate/test/ebp_spark", "world/materials/decal/reskate_test/stain_dv"});
+        // The other copy of this same plugin keeps its effects when this one fails.
+        auto& game = environment.fake;
+        const auto other = game.effect_create(side == Side::server ? "effect-startup" : "effect-startup@server", {});
+        const std::string main = R"(
+            local m = {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1}
+            assert(reskate.effects.particle("effects/reskate/test/ebp_spark", m))
+            assert(reskate.effects.decal("world/materials/decal/reskate_test/stain_dv", m))
+            reskate.console.command("fxstartup", "", function() end)
+        )";
+        host.apply({package("effect-startup", {{manifest_file, declaration.dump()},
+            {"plugin/main.lua", main + R"(error("intentional effect startup failure"))"}})});
+        stopped(host, "effect-startup", "error");
+        check(environment.logged("intentional effect startup failure") && game.effect_serial == 3,
+              "Startup reached the failure after creating both effects\n" + environment.all());
+        check(game.effects.size() == 1 && game.effects.contains(other), "Failed startup releases only its own effects immediately");
+        check(game.released == std::vector<std::string>{owner}, "Startup failure releases the full owner id, including its server suffix");
+        ticks(host, environment, 2);
+        check(game.effects.size() == 1 && game.effects.contains(other), "Later ticks preserve the other copy's effects");
+        (void)host.switch_on(owner);
+        stopped(host, "effect-startup", "error");
+        check(game.effect_serial == 5 && game.effects.size() == 1 && game.effects.contains(other),
+              "Repeated startup failures do not accumulate effects");
+        write(scratch / "mods/effect-startup/plugin/main.lua", main);
+        (void)host.switch_on(owner);
+        running(host, "effect-startup", environment);
+        check(host.run_console("fxstartup") && game.effects.size() == 3, "A repaired plugin can reclaim its command and create new effects");
+        host.shutdown();
+        check(game.effects.size() == 1 && game.effects.contains(other), "Shutdown still releases only this copy's effects");
+    }
+}
+
 void plugins_track_effect_lifetimes() {
     TestEnvironment environment;
     Limits limits;
@@ -4309,6 +4348,7 @@ int main() {
         std::filesystem::remove_all(scratch);
         run(a_manifest_says_what_a_plugin_is);
         run(plugins_render_private_effects);
+        run(failed_plugin_startup_releases_effects);
         run(plugins_track_effect_lifetimes);
         run(physics_steps_include_optional_geometry);
         run(a_plugin_loads_ticks_runs_its_commands_and_unloads);

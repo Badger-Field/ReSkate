@@ -72,9 +72,8 @@ void Host::load(Entry& entry) {
     } catch (const std::exception&) {}
     entry.plugin->set_channel(channel);
     if (!entry.plugin->load()) {
-        entry.failure = entry.plugin->reason();
-        entry.plugin.reset();
-        release_commands(id); // its own log says why it stopped
+        // Startup can own native resources already, even though no tick ran.
+        collect(entry);
         return;
     }
     environment_.log(LogLevel::info, std::format("Plugin {} loaded ({}).", id, permissions.empty() ? "no permissions" : permissions));

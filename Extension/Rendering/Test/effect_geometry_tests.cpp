@@ -11,6 +11,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <vector>
 
@@ -46,6 +47,33 @@ void effects_refuse_the_wrong_native_asset_type() {
     put(asset, addr::effects::asset_type, std::uintptr_t{});
     check(!effects::asset_type_matches(address(asset), false) && !effects::asset_type_matches(0, true),
         "missing reflection fails closed");
+}
+
+void effects_resolve_assets_again_after_streaming() {
+    effects::AssetLookup lookup;
+    std::map<std::uint16_t, std::uintptr_t> loaded;
+    loaded[7] = 1;
+    unsigned calls{};
+    const auto find = [&](std::uint16_t domain) -> std::uintptr_t {
+        ++calls;
+        const auto it = loaded.find(domain);
+        return it == loaded.end() ? 0 : it->second;
+    };
+    check(lookup.resolve(0, find) == 1, "an effect asset resolves in a loaded domain");
+    calls = 0;
+    check(lookup.resolve(1, find) == 1 && calls == 1, "a cached domain still looks the name up before every use");
+    loaded[7] = 2;
+    check(lookup.resolve(2, find) == 2, "a replacement in the same domain is used instead of the old pointer");
+    loaded.clear();
+    check(lookup.resolve(3, find) == 0, "streaming out a cached asset makes it unavailable immediately");
+    calls = 0;
+    check(lookup.resolve(1999, find) == 0 && calls == 0, "missing assets keep the bounded lookup retry");
+    loaded[19] = 3;
+    check(lookup.resolve(2000, find) == 3, "streaming into a different domain is found without a world reset");
+    loaded.clear();
+    check(lookup.resolve(4000, find) == 0, "a later streaming unload never revives a cached pointer");
+    loaded[19] = 4;
+    check(lookup.resolve(6000, find) == 4, "the same name can become available again after a missed search");
 }
 
 void geometry_is_from_the_local_physics_step() {
@@ -128,7 +156,8 @@ void draw_allowance_restores_only_its_own_setting() {
 }
 int main() {
     try {
-        effects_refuse_the_wrong_native_asset_type(); geometry_is_from_the_local_physics_step();
+        effects_refuse_the_wrong_native_asset_type(); effects_resolve_assets_again_after_streaming();
+        geometry_is_from_the_local_physics_step();
         projections_follow_receivers(); draw_allowance_restores_only_its_own_setting();
         std::cout << "effect geometry tests passed\n"; return 0;
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
