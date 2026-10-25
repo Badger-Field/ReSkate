@@ -2007,7 +2007,13 @@ void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, Mo
         }
         ImGui::SameLine();
         push_primary_button();
-        if (ImGui::Button("UNINSTALL", ImVec2(S(110), 0))) {
+        // Not while an install runs: it writes what packs brought in (brought-in.json) too.
+        ImGui::BeginDisabled(installing);
+        const bool confirmed = ImGui::Button("UNINSTALL", ImVec2(S(110), 0));
+        ImGui::EndDisabled();
+        if (installing && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Wait for the install to finish");
+        if (confirmed && !installing) {
             // Stops at the first folder that will not go: what went is gone, the rest is untouched.
             std::vector<std::string> removed;
             std::string failure;
@@ -2027,7 +2033,14 @@ void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, Mo
             };
             const auto first = removed.empty() ? std::string() : title(removed.front());
             std::erase_if(entries, [&](const auto& entry) { return gone(entry.mod.name); });
-            if (!removed.empty()) launcher_mods::forget_brought_in(panel.root, removed);
+            // A record that cannot be rewritten (a locked or read-only Mods folder) is only stale: the mods are gone already.
+            if (!removed.empty())
+                try {
+                    launcher_mods::forget_brought_in(panel.root, removed);
+                } catch (const std::exception& failure) {
+                    logging::write(logging::Level::warning, logging::Channel::launcher,
+                                   std::string("Could not update what uninstalled packs brought in: ") + failure.what());
+                }
             if (!removed.empty()) save(panel);
             auto message = !failure.empty() ? failure
                 : removed.size() == 1 ? "Uninstalled " + first + ". It is in the Recycle Bin if you want it back."

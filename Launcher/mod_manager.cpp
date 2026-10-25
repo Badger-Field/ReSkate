@@ -146,10 +146,25 @@ std::string mod_name(const Root& root, const std::string& source_name, const Ins
     return folder_name(root.folder.empty() ? without_version(source_name) : last_folder(root.folder));
 }
 
+// Whether the manifest.json in `folder` lists dependencies: a mod pack, which is nothing else.
+bool lists_dependencies(const fs::path& folder) {
+    try {
+        std::ifstream input(folder / mods::manifest_file, std::ios::binary);
+        if (!input) return false;
+        std::string text{std::istreambuf_iterator<char>(input), {}};
+        if (text.starts_with("\xef\xbb\xbf")) text.erase(0, 3);
+        const auto json = Json::parse(text, JsonLimits{1024 * 1024, 16, 65536});
+        return json.is_object() && json.contains("dependencies") && json.at("dependencies").is_array() &&
+               json.at("dependencies").size() > 0;
+    } catch (...) {
+        return false;
+    }
+}
+
 // Last steps in staging: a source that gives the game nothing to load is
-// refused when asked, and the author goes into manifest.json.
+// refused when asked, unless it is a mod pack, and the author goes into manifest.json.
 void finish(const fs::path& staging, const Root& root, const std::string& source_name, const InstallOptions& options) {
-    if (options.require_content && !root.content)
+    if (options.require_content && !root.content && !lists_dependencies(staging))
         fail(source_name + " has nothing for ReSkate to load: no layout.toc, reskate-levels.json or parks folder. "
              "Only mods built with ReSkate Studio, and park mods, can be installed.");
     const auto manifest = staging / mods::manifest_file;

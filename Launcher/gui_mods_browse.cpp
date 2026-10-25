@@ -10,7 +10,9 @@
 #include "Engine/Core/Debug/trace.h"
 
 #include <cstdio>
+#include <cctype>
 #include <format>
+#include <set>
 
 // The Mods panel's BROWSE page: packages from Thunderstore, their icons, and
 // downloading and installing them on the panel's worker.
@@ -417,13 +419,33 @@ void start_store_install(ModsPanel& panel, std::vector<thunderstore::Package> pa
     {
         // A package brings what it needs with it (a mod pack is nothing else), needed mods first.
         const auto have = installed_versions(panel.list);
+        // The installed folders as Windows tells them apart, ignoring case: one installed by hand or by another
+        // manager may be spelt differently from Thunderstore's name, and is still a mod the player had.
+        const auto folded = [](std::string text) {
+            std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return text;
+        };
+        std::set<std::string> had;
+        std::map<std::string, std::string> version_of;   // folded folder -> its installed version
+        for (const auto& [folder, version] : have) {
+            had.insert(folded(folder));
+            version_of.emplace(folded(folder), version);
+        }
+        // So a dependency installed under another spelling counts as installed (at its version) and is not
+        // downloaded again: each package whose folder is one of those, under Thunderstore's own spelling.
+        auto installed = have;
+        for (const auto& known : panel.store.packages) {
+            const auto folder = ts::folder_for(known.full_name);
+            if (installed.contains(folder)) continue;
+            if (const auto found = version_of.find(folded(folder)); found != version_of.end()) installed.emplace(folder, found->second);
+        }
         std::vector<thunderstore::Package> expanded;
         for (const auto& package : packages) {
             std::vector<std::string> brings;
-            for (auto& needed : thunderstore::with_dependencies(package, panel.store.packages, have)) {
+            for (auto& needed : thunderstore::with_dependencies(package, panel.store.packages, installed)) {
                 // What it brings in: a dependency that is not installed at all now (one only updated was there before).
                 const auto folder = ts::folder_for(needed.full_name);
-                if (needed.full_name != package.full_name && !have.contains(folder)) brings.push_back(folder);
+                if (needed.full_name != package.full_name && !had.contains(folded(folder))) brings.push_back(folder);
                 if (std::none_of(expanded.begin(), expanded.end(),
                         [&](const auto& queued) { return queued.full_name == needed.full_name; }))
                     expanded.push_back(std::move(needed));

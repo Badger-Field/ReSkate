@@ -402,6 +402,13 @@ int main() {
                       .find("nothing for ReSkate to load") != std::string::npos &&
                   !fs::exists(store / L"Team-Empty"),
               "Thunderstore installs refuse a package with nothing to load");
+        // A mod pack: nothing to load of its own, its manifest lists what it brings.
+        make_zip(sources / L"modpack.zip", {{"manifest.json", R"({"name":"Pack","version_number":"1.0.0","dependencies":["Team-Mod-1.0.0"]})"},
+            {"icon.png", "png"}, {"README.md", "readme"}});
+        options.folder = "Team-Pack";
+        check(launcher_mods::install(store, sources / L"modpack.zip", true, {}, cancel, options) == "Team-Pack" &&
+                  fs::exists(store / L"Team-Pack" / L"manifest.json"),
+              "Thunderstore installs take a mod pack, whose manifest lists dependencies");
         check(install(store, sources / L"empty.zip") == "empty", "A plain install still takes a description-only mod");
     }
 
