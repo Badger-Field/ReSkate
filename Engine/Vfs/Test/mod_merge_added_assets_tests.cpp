@@ -14,6 +14,7 @@
 #include "Engine/Resource/cas_codec.h"
 #include "Engine/Resource/ebx_document.h"
 #include "Engine/Resource/toc.h"
+#include "Engine/Resource/shader_lookup.h"
 #include "Engine/Vfs/game_archives.h"
 #include "Engine/Vfs/mod_catalog.h"
 #include "Engine/Vfs/mod_merge_internal.h"
@@ -865,9 +866,137 @@ void two_merges_write_the_same_bytes() {
     expect(read(patch / "Win32" / "pkg" / "cas_01.cas") == archive, "same bytes: the patch's own archive differs");
     expect(read(patch / "Win32" / fs::path(second_map_toc)) == toc, "same bytes: the second map's TOC differs");
 }
+
+void shader_selection_checks_the_winner(bool delivered, bool changed_heap, bool alias_first, bool overwritten = false,
+                                       bool encoder_available = true) {
+    Fixture fixture("shader-selection-" + std::to_string(delivered) + std::to_string(changed_heap) +
+                    std::to_string(alias_first) + std::to_string(overwritten));
+    const auto table = [](bool extended) {
+        Resource resource{"test/program_lookup", Bytes(extended ? 544 : 208)};
+        const std::uint32_t count = extended ? 2 : 1;
+        const std::uint64_t start = extended ? 208 : 16;
+        std::memcpy(resource.payload.data(), &count, 4);
+        std::memcpy(resource.payload.data() + 4, &start, 8);
+        resource.payload[192] = std::byte{7};
+        put32(resource.payload, 4); // the header pointer's relocation
+        return resource;
+    };
+    const auto rows = [](Resource resource, const std::map<std::uint64_t, std::uint32_t>& values) {
+        put32(resource.payload, static_cast<std::uint32_t>(values.size()));
+        for (const auto& [key, index] : values) {
+            for (int shift = 0; shift < 64; shift += 8) resource.payload.push_back(static_cast<std::byte>(key >> shift));
+            put32(resource.payload, 1); put32(resource.payload, index);
+        }
+        return resource;
+    };
+    auto stock = rows(table(false), {{1, 0}});
+    auto aliases = rows(table(false), {{1, 0}, {2, 0}});
+    auto custom = rows(table(true), {{1, 0}, {2, 0}, {5, 0}, {9, 1}, {99, 2}});
+    if (changed_heap) custom.payload[192] = std::byte{8};
+    const auto write_layer = [&](const fs::path& root, bool patch, const Resource& programs, bool code, unsigned code_version) {
+        fs::create_directories(root / "Win32" / "pkg");
+        write(root / "layout.toc", layout_toc());
+        fb::BinaryBundle manifest;
+        fb::BundleAsset asset;
+        asset.kind = fb::AssetKind::resource; asset.name = programs.name; asset.resourceId = 42;
+        asset.resourceType = fb::shader::programLookupType;
+        asset.sha1 = mods::detail::sha1_of(programs.payload); asset.originalSize = programs.payload.size();
+        const auto size = programs.payload.size() > 544 ? 544U : 208U;
+        put32(asset.resourceMeta, size); put32(asset.resourceMeta, 4);
+        put32(asset.resourceMeta, static_cast<std::uint32_t>(programs.payload.size() - size - 4)); put32(asset.resourceMeta, 0);
+        manifest.resources.push_back(asset);
+        const Bytes bytecode{static_cast<std::byte>(code_version)};
+        if (code) {
+            asset.name = "shaders/bytecode/test"; asset.resourceId = 43; asset.resourceType = fb::shader::bytecodeType;
+            asset.sha1 = mods::detail::sha1_of(bytecode); asset.originalSize = bytecode.size(); asset.resourceMeta.assign(16, std::byte{0});
+            manifest.resources.push_back(asset);
+        }
+        auto archive = fb::write_binary_bundle(manifest);
+        std::vector<fb::BundleFileInfo> files{{{patch, package, 1}, 0, static_cast<std::uint32_t>(archive.size())}};
+        const auto append_payload = [&](const Bytes& payload) {
+            const auto bytes = encoded(payload);
+            files.push_back({{patch, package, 1}, static_cast<std::uint32_t>(archive.size()), static_cast<std::uint32_t>(bytes.size())});
+            archive.insert(archive.end(), bytes.begin(), bytes.end());
+        };
+        append_payload(programs.payload);
+        if (code) append_payload(bytecode);
+        write(root / "Win32" / "pkg" / "cas_01.cas", archive);
+        const std::vector<fb::TocBundle> bundles{{bundle_name, fb::write_bundle_region(files), 1}};
+        write(root / "Win32" / fs::path(shared_toc), fb::write_patch_toc(bundles));
+    };
+    write_layer(fixture.catalog.data_root / "Data", false, stock, false, 0);
+    write_layer(fixture.catalog.root / "custom", true, custom, delivered, 1);
+    write_layer(fixture.catalog.root / "aliases", true, aliases, overwritten, 2);
+    for (const auto* name : alias_first ? std::vector<const char*>{"aliases", "custom"} : std::vector<const char*>{"custom", "aliases"}) {
+        mods::Mod mod; mod.name = name; mod.directory = fixture.catalog.root / name; mod.provides_layout = true;
+        fixture.catalog.mods.push_back(std::move(mod));
+    }
+    const auto report = mods::merge_mods(fixture.catalog);
+    expect(report.issue.empty() && report.built, "shader graph selection builds\n" + describe(report));
+    Patch patch(fixture);
+    const auto toc = fb::read_toc(read(patch.root / "Win32" / fs::path(shared_toc)));
+    const auto listing = mods::detail::list_bundle(patch.store, patch.root, patch.base, toc.bundles.front(), patch.game);
+    expect(listing && !listing->manifest.resources.empty(), "shader result has its native resource manifest");
+    if (!listing || listing->manifest.resources.empty()) return;
+    const auto program = std::find_if(listing->manifest.resources.begin(), listing->manifest.resources.end(),
+        [](const auto& resource) { return resource.resourceType == fb::shader::programLookupType; });
+    expect(program != listing->manifest.resources.end(), "program lookup resource survives");
+    if (program == listing->manifest.resources.end()) return;
+    const auto program_index = listing->manifest.ebx.size() + static_cast<std::size_t>(program - listing->manifest.resources.begin());
+    const auto payload = mods::detail::read_asset(patch.store, patch.root, patch.base, *listing, program_index, patch.game);
+    if (payload.size() < 12) { expect(false, "program lookup payload is complete"); return; }
+    if (!encoder_available) {
+        // This case starts before any codec has been loaded. A failed rebuild
+        // must retain the selected alias payload AND its matching metadata.
+        expect(payload == aliases.payload, "failed encoding keeps the selected payload");
+        std::uint32_t kept_size{}; std::memcpy(&kept_size, program->resourceMeta.data(), 4);
+        expect(kept_size == 208, "failed encoding does not publish replacement graph metadata");
+        expect(std::any_of(report.notes.begin(), report.notes.end(), [](const auto& note) {
+            return note.find("edits could not be combined") != std::string::npos;
+        }), "missing encoder exercises the failed-rebuild path");
+        return;
+    }
+    std::uint32_t count{}; std::memcpy(&count, payload.data(), 4);
+    const bool private_graph = delivered && !changed_heap && !overwritten;
+    expect(count == (private_graph ? 2U : 1U), "winning and promoted custom graphs need both stock preservation and retained bundle-owned bytecode");
+    const auto& meta = program->resourceMeta;
+    std::uint32_t size{}, fixups{}, number{};
+    std::memcpy(&size, meta.data(), 4); std::memcpy(&fixups, meta.data() + 4, 4);
+    std::size_t at = static_cast<std::size_t>(size) + fixups;
+    if (at + 4 > payload.size()) { expect(false, "program lookup section is bounded"); return; }
+    std::memcpy(&number, payload.data() + at, 4); at += 4;
+    std::set<std::uint64_t> keys;
+    for (std::uint32_t row = 0; row < number; ++row) {
+        if (at + 12 > payload.size()) { expect(false, "program row header is bounded"); return; }
+        std::uint64_t key{}; std::uint32_t values{};
+        std::memcpy(&key, payload.data() + at, 8); std::memcpy(&values, payload.data() + at + 8, 4); at += 12;
+        keys.insert(key);
+        for (std::uint32_t value = 0; value < values; ++value) {
+            if (at + 4 > payload.size()) { expect(false, "program row indices are bounded"); return; }
+            std::uint32_t index{}; std::memcpy(&index, payload.data() + at, 4); at += 4;
+            expect(index < count, "native output rows stay in the retained graph's range");
+        }
+    }
+    expect(keys.contains(2) && !keys.contains(99), "safe stock aliases survive and invalid winning rows are actually written out");
+    expect(keys.contains(9) == private_graph, "unproved graphs cannot leak private program indices into stock");
+    expect(keys.contains(5) == !changed_heap, "a non-retained custom contributor still contributes a proven stock alias");
+}
 } // namespace
 
-int main() try {
+int main(int argc, char** argv) try {
+    // Rebuilt native resources use the game's Oodle encoder. The normal suite
+    // needs no game files; supplying a game root enables these archive checks.
+    if (argc > 1 && *argv[1]) {
+        (void)fb::encode_cas(Bytes{std::byte{1}}, {fs::path(argv[1])});
+        shader_selection_checks_the_winner(true, false, false);
+        shader_selection_checks_the_winner(true, false, true);
+        shader_selection_checks_the_winner(false, false, false);
+        shader_selection_checks_the_winner(true, true, false);
+        shader_selection_checks_the_winner(true, false, true, true);
+    } else {
+        shader_selection_checks_the_winner(true, false, true, false, false);
+        std::cout << "Successful shader archive selection checks require a local game root; skipped\n";
+    }
     replaced_while_the_game_runs();
     const auto baseline = map_only();
     expect(baseline > 0, "map only: the map's copy exists (" + std::to_string(baseline) + ")");

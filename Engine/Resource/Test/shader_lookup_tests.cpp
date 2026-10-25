@@ -146,6 +146,11 @@ int main() {
     auto shortMeta = extension;
     shortMeta.meta.resize(8);
     check(!fb::shader::preserves_stock_programs(shortMeta.table(), stock.table()), "Short retained metadata is refused");
+    auto inflatedCount = extension;
+    const std::uint32_t impossibleCount = 0xffffffffU;
+    std::memcpy(inflatedCount.resource.data(), &impossibleCount, sizeof(impossibleCount));
+    check(!fb::shader::preserves_stock_programs(inflatedCount.table(), stock.table()),
+          "A declared private program count must fit inside the retained heap");
 #ifdef _WIN32
     SYSTEM_INFO system{};
     GetSystemInfo(&system);
@@ -199,6 +204,35 @@ int main() {
           "Stock aliases cannot address the selected graph's private program slots");
     check(fb::shader::merge_program_lookup(extension.table(), stockEdits).outside == 1,
           "The stock exception requires the caller's actual game table");
+    auto otherCustom = preserved_lookup(true, {{1, {0}}, {12, {0}}, {13, {1}}});
+    otherCustom.resource[400] = std::byte{9}; // a different private record, leaving stock intact
+    const std::vector<fb::shader::Table> competing{otherCustom.table()};
+    const auto sharedAliases = fb::shader::merge_program_lookup(extension.table(), competing, stock.table());
+    check(sharedAliases.added == 1 && sharedAliases.outside == 1 && rows_of(sharedAliases).contains(12) &&
+          !rows_of(sharedAliases).contains(13), "A non-retained custom graph contributes proven stock aliases, never its private indices");
+    const auto stockRetained = fb::shader::merge_program_lookup(stock.table(), competing, stock.table());
+    check(rows_of(stockRetained).contains(12) && !rows_of(stockRetained).contains(13),
+          "Stock aliases from an extended graph survive when stock is retained too");
+    const auto clash = preserved_lookup(false, {{1, {0}}, {9, {0}}});
+    const std::vector<fb::shader::Table> clashing{clash.table()};
+    const auto graphOwnerWins = fb::shader::merge_program_lookup(extension.table(), clashing, stock.table());
+    check(graphOwnerWins.conflicts == 1 && graphOwnerWins.added == 0 &&
+          rows_of(graphOwnerWins).at(9) == std::vector<std::uint32_t>{1},
+          "Retained graph rows win clashes with a stock-alias winner, and the disagreement is reported");
+    const auto sameGraphClash = lookup(5, {{1, {0}}, {9, {3}}});
+    const std::vector<fb::shader::Table> graphClashes{sameGraphClash.table()};
+    const auto selectedWins = fb::shader::merge_program_lookup(selected.table(), graphClashes);
+    check(selectedWins.conflicts == 1 && rows_of(selectedWins).at(9) == std::vector<std::uint32_t>{4},
+          "The selected contributor wins a same-graph clash with a lower-priority edit");
+    const auto invalidWinner = lookup(5, {{1, {0}}, {99, {5}}});
+    const auto filtered = fb::shader::merge_program_lookup(invalidWinner.table(), {});
+    check(filtered.removed == 1 && filtered.outside == 1 && !rows_of(filtered).contains(99),
+          "The retained winner's rows must be inside its own program count");
+    auto corruptEdit = extension;
+    corruptEdit.resource.resize(12);
+    const std::vector<fb::shader::Table> corrupt{corruptEdit.table()};
+    const auto kept = fb::shader::merge_program_lookup(stock.table(), corrupt, stock.table());
+    check(kept.outside == 1 && rows_of(kept).contains(1), "Malformed edits cannot discard an intact retained table");
     if (failures) return 1;
     std::cout << "shader lookup tests passed\n";
     return 0;

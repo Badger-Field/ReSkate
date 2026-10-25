@@ -1113,6 +1113,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                     for (const auto* edit : edits) editBytes.push_back(decode(*edit));
 
                     std::vector<std::byte> rebuilt;
+                    auto rebuiltMeta = entry.asset.resourceMeta;
                     std::string what;
                     if (refTable) {
                         std::vector<fb::bundle_ref::Table> tables;
@@ -1121,7 +1122,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                         const auto table = fb::bundle_ref::merge({baseBytes, baseCopy->resourceMeta}, tables);
                         if (!table.added) continue;
                         rebuilt = table.resource;
-                        entry.asset.resourceMeta = table.resourceMeta;
+                        rebuiltMeta = table.resourceMeta;
                         what = std::to_string(table.added) + " preset(s)";
                         if (table.conflicts)
                             what += ", " + std::to_string(table.conflicts) + " disagreed";
@@ -1153,15 +1154,13 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                         const auto* selected = retained;
                         auto retainedBytes = decode(*retained);
                         const fb::shader::Table stockTable{baseBytes, baseCopy->resourceMeta};
-                        if (entry.asset.resourceType == fb::shader::programLookupType &&
-                            fb::shader::only_stock_aliases({retainedBytes, retained->resourceMeta}, stockTable)) {
-                            // A stock-alias edit owns no new programs. It must not
-                            // erase a graph another contributor already delivers
-                            // to this same bundle. Highest custom contributor wins.
-                            for (std::size_t i = 0; i < edits.size(); ++i) {
-                                const fb::shader::Table candidate{editBytes[i], edits[i]->resourceMeta};
-                                if (fb::shader::only_stock_aliases(candidate, stockTable) ||
-                                    !fb::shader::preserves_stock_programs(candidate, stockTable)) continue;
+                        if (entry.asset.resourceType == fb::shader::programLookupType) {
+                            // Apply identical ownership checks to the winning and
+                            // lower-priority custom graphs. Unproved custom heaps
+                            // fall back to stock, keeping safe stock aliases usable.
+                            const auto usable = [&](const fb::shader::Table& candidate, const Contribution* source) {
+                                if (fb::shader::same_program_graph(candidate, stockTable)) return true;
+                                if (!fb::shader::preserves_stock_programs(candidate, stockTable)) return false;
                                 bool dependenciesRetained = true;
                                 bool bytecodeDelivered = false;
                                 for (const auto& resource : state.assets) {
@@ -1172,20 +1171,28 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                                     const auto key = asset_key(resource.asset);
                                     const auto history = state.history.find(key);
                                     if (history == state.history.end()) continue;
-                                    const auto shipped = state.baseSha.find(key);
-                                    for (const auto& copy : history->second) {
-                                        if (copy.root != edits[i]->root || copy.base ||
-                                            (shipped != state.baseSha.end() && copy.sha1 == shipped->second)) continue;
+                                    for (const auto& copy : history->second) if (!copy.base && copy.root == source->root) {
                                         if (copy.resourceType == fb::shader::bytecodeType) bytecodeDelivered = true;
-                                        if (copy.sha1 != resource.asset.sha1 ||
-                                            copy.resourceMeta != resource.asset.resourceMeta ||
-                                            copy.resourceId != resource.asset.resourceId ||
-                                            copy.resourceType != resource.asset.resourceType) dependenciesRetained = false;
+                                        if (copy.sha1 != resource.asset.sha1 || copy.resourceMeta != resource.asset.resourceMeta ||
+                                            copy.resourceId != resource.asset.resourceId || copy.resourceType != resource.asset.resourceType)
+                                            dependenciesRetained = false;
                                     }
                                 }
-                                if (!dependenciesRetained || !bytecodeDelivered) continue;
-                                retained = edits[i];
-                                retainedBytes = editBytes[i];
+                                return dependenciesRetained && bytecodeDelivered;
+                            };
+                            if (!usable({retainedBytes, retained->resourceMeta}, retained)) {
+                                report.notes.push_back(entry.asset.name + ": custom graph ownership or stock preservation could not be proved; retaining stock programs");
+                                retained = baseCopy;
+                                retainedBytes = baseBytes;
+                            }
+                            if (fb::shader::only_stock_aliases({retainedBytes, retained->resourceMeta}, stockTable)) {
+                                for (std::size_t i = 0; i < edits.size(); ++i) {
+                                    const fb::shader::Table candidate{editBytes[i], edits[i]->resourceMeta};
+                                    if (fb::shader::same_program_graph(candidate, stockTable) || !usable(candidate, edits[i])) continue;
+                                    retained = edits[i];
+                                    retainedBytes = editBytes[i];
+                                    break;
+                                }
                             }
                         }
                         const fb::shader::Table baseTable =
@@ -1199,9 +1206,13 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                             report.notes.push_back(entry.asset.name + ": " + std::to_string(table.outside) +
                                 " material row(s) left out: their graph or indices do not match the retained "
                                 "bundle shader database");
-                        if (!table.added && retained == selected) continue;
+                        if (!table.added && !table.removed && retained == selected) {
+                            if (table.conflicts) report.notes.push_back(entry.asset.name + ": " + std::to_string(table.conflicts) +
+                                " material row(s) disagreed; retained graph rows win");
+                            continue;
+                        }
                         rebuilt = table.resource;
-                        entry.asset.resourceMeta = table.resourceMeta;
+                        rebuiltMeta = table.resourceMeta;
                         what = std::to_string(table.added) + " material row(s)";
                         if (table.conflicts)
                             what += ", " + std::to_string(table.conflicts) + " disagreed";
@@ -1317,6 +1328,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                     const auto placement = store.write(state.manifestChunk, manifestArchive,
                                                        fb::encode_cas(rebuilt, {gameRoot}));
                     entry.file = placement;
+                    entry.asset.resourceMeta = std::move(rebuiltMeta);
                     entry.asset.sha1 = sha1_of(rebuilt);
                     entry.asset.originalSize = rebuilt.size();
                     used.emplace(placement.location.installChunk, placement.location.archive);
