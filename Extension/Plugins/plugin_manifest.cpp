@@ -1,4 +1,5 @@
 #include "plugin_manifest.h"
+#include "plugin_effects.h"
 #include "Engine/Core/Json/json.h"
 #include <algorithm>
 #include <array>
@@ -16,13 +17,13 @@ namespace {
 // (reskate.server.parks, park_spawn, park_remove); "variants" choosing which of its own mod's
 // variants is in the game (reskate.package.choose). A manifest's "resident" list and "variants" are
 // the merge's (Engine/Vfs/mod_list.h ResidentAssets, Variants), not the plugin host's.
-constexpr std::array<std::string_view, 49> permissions{
+constexpr std::array<std::string_view, 50> permissions{
     "console", "storage", "overlay", "menu", "ui.screen", "input", "hud", "events.tricks", "events.skater",
     "skater.read", "skater.teleport", "skater.control", "skater.animation", "trainer", "camera",
     "world.raycast", "world.objects", "world.entities", "world.environment", "world.ai", "travel", "session.read",
     "session.skaters", "session.nametags", "net.session", "net.http", "voice.control", "chat.read",
     "chat.send", "chat.local", "server", "server.parks", "throwdowns", "replay", "music", "progression.read", "settings.read", "audio.ui", "audio", "outfit", "board", "mods.read",
-    "events.physics", "game.speed", "files", "variants", "settings.write", "room", "capture"};
+    "events.physics", "game.speed", "files", "variants", "settings.write", "room", "capture", "effects"};
 }
 
 bool known_permission(std::string_view name) noexcept {
@@ -92,6 +93,16 @@ Manifest parse_manifest(std::string_view text) {
             if (!known_permission(name))
                 throw std::runtime_error("unknown permission \"" + name + "\": check the spelling, or update ReSkate");
             result.permissions.insert(name);
+        }
+    }
+    if (json.contains("effects")) {
+        const auto& list = json.at("effects");
+        if (!result.permissions.contains("effects") || !list.is_array() || list.size() > 128)
+            throw std::runtime_error("effects needs the effects permission and at most 128 private asset names");
+        for (const auto& item : list) {
+            if (!item.is_string() || (!private_effect_asset(item.string(), false) && !private_effect_asset(item.string(), true)))
+                throw std::runtime_error("effects accepts private reskate particle/material paths only; stock and store assets are refused");
+            result.effects.insert(item.string());
         }
     }
     if (json.contains("domains")) {

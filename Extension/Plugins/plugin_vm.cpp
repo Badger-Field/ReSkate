@@ -377,6 +377,7 @@ void Plugin::tick(double dt_ms) {
     if (state_ != State::running) return;
     ++tick_number_;
     raycasts_ = 0;
+    effect_calls_ = 0;
     const double now = services_.now_ms();
     std::vector<int> due;
     for (const auto& [id, timer] : timers_)

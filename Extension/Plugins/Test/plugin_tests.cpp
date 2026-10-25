@@ -30,6 +30,30 @@ std::filesystem::path scratch;
 
 // The wider set's game, faked: it records what plugins asked of it and answers as told.
 struct FakeGame final : Game {
+    struct Effect { std::string owner; EffectRequest request; bool stopped{}; float alpha{1}; };
+    std::map<std::uint64_t, Effect> effects;
+    std::uint64_t effect_serial{}, effect_epoch{1};
+    bool effects_ready{true};
+    std::uint64_t effect_create(std::string_view plugin, const EffectRequest& request) override {
+        if (!effects_ready) return 0;
+        const auto id = ++effect_serial;
+        effects.emplace(id, Effect{std::string(plugin), request});
+        return id;
+    }
+    void effect_move(std::string_view plugin, std::uint64_t id, const EffectMatrix& matrix) override {
+        if (auto it = effects.find(id); it != effects.end() && it->second.owner == plugin) it->second.request.transform = matrix;
+    }
+    void effect_stop(std::string_view plugin, std::uint64_t id) override {
+        if (auto it = effects.find(id); it != effects.end() && it->second.owner == plugin) it->second.stopped = true;
+    }
+    void effect_opacity(std::string_view plugin, std::uint64_t id, float value) override {
+        if (auto it = effects.find(id); it != effects.end() && it->second.owner == plugin) it->second.alpha = value;
+    }
+    void effect_release(std::string_view plugin, std::uint64_t id) override {
+        if (auto it = effects.find(id); it != effects.end() && it->second.owner == plugin) effects.erase(it);
+    }
+    void effects_clear(std::string_view plugin) override { std::erase_if(effects, [&](const auto& e) { return e.second.owner == plugin; }); }
+    std::pair<bool, std::uint64_t> effects_state() override { return {effects_ready, effect_epoch}; }
     std::optional<std::uint32_t> state;
     std::uint64_t wipe{};
     std::vector<std::string> calls;
@@ -622,7 +646,7 @@ struct FakeGame final : Game {
         return {};
     }
     std::vector<std::pair<std::string, std::string>> take_presses() override { return std::exchange(presses, {}); }
-    void release(std::string_view plugin) override { released.emplace_back(plugin); entity_clear(plugin); }
+    void release(std::string_view plugin) override { released.emplace_back(plugin); entity_clear(plugin); effects_clear(plugin); }
     // The game menu, its item grid, what is worn, and a screen capture of something turning once
     // every `turning` frames (reskate.capture, room.turn, menu.game/grid, outfit.board).
     GameMenu menu_now;
@@ -833,6 +857,207 @@ void stopped(const Host& host, std::string_view id, std::string_view because) {
     const auto status = status_of(host, id);
     check(status.state == "stopped", std::string(id) + " should have stopped, and is " + status.state);
     check(status.reason.find(because) != std::string::npos, std::string(id) + " stopped for \"" + status.reason + "\", not for " + std::string(because));
+}
+
+void plugins_render_private_effects() {
+    TestEnvironment environment;
+    // Filling every decal slot tests the resource quota, with room for a busy CI machine.
+    Limits limits;
+    limits.call_ms = 1000;
+    Host host(environment, Side::client, limits);
+    host.apply({script("effects-denied", R"(
+        for _,f in pairs(reskate.effects) do
+            local ok,why=pcall(f)
+            assert(not ok and why:find("permission"), tostring(why))
+        end
+        reskate.log("all effects denied")
+    )")});
+    running(host, "effects-denied", environment);
+    check(environment.logged("all effects denied"), environment.all());
+    check(environment.fake.effects.empty(), "A plugin without permission cannot reach the renderer");
+    auto declaration = dingosdk::Json::parse(manifest(R"("effects", "console")"));
+    const std::string particle = "effects/reskate/test/ebp_spark";
+    const std::string material = "world/materials/decal/reskate_test/stain_dv";
+    declaration["effects"] = dingosdk::Json::array({particle, material});
+    for (unsigned scenario = 0; scenario < 3; ++scenario) {
+        auto invalid = declaration;
+        if (scenario == 0) invalid["permissions"] = dingosdk::Json::array();
+        else if (scenario == 1) invalid["effects"] = particle;
+        else {
+            auto names = dingosdk::Json::array();
+            for (unsigned i = 0; i < 129; ++i) names.push_back(particle + std::to_string(i));
+            invalid["effects"] = std::move(names);
+        }
+        bool refused = false;
+        try { (void)parse_manifest(invalid.dump()); } catch (const std::exception&) { refused = true; }
+        check(refused, "An effect allowlist needs permission, an array and at most 128 names");
+    }
+    for (const auto* forbidden : {"effects/gestures/effectblueprints/ebp_gesture_applause", "effects/reskate/../store/item", "world/materials/decal/paid"}) {
+        auto invalid = declaration;
+        invalid["effects"] = dingosdk::Json::array({forbidden});
+        bool refused = false;
+        try { (void)parse_manifest(invalid.dump()); } catch (const std::exception&) { refused = true; }
+        check(refused, "Stock, store and path escapes are refused in effects manifests");
+    }
+    const auto main = R"(
+        local fx=reskate.effects
+        local m={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1}
+        local p="effects/reskate/test/ebp_spark"
+        local d="world/materials/decal/reskate_test/stain_dv"
+        assert(not pcall(fx.particle,"effects/reskate/test/not_declared",m))
+        assert(not pcall(fx.particle,"effects/gestures/effectblueprints/ebp_gesture_applause",m))
+        assert(not pcall(fx.decal,p,m))
+        local broken=table.clone(m); broken[1]=0/0
+        assert(not pcall(fx.particle,p,broken))
+        broken=table.clone(m); broken[4]=1
+        assert(not pcall(fx.particle,p,broken))
+        broken=table.clone(m); broken[1]=0
+        assert(not pcall(fx.particle,p,broken))
+        assert(not pcall(fx.decal,d,m,{lift=2}))
+        for i=1,24 do assert(fx.particle(p,m)) end
+        assert(fx.particle(p,m)==nil,"particle quota")
+        for i=1,2048 do assert(fx.decal(d,m,{attach=true,lift=.04})) end
+        assert(fx.decal(d,m)==nil,"decal quota")
+        fx.clear()
+        local id=assert(fx.particle(p,m))
+        m[13]=3; fx.move(id,m); fx.stop(id)
+        assert(not pcall(fx.opacity,id,-1))
+        local decal=assert(fx.decal(d,m,{attach=true,lift=.04})); fx.opacity(decal,.5)
+        reskate.console.command("fxgone","",function() fx.release(id); fx.release(decal) end)
+        reskate.console.command("fxfail","",function() error("intentional") end)
+    )";
+    host.apply({package("effects-owner", {{manifest_file, declaration.dump()}, {"plugin/main.lua", main}})});
+    running(host, "effects-owner", environment);
+    auto& game = environment.fake;
+    check(game.effects.size() == 2, "Quota objects are cleared before the two live effects");
+    for (const auto& [id, e] : game.effects) {
+        check(e.request.transform[12] == 3, "Effects move without native addresses");
+        check(e.request.decal ? e.alpha == .5f && e.request.attach : e.stopped, "Stop, opacity and attachment reach the game");
+    }
+    const auto owned_id = game.effects.begin()->first;
+    auto intruder = R"(assert(not pcall(reskate.effects.release, )" + std::to_string(owned_id) + R"()); reskate.log("foreign effect denied"))";
+    host.apply({{ "effects-owner", scratch / "mods" / "effects-owner", "1", {} },
+                package("effects-intruder", {{manifest_file, declaration.dump()}, {"plugin/main.lua", intruder}})});
+    running(host, "effects-intruder", environment);
+    check(environment.logged("foreign effect denied") && game.effects.size() == 2, "Handles never cross plugin ownership");
+    check(host.run_console("fxgone") && game.effects.empty(), "Release disposes both owned references");
+    host.reload("effects-owner");
+    running(host, "effects-owner", environment);
+    check(game.effects.size() == 2, "Reload starts from a clean owner");
+    for (int i = 0; i < 6; ++i) (void)host.run_console("fxfail");
+    stopped(host, "effects-owner", "errors");
+    check(game.effects.empty(), "Stopping a failing VM releases its effects");
+}
+
+void plugins_track_effect_lifetimes() {
+    TestEnvironment environment;
+    Limits limits;
+    limits.call_ms = 1000; // Exercise all 8192 operations independently of the timing tests.
+    Host host(environment, Side::client, limits);
+    auto declaration = dingosdk::Json::parse(manifest(R"("effects", "console")"));
+    declaration["effects"] = dingosdk::Json::array({"effects/reskate/test/ebp_spark"});
+    host.apply({package("effect-lifetime", {{manifest_file, declaration.dump()}, {"plugin/main.lua", R"(
+        local fx = reskate.effects
+        local asset = "effects/reskate/test/ebp_spark"
+        local transform = {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1}
+        local ready, epoch = fx.state()
+        assert(ready)
+        local expired = assert(fx.particle(asset, transform))
+        reskate.console.command("fxmissing", "", function()
+            local available, current = fx.state()
+            assert(not available and current ~= epoch)
+            local id, why = fx.particle(asset, transform)
+            assert(id == nil and why:find("unavailable"))
+            fx.release(expired)
+            assert(not pcall(fx.release, expired), "a released handle cannot be reused")
+            fx.clear(); fx.clear()
+            reskate.log("expired effects cleared")
+        end)
+        reskate.console.command("fxbudget", "", function()
+            for i = 1, 8192 do fx.state() end
+            local ok, why = pcall(fx.state)
+            assert(not ok and why:find("8192"))
+            reskate.log("effect call limit enforced")
+        end)
+        reskate.console.command("fxnew", "", function()
+            assert(fx.state())
+            local id = assert(fx.particle(asset, transform))
+            assert(id ~= expired, "a new world never reuses a stale handle")
+            reskate.log("effect created after reset")
+        end)
+    )"}})});
+    running(host, "effect-lifetime", environment);
+    auto& game = environment.fake;
+    check(game.effects.size() == 1, "An effect belongs to the running plugin");
+    game.effects_ready = false;
+    ++game.effect_epoch;
+    game.effects.clear(); // Native world teardown precedes the plugin's next callback.
+    check(host.run_console("fxmissing") && environment.logged("expired effects cleared"), environment.all());
+    game.effects_ready = true;
+    ticks(host, environment, 1);
+    check(host.run_console("fxbudget") && environment.logged("effect call limit enforced"), environment.all());
+    ticks(host, environment, 1);
+    check(host.run_console("fxnew") && environment.logged("effect created after reset") && game.effects.size() == 1,
+          "The next tick restores the operation allowance\n" + environment.all());
+    host.reload("effect-lifetime");
+    running(host, "effect-lifetime", environment);
+    check(game.effects.size() == 1, "Reload releases the previous VM's native effects");
+    host.apply({});
+    check(game.effects.empty(), "Removing a plugin releases all its effects");
+}
+
+void physics_steps_include_optional_geometry() {
+    TestEnvironment environment;
+    Host host(environment, Side::client);
+    host.apply({script("physics-geometry", R"(
+        local samples = 0
+        reskate.on("physics_step", function(step)
+            samples += 1
+            local body = step.bodies["Left forearm"]
+            if samples == 1 then
+                assert(step.at == 1000 and math.abs(step.seconds - .05) < .000001)
+                assert(step.state == 300 and step.wipeout and step.ragdoll and not step.airborne)
+                assert(body.impact == 12 and body.slide == 5 and body.world and not body.board)
+                assert(body.point[1] == 2 and body.point[2] == 0 and body.point[3] == 4)
+                assert(body.normal[1] == 0 and body.normal[2] == 1 and body.normal[3] == 0)
+                local expected = {1,0,0,0,0,1,0,0,0,0,1,0,2,.25,4,1}
+                for _, name in {"Pelvis", "Left forearm"} do
+                    local pose = step.poses[name]
+                    assert(#pose.transform == 16 and #pose.velocity == 3)
+                    for i, value in expected do assert(pose.transform[i] == value) end
+                    assert(pose.velocity[1] == 5 and pose.velocity[2] == -10 and pose.velocity[3] == 0)
+                end
+                assert(step.bodies.Pelvis == nil, "a body can have a pose without a contact")
+                reskate.log("contact geometry received")
+            else
+                assert(step.state == nil and step.ragdoll == nil)
+                assert(body.point == nil and body.normal == nil and next(step.poses) == nil)
+                reskate.log("missing geometry stays absent")
+            end
+        end)
+    )", R"("events.physics")"), script("physics-denied", R"(
+        local ok, why = pcall(reskate.on, "physics_step", function() error("not permitted") end)
+        assert(not ok and why:find("events.physics"))
+        reskate.log("physics permission enforced")
+    )")});
+    running(host, "physics-geometry", environment);
+    running(host, "physics-denied", environment);
+    check(environment.logged("physics permission enforced"), environment.all());
+    PhysicsStep value;
+    value.at = environment.now; value.seconds = .05f; value.state = 300;
+    value.wipeout = true; value.ragdoll = true;
+    const EffectMatrix matrix{1,0,0,0,0,1,0,0,0,0,1,0,2,.25f,4,1};
+    value.poses.emplace("Pelvis", PhysicsStep::Pose{matrix, {5, -10, 0}});
+    value.poses.emplace("Left forearm", PhysicsStep::Pose{matrix, {5, -10, 0}});
+    value.bodies.push_back({"Left forearm", 12, 5, false, false, true, Vec3{2,0,4}, Vec3{0,1,0}});
+    environment.fake.steps.push_back(value);
+    ticks(host, environment, 1);
+    check(environment.logged("contact geometry received"), environment.all());
+    value.state.reset(); value.ragdoll.reset(); value.poses.clear();
+    value.bodies[0].point.reset(); value.bodies[0].normal.reset();
+    environment.fake.steps.push_back(value);
+    ticks(host, environment, 1);
+    check(environment.logged("missing geometry stays absent"), environment.all());
 }
 
 void a_manifest_says_what_a_plugin_is() {
@@ -4083,6 +4308,9 @@ int main() {
         scratch = std::filesystem::temp_directory_path() / "reskate-plugin-tests";
         std::filesystem::remove_all(scratch);
         run(a_manifest_says_what_a_plugin_is);
+        run(plugins_render_private_effects);
+        run(plugins_track_effect_lifetimes);
+        run(physics_steps_include_optional_geometry);
         run(a_plugin_loads_ticks_runs_its_commands_and_unloads);
         run(a_permission_must_be_declared);
         run(command_names_are_checked);
