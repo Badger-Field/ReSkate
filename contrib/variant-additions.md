@@ -59,6 +59,13 @@ in both priority orders. The real-data development audit covers all sixteen
 installed Board Break variants and both full-mod priority orders. Those
 offline checks do not establish native rendering or fracture behaviour.
 
+The integrated development build (also carrying the material inputs, shader
+coexistence and private glass renderer) was subsequently checked in Dev with
+the original-placement SDEC core and Board Break's concave variant enabled.
+The user confirmed loading, Night Watch, Loose Screws, Crystal Clear, and
+visible broken SDEC pieces. This is not native validation of every installed
+shape or arbitrary combination of material mods.
+
 Development tests add opt-in to local package copies. They are not evidence
 that an upstream mod author has shipped these declarations. Do not publish a
 compatibility claim or modified third-party package based on the audit alone.
