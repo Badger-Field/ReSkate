@@ -138,11 +138,18 @@ DeclarationSet read_declarations(const std::vector<mods::DeclarationFileStamp>& 
     auto sources = mods::read_item_sources_checked(signature[1].path);
     if (!sources) throw std::runtime_error("Item ownership could not be read; retaining previous declarations");
     result.sources = std::move(*sources);
+    // A mod whose file cannot be read or parsed is left out on its own: the others' declarations stand.
+    // (Read only when a file changed, so this is said once for each change.)
     for (std::size_t at = 2; at < signature.size(); ++at) {
         const auto& file = signature[at];
         if (!file.present) continue;
-        auto read = mods::parse_material_declarations(file.owner, read_shared_text(file.path, 64 * 1024));
-        std::move(read.begin(), read.end(), std::back_inserter(result.materials));
+        try {
+            auto read = mods::parse_material_declarations(file.owner, read_shared_text(file.path, 64 * 1024));
+            std::move(read.begin(), read.end(), std::back_inserter(result.materials));
+        } catch (const std::exception& failure) {
+            logging::log(logging::Level::warning, logging::Channel::customization,
+                         "Board parameters: {}'s reskate-materials.json is left out: {}", file.owner, failure.what());
+        }
     }
     return result;
 }
