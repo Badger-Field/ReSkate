@@ -398,7 +398,7 @@ struct CallbacksV2 {
 using MultiplayerQueue = bool (*)(const char *action, const char *argument, const char *password,
                                  char *result, std::size_t size);
 void set_multiplayer_queue(MultiplayerQueue) noexcept;
-// A map the session needs being fetched (Extension/Assets/map_download.h), for its card.
+// What the session needs being fetched, a map and plugins (Extension/Assets/map_download.h), for its card.
 struct MapDownloadCard {
     int stage{};                // 0 none, 1 asking, 2 downloading, 3 installing, 4 applying, 5 joining
     std::string map, package, author, version, description;
@@ -409,6 +409,15 @@ struct MapDownloadCard {
     std::uint64_t bytes{};       // asking: the package's size; 0 when it is not known
     std::uint64_t received{}, total{};
     std::uint32_t yes_bind{}, no_bind{};
+    // Everything asked for, the map first when it is needed, then a dedicated server's plugins.
+    // One map alone has the map's own card; anything more is listed.
+    struct Item {
+        std::string name, author, version, have;
+        bool plugin{}, installed{};
+        std::uint64_t bytes{};
+    };
+    std::vector<Item> items;
+    std::size_t current{}; // downloading, installing: the one in hand
 };
 using MapDownloadFeed = MapDownloadCard (*)();
 void set_map_download_feed(MapDownloadFeed) noexcept;
@@ -693,6 +702,13 @@ inline std::atomic<bool>& menu_open_flag() {
 // Plugins read controllers this way (Extension/Plugins/plugin_joystick.h).
 void begin_input_access() noexcept;
 void end_input_access() noexcept;
+// When the player last worked the controls (GetTickCount64 ms; 0: not since the game started): a
+// key or a mouse button or move the game read, a gamepad's buttons, sticks or triggers, or a
+// joystick a plugin reads. A multiplayer server is told while they do (PacketKind::present), so a
+// player whose skater stands still (flying a plugin's drone) is not taken for away. Any thread.
+std::uint64_t controls_touched_at() noexcept;
+// A joystick a plugin read (Extension/Plugins/plugin_joystick.h): its buttons and six axes.
+void note_joystick(std::uint32_t buttons, const std::array<float, 6>& axes) noexcept;
 }
 
 // Nonblocking. A later Present releases GPU resources after its fence completes.

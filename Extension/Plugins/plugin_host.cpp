@@ -383,6 +383,20 @@ void Host::follow_game() {
             each([&](Plugin& plugin, const std::string&) { plugin.throwdown_phase(active ? "started" : "ended"); });
         }
     }
+    // Answers to a server copy's polls (server.poll), and polls that closed unanswered, to the
+    // plugin that asked.
+    for (const auto& news : game.take_poll_news()) {
+        auto data = Json::object();
+        data["id"] = static_cast<double>(news.id);
+        data["player"] = std::to_string(news.player);
+        if (news.answer) {
+            data["answer"] = static_cast<double>(news.answer);
+            data["text"] = news.text;
+        } else data["why"] = news.why;
+        each([&](Plugin& plugin, const std::string&) {
+            if (plugin.id() == news.plugin) plugin.game_event(news.answer ? "poll_answer" : "poll_closed", "server", data);
+        });
+    }
     for (const auto& [plugin, action] : game.take_presses())
         if (auto* entry = find(plugin); entry && entry->plugin) {
             entry->plugin->action(action);
@@ -499,6 +513,11 @@ void Host::trick(const TrickNews& news) {
 bool Host::wants_tricks() const {
     return std::any_of(entries_.begin(), entries_.end(),
         [](const auto& item) { return item.second.plugin && item.second.plugin->has("events.tricks"); });
+}
+
+bool Host::wants_chat() const {
+    return std::any_of(entries_.begin(), entries_.end(),
+        [](const auto& item) { return item.second.plugin && item.second.plugin->has("chat.read"); });
 }
 
 bool Host::run_console(std::string_view text) {
