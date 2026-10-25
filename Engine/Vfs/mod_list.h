@@ -71,6 +71,12 @@ struct Variants {
     std::vector<std::string> displaces;
 };
 
+// Separate from displacement: both authors must opt into a bounded native
+// compatibility check. Exact bundle names are used, never prefixes or globs.
+struct VariantAdditions {
+    std::vector<std::string> accept, contribute;
+};
+
 struct Mod {
     std::string name;                 // folder name directly under Mods/
     std::filesystem::path directory;
@@ -96,6 +102,7 @@ struct Mod {
     std::vector<ResidentAssets> resident;
     // From reskate-plugin.json: the variants it holds (Variants), if it declares any.
     std::optional<Variants> variants;
+    VariantAdditions variant_additions;
     // From .reskate-studio-patch: whether the mod has one, and the Skate.exe SHA-256 it records.
     bool studio_marker{};
     std::string skate_sha256;
