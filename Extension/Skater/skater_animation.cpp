@@ -920,6 +920,12 @@ void on_animation(std::uintptr_t component) noexcept {
 }
 
 // What other players get of the local skater: the clip, as drawn here.
+// What the others are sent of a joint: the pose's scale with its place, since a place under a scaled
+// joint (keep_children, or one placed relative to another joint or the world) is worked out with that
+// scale in it; sent without it, the joint landed up to a thousand times its distance away. And no
+// joint further from its parent than any part of a body is: a place may be far off in the parent's
+// frame, and the others would draw the skater's arms and head across the map.
+constexpr float sent_scale_floor = 0.001f, sent_scale_ceiling = 10.0f, farthest_sent_joint = 4.0f;
 void on_send(std::uintptr_t component, std::vector<multiplayer::Transform>& skater) noexcept {
     try {
         auto& sp = sent_pose();
@@ -928,7 +934,12 @@ void on_send(std::uintptr_t component, std::vector<multiplayer::Transform>& skat
         for (std::uint32_t i = sp.first; i < sp.last; ++i) {
             const auto& j = sp.joints[i - sp.first];
             skater[i].rotation = j.rotation;
-            skater[i].position = j.position;
+            auto position = j.position;
+            const float length = std::sqrt(position[0] * position[0] + position[1] * position[1] + position[2] * position[2]);
+            if (length > farthest_sent_joint)
+                for (auto& axis : position) axis *= farthest_sent_joint / length;
+            skater[i].position = position;
+            for (std::size_t a = 0; a < 3; ++a) skater[i].scale[a] = std::clamp(j.scale[a], sent_scale_floor, sent_scale_ceiling);
         }
     } catch (...) {
     }
