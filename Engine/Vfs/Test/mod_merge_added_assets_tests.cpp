@@ -916,6 +916,7 @@ void native_variant_additions_preserve_replacements_and_removals(bool donor_firs
     const auto projection = mods::detail::admit_variant_additions(fixture.catalog.data_root, owner, choice, donor, {});
     expect(projection.at(bundle_name) == std::set<std::string>{"0:test/private"}, "native admission projects exactly the private EBX");
     donor.variant_projection = projection;
+    donor.variant_targets[bundle_name] = choice.name;
     choice.variant_authority.insert(bundle_name);
     if (!donor_first) std::swap(fixture.catalog.mods[0], fixture.catalog.mods[1]);
     const auto report = mods::merge_mods(fixture.catalog);
@@ -935,6 +936,21 @@ void native_variant_additions_preserve_replacements_and_removals(bool donor_firs
                "the variant's replacement wins over donor scaffold in either priority order");
     }
 
+    auto without_donor = fixture.catalog;
+    std::erase_if(without_donor.mods, [](const auto& m) { return m.name == "donor"; });
+    auto retry = mods::merge_mods(without_donor);
+    expect(retry.issue.empty() && retry.built, "retry with the donor removed clears stale authority and still merges");
+    mods::reconcile_variant_additions(without_donor);
+    expect(std::ranges::all_of(without_donor.mods, [](const auto& m) { return m.variant_authority.empty(); }),
+           "variant authority needs a surviving donor");
+    auto without_variant = fixture.catalog;
+    std::erase_if(without_variant.mods, [](const auto& m) { return m.name == "choice"; });
+    mods::reconcile_variant_additions(without_variant);
+    expect(std::ranges::none_of(without_variant.mods, [](const auto& m) { return m.name == "donor"; }),
+           "retry removes a donor when its verified variant was removed");
+    retry = mods::merge_mods(without_variant);
+    expect(retry.issue.empty() && retry.built, "retry without either member still merges the remaining catalogue");
+
     // Native readers must detect an added asset hidden behind a new name but the game's GUID.
     auto collision_assets = game_copy();
     collision_assets.push_back({"test/renamed", 1, ebx_document(guid(2), {})});
@@ -945,6 +961,12 @@ void native_variant_additions_preserve_replacements_and_removals(bool donor_firs
     try { (void)mods::detail::admit_variant_additions(fixture.catalog.data_root, owner, fixture.catalog.mods[donor_first ? 1 : 0], collision, {}); }
     catch (const std::exception&) { refused = true; }
     expect(refused, "native renamed partition GUID collision is refused");
+    // The donor passed admission, then its TOC became unreadable before a job
+    // collected sources. Keep the selected variant usable and blame that donor.
+    write(fixture.catalog.root / "donor" / "Win32" / fs::path(shared_toc), Bytes{std::byte{0xff}});
+    retry = mods::merge_mods(fixture.catalog);
+    expect(retry.issue.empty() && retry.problems.contains("donor"),
+           "a TOC lost after admission is a donor problem, not a merge-wide issue");
 }
 
 void catalog_checks_native_cooperation_again_when_the_variant_changes() {

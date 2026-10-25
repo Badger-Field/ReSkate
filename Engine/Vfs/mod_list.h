@@ -107,6 +107,7 @@ struct Mod {
     // Validated anew by the catalogue for the currently selected variant.
     // Values are kind-qualified asset names permitted in that bundle.
     std::map<std::string, std::set<std::string>, std::less<>> variant_projection;
+    std::map<std::string, std::string, std::less<>> variant_targets;
     std::set<std::string> variant_authority;
     // From .reskate-studio-patch: whether the mod has one, and the Skate.exe SHA-256 it records.
     bool studio_marker{};

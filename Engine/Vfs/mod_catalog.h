@@ -48,6 +48,10 @@ struct Catalog {
     std::vector<std::string> set_aside;
 };
 
+// Retry rounds and live apply may remove a previously admitted donor or its
+// selected variant. Withdraw orphan donors and rebuild authority from survivors.
+void reconcile_variant_additions(Catalog& catalog);
+
 // Variants (mod_list.h). For the run each variant is a mod of its own, listed after the mod that
 // holds it as <mod's folder>#<variant>, with that mod's build stamp; mods.json and the mod list only
 // know the mod. One variant of each such mod loads, the one the player chose (else the first of its

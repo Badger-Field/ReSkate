@@ -39,6 +39,13 @@ and native delivery locations are not rewritten. Shader graphs continue to
 follow the separate shader-lookup merge rules; this declaration never grants
 permission to copy a graph into another bundle.
 
+Preservation checks cover the bundle's assets, not TOC-level chunks. As with
+ordinary mods, a donor can still replace a TOC chunk; authors must account for
+that separately. Admission timings are included in the catalogue notes.
+
+The non-first manifest reader fix also applies to mods without opt-in. Their
+payload slots are corrected, and pass-through regions write the manifest first.
+
 An accepted contribution is projected to its private additions only. Stock
 assets carried as authoring scaffold are not merged from that pack. The
 selected variant is authoritative over originals, including intentional
@@ -50,22 +57,14 @@ Admission is recomputed by `load_catalog` at each launch and live apply. A
 different variant is checked afresh. Decisions are part of the merge
 fingerprint. Cooperation with multiple variant owners is conservatively
 refused, and an addition is set aside if its verified variant is subsequently
-displaced by another owner.
+removed. After every retry or live-apply removal, orphan donors are withdrawn
+and variant authority is rebuilt from surviving donors. A bundle that becomes
+unreadable after admission is reported against its contributor, not the whole
+merge.
 
 Tests cover native catalogue admission and a changed selection, strict default
 behaviour, malformed opt-in, native renamed GUID collisions, conflicting
 prospective packs, non-first manifests, and replacement/removal preservation
-in both priority orders. The real-data development audit covers all sixteen
-installed Board Break variants and both full-mod priority orders. Those
-offline checks do not establish native rendering or fracture behaviour.
-
-The integrated development build (also carrying the material inputs, shader
-coexistence and private glass renderer) was subsequently checked in Dev with
-the original-placement SDEC core and Board Break's concave variant enabled.
-The user confirmed loading, Night Watch, Loose Screws, Crystal Clear, and
-visible broken SDEC pieces. This is not native validation of every installed
-shape or arbitrary combination of material mods.
-
-Development tests add opt-in to local package copies. They are not evidence
-that an upstream mod author has shipped these declarations. Do not publish a
-compatibility claim or modified third-party package based on the audit alone.
+in both priority orders, plus retries after losing a donor, its selected
+variant, or a previously readable TOC. Native rendering remains an author
+validation step; archive checks alone do not establish it.

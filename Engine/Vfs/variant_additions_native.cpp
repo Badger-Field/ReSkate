@@ -108,10 +108,15 @@ std::map<std::string, std::set<std::string>, std::less<>> admit_variant_addition
                     other.mod.directory == owner.directory || variant_owner(other.mod.name) == owner.name) continue;
                 const auto path = other.mod.directory / relative;
                 if (!fs::exists(path)) continue;
-                const auto other_toc = fb::read_toc(bounded_toc(path));
-                const auto found = std::ranges::find_if(other_toc.bundles, [&](const auto& b) { return lower(b.name) == name; });
-                if (found == other_toc.bundles.end()) continue;
-                const auto reserved = inventory(game, other.mod.directory, *found);
+                std::vector<VariantAsset> reserved;
+                try {
+                    const auto other_toc = fb::read_toc(bounded_toc(path));
+                    const auto found = std::ranges::find_if(other_toc.bundles, [&](const auto& b) { return lower(b.name) == name; });
+                    if (found == other_toc.bundles.end()) continue;
+                    reserved = inventory(game, other.mod.directory, *found);
+                } catch (const std::exception& failure) {
+                    throw std::runtime_error("enabled pack " + other.mod.name + " blocks admission: " + failure.what());
+                }
                 std::set<std::string> names, identities;
                 for (const auto& asset : reserved) { names.insert(asset.name); identities.insert(asset.identity); }
                 for (const auto index : plan.additions)

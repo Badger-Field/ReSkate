@@ -516,10 +516,9 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                     if (index != 0) {
                         const auto at = region.files.begin() + static_cast<std::ptrdiff_t>(index);
                         std::rotate(region.files.begin(), at, at + 1);
-                    }
-                    if (index != 0)
                         report.notes.push_back(modName + ": " + bundle.name + ": manifest found at file " +
                             std::to_string(index) + " of the region");
+                    }
                 } catch (const std::exception& failure) {
                     if (firstFailure.empty()) firstFailure = failure.what();
                 }
@@ -804,7 +803,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
             }
         }
         // Nothing moved in this bundle: it passes through whole, as before.
-        if (casBacked && !shared && !gridBundle && renumbered.empty() && overridden.empty() && repaired.empty() &&
+        if (casBacked && !shared && !gridBundle && !cooperative && renumbered.empty() && overridden.empty() && repaired.empty() &&
             additions.empty())
             casBacked = false;
 
@@ -882,7 +881,10 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
         auto& state = states.at(key);
 
         if (region.inlineManifest.empty() && !casBacked) {
-            if (cooperative) throw std::runtime_error("verified variant bundle became unreadable before merging");
+            if (cooperative) {
+                report.problems[contributor->name].push_back(bundle.name + ": verified variant bundle became unreadable before merging");
+                return;
+            }
             // A copy whose contents cannot be read can only be passed through whole.
             // Once other providers have merged into this bundle, taking it whole
             // would throw their additions away (every map that shares the root
