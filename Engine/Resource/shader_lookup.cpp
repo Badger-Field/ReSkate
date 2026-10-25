@@ -61,6 +61,7 @@ bool same_graph(const Table& left, const Table& right) {
 bool preserves_stock(const Table& retained, const Table& stock) {
     if (stock.resourceMeta.size() != 16) return false;
     try {
+        (void)lookup_offset(retained);
         (void)lookup_offset(stock);
         const auto stockSize = read<std::uint32_t>(stock.resourceMeta, 0);
         const auto keptSize = read<std::uint32_t>(retained.resourceMeta, 0);

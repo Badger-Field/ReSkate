@@ -2,6 +2,9 @@
 // that points past the base's shader records is left out (the game reads such an index outside
 // its shader database).
 #include "Engine/Resource/shader_lookup.h"
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 #include <algorithm>
 #include <cstring>
 #include <iostream>
@@ -134,6 +137,33 @@ int main() {
     const auto stock = preserved_lookup(false, {{1, {0}}});
     const auto stockAlias = preserved_lookup(false, {{1, {0}}, {2, {0}}});
     const auto extension = preserved_lookup(true, {{1, {0}}, {9, {1}}});
+    for (const auto bytes : {std::size_t{0}, std::size_t{4}, std::size_t{12}, std::size_t{32}, std::size_t{544}}) {
+        auto truncated = extension;
+        truncated.resource.resize(bytes);
+        check(!fb::shader::preserves_stock_programs(truncated.table(), stock.table()),
+              "A retained table's metadata cannot authorize reads past its actual payload");
+    }
+    auto shortMeta = extension;
+    shortMeta.meta.resize(8);
+    check(!fb::shader::preserves_stock_programs(shortMeta.table(), stock.table()), "Short retained metadata is refused");
+#ifdef _WIN32
+    SYSTEM_INFO system{};
+    GetSystemInfo(&system);
+    const auto page = static_cast<std::size_t>(system.dwPageSize);
+    auto* guarded = static_cast<std::byte*>(VirtualAlloc(nullptr, page * 2, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    check(guarded != nullptr, "Allocate guarded shader-table regression buffer");
+    if (guarded) {
+        auto* tiny = guarded + page - 12;
+        std::memcpy(tiny, extension.resource.data(), 12);
+        DWORD previous{};
+        const bool protectedPage = VirtualProtect(guarded + page, page, PAGE_NOACCESS, &previous) != 0;
+        check(protectedPage, "Protect the page immediately after the truncated table");
+        if (protectedPage)
+            check(!fb::shader::preserves_stock_programs({{tiny, 12}, extension.meta}, stock.table()),
+                  "Direct graph selection refuses truncation before touching the guard page");
+        VirtualFree(guarded, 0, MEM_RELEASE);
+    }
+#endif
     const std::vector<fb::shader::Table> stockEdits{stockAlias.table()};
     check(fb::shader::only_stock_aliases(stockAlias.table(), stock.table()) &&
           !fb::shader::only_stock_aliases(extension.table(), stock.table()),
