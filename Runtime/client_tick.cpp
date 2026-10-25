@@ -1181,7 +1181,29 @@ void update_model(std::uintptr_t client, TickState& frame) {
     // Handed out with the manifests: once the merge is in, load the level being
     // played again ("Apply and reload level"), or San Van when that map is gone.
     const bool reload = dingosdk::live_mods::take_reload();
-    if (left_map || reload) {
+    // In a session the map is reloaded where the player is, as their own business: the session is
+    // told first, so it neither ends (a guest) nor moves everyone (a host, or a server's admin, whose
+    // "load" would change the server's map).
+    if (reload && !left_map && dingosdk::multiplayer::model().active && !current_level.empty()) {
+        std::string start, lm_start;
+        {
+            std::lock_guard lock(r.mutex);
+            for (const auto& level : r.model.levels)
+                if (equals(level.asset, description.lm_level))
+                    if (const auto* automatic = level.automatic_start_point()) lm_start = *automatic;
+        }
+        std::array<char, 256> said{};
+        if (!dingosdk::multiplayer::begin_local_reload())
+            dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::level,
+                "Mods applied; the session is changing maps, so they show at the next level load.");
+        else if (!queue_local_load(description.level.c_str(), start.c_str(), description.lm_level.c_str(), lm_start.c_str(), said.data(), said.size())) {
+            dingosdk::multiplayer::cancel_local_reload();
+            dingosdk::logging::log(dingosdk::logging::Level::warning, dingosdk::logging::Channel::level,
+                "Mods applied, but the map could not be reloaded in the session ({}); they show at the next level load.", said.data());
+        } else
+            dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::level,
+                "Reloading {} in the session to use the applied mods.", current_level);
+    } else if (left_map || reload) {
         constexpr std::string_view san_van = "levels/game/BAM_LevelRoot/BAM_LevelRoot";
         const std::string target = left_map ? std::string(san_van) : current_level;
         std::lock_guard lock(r.mutex);
