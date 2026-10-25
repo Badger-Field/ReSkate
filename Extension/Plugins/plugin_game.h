@@ -2,6 +2,7 @@
 #include "plugin_wave.h"
 #include "Engine/Core/Json/json.h"
 #include "Extension/AnimationStudio/anim_core.h"
+#include "Extension/Skater/pose_place.h"
 #include "Extension/Throwdowns/throwdown_kit.h"
 #include <array>
 #include <cstdint>
@@ -729,7 +730,10 @@ public:
         std::array<float, 4> rotation{0, 0, 0, 1};
         float scale{1};
         Vec3 offset{}; // added to its position, in its parent's frame
+        std::optional<pose_place::Place> place; // set instead of added, after the above
+        bool keep_children{};                   // its children stay where they were in the world
     };
+    // The joints come in the order they are posed in (pose_place::order).
     virtual std::string skater_pose(std::string_view /*plugin*/, const std::vector<JointOffset>&, float /*weight*/, Shown /*shown*/) {
         return unavailable;
     }
