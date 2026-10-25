@@ -528,7 +528,7 @@ public:
             using board_material::Kind;
             const char* type = p.kind == Kind::colour ? "colour" : p.kind == Kind::number ? "number" : p.kind == Kind::integer ? "integer"
                              : p.kind == Kind::toggle ? "switch" : "other";
-            out.push_back({p.key, type, p.value, p.integer});
+            out.push_back({p.key, type, p.value, p.integer, p.inherited});
         }
         return out;
     }

@@ -832,6 +832,9 @@ public:
         std::string type;
         std::array<float, 3> value{};
         std::int32_t integer{};
+        // Declared by the equipped item's mod (reskate-materials.json) and not held by the material
+        // yet: `value` is the default its shader has; set_parameter adds it.
+        bool inherited{};
     };
     virtual std::optional<std::vector<BoardParameter>> board_parameters(int /*part*/) { return std::nullopt; }
     // A colour (`colour`, all three) or a number (value[0]) held there until cleared; empty when held.
