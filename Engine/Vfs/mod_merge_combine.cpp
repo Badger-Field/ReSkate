@@ -1224,7 +1224,9 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                                 retainedBytes = baseBytes;
                             }
                             if (fb::shader::only_stock_aliases({retainedBytes, retained->resourceMeta}, stockTable)) {
-                                for (std::size_t i = 0; i < edits.size(); ++i) {
+                                // `edits` is lowest priority first, as the copies were absorbed: the
+                                // highest-priority usable graph is the one kept.
+                                for (std::size_t i = edits.size(); i-- > 0;) {
                                     const fb::shader::Table candidate{editBytes[i], edits[i]->resourceMeta};
                                     if (fb::shader::same_program_graph(candidate, stockTable) || !usable(candidate, edits[i])) continue;
                                     retained = edits[i];

@@ -1029,10 +1029,12 @@ void catalog_checks_native_cooperation_again_when_the_variant_changes() {
                "two private contributors reusing a GUID are both refused in either priority order");
     }
 }
+// `second_custom`: a higher-priority custom pack too, with its own bytecode, so both custom graphs can
+// be kept; the higher one's must be.
 void shader_selection_checks_the_winner(bool delivered, bool changed_heap, bool alias_first, bool overwritten = false,
-                                       bool encoder_available = true) {
+                                       bool encoder_available = true, bool second_custom = false) {
     Fixture fixture("shader-selection-" + std::to_string(delivered) + std::to_string(changed_heap) +
-                    std::to_string(alias_first) + std::to_string(overwritten));
+                    std::to_string(alias_first) + std::to_string(overwritten) + std::to_string(second_custom));
     const auto table = [](bool extended) {
         Resource resource{"test/program_lookup", Bytes(extended ? 544 : 208)};
         const std::uint32_t count = extended ? 2 : 1;
@@ -1055,7 +1057,10 @@ void shader_selection_checks_the_winner(bool delivered, bool changed_heap, bool 
     auto aliases = rows(table(false), {{1, 0}, {2, 0}});
     auto custom = rows(table(true), {{1, 0}, {2, 0}, {5, 0}, {9, 1}, {99, 2}});
     if (changed_heap) custom.payload[192] = std::byte{8};
-    const auto write_layer = [&](const fs::path& root, bool patch, const Resource& programs, bool code, unsigned code_version) {
+    auto higher = rows(table(true), {{1, 0}, {2, 0}, {11, 1}});
+    higher.payload[400] = std::byte{3}; // its own second program: another graph than the lower pack's
+    const auto write_layer = [&](const fs::path& root, bool patch, const Resource& programs, bool code, unsigned code_version,
+                                 const char* code_name = "shaders/bytecode/test", std::uint32_t code_id = 43) {
         fs::create_directories(root / "Win32" / "pkg");
         write(root / "layout.toc", layout_toc());
         fb::BinaryBundle manifest;
@@ -1069,7 +1074,7 @@ void shader_selection_checks_the_winner(bool delivered, bool changed_heap, bool 
         manifest.resources.push_back(asset);
         const Bytes bytecode{static_cast<std::byte>(code_version)};
         if (code) {
-            asset.name = "shaders/bytecode/test"; asset.resourceId = 43; asset.resourceType = fb::shader::bytecodeType;
+            asset.name = code_name; asset.resourceId = code_id; asset.resourceType = fb::shader::bytecodeType;
             asset.sha1 = mods::detail::sha1_of(bytecode); asset.originalSize = bytecode.size(); asset.resourceMeta.assign(16, std::byte{0});
             manifest.resources.push_back(asset);
         }
@@ -1089,7 +1094,11 @@ void shader_selection_checks_the_winner(bool delivered, bool changed_heap, bool 
     write_layer(fixture.catalog.data_root / "Data", false, stock, false, 0);
     write_layer(fixture.catalog.root / "custom", true, custom, delivered, 1);
     write_layer(fixture.catalog.root / "aliases", true, aliases, overwritten, 2);
-    for (const auto* name : alias_first ? std::vector<const char*>{"aliases", "custom"} : std::vector<const char*>{"custom", "aliases"}) {
+    if (second_custom) write_layer(fixture.catalog.root / "higher", true, higher, true, 3, "shaders/bytecode/higher", 44);
+    // The first mod listed has the highest priority.
+    auto order = alias_first ? std::vector<const char*>{"aliases", "custom"} : std::vector<const char*>{"custom", "aliases"};
+    if (second_custom) order = {"aliases", "higher", "custom"};
+    for (const auto* name : order) {
         mods::Mod mod; mod.name = name; mod.directory = fixture.catalog.root / name; mod.provides_layout = true;
         fixture.catalog.mods.push_back(std::move(mod));
     }
@@ -1139,6 +1148,11 @@ void shader_selection_checks_the_winner(bool delivered, bool changed_heap, bool 
             expect(index < count, "native output rows stay in the retained graph's range");
         }
     }
+    if (second_custom) {
+        expect(count == 2 && keys.contains(11) && !keys.contains(9),
+               "of two usable custom graphs under an alias-only winner, the higher-priority one is kept");
+        return;
+    }
     expect(keys.contains(2) && !keys.contains(99), "safe stock aliases survive and invalid winning rows are actually written out");
     expect(keys.contains(9) == private_graph, "unproved graphs cannot leak private program indices into stock");
     expect(keys.contains(5) == !changed_heap, "a non-retained custom contributor still contributes a proven stock alias");
@@ -1155,6 +1169,7 @@ int main(int argc, char** argv) try {
         shader_selection_checks_the_winner(false, false, false);
         shader_selection_checks_the_winner(true, true, false);
         shader_selection_checks_the_winner(true, false, true, true);
+        shader_selection_checks_the_winner(true, false, true, false, true, true);
     } else {
         shader_selection_checks_the_winner(true, false, true, false, false);
         std::cout << "Successful shader archive selection checks require a local game root; skipped\n";
