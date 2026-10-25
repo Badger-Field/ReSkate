@@ -865,9 +865,33 @@ void two_merges_write_the_same_bytes() {
     expect(read(patch / "Win32" / "pkg" / "cas_01.cas") == archive, "same bytes: the patch's own archive differs");
     expect(read(patch / "Win32" / fs::path(second_map_toc)) == toc, "same bytes: the second map's TOC differs");
 }
+
+void a_manifest_after_the_first_payload_keeps_asset_order() {
+    Fixture fixture("manifest-order");
+    const auto assets = game_copy();
+    fixture.add("native", false, shared_toc, {}, assets);
+    const auto root = fixture.catalog.root / "native";
+    const auto toc = fb::read_toc(read(root / "Win32" / fs::path(shared_toc)));
+    auto bundle = toc.bundles.front();
+    auto region = fb::read_bundle_region(bundle.region);
+    // [manifest, first, second] becomes [first, manifest, second].
+    std::swap(region.files[0], region.files[1]);
+    bundle.region = fb::write_bundle_region(region.files);
+    const auto layout = vfs::read_layout(root / "layout.toc");
+    mods::detail::CasStore store(fixture.catalog.data_root / "Data", fixture.root / "unused", layout.root);
+    const auto listing = mods::detail::list_bundle(store, root, fixture.catalog.data_root / "Data", bundle,
+                                                  fixture.catalog.data_root);
+    expect(listing.has_value(), "a manifest after a payload is found");
+    if (!listing) return;
+    for (std::size_t index = 0; index < assets.size(); ++index)
+        expect(mods::detail::read_asset(store, root, fixture.catalog.data_root / "Data", *listing, index,
+                                        fixture.catalog.data_root) == assets[index].payload,
+               "finding a non-first manifest preserves each asset's payload, not the manifest bytes");
+}
 } // namespace
 
 int main() try {
+    a_manifest_after_the_first_payload_keeps_asset_order();
     replaced_while_the_game_runs();
     const auto baseline = map_only();
     expect(baseline > 0, "map only: the map's copy exists (" + std::to_string(baseline) + ")");
