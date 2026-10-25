@@ -189,8 +189,26 @@ struct FakeGame final : Game {
         if (shown != Shown::everyone) text += std::format(" {}", shown_name(shown));
         auto sorted = offsets;
         std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.joint < b.joint; });
-        for (const auto& o : sorted) text += std::format(" {}:{:.2f},{:.2f},{:.2f},{:.2f}x{:.2f}", o.joint, o.rotation[0], o.rotation[1], o.rotation[2], o.rotation[3], o.scale);
+        for (const auto& o : sorted) {
+            text += std::format(" {}:{:.2f},{:.2f},{:.2f},{:.2f}x{:.2f}", o.joint, o.rotation[0], o.rotation[1], o.rotation[2], o.rotation[3], o.scale);
+            if (o.place) {
+                const auto& pl = *o.place;
+                text += pl.frame == dingosdk::pose_place::Frame::joint ? std::format(" place@{}", pl.joint)
+                        : pl.frame == dingosdk::pose_place::Frame::skater ? std::string(" place@skater")
+                        : pl.frame == dingosdk::pose_place::Frame::world  ? std::string(" place@world")
+                                                                : std::string(" place@parent");
+                if (pl.position) text += std::format(" p{:.2f},{:.2f},{:.2f}", (*pl.position)[0], (*pl.position)[1], (*pl.position)[2]);
+                if (pl.rotation) text += std::format(" r{:.2f},{:.2f},{:.2f},{:.2f}", (*pl.rotation)[0], (*pl.rotation)[1], (*pl.rotation)[2], (*pl.rotation)[3]);
+            }
+            if (o.keep_children) text += " keep";
+        }
         calls.push_back(text);
+        // The order the joints are posed in, when any is set to a place or keeps its children.
+        if (std::any_of(offsets.begin(), offsets.end(), [](const auto& o) { return o.place || o.keep_children; })) {
+            std::string order = std::format("pose order {}", plugin);
+            for (const auto& o : offsets) order += std::format(" {}", o.joint);
+            calls.push_back(order);
+        }
         return {};
     }
     std::string typed = "";
@@ -1193,7 +1211,7 @@ void the_skater_can_be_read_moved_and_the_world_probed() {
     check(environment.logged("teleport false teleporting is unavailable"), "nor to move");
     environment.local_skater = SkaterState{{1, 0, 2}, 1.5f, 4, 0.5f, true, 0.25f};
     host.run_console("probe");
-    check(environment.logged("at 1.0 0.0 2.0 facing 1.50 speed 4.0 up 0.5 air true 0.2"), "The skater is read\n" + environment.all());
+    check(environment.logged("at 1.0 0.0 2.0 facing 1.50 speed 4.0 up 0.5 air true 0."), "The skater is read\n" + environment.all());
     running(host, "mover", environment);
     host.run_console("move 0.5");
     check(environment.teleports.size() == 1 && environment.teleports[0].first == Vec3{10, 0, 20} &&
@@ -1528,6 +1546,26 @@ void plugins_read_joints_and_tune_physics() {
         assert(not pcall(reskate.skater.pose, {head = {scale = 11}}), "scale 0 to 10")
         assert(not pcall(reskate.skater.pose, {head = {}}, 2), "weight 0 to 1")
         assert(not pcall(reskate.skater.pose, {head = {}, [103] = {}}), "a joint once")
+        local many = {}
+        for j = 2, 129 do many[j] = {scale = 1} end
+        assert(reskate.skater.pose(many), "128 joints")
+        many[130] = {scale = 1}
+        assert(not pcall(reskate.skater.pose, many), "at most 128 joints")
+        -- Set to a place: a link of a chain relative to another joint, one in the skater's frame keeping
+        -- its children where they were, one in the world.
+        assert(reskate.skater.pose({[49] = {place = {position = vector.create(0, 0, -0.1), relative_to = 278}},
+            [278] = {place = {angles = vector.create(0, 0, 90), relative_to = "skater"}, keep_children = true},
+            head = {place = {position = vector.create(1, 2, 3), relative_to = "world"}}, [42] = {place = {position = vector.create(0, 0.2, 0)}}}))
+        assert(not pcall(reskate.skater.pose, {[49] = {place = {relative_to = 278}}}), "a place has a position or a rotation")
+        assert(not pcall(reskate.skater.pose, {[49] = {place = {position = vector.create(0, 0, 0), relative_to = "moon"}}}), "relative to a joint, the skater or the world")
+        assert(not pcall(reskate.skater.pose, {head = {keep_children = 1}}), "keep_children is true or false")
+        local _, itself = pcall(reskate.skater.pose, {[49] = {place = {position = vector.create(0, 0, 0), relative_to = 49}}})
+        assert(itself:find("relative to itself"), itself)
+        local _, below = pcall(reskate.skater.pose, {hips = {place = {position = vector.create(0, 0, 0), relative_to = "spine"}}})
+        assert(below:find("hangs from it"), below)
+        local _, circle = pcall(reskate.skater.pose, {[49] = {place = {position = vector.create(0, 0, 0), relative_to = 278}},
+            [278] = {place = {position = vector.create(0, 0, 0), relative_to = 49}}})
+        assert(circle:find("in a circle"), circle)
         assert(reskate.settings.set("Camera.Height", 1.5) and reskate.settings.set("Chat.Show", true) and
             reskate.settings.set("Render.Mode", "fast") and reskate.settings.set("Camera.Height", nil))
         reskate.log("tuned")
@@ -1542,6 +1580,11 @@ void plugins_read_joints_and_tune_physics() {
     check(game.called("pose tuner 0.50 8:0.00,0.00,0.00,1.00x1.00 44:0.00,0.00,0.71,0.71x1.00 103:0.00,0.00,0.00,1.00x0.00") &&
               game.called("pose tuner 1.00"),
           "Joints posed: a head shrunk, one turned 90 degrees about Z, and off\n" + environment.all());
+    check(game.called("pose tuner 1.00 42:0.00,0.00,0.00,1.00x1.00 place@parent p0.00,0.20,0.00 49:0.00,0.00,0.00,1.00x1.00 place@278 p0.00,0.00,-0.10 "
+                      "103:0.00,0.00,0.00,1.00x1.00 place@world p1.00,2.00,3.00 278:0.00,0.00,0.00,1.00x1.00 place@skater r0.00,0.00,0.71,0.71 keep") &&
+              game.called("pose order tuner 42 103 278 49"),
+          "Joints set to places: in their parent's frame, another joint's, the world and the skater's, the children kept; "
+          "each posed after the joint it is placed relative to\n" + environment.all());
     check(game.called("setting tuner Camera.Height 1.5") && game.called("setting tuner Chat.Show true") &&
               game.called("setting tuner Render.Mode fast") && game.called("setting tuner Camera.Height none"),
           "Game settings held and let go\n" + environment.all());

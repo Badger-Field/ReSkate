@@ -759,18 +759,26 @@ void on_animation(std::uintptr_t component) noexcept {
                 last = to;
             }
         };
-        // Joints turned and scaled, after the clip; then something carried; then an arm reaching. Each
-        // goes into the pose drawn, the pose sent, or both (Shown), and its joints join what is written.
+        // Joints turned, scaled and moved, or set to a place (pose_place.h), after the clip; then something
+        // carried; then an arm reaching. Each goes into the pose drawn, the pose sent, or both (Shown), and
+        // its joints join what is written (a joint's children too, when they are kept where they were).
         const auto pose_joints = [&](std::vector<Joint>& pose, std::size_t& first, std::size_t& last) {
             const float w = std::clamp(snap->offsets_weight, 0.0f, 1.0f);
+            thread_local std::vector<pose_place::Kept> kept;
             for (const auto& o : snap->offsets) {
                 if (o.joint < 2 || o.joint >= layout.count) continue;
+                if (o.keep_children) pose_place::keep(pose, o.joint, kept);
                 auto& j = pose[o.joint];
                 j.rotation = normalised(multiply(j.rotation, slerp(Quat{0, 0, 0, 1}, o.rotation, w)));
                 // Never quite 0: a joint at scale 0 has no inverse. This small, it is as good as gone.
                 const float s = std::max(1.0f + (o.scale - 1.0f) * w, smallest_scale);
                 for (auto& k : j.scale) k *= s;
                 for (std::size_t a = 0; a < 3; ++a) j.position[a] += o.offset[a] * w;
+                if (o.place) pose_place::apply(pose, o.joint, *o.place, w);
+                if (o.keep_children) {
+                    pose_place::put_back(pose, o.joint, kept);
+                    for (const auto& k : kept) widen(first, last, k.joint, k.joint + 1u);
+                }
                 widen(first, last, o.joint, o.joint + 1u);
             }
         };
