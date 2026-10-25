@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -103,6 +104,10 @@ struct Mod {
     // From reskate-plugin.json: the variants it holds (Variants), if it declares any.
     std::optional<Variants> variants;
     VariantAdditions variant_additions;
+    // Validated anew by the catalogue for the currently selected variant.
+    // Values are kind-qualified asset names permitted in that bundle.
+    std::map<std::string, std::set<std::string>, std::less<>> variant_projection;
+    std::set<std::string> variant_authority;
     // From .reskate-studio-patch: whether the mod has one, and the Skate.exe SHA-256 it records.
     bool studio_marker{};
     std::string skate_sha256;

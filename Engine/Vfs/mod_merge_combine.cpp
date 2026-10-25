@@ -433,7 +433,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
 
     // `tocChunks`: the chunks the copy's own TOC lists, which a texture streams its mips from.
     const auto absorb = [&](const fb::TocBundle& bundle, const ArchivePlacement* placement,
-                            bool isBase, const fs::path& root, const std::set<fb::Guid>* tocChunks) {
+                            bool isBase, const fs::path& root, const std::set<fb::Guid>* tocChunks, const Mod* contributor) {
         const auto key = lower(bundle.name);
         auto region = fb::read_bundle_region(bundle.region);
         const auto provider = providers.find(key);
@@ -448,7 +448,8 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
         const auto propagate = !isBase && !overrides.empty();
         // Reading the manifest only to look for such copies is optional: a
         // bundle that cannot be read that way just passes through as it is.
-        const auto needed = shared || gridBundle || renumber;
+        const auto cooperative = contributor && (contributor->variant_projection.contains(key) || contributor->variant_authority.contains(key));
+        const auto needed = shared || gridBundle || renumber || cooperative;
 
         // A mod's payloads have to lie inside the archives it ships. A bundle
         // pointing past the end of one, or into one that is not there, means
@@ -512,6 +513,10 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                             " files");
                     casManifest = std::move(manifest);
                     casBacked = true;
+                    if (index != 0) {
+                        const auto at = region.files.begin() + static_cast<std::ptrdiff_t>(index);
+                        std::rotate(region.files.begin(), at, at + 1);
+                    }
                     if (index != 0)
                         report.notes.push_back(modName + ": " + bundle.name + ": manifest found at file " +
                             std::to_string(index) + " of the region");
@@ -877,6 +882,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
         auto& state = states.at(key);
 
         if (region.inlineManifest.empty() && !casBacked) {
+            if (cooperative) throw std::runtime_error("verified variant bundle became unreadable before merging");
             // A copy whose contents cannot be read can only be passed through whole.
             // Once other providers have merged into this bundle, taking it whole
             // would throw their additions away (every map that shares the root
@@ -908,6 +914,13 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
         }
         const auto manifest = casBacked ? casManifest : fb::read_binary_bundle(region.inlineManifest);
         auto flat = flatten(region, manifest, casBacked ? 1 : 0);
+        if (contributor && contributor->variant_authority.contains(key)) {
+            std::set<std::string> retained;
+            for (const auto& asset : flat) retained.insert(asset_key(asset.asset));
+            std::erase_if(state.assets, [&](const auto& asset) { return asset.base && !retained.contains(asset_key(asset.asset)); });
+            state.seen.clear();
+            for (std::size_t at = 0; at < state.assets.size(); ++at) state.seen.emplace(asset_key(state.assets[at].asset), at);
+        }
         if (state.opaque) {
             // A named copy is more useful than an opaque one, so it takes over.
             if (isBase) return;
@@ -969,6 +982,11 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
             earlier.emplace_back(asset.asset.sha1, modName);
         };
         for (std::size_t position = 0; position < flat.size(); ++position) {
+            if (contributor) {
+                const auto projection = contributor->variant_projection.find(key);
+                if (projection != contributor->variant_projection.end() && !projection->second.contains(asset_key(flat[position].asset)))
+                    continue;
+            }
             auto& entry = flat[position];
             entry.base = isBase;
             entry.mod = owner;
@@ -1048,7 +1066,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                 "; the merged bundle keeps " + modName + "'s");
     };
 
-    if (base) for (const auto& bundle : base->bundles) absorb(bundle, nullptr, true, baseRoot, nullptr);
+    if (base) for (const auto& bundle : base->bundles) absorb(bundle, nullptr, true, baseRoot, nullptr, nullptr);
     const auto baseBundles = order.size();
     // Lowest priority first, so the highest-priority mod overwrites the rest.
     for (auto source = sources.rbegin(); source != sources.rend(); ++source) {
@@ -1056,7 +1074,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
         for (const auto& chunk : source->toc.chunks)
             if (!chunk.removed) tocChunks.insert(chunk.guid);
         for (const auto& bundle : source->toc.bundles)
-            absorb(bundle, source->placement, false, source->root, &tocChunks);
+            absorb(bundle, source->placement, false, source->root, &tocChunks, source->mod);
     }
 
     for (const auto& name : order) {

@@ -484,6 +484,7 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
                 for (const auto* mod : providers.at(lower(relative))) {
                     Source source;
                     source.root = mod->directory;
+                    source.mod = mod;
                     source.placement = &placements.at(mod);
                     try {
                         source.toc = fb::read_toc(read_file(mod->directory / fs::path(relative)));

@@ -4,6 +4,7 @@
 
 #include "mod_merge.h"
 #include "mod_conflicts.h"
+#include "variant_additions_native.h"
 #include "native_db.h"
 #include "Engine/Core/Json/json.h"
 #include "Engine/Game/Build/supported_build.h"
@@ -353,10 +354,13 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
         // their archives are placed like a disabled mod's, so another variant can be chosen while the
         // game runs. A choice that is not installed falls back to the first of the "order", then to
         // any variant there is.
+        const auto compatibility_candidates = list.entries;
+        std::map<std::string, std::string, std::less<>> addition_targets;
         for (const auto& owner : owners) {
             const auto held = std::find_if(list.entries.begin(), list.entries.end(), [&](const auto& entry) { return entry.mod.name == owner; });
             if (held == list.entries.end() || !held->enabled) continue;
             const auto declared = *held->mod.variants;
+            const auto owner_mod = held->mod;
             const auto of_owner = [&](const ModEntry& entry) { return variant_owner(entry.mod.name) == owner; };
             const auto enabled_variant = [&](const std::string& name) {
                 return std::find_if(list.entries.begin(), list.entries.end(), [&](const auto& entry) {
@@ -371,10 +375,38 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
             result.notes.push_back("Variants: " + list.entries.front().mod.name + " loads first, so it is the one of " + owner + "'s in the game");
             for (auto entry = list.entries.begin() + 1; entry != list.entries.end(); ++entry) {
                 if (!entry->enabled || (!of_owner(*entry) && !lists_bundle(entry->mod.directory, declared.displaces))) continue;
+                if (!of_owner(*entry) && !owner_mod.variant_additions.accept.empty() &&
+                    !entry->mod.variant_additions.contribute.empty()) {
+                    try {
+                        if (addition_targets.contains(entry->mod.name))
+                            throw std::runtime_error("cooperation with multiple variant owners is not supported");
+                        const auto projection = detail::admit_variant_additions(data_root, owner_mod, list.entries.front().mod,
+                                                                               entry->mod, compatibility_candidates);
+                        for (const auto& [bundle, keys] : projection) {
+                            entry->mod.variant_projection.emplace(bundle, keys);
+                            list.entries.front().mod.variant_authority.insert(bundle);
+                        }
+                        addition_targets.emplace(entry->mod.name, list.entries.front().mod.name);
+                        result.notes.push_back("Variants: " + entry->mod.name + " contributes verified private additions beside " +
+                                               list.entries.front().mod.name);
+                        continue;
+                    } catch (const std::exception& failure) {
+                        result.notes.push_back("Variants: private additions from " + entry->mod.name + " refused: " + failure.what());
+                    }
+                }
                 entry->enabled = false;
                 result.set_aside.push_back(entry->mod.name);
                 result.notes.push_back("Variants: " + entry->mod.name + (of_owner(*entry) ? " is another of " + owner + "'s" : " brings what they replace") +
                                        " and is set aside for this run");
+            }
+        }
+        for (auto& entry : list.entries) {
+            const auto target = addition_targets.find(entry.mod.name);
+            if (!entry.enabled || target == addition_targets.end()) continue;
+            if (std::ranges::none_of(list.entries, [&](const auto& choice) { return choice.enabled && choice.mod.name == target->second; })) {
+                entry.enabled = false;
+                result.set_aside.push_back(entry.mod.name);
+                result.notes.push_back("Variants: " + entry.mod.name + " is set aside because its verified variant no longer loads");
             }
         }
         for (auto& entry : list.entries) {

@@ -17,6 +17,8 @@
 #include "Engine/Vfs/game_archives.h"
 #include "Engine/Vfs/mod_catalog.h"
 #include "Engine/Vfs/mod_merge_internal.h"
+#include "Engine/Vfs/variant_additions_native.h"
+#include "Engine/Game/Build/supported_build.h"
 #include "Engine/Vfs/native_db.h"
 
 #include <Windows.h>
@@ -888,9 +890,128 @@ void a_manifest_after_the_first_payload_keeps_asset_order() {
                                         fixture.catalog.data_root) == assets[index].payload,
                "finding a non-first manifest preserves each asset's payload, not the manifest bytes");
 }
+
+void native_variant_additions_preserve_replacements_and_removals(bool donor_first) {
+    Fixture fixture(donor_first ? "cooperative-first" : "cooperative-last");
+    auto donor_assets = game_copy();
+    donor_assets.push_back({"test/private", 1, ebx_document(guid(10), {})});
+    fixture.add("donor", false, shared_toc, {}, donor_assets);
+    if (donor_first) {
+        const auto path = fixture.catalog.root / "donor" / "Win32" / fs::path(shared_toc);
+        auto toc = fb::read_toc(read(path));
+        auto region = fb::read_bundle_region(toc.bundles.front().region);
+        std::swap(region.files[0], region.files[1]);
+        toc.bundles.front().region = fb::write_bundle_region(region.files);
+        write(path, fb::write_patch_toc(toc.bundles));
+    }
+    // The selected variant replaces the playlist and deliberately drops test/other.
+    fixture.add("choice", false, shared_toc, {}, {{"test/playlist", 1, ebx_document(guid(1), {guid(1)})}});
+    auto& donor = fixture.catalog.mods[0];
+    auto& choice = fixture.catalog.mods[1];
+    mods::Mod owner;
+    owner.name = "Pack"; owner.directory = fixture.catalog.root / "Pack";
+    owner.variants = mods::Variants{"decks", {}, {bundle_name}};
+    owner.variant_additions.accept = {bundle_name};
+    donor.variant_additions.contribute = {bundle_name};
+    const auto projection = mods::detail::admit_variant_additions(fixture.catalog.data_root, owner, choice, donor, {});
+    expect(projection.at(bundle_name) == std::set<std::string>{"0:test/private"}, "native admission projects exactly the private EBX");
+    donor.variant_projection = projection;
+    choice.variant_authority.insert(bundle_name);
+    if (!donor_first) std::swap(fixture.catalog.mods[0], fixture.catalog.mods[1]);
+    const auto report = mods::merge_mods(fixture.catalog);
+    expect(report.issue.empty() && report.built, "native cooperative merge builds\n" + describe(report));
+    Patch patch(fixture);
+    expect(!patch.file(shared_toc, "test/other"), "a stock original the selected variant removed is not resurrected");
+    const auto private_file = patch.file(shared_toc, "test/private");
+    expect(private_file && fb::decode_cas(patch.bytes(private_file->location, private_file->offset, private_file->size, "private addition"),
+                                        {fixture.catalog.data_root}) == donor_assets.back().payload,
+           "private addition retains its original payload in either priority order");
+    const auto playlist = patch.file(shared_toc, "test/playlist");
+    expect(playlist.has_value(), "the variant's replacement remains present");
+    if (playlist) {
+        const auto document = fb::ebx::read_document(fb::decode_cas(patch.bytes(playlist->location, playlist->offset,
+            playlist->size, "variant replacement"), {fixture.catalog.data_root}));
+        expect(document.imports.size() == 1 && document.imports.front().fileGuid == guid(1),
+               "the variant's replacement wins over donor scaffold in either priority order");
+    }
+
+    // Native readers must detect an added asset hidden behind a new name but the game's GUID.
+    auto collision_assets = game_copy();
+    collision_assets.push_back({"test/renamed", 1, ebx_document(guid(2), {})});
+    fixture.add("collision", false, shared_toc, {}, collision_assets);
+    auto& collision = fixture.catalog.mods.back();
+    collision.variant_additions.contribute = {bundle_name};
+    bool refused{};
+    try { (void)mods::detail::admit_variant_additions(fixture.catalog.data_root, owner, fixture.catalog.mods[donor_first ? 1 : 0], collision, {}); }
+    catch (const std::exception&) { refused = true; }
+    expect(refused, "native renamed partition GUID collision is refused");
+}
+
+void catalog_checks_native_cooperation_again_when_the_variant_changes() {
+    Fixture fixture("catalog-cooperation");
+    struct LocalAppData {
+        std::wstring previous;
+        explicit LocalAppData(const fs::path& root) {
+            const auto size = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+            if (size) {
+                previous.resize(size);
+                const auto copied = GetEnvironmentVariableW(L"LOCALAPPDATA", previous.data(), size);
+                previous.resize(copied);
+            }
+            SetEnvironmentVariableW(L"LOCALAPPDATA", root.wstring().c_str());
+        }
+        ~LocalAppData() { SetEnvironmentVariableW(L"LOCALAPPDATA", previous.empty() ? nullptr : previous.c_str()); }
+    } appdata(fixture.root / "appdata");
+    auto added = game_copy();
+    added.push_back({"test/private", 1, ebx_document(guid(10), {})});
+    fixture.add("donor", false, shared_toc, {}, added);
+    fixture.add("Pack/decks/standard", false, shared_toc, {}, game_copy());
+    fixture.add("Pack/decks/collision", false, shared_toc, {}, added);
+    const auto text = [&](const fs::path& path, std::string_view value) {
+        Bytes bytes; put_bytes(bytes, value); write(path, bytes);
+    };
+    const auto stamp = "ReSkate Studio native Patch v1\nskate_sha256=" + std::string(supported_build::game_sha256) + "\n";
+    text(fixture.catalog.root / "donor" / mods::studio_marker_file, stamp);
+    text(fixture.catalog.root / "Pack" / mods::studio_marker_file, stamp);
+    const auto owner_manifest = fixture.catalog.root / "Pack" / mods::plugin_manifest_file;
+    text(owner_manifest, R"({"api":1,"entry":"plugin/main.lua","variants":{"folder":"decks","order":["standard"],"displaces":["win32/test/shared"]},"variant_additions":{"accept":["win32/test/shared"]}})");
+    text(fixture.catalog.root / "donor" / mods::plugin_manifest_file,
+         R"({"variant_additions":{"contribute":["win32/test/shared"]}})");
+    auto catalog = mods::load_catalog(fixture.catalog.data_root, {}, false);
+    const auto find = [](const mods::Catalog& c) -> const mods::Mod* {
+        const auto at = std::ranges::find_if(c.mods, [](const auto& m) { return m.name == "donor"; });
+        return at == c.mods.end() ? nullptr : &*at;
+    };
+    expect(find(catalog) && find(catalog)->variant_projection.contains(bundle_name), "catalog admits native additions after both author permissions and delivery checks");
+    // Change the default choice without writing the real user's variants file.
+    text(owner_manifest, R"({"api":1,"entry":"plugin/main.lua","variants":{"folder":"decks","order":["collision"],"displaces":["win32/test/shared"]},"variant_additions":{"accept":["win32/test/shared"]}})");
+    catalog = mods::load_catalog(fixture.catalog.data_root, {}, false);
+    expect(!find(catalog), "catalog checks the newly selected variant and refuses its identity collision");
+    text(owner_manifest, R"({"api":1,"entry":"plugin/main.lua","variants":{"folder":"decks","order":["standard"],"displaces":["win32/test/shared"]}})");
+    catalog = mods::load_catalog(fixture.catalog.data_root, {}, false);
+    expect(!find(catalog), "catalog retains strict displacement when the variant owner has not opted in");
+    text(owner_manifest, R"({"api":1,"entry":"plugin/main.lua","variants":{"folder":"decks","order":["standard"],"displaces":["win32/test/shared"]},"variant_additions":{"accept":["win32/test/shared"]}})");
+    auto rival = game_copy();
+    rival.push_back({"test/renamed-private", 1, ebx_document(guid(10), {})});
+    fixture.add("rival", false, shared_toc, {}, rival);
+    text(fixture.catalog.root / "rival" / mods::studio_marker_file, stamp);
+    text(fixture.catalog.root / "rival" / mods::plugin_manifest_file,
+         R"({"variant_additions":{"contribute":["win32/test/shared"]}})");
+    for (const auto* order : {
+        R"({"schema":1,"mods":[{"name":"donor","enabled":true},{"name":"rival","enabled":true}]})",
+        R"({"schema":1,"mods":[{"name":"rival","enabled":true},{"name":"donor","enabled":true}]})"}) {
+        text(fixture.catalog.root / "mods.json", order);
+        catalog = mods::load_catalog(fixture.catalog.data_root, {}, false);
+        expect(!find(catalog) && std::ranges::none_of(catalog.mods, [](const auto& m) { return m.name == "rival"; }),
+               "two private contributors reusing a GUID are both refused in either priority order");
+    }
+}
 } // namespace
 
 int main() try {
+    catalog_checks_native_cooperation_again_when_the_variant_changes();
+    native_variant_additions_preserve_replacements_and_removals(true);
+    native_variant_additions_preserve_replacements_and_removals(false);
     a_manifest_after_the_first_payload_keeps_asset_order();
     replaced_while_the_game_runs();
     const auto baseline = map_only();
