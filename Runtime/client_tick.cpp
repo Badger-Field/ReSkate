@@ -712,14 +712,16 @@ void update_model(std::uintptr_t client, TickState& frame) {
     const bool map_prompt = dingosdk::map_download::asking();
     // The vote for the next map comes up the same way (overlay.h: map_vote_asking), when no map is being asked about.
     const bool map_vote = !map_prompt && dingosdk::overlay::map_vote_asking();
-    // And a message to say OK to (overlay.h: message_asking), over either.
+    // And a message to say OK to (overlay.h: message_asking), over either; and a question with two
+    // answers (overlay.h: ask_question), under the message.
     const bool message_up = dingosdk::overlay::message_asking();
+    const bool question_up = !message_up && dingosdk::overlay::question_asking();
     // The hold on the game's input outlasts the card's question until everything pressed is let
     // go (or a moment has passed): the button that answered must not also be a press in the
     // game, or in the pause menu behind the card.
     static bool prompt_held{};
     static ULONGLONG prompt_release_by{};
-    if (map_prompt || map_vote || message_up) {
+    if (map_prompt || map_vote || message_up || question_up) {
         prompt_held = true;
         prompt_release_by = 0;
     } else if (prompt_held) {
@@ -730,7 +732,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
                              std::ranges::any_of(held.keys, [](std::uint64_t word) { return word != 0; });
         if (!pressed || GetTickCount64() >= prompt_release_by) prompt_held = false;
     }
-    DingoSDKOverlaySetPromptInputCapture(map_prompt || map_vote || message_up || prompt_held);
+    DingoSDKOverlaySetPromptInputCapture(map_prompt || map_vote || message_up || question_up || prompt_held);
     const unsigned poll_answers = dingosdk::multiplayer::server_poll_answers();
     const bool placement_flight = dingosdk::pad_flight::requested();
     bool freecam_controller = dingosdk::local_freecam_controller() || placement_flight;
@@ -761,10 +763,10 @@ void update_model(std::uintptr_t client, TickState& frame) {
         dingosdk::plugins::plugin_input_capture());
     dingosdk::ControllerInput controller;
     if (freecam_controller_combo || freecam_combo || tp_to_freecam_combo || noclip_combo || forward_velocity_combo || up_velocity_combo || offboard_up_velocity_combo ||
-        vote_yes_combo || vote_no_combo || poll_answers || map_prompt || map_vote || message_up ||
+        vote_yes_combo || vote_no_combo || poll_answers || map_prompt || map_vote || message_up || question_up ||
         std::ranges::any_of(action_combos, [](auto combo) { return combo != 0; }))
         // (The card that asks has the pointer, as a menu does: it is still read for.)
-        DingoSDKOverlayReadControllerInput(&controller, map_prompt || map_vote || message_up);
+        DingoSDKOverlayReadControllerInput(&controller, map_prompt || map_vote || message_up || question_up);
     for (std::size_t i = 0; i < action_combos.size(); ++i)
         if (r.action_bind_latches[i].update(action_combos[i], controller, r.observer_failed || placement_flight)) {
             std::array<char, 256> result{};
@@ -790,7 +792,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
         static bool prompt_before{};
         static std::uint32_t buttons_before{};
         // The keyboard's arrows, Enter and Esc do the same, above the pad's bits.
-        const bool prompt = map_prompt || map_vote || message_up;
+        const bool prompt = map_prompt || map_vote || message_up || question_up;
         const std::uint32_t buttons = !prompt ? 0
             : (controller.available ? controller.buttons : 0) | (DingoSDKOverlayReadPromptKeys() << 20);
         // The message is over the others and is answered first: A or B, Enter or Esc, is its OK.
@@ -804,6 +806,16 @@ void update_model(std::uintptr_t client, TickState& frame) {
             if (pressed & (0x1000 | 1u << 22)) dingosdk::map_download::answer(dingosdk::map_download::picked());
             else if (pressed & (0x2000 | 1u << 23)) dingosdk::map_download::answer(false);
         }
+        // The question: left and right pick, A takes the pick, B is its second answer.
+        static bool question_before{};
+        if (question_up && question_before) {
+            const auto pressed = buttons & ~buttons_before;
+            if (pressed & (0x0004 | 1u << 20)) dingosdk::overlay::question_pick(true);
+            if (pressed & (0x0008 | 1u << 21)) dingosdk::overlay::question_pick(false);
+            if (pressed & (0x1000 | 1u << 22)) dingosdk::overlay::question_answer(dingosdk::overlay::question_picked());
+            else if (pressed & (0x2000 | 1u << 23)) dingosdk::overlay::question_answer(false);
+        }
+        question_before = question_up;
         // The vote's popup: left and right move the pick, A votes for it, B closes it.
         static bool vote_before{};
         if (!message_up && map_vote && vote_before) {
