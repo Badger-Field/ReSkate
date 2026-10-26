@@ -49,6 +49,7 @@
 #include "Extension/Trainer/trainer.h"
 #include "Extension/Travel/local_location_travel.h"
 #include "Extension/World/world_entities.h"
+#include "Extension/World/owned_bodies.h"
 #include "Extension/Skater/bone_cam.h"
 #include "Extension/Skater/pad_flight.h"
 #include "Extension/Skater/trick_feed.h"
@@ -169,6 +170,17 @@ std::filesystem::path game_folder() {
 class RealGame final : public Game {
 public:
     explicit RealGame(std::uintptr_t base) : base_(base) {}
+    std::string body_prepare() override { return owned_bodies::prepare(); }
+    std::string body_create(std::uint64_t owner, const owned_body::Definition& d, owned_body::Handle& h) override { return owned_bodies::create(owner, d, h); }
+    std::string body_read(std::uint64_t owner, const owned_body::Handle& h, owned_body::Sample& s) override { return owned_bodies::read(owner, h, s); }
+    body_query::Result body_probe_batch(std::uint64_t owner, const owned_body::Handle& h, const body_query::Request& request, unsigned allowed) override {
+        return owned_bodies::probe_batch(owner, h, request, allowed);
+    }
+    std::string body_submit(std::uint64_t owner, const owned_body::Handle& h, const owned_body::Command& c, std::uint64_t& sequence) override { return owned_bodies::submit(owner, h, c, sequence); }
+    std::string body_receipt(std::uint64_t owner, const owned_body::Handle& h, std::uint64_t selected, owned_body::Receipt& r) override { return owned_bodies::receipt(owner, h, selected, r); }
+    std::string body_acknowledge(std::uint64_t owner, const owned_body::Handle& h, std::uint64_t sequence) override { return owned_bodies::acknowledge(owner, h, sequence); }
+    std::string body_release(std::uint64_t owner, const owned_body::Handle& h) override { return owned_bodies::release(owner, h); }
+    void body_release_all(std::uint64_t owner) override { owned_bodies::release_all(owner); }
 
     // ---- the local skater ----------------------------------------------------------------------
     std::optional<std::uint32_t> physics_state() override {
@@ -274,6 +286,13 @@ public:
         const auto box = world_entities::blueprint_bounds(base_, blueprint);
         if (!box) return std::nullopt;
         return std::array<Vec3, 2>{(*box)[0], (*box)[1]};
+    }
+    CountedProbe world_probe_bounded(const Vec3& from, const Vec3& to, unsigned allowed) override {
+        if (!allowed) return {};
+        // The client-thread query locks native_mutex and resolves the current TLS context and
+        // world. Its native identities stay here; this is not an ownership or epoch receipt.
+        const auto p = probe_local_surface_counted(from, to);
+        return {{p.available, p.hit, p.position, p.fraction}, p.native_casts};
     }
     std::optional<WorldPick> world_pick(const Vec3& from, const Vec3& to) override {
         const auto pick = local_world_pick(from, to);

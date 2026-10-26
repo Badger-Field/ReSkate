@@ -5,12 +5,15 @@
 #include "lua.h"
 #include "luacode.h"
 #include "lualib.h"
+#include <atomic>
 #include <cstdlib>
 #include <format>
 #include <fstream>
 
 namespace dingosdk::plugins {
 namespace {
+// Each load gets a new VM instance, so a reloaded plugin never adopts the old VM's bodies.
+std::atomic<std::uint64_t> next_instance{1};
 double elapsed_ms(std::chrono::steady_clock::time_point since) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - since).count();
 }
@@ -85,6 +88,7 @@ void Plugin::interrupt(lua_State* L, int gc) {
 
 bool Plugin::load(std::string entry) {
     if (L_) return state_ == State::running;
+    instance_ = next_instance.fetch_add(1, std::memory_order_relaxed);
     state_ = State::loading;
     reason_.clear();
     halt_ = Halt::none;
@@ -259,6 +263,7 @@ void Plugin::close_if_stopped() {
 }
 
 void Plugin::close() {
+    services_.game().body_release_all(instance_);
     save_storage();
     shapes_.clear();
     panels_.clear();
@@ -377,6 +382,8 @@ void Plugin::tick(double dt_ms) {
     if (state_ != State::running) return;
     ++tick_number_;
     raycasts_ = 0;
+    native_casts_ = {};
+    body_prepares_ = 0;
     const double now = services_.now_ms();
     std::vector<int> due;
     for (const auto& [id, timer] : timers_)

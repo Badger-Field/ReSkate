@@ -251,6 +251,8 @@ public:
     void save_storage();
 
     const std::string& id() const noexcept { return id_; }
+    // This VM's instance, new at each load: what owns its native bodies, never its plugin name.
+    std::uint64_t instance() const noexcept { return instance_; }
     const std::filesystem::path& directory() const noexcept { return directory_; }
     const Manifest& manifest() const noexcept { return manifest_; }
     State state() const noexcept { return state_; }
@@ -274,6 +276,8 @@ private:
     friend struct ServicesApi;
     friend struct KitApi;
     friend struct CaptureApi;
+    friend struct PhysicsApi;
+    std::uint64_t instance_{};
     struct Subcommand { std::string name, args, help; };
     struct Command { std::string help; int function{}; std::vector<Subcommand> subcommands; };
     struct Timer { double due{}, every{}; int function{}; };
@@ -326,6 +330,8 @@ private:
     double log_second_{};
     int log_lines_{};
     int raycasts_{};                    // since the last tick
+    body_query::Budget native_casts_{}; // world.probe's and probe_batch's native casts, failed ones included
+    unsigned body_prepares_{};          // explicit native body preparation calls since the last tick
     std::optional<float> touch_reach_;
     std::map<std::uint64_t, Contact> contacts_;
     double teleport_second_{};

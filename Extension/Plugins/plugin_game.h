@@ -1,6 +1,7 @@
 #pragma once
 #include "plugin_wave.h"
 #include "Engine/Core/Json/json.h"
+#include "Engine/Game/World/body_query.h"
 #include "Extension/AnimationStudio/anim_core.h"
 #include "Extension/Skater/pose_place.h"
 #include "Extension/Throwdowns/throwdown_kit.h"
@@ -259,6 +260,21 @@ struct Progress {
 class Game {
 public:
     virtual ~Game() = default;
+    // ---- native bodies a plugin owns (reskate.world.physics; Extension/World/owned_bodies.h) ------
+    // Owned by one VM instance, not by a reloadable plugin name. Client phase only; the typed
+    // handles and epochs reach Lua only inside opaque userdata.
+    // Generic deferred producer setup and readiness only; no owner or definition is kept.
+    virtual std::string body_prepare() { return unavailable; }
+    virtual std::string body_create(std::uint64_t, const owned_body::Definition&, owned_body::Handle&) { return unavailable; }
+    virtual std::string body_read(std::uint64_t, const owned_body::Handle&, owned_body::Sample&) { return unavailable; }
+    // allowed is the VM's remaining native cast budget; the result counts every native call made.
+    virtual body_query::Result body_probe_batch(std::uint64_t, const owned_body::Handle&, const body_query::Request&, unsigned) { return {}; }
+    virtual std::string body_submit(std::uint64_t, const owned_body::Handle&, const owned_body::Command&, std::uint64_t&) { return unavailable; }
+    virtual std::string body_receipt(std::uint64_t, const owned_body::Handle&, std::uint64_t, owned_body::Receipt&) { return unavailable; }
+    virtual std::string body_acknowledge(std::uint64_t, const owned_body::Handle&, std::uint64_t) { return unavailable; }
+    virtual std::string body_release(std::uint64_t, const owned_body::Handle&) { return unavailable; }
+    // When the VM closes: every body it still owns is released (retained and parked).
+    virtual void body_release_all(std::uint64_t) {}
     // ---- the local skater ----------------------------------------------------------------------
     // Its physics state (100s riding, 200s in the air, 300 a wipeout, 400s grinding, 504 off the
     // board), or empty without a skater; and how many wipeouts it has had this session.
@@ -301,6 +317,19 @@ public:
     virtual std::vector<std::string> entity_blueprints(std::string_view /*prefix*/, bool /*meshes_only*/) { return {}; }
     // A world object blueprint's mesh box in its own frame (min, max), when it has a loaded mesh.
     virtual std::optional<std::array<Vec3, 2>> entity_bounds(std::string_view /*blueprint*/) { return std::nullopt; }
+    // reskate.world.probe's ray: one current client-world ray that tells an unavailable query from
+    // a successful clear ray. A hit supplies its actual position and segment fraction only. No
+    // surface normal, velocity, native handles or world/owner epoch is qualified by this observation.
+    struct WorldProbe {
+        bool available{}, hit{};
+        Vec3 position{};
+        float fraction{};
+    };
+    // At most `allowed` native casts (what is left of the VM's native cast budget, never more than
+    // body_query::casts_per_ray), all of them counted, failed ones included; the game's ray makes
+    // one. An unavailable backend reports zero casts. world.raycast and world.pick do not use it.
+    struct CountedProbe { WorldProbe probe{}; unsigned native_casts{}; };
+    virtual CountedProbe world_probe_bounded(const Vec3&, const Vec3&, unsigned) { return {}; }
     // The world raycast and the object it meets (Extension/Objects/ParkEditor/park_editor_runtime.h,
     // local_world_pick): where; and the object's transform (rows right, up, forward with their
     // scale, then position) and blueprint, when known.
