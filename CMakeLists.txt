@@ -62,6 +62,12 @@ if(DINGOSDK_BUILD_PARK_EDITOR_TESTS AND WIN32)
     add_executable(dingosdk_object_categories_tests Extension/Objects/Test/object_categories_tests.cpp)
     target_link_libraries(dingosdk_object_categories_tests PRIVATE dingosdk_local_profile)
     add_test(NAME object_categories COMMAND dingosdk_object_categories_tests)
+    # The park editor's native ray (Extension/Objects/ParkEditor/park_editor_surface.h) over a
+    # constructed result: the editor's own rules and exclusions, and the counted cast behind
+    # reskate.world.probe and the ray batches (clear, hit and malformed results, presets and
+    # measured contact normals).
+    add_executable(dingosdk_surface_probe_tests Extension/Objects/ParkEditor/Test/surface_probe_tests.cpp)
+    add_test(NAME surface_probe COMMAND dingosdk_surface_probe_tests)
 endif()
 option(DINGOSDK_BUILD_MULTIPLAYER_TESTS "Build multiplayer protocol regression tests" OFF)
 if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
