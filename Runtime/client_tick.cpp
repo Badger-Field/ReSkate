@@ -42,6 +42,7 @@
 #include "Engine/Vfs/mod_merge.h"
 #include "Extension/Skater/ai_skaters.h"
 #include "Extension/World/world_entities.h"
+#include "Extension/World/owned_bodies.h"
 #include "Extension/Skater/client_source_spawn.h"
 #include "Extension/Skater/skater_slot_override.h"
 #include "Extension/Throwdowns/native_throwdowns.h"
@@ -1151,6 +1152,9 @@ void update_model(std::uintptr_t client, TickState& frame) {
     }
     {
         DINGO_PROFILE_ZONE("tick/plugins");
+        // Before the plugins tick, so their owned bodies see this tick's client phase (debug_busy: a
+        // level request is loading).
+        dingosdk::owned_bodies::tick(r.base, client, named_context_ready && !debug_busy);
         dingosdk::plugins::on_client_tick();
         dingosdk::plugins::tick_plugin_settings();
     }

@@ -479,6 +479,16 @@ if(DINGOSDK_BUILD_PLUGIN_TESTS)
     add_test(NAME plugins COMMAND dingosdk_plugin_tests)
 endif()
 if(DINGOSDK_BUILD_PLUGIN_TESTS AND WIN32)
+    # The owned-body service itself (Extension/World/owned_bodies.cpp), over a constructed local
+    # client, physics world and TLS: ray batches, measured contact, presets, categories and
+    # preparation. The test includes owned_bodies.cpp once and defines the hook, No Bail, session
+    # and ray functions it calls; do not add a second object for any of them.
+    add_executable(dingosdk_owned_body_source_tests Extension/World/Test/owned_body_source_tests.cpp)
+    target_include_directories(dingosdk_owned_body_source_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_compile_options(dingosdk_owned_body_source_tests PRIVATE /Gy /Gw)
+    target_link_options(dingosdk_owned_body_source_tests PRIVATE /OPT:REF)
+    add_test(NAME owned_body_source COMMAND dingosdk_owned_body_source_tests)
+    set_tests_properties(owned_body_source PROPERTIES TIMEOUT 15)
     # Tricks read from the score HUD's values (Extension/Skater/trick_watch.h), what plugins hear.
     add_executable(dingosdk_trick_watch_tests Extension/Skater/Test/trick_watch_tests.cpp Extension/Skater/trick_watch.cpp)
     target_include_directories(dingosdk_trick_watch_tests PRIVATE "${PROJECT_SOURCE_DIR}")
