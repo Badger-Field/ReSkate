@@ -10,6 +10,19 @@ inline constexpr std::uintptr_t service=0x74deb20;
 // generated type identity, not native_name_hash(class name). Confirmed on the
 // loaded private assets and in records 0x80c7870 / 0x8090360 of the pinned image.
 inline constexpr std::uintptr_t client_world = 0x8, asset_type = 0x8;
+// 41b9c20 names compartment 5 "Game"; 6..3006 are streamed sublevels.
+// 2990dd0 copies the blueprint's u16 compartment at +0x16 into the effect
+// descriptor. Looking up a name in Game can also return an asset inherited
+// from a parent registry, so check the returned asset's own compartment too.
+inline constexpr std::uintptr_t asset_compartment = 0x16;
+inline constexpr std::uint16_t resident_compartment = 5;
+// Loaded by Level::startLoadLevelResources (4649bf0) for the whole level.
+// A resident declaration preserves merge additions; it does not load or pin a
+// streamed bundle. Plugin effects must be compiled into this shared root.
+// EffectManager's level-unload listener (29cb290) cancels queued creations for
+// the departing compartment (29c88c0), drains stop/release commands (29c89e0)
+// and tears down its active effects. Ordinary stop/release only enqueue work.
+inline constexpr char resident_bundle[] = "win32/levels/game/dingolevel_root/dingolevel_root";
 inline constexpr std::uint32_t particle_type_hash = 0xf258c6f9; // EffectBlueprint
 inline constexpr std::uint32_t decal_type_hash = 0x5de4ae3c; // EnvironmentDecalVolumeTemplateData
 inline constexpr std::uint16_t domain_count = 0xbbf;

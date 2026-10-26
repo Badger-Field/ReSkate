@@ -91,14 +91,20 @@ inline std::uintptr_t manager(std::uintptr_t base) {
         table!=base+build::manager_vtable) return 0; // Exclude the engine's null service.
     return result;
 }
+inline std::uintptr_t client_realm(std::uintptr_t manager) {
+    // Allocation and release both need the client realm and its update queue.
+    // The global manager can survive after teardown clears this realm slot.
+    std::uintptr_t realm{}, queue{};
+    if (!manager || !memory::peek(manager+build::manager_realm,realm) || !realm ||
+        !memory::peek(realm+build::realm_update_queue,queue) || !queue) return 0;
+    return realm;
+}
 inline Handle create(std::uintptr_t base, std::uintptr_t manager, std::uintptr_t material,
                      const std::array<float,16>& transform,std::optional<ReceiverMask> mask=std::nullopt) {
     // The concrete allocator (0x1993620) dereferences the client realm's
     // state at manager+0x70 and its pending-update queue at state+0x400.
     // The service can exist before that realm is attached.
-    std::uintptr_t realm{}, queue{};
-    if (!memory::peek(manager+build::manager_realm,realm) || !realm || !memory::peek(realm+build::realm_update_queue,queue) || !queue)
-        return {};
+    if (!client_realm(manager)) return {};
     alignas(16) Settings settings{};
     function<void(*)(void*)>(base,build::settings_init)(&settings);
     settings.culling={100,100,100,100}; settings.flags|=3;

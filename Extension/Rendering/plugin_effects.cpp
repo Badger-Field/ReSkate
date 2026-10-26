@@ -23,12 +23,12 @@ namespace fx = addr::effects;
 namespace decal = decals::native;
 struct Entry {
     std::string owner;
-    std::uintptr_t particle{};
+    std::uintptr_t particle{}, decal_realm{};
     decal::Handle decal;
     ReceiverId receiver{};
     Matrix local{}, drawn{};
     std::uint64_t expires{};
-    bool stopped{};
+    bool stopped{}, retired{};
 };
 struct State {
     std::mutex mutex;
@@ -43,7 +43,10 @@ struct State {
     bool checked{}, valid{}, allowed{};
 };
 State& state() { static auto* s = new State; return *s; }
-template<class F> F function(const State& s, std::uintptr_t rva) { return reinterpret_cast<F>(s.base + rva); }
+#ifndef DINGOSDK_EFFECT_FUNCTION
+#define DINGOSDK_EFFECT_FUNCTION(base, rva) ((base) + (rva))
+#endif
+template<class F> F function(const State& s, std::uintptr_t rva) { return reinterpret_cast<F>(DINGOSDK_EFFECT_FUNCTION(s.base, rva)); }
 std::uintptr_t pointer(std::uintptr_t address) { std::uintptr_t value{}; memory::peek(address, value); return value; }
 std::uintptr_t service(const State& s) {
     const auto p = pointer(s.base + fx::service), vtable = pointer(p);
@@ -54,26 +57,46 @@ std::uintptr_t service(const State& s) {
     }
     return p;
 }
-bool same_services(const State& s) { return service(s) == s.service && decal::manager(s.base) == s.manager; }
+#ifndef DINGOSDK_EFFECT_SERVICE
+#define DINGOSDK_EFFECT_SERVICE(s) service(s)
+#endif
+#ifndef DINGOSDK_EFFECT_DECAL_MANAGER
+#define DINGOSDK_EFFECT_DECAL_MANAGER(base) decal::manager(base)
+#endif
+#ifndef DINGOSDK_EFFECT_DECAL_CREATE
+#define DINGOSDK_EFFECT_DECAL_CREATE(base, manager, asset, transform) decal::create(base, manager, asset, transform, decal::ReceiverMask::all)
+#endif
+#ifndef DINGOSDK_EFFECT_DECAL_RELEASE
+#define DINGOSDK_EFFECT_DECAL_RELEASE(base, handle) decal::release(base, handle)
+#endif
+bool same_services(const State& s) { return DINGOSDK_EFFECT_SERVICE(s) == s.service && DINGOSDK_EFFECT_DECAL_MANAGER(s.base) == s.manager; }
 void destroy(State& s, Entry& e) {
-    if (e.particle) {
+    // Replacing one global service must not abandon the other's live effects.
+    if (e.particle && DINGOSDK_EFFECT_SERVICE(s) == s.service) {
         function<void(*)(std::uintptr_t*, bool, float)>(s, fx::stop.rva)(&e.particle, true, 0);
         function<void(*)(std::uintptr_t*)>(s, fx::release.rva)(&e.particle);
     }
-    if (e.decal.id) decal::release(s.base, e.decal);
+    // The manager can outlive its realm. Never send an old ID to a cleared or
+    // replacement realm, even when the global service itself has not changed.
+    if (e.decal.id && e.decal_realm && DINGOSDK_EFFECT_DECAL_MANAGER(s.base) == s.manager &&
+        decal::client_realm(s.manager) == e.decal_realm) DINGOSDK_EFFECT_DECAL_RELEASE(s.base, e.decal);
 }
-void reset(State& s, bool same_world = true) {
+void reset(State& s) {
     if (s.allowed || !s.entries.empty()) ++s.epoch;
-    if (same_world && s.valid && s.thread == GetCurrentThreadId() && same_services(s))
+    // Queue releases before forwarding native level teardown, including when
+    // it arrives on another thread. Native EffectManager's level-unload handler
+    // drains its queues before the level-wide Game compartment is cleared.
+    if (s.valid)
         for (auto& [id, e] : s.entries) destroy(s, e);
     s.entries.clear(); s.assets.clear();
-    if (s.valid && s.thread == GetCurrentThreadId()) (void)s.budget.update(s.base, 0);
+    if (s.valid) (void)s.budget.update(s.base, 0);
+    s.budget_at = 0;
     s.allowed = false;
 }
 bool usable(const State& s) { return s.valid && s.allowed && !s.suspended && s.thread == GetCurrentThreadId() && same_services(s); }
 Entry* owned(State& s, std::string_view plugin, std::uint64_t id) {
     const auto it = s.entries.find(id);
-    return usable(s) && it != s.entries.end() && it->second.owner == plugin ? &it->second : nullptr;
+    return usable(s) && it != s.entries.end() && !it->second.retired && it->second.owner == plugin ? &it->second : nullptr;
 }
 std::uintptr_t asset(State& s, const std::string& name) {
     const auto find = game::native_data().find_asset;
@@ -84,6 +107,9 @@ std::uintptr_t asset(State& s, const std::string& name) {
         return find(domain, name.c_str());
     });
 }
+#ifndef DINGOSDK_EFFECT_ASSET
+#define DINGOSDK_EFFECT_ASSET(s, name) asset(s, name)
+#endif
 bool replaying(std::uintptr_t base) {
     namespace r = addr::replay_activity;
     const auto client = pointer(base + r::client), manager = pointer(client + r::manager);
@@ -106,14 +132,14 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool ready, bool noclip, b
                 decal::surface_contracts_match(base) && s.receivers.initialize(base);
         }
         if (!s.valid || base != s.base) return;
-        const auto current = service(s), manager = decal::manager(base);
+        const auto current = DINGOSDK_EFFECT_SERVICE(s), manager = DINGOSDK_EFFECT_DECAL_MANAGER(base);
         NoBailSkater skater;
         const bool playing = ready && !s.suspended && !noclip && !editor && !replaying(base) && no_bail_skater(skater);
         const auto world = pointer(client + fx::client_world);
-        // The transition hook releases references before teardown. If a world
-        // was replaced without that hook, never submit its old IDs to a new one.
+        // The transition hook releases before assets unload. A missed world
+        // change still releases particles, but decals also require their realm.
         if (!playing || current != s.service || manager != s.manager || world != s.world || skater.entity != s.entity)
-            reset(s, world == s.world);
+            reset(s);
         s.service = current; s.manager = manager; s.world = world; s.entity = skater.entity;
         s.allowed = playing && world && current && manager;
         if (!s.allowed) return;
@@ -122,7 +148,7 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool ready, bool noclip, b
         for (auto it = s.entries.begin(); it != s.entries.end();) {
             auto& e = it->second;
             Matrix pose{};
-            if (now >= e.expires || (e.receiver[0] && !s.receivers.pose(e.receiver, pose))) {
+            if (e.retired || now >= e.expires || (e.receiver[0] && !s.receivers.pose(e.receiver, pose))) {
                 destroy(s, e); it = s.entries.erase(it); continue;
             }
             if (e.receiver[0]) {
@@ -135,7 +161,7 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool ready, bool noclip, b
         }
         if (now >= s.budget_at) {
             const auto count = std::count_if(s.entries.begin(), s.entries.end(), [](const auto& e) { return e.second.decal.id != 0; });
-            (void)s.budget.update(base, count ? 4096 : 0); s.budget_at = now + 1000;
+            (void)s.budget.update(base, static_cast<std::uint32_t>(count)); s.budget_at = now + 1000;
         }
     } catch (...) {}
 }
@@ -158,19 +184,20 @@ std::uint64_t create(std::string_view plugin, const plugins::EffectRequest& r) {
         return e.second.owner == plugin && (e.second.decal.id != 0) == r.decal;
     });
     if (mine >= (r.decal ? 2048 : 24)) return 0;
-    const auto found = asset(s, r.asset);
-    if (!asset_type_matches(found, r.decal)) return 0;
+    const auto found = DINGOSDK_EFFECT_ASSET(s, r.asset);
+    if (!asset_is_resident(found) || !asset_type_matches(found, r.decal)) return 0;
     Entry e; e.owner = plugin; e.expires = GetTickCount64() + 600000;
     e.drawn = r.transform;
     if (r.decal) {
+        e.decal_realm = decal::client_realm(s.manager);
+        if (!e.decal_realm) return 0;
         if (r.attach) {
             Receiver receiver;
             if (!s.receivers.bind(r.transform, r.lift, receiver)) return 0;
             e.receiver = receiver.id; e.local = surface::local(receiver.pose, r.transform);
         }
-        e.decal = decal::create(s.base, s.manager, found, r.transform, decal::ReceiverMask::all);
+        e.decal = DINGOSDK_EFFECT_DECAL_CREATE(s.base, s.manager, found, r.transform);
         if (!e.decal.id) return 0;
-        if (mine == 0) { (void)s.budget.update(s.base, 4096); s.budget_at = GetTickCount64() + 1000; }
     } else {
         alignas(16) std::array<std::byte, fx::descriptor_size> descriptor{};
         alignas(16) const auto transform = r.transform;
@@ -206,8 +233,16 @@ void release(std::string_view plugin, std::uint64_t id) {
     auto& s = state(); std::lock_guard lock(s.mutex);
     const auto it = s.entries.find(id);
     if (it == s.entries.end() || it->second.owner != plugin) return;
-    if (s.valid && s.thread == GetCurrentThreadId() && same_services(s)) destroy(s, it->second);
+    if (s.thread != GetCurrentThreadId()) { it->second.retired = true; return; }
+    if (s.valid) destroy(s, it->second);
     s.entries.erase(it);
+}
+std::vector<std::uint64_t> live(std::string_view plugin) {
+    auto& s = state(); std::lock_guard lock(s.mutex);
+    std::vector<std::uint64_t> result;
+    for (const auto& [id, e] : s.entries)
+        if (!e.retired && e.owner == plugin) result.push_back(id);
+    return result;
 }
 std::pair<bool, std::uint64_t> status() {
     auto& s = state(); std::lock_guard lock(s.mutex); return {usable(s), s.epoch};
@@ -216,9 +251,11 @@ void clear(std::string_view plugin) {
     auto& s = state(); std::lock_guard lock(s.mutex);
     for (auto it = s.entries.begin(); it != s.entries.end();) {
         if (it->second.owner != plugin) { ++it; continue; }
-        if (s.valid && s.thread == GetCurrentThreadId() && same_services(s)) destroy(s, it->second);
+        if (s.thread != GetCurrentThreadId()) { it->second.retired = true; ++it; continue; }
+        if (s.valid) destroy(s, it->second);
         it = s.entries.erase(it);
     }
-    if (s.valid && s.thread == GetCurrentThreadId() && s.entries.empty()) (void)s.budget.update(s.base, 0);
+    // Reconcile the allowance in tick, once per second. A create/clear loop
+    // must not resize five native render buffers on every script callback.
 }
 }

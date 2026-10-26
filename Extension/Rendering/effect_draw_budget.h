@@ -11,6 +11,10 @@ namespace dingosdk::effects {
 // Native renderer truncates whole later material groups at these limits.
 // Read-only live recon: Low environment count 120, total view count 256.
 // The named typed setter notifies the engine to resize its render buffers.
+// This is the in-memory SystemSettings manager, not the profile-option setter
+// hooked by local_native_settings.cpp. The pinned setter copies the field,
+// increments DdcDirtyVersion and invokes listeners; it has no profile write.
+// named_settings.cpp persists only the list of names, never their values.
 class DrawBudget {
 public:
     bool update(std::uintptr_t base,std::uint32_t extra) noexcept {

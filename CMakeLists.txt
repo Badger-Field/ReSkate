@@ -470,6 +470,11 @@ if(DINGOSDK_BUILD_PLUGIN_TESTS AND WIN32)
     target_include_directories(dingosdk_effect_geometry_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     target_link_libraries(dingosdk_effect_geometry_tests PRIVATE dingosdk_logging)
     add_test(NAME effect_geometry COMMAND dingosdk_effect_geometry_tests)
+    add_executable(dingosdk_effect_lifetime_tests Extension/Rendering/Test/effect_lifetime_tests.cpp
+        Extension/Plugins/plugin_effects.cpp)
+    target_include_directories(dingosdk_effect_lifetime_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_link_libraries(dingosdk_effect_lifetime_tests PRIVATE dingosdk_logging)
+    add_test(NAME effect_lifetime COMMAND dingosdk_effect_lifetime_tests)
     # Tricks read from the score HUD's values (Extension/Skater/trick_watch.h), what plugins hear.
     add_executable(dingosdk_trick_watch_tests Extension/Skater/Test/trick_watch_tests.cpp Extension/Skater/trick_watch.cpp)
     target_include_directories(dingosdk_trick_watch_tests PRIVATE "${PROJECT_SOURCE_DIR}")

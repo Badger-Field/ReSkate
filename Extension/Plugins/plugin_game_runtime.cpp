@@ -589,6 +589,7 @@ public:
     void effect_stop(std::string_view plugin, std::uint64_t id) override { effects::stop(plugin, id); }
     void effect_opacity(std::string_view plugin, std::uint64_t id, float value) override { effects::opacity(plugin, id, value); }
     void effect_release(std::string_view plugin, std::uint64_t id) override { effects::release(plugin, id); }
+    std::vector<std::uint64_t> effects_live(std::string_view plugin) override { return effects::live(plugin); }
     void effects_clear(std::string_view plugin) override { effects::clear(plugin); }
     std::pair<bool, std::uint64_t> effects_state() override { return effects::status(); }
     // ---- the skater's physics ------------------------------------------------------------------------

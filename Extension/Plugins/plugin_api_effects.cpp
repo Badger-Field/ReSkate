@@ -50,9 +50,14 @@ struct EffectsApi {
             lua_pop(L, 1);
             if (!(request.lift >= 0 && request.lift <= 1)) luaL_error(L, "projection lift is 0 to 1 metre");
         }
-        const auto count = std::count_if(p.effect_handles_.begin(), p.effect_handles_.end(), [decal](const auto& h) { return h.second == decal; });
-        if (count >= (decal ? 2048 : 24)) {
-            lua_pushnil(L); lua_pushliteral(L, "effect limit reached"); return 2;
+        const auto full = [&] {
+            return std::count_if(p.effect_handles_.begin(), p.effect_handles_.end(),
+                [decal](const auto& h) { return h.second == decal; }) >= (decal ? 2048 : 24);
+        };
+        // Console/event callbacks can run before the next VM tick.
+        if (full()) {
+            p.prune_effects();
+            if (full()) { lua_pushnil(L); lua_pushliteral(L, "effect limit reached"); return 2; }
         }
         const auto id = p.services_.game().effect_create(p.id_, request);
         if (!id) { lua_pushnil(L); lua_pushliteral(L, "effect asset or renderer unavailable"); return 2; }

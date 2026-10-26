@@ -49,31 +49,32 @@ void effects_refuse_the_wrong_native_asset_type() {
         "missing reflection fails closed");
 }
 
-void effects_resolve_assets_again_after_streaming() {
+void effects_only_resolve_the_level_wide_compartment() {
     effects::AssetLookup lookup;
     std::map<std::uint16_t, std::uintptr_t> loaded;
-    loaded[7] = 1;
+    loaded[7] = 1; // A valid private name in a streamed sublevel.
     unsigned calls{};
     const auto find = [&](std::uint16_t domain) -> std::uintptr_t {
+        check(domain == addr::effects::resident_compartment, "lookup never searches streamed compartments");
         ++calls;
         const auto it = loaded.find(domain);
         return it == loaded.end() ? 0 : it->second;
     };
-    check(lookup.resolve(0, find) == 1, "an effect asset resolves in a loaded domain");
-    calls = 0;
-    check(lookup.resolve(1, find) == 1 && calls == 1, "a cached domain still looks the name up before every use");
-    loaded[7] = 2;
-    check(lookup.resolve(2, find) == 2, "a replacement in the same domain is used instead of the old pointer");
-    loaded.clear();
-    check(lookup.resolve(3, find) == 0, "streaming out a cached asset makes it unavailable immediately");
+    check(lookup.resolve(0, find) == 0 && calls == 1, "a streamed blueprint is refused even when its name is declared resident");
+    loaded[addr::effects::resident_compartment] = 2;
     calls = 0;
     check(lookup.resolve(1999, find) == 0 && calls == 0, "missing assets keep the bounded lookup retry");
-    loaded[19] = 3;
-    check(lookup.resolve(2000, find) == 3, "streaming into a different domain is found without a world reset");
-    loaded.clear();
-    check(lookup.resolve(4000, find) == 0, "a later streaming unload never revives a cached pointer");
-    loaded[19] = 4;
-    check(lookup.resolve(6000, find) == 4, "the same name can become available again after a missed search");
+    check(lookup.resolve(2000, find) == 2, "the level-wide copy is selected over a same-named streamed copy");
+    calls = 0;
+    check(lookup.resolve(2001, find) == 2 && calls == 1, "a previously found asset is looked up again before every use");
+    loaded[addr::effects::resident_compartment] = 3;
+    check(lookup.resolve(2002, find) == 3, "a replacement never revives the old pointer");
+    loaded.erase(addr::effects::resident_compartment);
+    check(lookup.resolve(2003, find) == 0, "losing the resident copy does not fall back to a streamed copy");
+    calls = 0;
+    check(lookup.resolve(4002, find) == 0 && calls == 0, "a lost resident copy is retried at a bounded rate");
+    loaded[addr::effects::resident_compartment] = 4;
+    check(lookup.resolve(4003, find) == 4, "a newly loaded resident copy becomes available again");
 }
 
 void geometry_is_from_the_local_physics_step() {
@@ -139,12 +140,19 @@ void projections_follow_receivers() {
 }
 void draw_allowance_restores_only_its_own_setting() {
     CountSettingSample value{1,2,3,120};
+    unsigned writes{};
     const auto read=[&]() -> std::optional<CountSettingSample> { return value; };
     const auto write=[&](const CountSettingSample& expected, std::uint32_t next) {
         if (value!=expected) return false;
+        ++writes;
         value.value=next; return true;
     };
     TransientCountLease lease;
+    check(lease.update(1,read,write) && value.value==121, "one decal adds exactly one slot");
+    const auto first_write = writes;
+    check(lease.update(1,read,write) && writes==first_write, "an unchanged count never resizes the render buffers");
+    check(lease.update(7,read,write) && value.value==127, "growing demand adds to the original count, not the raised value");
+    check(lease.update(2,read,write) && value.value==122, "shrinking demand releases unused allowance");
     check(lease.update(2048,read,write) && value.value==2168, "decal allowance is additive");
     check(lease.restore(read,write) && value.value==120, "disabling restores the renderer's original budget");
     check(lease.update(2048,read,write), "the allowance can be reacquired");
@@ -152,11 +160,21 @@ void draw_allowance_restores_only_its_own_setting() {
     check(!lease.update(2048,read,write), "an external settings edit relinquishes ownership");
     check(lease.restore(read,write) && value.value==4000, "cleanup does not overwrite the player's later setting");
     check(!lease.update(4097,read,write), "the temporary allowance is bounded");
+    value.value=65000;
+    check(lease.update(500,read,write) && value.value==65500, "an allowance near the limit fits");
+    check(lease.update(400,read,write) && value.value==65400, "shrinking near the limit uses the original baseline");
+    value.manager=4;
+    check(!lease.update(1,read,write), "a replaced settings manager relinquishes ownership");
+    check(lease.restore(read,write) && value.value==65400, "a replacement is never restored using the previous manager's baseline");
+    value.value=65000;
+    check(!lease.update(4096,read,write), "an allowance cannot overflow the native count limit");
+    value.value=200;
+    check(lease.update(1,read,write) && value.value==201, "a refused allowance never captures a stale baseline");
 }
 }
 int main() {
     try {
-        effects_refuse_the_wrong_native_asset_type(); effects_resolve_assets_again_after_streaming();
+        effects_refuse_the_wrong_native_asset_type(); effects_only_resolve_the_level_wide_compartment();
         geometry_is_from_the_local_physics_step();
         projections_follow_receivers(); draw_allowance_restores_only_its_own_setting();
         std::cout << "effect geometry tests passed\n"; return 0;

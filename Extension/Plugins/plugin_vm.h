@@ -327,6 +327,7 @@ private:
     double log_second_{};
     int log_lines_{};
     std::map<std::uint64_t, bool> effect_handles_; // bool: decal
+    void prune_effects();
     int effect_calls_{};
     int raycasts_{};                    // since the last tick
     std::optional<float> touch_reach_;

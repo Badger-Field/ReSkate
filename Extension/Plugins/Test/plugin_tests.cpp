@@ -55,6 +55,11 @@ struct FakeGame final : Game {
     void effect_release(std::string_view plugin, std::uint64_t id) override {
         if (auto it = effects.find(id); it != effects.end() && it->second.owner == plugin) effects.erase(it);
     }
+    std::vector<std::uint64_t> effects_live(std::string_view plugin) override {
+        std::vector<std::uint64_t> result;
+        for (const auto& [id, e] : effects) if (e.owner == plugin) result.push_back(id);
+        return result;
+    }
     void effects_clear(std::string_view plugin) override { std::erase_if(effects, [&](const auto& e) { return e.second.owner == plugin; }); }
     std::pair<bool, std::uint64_t> effects_state() override { return {effects_ready, effect_epoch}; }
     std::optional<std::uint32_t> state;
@@ -928,6 +933,83 @@ void stopped(const Host& host, std::string_view id, std::string_view because) {
     check(status.reason.find(because) != std::string::npos, std::string(id) + " stopped for \"" + status.reason + "\", not for " + std::string(because));
 }
 
+void effects_require_resident_roots() {
+    auto declaration = dingosdk::Json::parse(manifest(R"("effects")"));
+    const std::string particle = "effects/reskate/test/ebp_spark";
+    declaration["effects"] = dingosdk::Json::array({particle});
+    const auto refused = [&](const dingosdk::Json& value) {
+        try { (void)parse_manifest(value.dump()); } catch (const std::exception&) { return; }
+        throw std::runtime_error("An effect without valid resident coverage was accepted");
+    };
+    refused(declaration);
+    for (const auto* bundle : {"win32/levels/test/sublevel", "win32/levels/test/root",
+                               "win32/levels/game/dingolevel_root/dingolevel_root_extra"}) {
+        declaration["resident"] = dingosdk::Json::array({dingosdk::Json{
+            {"bundle", bundle}, {"roots", dingosdk::Json::array({"effects/reskate/test/"})}}});
+        refused(declaration);
+    }
+    for (const auto* roots : {R"([])", R"(["effects/reskate/test"])", R"(["effects/reskate/tes/"])",
+                             R"(["effects/reskate/test/ebp_spark_extra"])"}) {
+        declaration["resident"] = dingosdk::Json::array({dingosdk::Json{
+            {"bundle", "win32/levels/game/dingolevel_root/dingolevel_root"}, {"roots", dingosdk::Json::parse(roots)}}});
+        refused(declaration);
+    }
+    for (const auto* root : {"effects/reskate/test/", "EFFECTS/RESKATE/TEST/", "effects/reskate/test/ebp_spark"}) {
+        declaration["resident"] = dingosdk::Json::array({dingosdk::Json{
+            {"bundle", "win32/levels/game/dingolevel_root/dingolevel_root"}, {"roots", dingosdk::Json::array({root})}}});
+        check(parse_manifest(declaration.dump()).effects.contains(particle), "Exact and directory roots cover an effect");
+    }
+    declaration["resident"][0]["bundle"] = "WIN32/LEVELS/GAME/DINGOLEVEL_ROOT/DINGOLEVEL_ROOT";
+    check(parse_manifest(declaration.dump()).effects.contains(particle), "Resident bundle names are normalized consistently with the merge");
+    declaration["resident"] = dingosdk::Json::parse(R"([
+        {"bundle":"win32/levels/game/dingolevel_root/dingolevel_root","roots":["effects/reskate/other/"]},
+        {"bundle":"win32/levels/test/sublevel","roots":["effects/reskate/test/"]}
+    ])");
+    refused(declaration); // Coverage must be in the same row as the supported bundle.
+    // The merge discards the entire resident list when any row or shader is malformed.
+    for (const auto* bad : {R"([{"roots":["effects/reskate/test/"]}])",
+                           R"([{"bundle":"win32/levels/game/dingolevel_root/dingolevel_root","roots":["effects/reskate/test/"],"shaders":[{"name":"depot","roots":[]}]}])",
+                           R"([{"bundle":"win32/levels/game/dingolevel_root/dingolevel_root","roots":["effects/reskate/test/"]},{"bundle":7}])"}) {
+        declaration["resident"] = dingosdk::Json::parse(bad);
+        refused(declaration);
+    }
+    bool denied = false;
+    try { (void)parse_manifest(manifest(R"("events.physics.geometry")")); }
+    catch (const std::exception&) { denied = true; }
+    check(denied, "Geometry does not bypass the base physics permission");
+}
+
+void expired_effects_return_their_quota() {
+    TestEnvironment environment;
+    Limits limits;
+    limits.call_ms = 1000;
+    Host host(environment, Side::client, limits);
+    auto declaration = dingosdk::Json::parse(manifest(R"("effects", "console")"));
+    declaration["effects"] = dingosdk::Json::array({"effects/reskate/test/ebp_spark", "world/materials/decal/reskate_test/stain_dv"});
+    declaration["resident"] = dingosdk::Json::parse(R"([{"bundle":"win32/levels/game/dingolevel_root/dingolevel_root", "roots":["effects/reskate/test/", "world/materials/decal/reskate_test/"]}])");
+    host.apply({package("effects-expire", {{manifest_file, declaration.dump()}, {"plugin/main.lua", R"(
+        local fx = reskate.effects
+        local m = {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1}
+        reskate.console.command("fxfill", "", function()
+            for i=1,24 do assert(fx.particle("effects/reskate/test/ebp_spark", m)) end
+            for i=1,2048 do assert(fx.decal("world/materials/decal/reskate_test/stain_dv", m)) end
+            assert(fx.particle("effects/reskate/test/ebp_spark", m) == nil)
+            assert(fx.decal("world/materials/decal/reskate_test/stain_dv", m) == nil)
+        end)
+    )"}})});
+    auto& game = environment.fake;
+    check(host.run_console("fxfill") && game.effects.size() == 2072, "Both effect quotas can be filled");
+    game.effects.clear(); // Ten-minute native expiry, with no change to the world epoch.
+    ticks(host, environment, 1);
+    check(host.run_console("fxfill") && game.effects.size() == 2072, "Expiry returns both quotas without Lua release/clear");
+    ticks(host, environment, 1);
+    game.effects.clear();
+    ++game.effect_epoch;
+    // A console call can arrive after the native reset but before Plugin::tick.
+    check(host.run_console("fxfill") && game.effects.size() == 2072, "A reset returns quota even before the next VM tick");
+    running(host, "effects-expire", environment);
+}
+
 void plugins_render_private_effects() {
     TestEnvironment environment;
     // Filling every decal slot tests the resource quota, with room for a busy CI machine.
@@ -948,6 +1030,7 @@ void plugins_render_private_effects() {
     const std::string particle = "effects/reskate/test/ebp_spark";
     const std::string material = "world/materials/decal/reskate_test/stain_dv";
     declaration["effects"] = dingosdk::Json::array({particle, material});
+    declaration["resident"] = dingosdk::Json::parse(R"([{"bundle":"win32/levels/game/dingolevel_root/dingolevel_root", "roots":["effects/reskate/test/", "world/materials/decal/reskate_test/"]}])");
     for (unsigned scenario = 0; scenario < 3; ++scenario) {
         auto invalid = declaration;
         if (scenario == 0) invalid["permissions"] = dingosdk::Json::array();
@@ -1026,6 +1109,7 @@ void failed_plugin_startup_releases_effects() {
         Host host(environment, side, {}, suffix);
         auto declaration = dingosdk::Json::parse(manifest(R"("effects", "console")", "both"));
         declaration["effects"] = dingosdk::Json::array({"effects/reskate/test/ebp_spark", "world/materials/decal/reskate_test/stain_dv"});
+        declaration["resident"] = dingosdk::Json::parse(R"([{"bundle":"win32/levels/game/dingolevel_root/dingolevel_root", "roots":["effects/reskate/test/", "world/materials/decal/reskate_test/"]}])");
         // The other copy of this same plugin keeps its effects when this one fails.
         auto& game = environment.fake;
         const auto other = game.effect_create(side == Side::server ? "effect-startup" : "effect-startup@server", {});
@@ -1064,6 +1148,7 @@ void plugins_track_effect_lifetimes() {
     Host host(environment, Side::client, limits);
     auto declaration = dingosdk::Json::parse(manifest(R"("effects", "console")"));
     declaration["effects"] = dingosdk::Json::array({"effects/reskate/test/ebp_spark"});
+    declaration["resident"] = dingosdk::Json::parse(R"([{"bundle":"win32/levels/game/dingolevel_root/dingolevel_root", "roots":["effects/reskate/test/", "world/materials/decal/reskate_test/"]}])");
     host.apply({package("effect-lifetime", {{manifest_file, declaration.dump()}, {"plugin/main.lua", R"(
         local fx = reskate.effects
         local asset = "effects/reskate/test/ebp_spark"
@@ -1143,6 +1228,13 @@ void physics_steps_include_optional_geometry() {
                 reskate.log("missing geometry stays absent")
             end
         end)
+    )", R"("events.physics", "events.physics.geometry")"), script("physics-basic", R"(
+        reskate.on("physics_step", function(step)
+            assert(step.poses == nil and step.state == nil)
+            local body = step.bodies["Left forearm"]
+            assert(body and body.impact == 12 and body.point == nil and body.normal == nil)
+            reskate.log("basic physics has no geometry")
+        end)
     )", R"("events.physics")"), script("physics-denied", R"(
         local ok, why = pcall(reskate.on, "physics_step", function() error("not permitted") end)
         assert(not ok and why:find("events.physics"))
@@ -1160,7 +1252,7 @@ void physics_steps_include_optional_geometry() {
     value.bodies.push_back({"Left forearm", 12, 5, false, false, true, Vec3{2,0,4}, Vec3{0,1,0}});
     environment.fake.steps.push_back(value);
     ticks(host, environment, 1);
-    check(environment.logged("contact geometry received"), environment.all());
+    check(environment.logged("contact geometry received") && environment.logged("basic physics has no geometry"), environment.all());
     value.state.reset(); value.ragdoll.reset(); value.poses.clear();
     value.bodies[0].point.reset(); value.bodies[0].normal.reset();
     environment.fake.steps.push_back(value);
@@ -3152,6 +3244,50 @@ std::string printed_lines(const TestEnvironment& environment) {
     return text;
 }
 
+// Use the Blood package's own manifest: model-only tests miss permission changes
+// that remove the poses and contact normals before physics_step reaches it.
+void blood_renders_an_impact_through_the_host() {
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    host.apply({contributed("blood")});
+    running(host, "blood", environment);
+    check(host.run_console("blood test") && environment.printed("tests passed"),
+          "Blood's own checks pass:\n" + printed_lines(environment) + environment.all());
+    check(host.run_console("blood on") && host.run_console("blood color 2"), "Blood is enabled with green effects");
+
+    PhysicsStep step;
+    step.at = environment.now; step.seconds = .05f; step.state = 100; step.ragdoll = false;
+    const EffectMatrix pose{1,0,0,0,0,1,0,0,0,0,1,0,0,.15f,0,1};
+    step.poses.emplace("Pelvis", PhysicsStep::Pose{pose, {5, -10, 0}});
+    step.poses.emplace("Left forearm", PhysicsStep::Pose{pose, {5, -10, 0}});
+    game.steps.push_back(step);
+    ticks(host, environment, 1);
+    check(game.effects.empty(), "A pose without an impact creates no blood");
+
+    step.at = environment.now; step.state = 300; step.wipeout = true; step.ragdoll = true;
+    step.bodies.push_back({"Left forearm", 12, 5, false, false, true, Vec3{0,0,0}, Vec3{0,1,0}});
+    game.steps.push_back(step);
+    ticks(host, environment, 1);
+    running(host, "blood", environment);
+    const auto particles = std::count_if(game.effects.begin(), game.effects.end(), [](const auto& effect) {
+        return !effect.second.request.decal;
+    });
+    check(particles == 3 && game.effects.size() == 4,
+          "A host-delivered impact creates three particle sources and a decal; check events.physics.geometry in Blood's manifest\n" + environment.all());
+    for (const auto& [id, effect] : game.effects) {
+        (void)id;
+        check(effect.owner == "blood" && effect.request.asset.find("_green") != std::string::npos,
+              "Blood uses its declared green assets");
+        check(!effect.request.decal || effect.request.attach, "The impact stain attaches to the receiving surface");
+    }
+    check(host.run_console("blood") && environment.printed("1 impacts, 3 particle sources, 1 marks"),
+          "Blood reports the impact delivered through its real permissions:\n" + printed_lines(environment));
+    host.switch_off("blood");
+    check(game.effects.empty(), "Disabling Blood releases the impact effects");
+    std::cout << "Blood package: model checks and host-delivered impact passed\n";
+}
+
 void reskate_test_passes_its_own_checks() {
     TestEnvironment environment;
     std::filesystem::remove_all(scratch / "storage" / "reskate-test");
@@ -4511,6 +4647,8 @@ int main() {
         scratch = std::filesystem::temp_directory_path() / "reskate-plugin-tests";
         std::filesystem::remove_all(scratch);
         run(a_manifest_says_what_a_plugin_is);
+        run(effects_require_resident_roots);
+        run(expired_effects_return_their_quota);
         run(plugins_render_private_effects);
         run(failed_plugin_startup_releases_effects);
         run(plugins_track_effect_lifetimes);
@@ -4558,6 +4696,7 @@ int main() {
         run(timers_run_when_due);
         run(a_package_with_a_program_or_on_the_wrong_side_is_not_loaded);
         run(discovery_finds_the_plugins_among_the_mods_left_on);
+        run(blood_renders_an_impact_through_the_host);
         run(reskate_test_passes_its_own_checks);
         run(road_rash_marks_the_skater_as_it_bails);
         run(dual_stick_edits_the_companions_settings);

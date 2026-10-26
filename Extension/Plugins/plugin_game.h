@@ -270,6 +270,7 @@ public:
     virtual void effect_stop(std::string_view, std::uint64_t) {}
     virtual void effect_opacity(std::string_view, std::uint64_t, float) {}
     virtual void effect_release(std::string_view, std::uint64_t) {}
+    virtual std::vector<std::uint64_t> effects_live(std::string_view) { return {}; }
     virtual void effects_clear(std::string_view) {}
     virtual std::pair<bool, std::uint64_t> effects_state() { return {false, 0}; }
 

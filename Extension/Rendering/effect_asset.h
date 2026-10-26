@@ -2,31 +2,31 @@
 #include "Engine/Core/Platform/memory.h"
 #include "Engine/Game/Build/addresses.h"
 #include "Engine/Game/Build/20260929/effects.h"
-#include <optional>
 
 namespace dingosdk::effects {
-// Bundles can stream out without replacing the world. Remember only where a
-// name was found, and resolve it again before handing an asset to native code.
+// Only the level-wide Game compartment may supply effects. Searching streamed
+// sublevels would let a manifest claim a resident root for an unrelated asset.
+// Never cache a native pointer, including across a replacement of Game itself.
 class AssetLookup {
 public:
     template<class Find> std::uintptr_t resolve(std::uint64_t now, Find&& find) {
-        if (domain_) {
-            if (const auto asset = find(*domain_)) return asset;
-            domain_.reset();
-        }
-        if (now < retry_) return 0;
-        retry_ = now + 2000;
-        for (std::uint16_t domain = 0; domain < addr::effects::domain_count; ++domain)
-            if (const auto asset = find(domain)) {
-                domain_ = domain;
-                return asset;
-            }
-        return 0;
+        if (!found_ && now < retry_) return 0;
+        const auto asset = find(addr::effects::resident_compartment);
+        found_ = asset != 0;
+        if (!found_) retry_ = now + 2000;
+        return asset;
     }
 private:
-    std::optional<std::uint16_t> domain_;
+    bool found_{};
     std::uint64_t retry_{};
 };
+
+inline bool asset_is_resident(std::uintptr_t asset) noexcept {
+    std::uint16_t compartment{};
+    return asset && asset < memory::highest_user_address - addr::effects::asset_compartment &&
+        memory::peek(asset + addr::effects::asset_compartment, compartment) &&
+        compartment == addr::effects::resident_compartment;
+}
 
 inline bool asset_type_matches(std::uintptr_t asset, bool decal) noexcept {
     // Named lookup can return any asset class. Check its reflected type before

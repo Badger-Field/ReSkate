@@ -1,5 +1,6 @@
 #pragma once
 #include <utility>
+#include <vector>
 #include "Extension/Plugins/plugin_effects.h"
 
 // The game-thread owner of plugins' native effects. No native reference crosses into a VM.
@@ -11,6 +12,7 @@ void move(std::string_view plugin, std::uint64_t id, const plugins::EffectMatrix
 void stop(std::string_view plugin, std::uint64_t id);
 void opacity(std::string_view plugin, std::uint64_t id, float value);
 void release(std::string_view plugin, std::uint64_t id);
+std::vector<std::uint64_t> live(std::string_view plugin);
 void clear(std::string_view plugin);
 std::pair<bool, std::uint64_t> status();
 }

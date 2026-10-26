@@ -16,8 +16,9 @@ public:
         if (!extra) return restore(read,write);
         if (extra>4096 || yielded_) return false;
         const auto current=read();
-        if (!current || current->value>65536-extra) return false;
+        if (!current) return false;
         if (applied_ && *current!=*applied_) {original_.reset(); applied_.reset(); yielded_=true; return false;}
+        if ((original_ ? original_->value : current->value)>65536-extra) return false;
         if (!original_) original_=current;
         return apply(original_->value+extra,*current,read,write);
     }
