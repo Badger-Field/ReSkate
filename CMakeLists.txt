@@ -193,7 +193,8 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
     add_test(NAME server_map_update COMMAND dingosdk_server_map_update_tests)
     if(WIN32)
         # By hand: what the music player outside the game is playing (Extension/Music/external_player.h).
-        add_executable(dingosdk_external_player_probe Extension/Music/Test/external_player_probe.cpp Extension/Music/external_player.cpp)
+        add_executable(dingosdk_external_player_probe Extension/Music/Test/external_player_probe.cpp Extension/Music/external_player.cpp
+            Extension/Music/Test/external_player_probe_stubs.cpp)
         target_include_directories(dingosdk_external_player_probe PRIVATE "${PROJECT_SOURCE_DIR}")
         add_executable(dingosdk_app_audio_probe Extension/Music/Test/app_audio_probe.cpp Extension/Music/app_audio_capture.cpp)
         target_include_directories(dingosdk_app_audio_probe PRIVATE "${PROJECT_SOURCE_DIR}")
