@@ -237,13 +237,15 @@ BOOL WINAPI captured_read_file(HANDLE file, LPVOID buffer, DWORD size, LPDWORD b
     InputCaptureHooks::HidRead read{file, buffer, size, PlayStationPad::none};
     if (!overlay_input_access) {
         // Some readers inspect a temporary enumeration handle, then open a
-        // second handle for reports. Identify that handle as well.
+        // second handle for reports. Identify that handle as well, by a read
+        // the size of a Sony pad's reports: up to a DualShock 4's over
+        // Bluetooth, which Windows pads to 547 bytes.
         bool known{};
         {
             std::lock_guard lock(h.hid_mutex);
             known = h.hid_devices.contains(file);
         }
-        if (!known && size >= 10 && size <= 512) {
+        if (!known && size >= 10 && size <= dualshock4_bluetooth_read_length) {
             const auto error = GetLastError();
             HIDD_ATTRIBUTES attributes{sizeof(attributes)};
             const auto okay = original<decltype(&HidD_GetAttributes)>(h.hid_attributes)(file, &attributes);
