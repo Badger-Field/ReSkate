@@ -117,7 +117,7 @@ struct WorldApi {
         lua_getfield(L, 1, "side");
         wish.side = luaL_checkstring(L, -1);
         lua_pop(L, 1);
-        if (wish.side != "toe" && wish.side != "heel" && wish.side != "left" && wish.side != "right")
+        if (!one_of(grind_sides, wish.side))
             luaL_error(L, "a grind exit's side is \"toe\", \"heel\", \"left\" or \"right\"");
         lua_getfield(L, 1, "stance");
         if (!lua_isnil(L, -1)) {
@@ -460,10 +460,9 @@ struct WorldApi {
     static int entities_status(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "world.entities", "reskate.entities.status");
-        static constexpr const char* names[] = {nullptr, "waiting", "loading", "missing", "ready", "hidden"};
         const auto status = game(plugin).entity_status(plugin.id(), entity_id(L, 1));
-        if (status <= 0 || status > 5) lua_pushnil(L);
-        else lua_pushstring(L, names[status]);
+        if (status <= 0 || status > static_cast<int>(std::size(entity_statuses))) lua_pushnil(L);
+        else lua_pushlstring(L, entity_statuses[status - 1].data(), entity_statuses[status - 1].size());
         return 1;
     }
     static int entities_ready(lua_State* L) {
@@ -743,7 +742,7 @@ struct WorldApi {
             lua_getfield(L, 3, "pop");
             if (!lua_isnil(L, -1)) pop = luaL_checkstring(L, -1);
             lua_pop(L, 1);
-            if (pop != "" && pop != "low" && pop != "mid" && pop != "high") luaL_argerror(L, 3, "a pop is \"low\", \"mid\" or \"high\"");
+            if (!pop.empty() && !one_of(pops, pop)) luaL_argerror(L, 3, "a pop is \"low\", \"mid\" or \"high\"");
         }
         const float speed = number_field(L, 3, "speed", 1, 0.1f, 4);
         return result(L, game(plugin).replace_trick(plugin.id(), std::move(trick), std::move(pop), std::move(clip), speed));
@@ -867,7 +866,7 @@ struct WorldApi {
         lua_getfield(L, 2, "space");
         const std::string space = lua_isnil(L, -1) ? "local" : luaL_checkstring(L, -1);
         lua_pop(L, 1);
-        if (space != "local" && space != "world") luaL_argerror(L, 2, "space is \"local\" or \"world\"");
+        if (!one_of(spaces, space)) luaL_argerror(L, 2, "space is \"local\" or \"world\"");
         return result(L, game(plugin).board_set(plugin.id(), bone, value, space == "world"));
     }
     static int board_hide(lua_State* L) {
@@ -1284,7 +1283,7 @@ struct WorldApi {
             mode.cursor_height = static_cast<float>(h);
         }
         lua_pop(L, 1);
-        const auto stock = [](const std::string& tile) { return tile == "skate" || tile == "spot" || tile == "spot_battle" || tile == "jam"; };
+        const auto stock = [](const std::string& tile) { return one_of(throwdown_cards, tile); };
         if (!mode.replaces.empty() && !stock(mode.replaces)) luaL_argerror(L, 1, "replaces is \"skate\", \"spot\" or \"jam\"");
         if (!stock(mode.card)) luaL_argerror(L, 1, "card is \"skate\", \"spot\" or \"jam\"");
         if (mode.flag.size() > 256 || mode.art.size() > 256) luaL_argerror(L, 1, "art and flag are at most 256 characters");

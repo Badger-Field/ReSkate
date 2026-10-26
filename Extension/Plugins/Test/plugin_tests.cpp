@@ -1235,10 +1235,15 @@ void plugins_server_copies_are_the_authority() {
     player.session_now = {true, false, {{2, "Bob", true, false}, {1, "Ann", false, true}}};
     const std::string main = R"(
         reskate.log("side " .. reskate.side)
-        if reskate.side == "server" then
+        local E = reskate.Enums
+        assert(E.Side.server == "server" and E.Event.tick == "tick" and E.Key.Enter == "Enter" and E.LogLevel.warn == "warn"
+            and E.Target.all == "all" and E.EntityStatus.ready == "ready" and E.Throwdown.spot_battle == "spot_battle")
+        assert(not pcall(function() E.Pop.huge = "huge" end), "an enum is read-only")
+        reskate.log("enum check", E.LogLevel.warn)
+        if reskate.side == E.Side.server then
             reskate.on("message", function(from, text)
                 reskate.log("server heard " .. text .. " from " .. from.name)
-                assert(reskate.net.send("all", "state " .. text))
+                assert(reskate.net.send(reskate.Enums.Target.all, "state " .. text))
                 assert(reskate.server.kick(from, "testing"))
                 assert(reskate.server.say("round over"))
                 assert(not pcall(reskate.net.send, "server", "x"), "it is the server")
