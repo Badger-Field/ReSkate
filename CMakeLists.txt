@@ -450,6 +450,14 @@ endif()
 option(DINGOSDK_BUILD_PLUGIN_TESTS "Build plugin host regression tests" OFF)
 if(DINGOSDK_BUILD_PLUGIN_TESTS)
     enable_testing()
+    # The owned-body contracts behind reskate.world.physics (Engine/Game/World): definitions, the
+    # command mailbox, ray batches and their budget, hit identity, measured contact and shape
+    # categories, over constructed values and fake memory.
+    foreach(test owned_body body_query body_contact_read body_shape_categories)
+        add_executable(dingosdk_${test}_tests Engine/Game/World/Test/${test}_tests.cpp)
+        target_include_directories(dingosdk_${test}_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+        add_test(NAME ${test} COMMAND dingosdk_${test}_tests)
+    endforeach()
     # The plugin host apart from the game: manifests, the reskate API, storage, modules, hot reload,
     # and the sandbox against plugins written to break it. These build on Linux too, so they can be
     # run without Windows.
