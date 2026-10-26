@@ -3,10 +3,16 @@
 #include "Extension/Plugins/plugin_ui.h"
 #include "Extension/UI/Overlay/game_images.h"
 #include "Extension/UI/Overlay/overlay_internal.h"
+#include "Extension/UI/Overlay/input_capture.h"
 #include "Extension/UI/Overlay/xray_overlay.h"
+#include "Extension/UI/Overlay/overlay.h"
+#include "Extension/UI/Overlay/skate_style.h"
 #include <algorithm>
 #include <imgui_internal.h>
 #include <memory>
+#include <chrono>
+#include <mutex>
+#include <string>
 
 namespace dingosdk::overlay {
 namespace {
@@ -22,6 +28,16 @@ ImU32 shadow_of(ImU32 colour) {
 }
 void text(ImDrawList* draw, ImFont* font, float k, ImVec2 where, const plugin_ui::Shape& shape) {
     const float size = shape.style.size * k;
+    if (shape.style.wrap > 0) {
+        // Wrapped: from its top left, as d:measure counts it.
+        const float wrap = shape.style.wrap * k;
+        if (shape.style.shadow) {
+            const float offset = std::max(1.0f, size * 0.06f);
+            draw->AddText(font, size, ImVec2(where.x + offset, where.y + offset), shadow_of(shape.style.colour), shape.text.c_str(), nullptr, wrap);
+        }
+        draw->AddText(font, size, where, shape.style.colour, shape.text.c_str(), nullptr, wrap);
+        return;
+    }
     const auto width = font->CalcTextSizeA(size, FLT_MAX, 0.0f, shape.text.c_str()).x;
     if (shape.style.align == 1) where.x -= width * 0.5f;
     else if (shape.style.align == 2) where.x -= width;
@@ -36,6 +52,101 @@ void circle(ImDrawList* draw, ImVec2 centre, float radius, const plugin_ui::Styl
     if (style.fill) draw->AddCircleFilled(centre, radius, style.colour);
     else draw->AddCircle(centre, radius, style.colour, 0, style.thickness * k);
 }
+}
+
+// The mouse while a plugin's screen is open, for reskate.input.cursor (render thread writes it).
+struct CursorState {
+    std::mutex mutex;
+    PluginCursor now;
+    bool open{};
+};
+static CursorState& cursor_state() {
+    static auto* value = new CursorState;
+    return *value;
+}
+bool read_plugin_cursor(PluginCursor& out) noexcept {
+    auto& c = cursor_state();
+    std::lock_guard lock(c.mutex);
+    if (!c.open) return false;
+    out = c.now;
+    c.now.wheel = 0;
+    return true;
+}
+// Typing a plugin takes (take_plugin_text): until when, and what came.
+struct Typing {
+    std::mutex mutex;
+    std::string text;
+    std::chrono::steady_clock::time_point until{};
+};
+static Typing& typing() {
+    static auto* value = new Typing;
+    return *value;
+}
+static bool typing_taken() {
+    auto& t = typing();
+    std::lock_guard lock(t.mutex);
+    return std::chrono::steady_clock::now() < t.until;
+}
+std::string take_plugin_text(bool capture) noexcept {
+    try {
+        auto& t = typing();
+        std::lock_guard lock(t.mutex);
+        const auto now = std::chrono::steady_clock::now();
+        if (capture) t.until = now + std::chrono::milliseconds(300);
+        else t.until = {};
+        return std::exchange(t.text, {});
+    } catch (...) {
+        return {};
+    }
+}
+// Render thread, while a plugin's screen is open: the characters typed this frame, kept for it.
+static void note_typing() {
+    if (!typing_taken()) return;
+    std::string typed;
+    for (const ImWchar c : ImGui::GetIO().InputQueueCharacters) {
+        const auto u = static_cast<unsigned>(c);
+        if (u < 0x20 || u == 0x7f || (u >= 0x80 && u < 0xa0)) continue;
+        if (u < 0x80) typed += static_cast<char>(u);
+        else if (u < 0x800) {
+            typed += static_cast<char>(0xc0 | (u >> 6));
+            typed += static_cast<char>(0x80 | (u & 0x3f));
+        } else {
+            typed += static_cast<char>(0xe0 | (u >> 12));
+            typed += static_cast<char>(0x80 | ((u >> 6) & 0x3f));
+            typed += static_cast<char>(0x80 | (u & 0x3f));
+        }
+    }
+    if (typed.empty()) return;
+    auto& t = typing();
+    std::lock_guard lock(t.mutex);
+    if (t.text.size() + typed.size() <= 1024) t.text += typed;
+}
+static void note_cursor(bool open, bool over_screen) {
+    auto& c = cursor_state();
+    std::lock_guard lock(c.mutex);
+    c.open = open;
+    if (!open) {
+        c.now = {};
+        return;
+    }
+    const auto& io = ImGui::GetIO();
+    c.now.x = io.MousePos.x;
+    c.now.y = io.MousePos.y;
+    c.now.left = io.MouseDown[0];
+    c.now.right = io.MouseDown[1];
+    // The middle button also as Windows and raw input have it: in game it did not reach ImGui's state
+    // while the left and right ones did (a plugin's pan never started).
+    bool middle = io.MouseDown[2];
+    if (!middle) {
+        auto& s = detail::state();
+        const auto raw_at = s.raw_mouse_time.load();
+        detail::OverlayInputAccess real;
+        middle = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0 ||
+                 (raw_at && GetTickCount64() < raw_at + 10000 && (s.raw_mouse_buttons.load() & 4u) != 0);
+    }
+    c.now.middle = middle;
+    c.now.wheel += io.MouseWheel;
+    c.now.over_screen = over_screen;
 }
 
 // The screen Esc closed, until its plugin's next build no longer has it open.
@@ -71,16 +182,38 @@ bool plugins_pending() {
 
 void draw_plugin_screen() {
     const auto* screen = open_screen();
-    if (!screen) return;
+    if (!screen) {
+        note_cursor(false, false);
+        return;
+    }
     const auto display = ImGui::GetIO().DisplaySize;
     const float k = std::max(1.0f, display.y / 1080.0f);
     auto& s = detail::state();
-    ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(display);
-    ImGui::SetNextWindowBgAlpha(0.94f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(64 * k, 48 * k));
+    // No panel: the input is the plugin's, which draws its screen itself; Esc still closes it.
+    note_typing();
+    if (screen->dock == 3) {
+        note_cursor(true, false);
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::GetIO().WantTextInput && !typing_taken()) {
+            plugin_ui::act({screen->plugin, screen->title, plugin_ui::close_widget});
+            closed_screen() = screen->plugin + '\n' + screen->title;
+            s.plugin_screen_visible.store(false);
+        }
+        return;
+    }
+    // Docked: a panel down one side, the game showing beside it.
+    const bool docked = screen->dock != 0;
+    const float panel = docked ? std::round(display.x * std::clamp(screen->width, 0.2f, 0.6f)) : display.x;
+    ImGui::SetNextWindowPos(ImVec2(screen->dock == 2 ? display.x - panel : 0.0f, 0));
+    ImGui::SetNextWindowSize(ImVec2(panel, display.y));
+    ImGui::SetNextWindowBgAlpha(docked ? 0.88f : 0.94f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, docked ? ImVec2(24 * k, 24 * k) : ImVec2(64 * k, 48 * k));
     const auto flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings;
+    const auto& io = ImGui::GetIO();
+    const float left = screen->dock == 2 ? display.x - panel : 0.0f;
+    note_cursor(true, io.MousePos.x >= left && io.MousePos.x < left + panel);
     if (ImGui::Begin("##plugin-screen", nullptr, flags)) {
+        const float wide = docked ? ImGui::GetContentRegionAvail().x * 0.6f : 480 * k;
+        const float button = docked ? ImGui::GetContentRegionAvail().x : 320 * k;
         ImGui::SetWindowFontScale(1.25f * k);
         if (s.menu.heading) ImGui::PushFont(s.menu.heading);
         ImGui::TextUnformatted(screen->title.c_str());
@@ -126,9 +259,9 @@ void draw_plugin_screen() {
                 }
                 break;
             case Kind::bar:
-                ImGui::ProgressBar((w.value - w.minimum) / (w.maximum - w.minimum), ImVec2(480 * k, 0), w.text.c_str());
+                ImGui::ProgressBar((w.value - w.minimum) / (w.maximum - w.minimum), ImVec2(wide, 0), w.text.c_str());
                 break;
-            case Kind::button: acted = ImGui::Button(w.text.c_str(), ImVec2(320 * k, 0)); break;
+            case Kind::button: acted = ImGui::Button(w.text.c_str(), ImVec2(button, 0)); break;
             case Kind::toggle: {
                 bool on = w.on;
                 if (ImGui::Checkbox(w.text.c_str(), &on)) {
@@ -139,7 +272,7 @@ void draw_plugin_screen() {
             }
             case Kind::slider: {
                 float value = w.value;
-                ImGui::SetNextItemWidth(480 * k);
+                ImGui::SetNextItemWidth(wide);
                 if (ImGui::SliderFloat(w.text.c_str(), &value, w.minimum, w.maximum, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
                     action.value = value;
                     acted = true;
@@ -148,7 +281,7 @@ void draw_plugin_screen() {
             }
             case Kind::dropdown: {
                 int selected = std::clamp(w.chosen - 1, 0, static_cast<int>(w.choices.size()) - 1);
-                ImGui::SetNextItemWidth(480 * k);
+                ImGui::SetNextItemWidth(wide);
                 if (ImGui::BeginCombo(w.text.c_str(), w.choices.empty() ? "" : w.choices[static_cast<std::size_t>(selected)].c_str())) {
                     for (int i = 0; i < static_cast<int>(w.choices.size()); ++i)
                         if (ImGui::Selectable(w.choices[static_cast<std::size_t>(i)].c_str(), i == selected)) {
@@ -164,7 +297,7 @@ void draw_plugin_screen() {
             ImGui::PopID();
         }
         // Esc closes it at once here; its plugin hears screen_closed.
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::GetIO().WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::GetIO().WantTextInput && !typing_taken()) {
             plugin_ui::act({screen->plugin, screen->title, plugin_ui::close_widget});
             closed_screen() = screen->plugin + '\n' + screen->title;
             s.plugin_screen_visible.store(false);
@@ -182,16 +315,30 @@ void draw_plugins() {
     const float k = display.y / 1080.0f;
     auto& s = detail::state();
     auto* fallback = ImGui::GetFont();
-    const std::array<ImFont*, 4> fonts{s.menu.bold ? s.menu.bold : fallback, s.menu.body ? s.menu.body : fallback,
-                                       s.menu.heading ? s.menu.heading : fallback, s.menu.title ? s.menu.title : fallback};
+    const std::array<ImFont*, 5> fonts{s.menu.bold ? s.menu.bold : fallback, s.menu.body ? s.menu.body : fallback,
+                                       s.menu.heading ? s.menu.heading : fallback, s.menu.title ? s.menu.title : fallback,
+                                       s.menu.title_large ? s.menu.title_large : s.menu.title ? s.menu.title : fallback};
     auto* draw = ImGui::GetBackgroundDrawList();
     const auto camera = plugin_camera::projector(display.x, display.y);
+    // The fonts' advances for d:measure, again whenever the atlas is new.
+    static const void* measured{};
+    if (measured != ImGui::GetIO().Fonts) {
+        measured = ImGui::GetIO().Fonts;
+        for (int i = 0; i < 5; ++i) {
+            auto* font = fonts[static_cast<std::size_t>(i)];
+            plugin_ui::detail::FontMetrics m;
+            m.size = font->FontSize;
+            for (int c = 32; c < 128; ++c) m.advance[static_cast<std::size_t>(c - 32)] = font->GetCharAdvance(static_cast<ImWchar>(c));
+            plugin_ui::set_font(i, m);
+        }
+    }
     using Kind = plugin_ui::Shape::Kind;
-    for (const auto& layer : *layers)
+    for (const auto& layer : *layers) {
+        int clips = 0;
         for (const auto& shape : layer.shapes) {
             const auto& style = shape.style;
             const auto& p = shape.points;
-            auto* font = fonts[static_cast<std::size_t>(std::clamp(style.font, 0, 3))];
+            auto* font = fonts[static_cast<std::size_t>(std::clamp(style.font, 0, 4))];
             switch (shape.kind) {
             case Kind::text: text(draw, font, k, at(p[0]), shape); break;
             case Kind::rect:
@@ -241,7 +388,7 @@ void draw_plugins() {
             }
             case Kind::game_image:
                 (void)draw_game_image(draw, shape.text, at(p[0]), at(p[1]), style.colour, static_cast<GameImageFit>(std::clamp(shape.fit, 0, 2)),
-                                      shape.edge * k);
+                                      shape.edge * k, shape.frame);
                 break;
             case Kind::gradient:
                 if (shape.colours.size() == 4)
@@ -254,7 +401,23 @@ void draw_plugins() {
                 draw_xray(draw, paint, static_cast<float>(style.colour >> IM_COL32_A_SHIFT & 0xff) / 255.0f);
                 break;
             }
+            case Kind::rough_rect: skate_theme::rough_rect(draw, at(p[0]), at(p[1]), style.colour, shape.seed, shape.radius * k); break;
+            case Kind::scribble: skate_theme::scribble(draw, at(p[0]), at(p[1]), shape.seed, shape.radius * k); break;
+            case Kind::halftone: theme::halftone(draw, at(p[0]), shape.columns, shape.rows, style.colour); break;
+            case Kind::clip:
+                if (clips >= 16) break;
+                draw->PushClipRect(at(p[0]), at(p[1]), true);
+                ++clips;
+                break;
+            case Kind::unclip:
+                if (clips > 0) {
+                    draw->PopClipRect();
+                    --clips;
+                }
+                break;
             }
         }
+        for (; clips > 0; --clips) draw->PopClipRect();
+    }
 }
 }

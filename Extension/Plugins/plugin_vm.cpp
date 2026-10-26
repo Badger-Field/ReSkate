@@ -1,6 +1,7 @@
 #include "plugin_vm.h"
 #include "plugin_api.h"
 #include "plugin_wire.h"
+#include "plugin_bodies.h"
 #include "lua.h"
 #include "luacode.h"
 #include "lualib.h"
@@ -579,6 +580,35 @@ void Plugin::skater_changed(const char* state, const char* previous) {
     });
 }
 
+// A launch into the air (events.skater), with its velocities as vectors.
+void Plugin::launched(const LaunchNews& launch) {
+    if (state_ != State::running || !has("events.skater")) return;
+    fire_with("launch", [&](lua_State* L) {
+        lua_createtable(L, 0, 8);
+        lua_pushlstring(L, launch.from.data(), launch.from.size());
+        lua_setfield(L, -2, "from");
+        push_position(L, launch.velocity);
+        lua_setfield(L, -2, "velocity");
+        push_position(L, launch.game);
+        lua_setfield(L, -2, "game");
+        if (launch.travel) {
+            push_position(L, Vec3{(*launch.travel)[0], 0, (*launch.travel)[1]});
+            lua_setfield(L, -2, "travel");
+        }
+        lua_pushnumber(L, launch.travel_speed);
+        lua_setfield(L, -2, "travel_speed");
+        lua_pushboolean(L, launch.reason == "applied");
+        lua_setfield(L, -2, "shaped");
+        lua_pushlstring(L, launch.reason.data(), launch.reason.size());
+        lua_setfield(L, -2, "reason");
+        if (!launch.by.empty()) {
+            lua_pushlstring(L, launch.by.data(), launch.by.size());
+            lua_setfield(L, -2, "by");
+        }
+        return 1;
+    });
+}
+
 void Plugin::game_event(std::string_view event, std::string_view permission, const Json& data) {
     if (state_ != State::running || !has(permission)) return;
     fire_with(event, [&](lua_State* L) {
@@ -605,6 +635,60 @@ void Plugin::bailed(std::uint64_t wipeouts, std::optional<SlamNews> slam) {
         }
         return 1;
     });
+}
+
+void Plugin::touch_tick(const std::vector<Body>& list) {
+    if (state_ != State::running || !has("session.skaters") || !touch_reach_) return;
+    const auto tell = [&](std::string_view event, std::uint64_t player, const Contact& c) {
+        fire_with(event, [&](lua_State* L) {
+            lua_createtable(L, 0, 5);
+            const auto id = std::to_string(player);
+            lua_pushlstring(L, id.data(), id.size());
+            lua_setfield(L, -2, "player");
+            lua_pushstring(L, body_part_names[c.part]);
+            lua_setfield(L, -2, "part");
+            lua_pushstring(L, body_part_names[c.their_part]);
+            lua_setfield(L, -2, "their_part");
+            lua_pushnumber(L, std::max(c.gap, 0.f));
+            lua_setfield(L, -2, "distance");
+            lua_pushvector(L, c.at[0], c.at[1], c.at[2]);
+            lua_setfield(L, -2, "position");
+            return 1;
+        });
+    };
+    const Body* mine = nullptr;
+    for (const auto& body : list)
+        if (!body.player) mine = &body;
+    std::set<std::uint64_t> seen;
+    for (const auto& body : list) {
+        if (!body.player || !mine) continue;
+        const auto near = bodies::nearest(*mine, body);
+        if (!near) continue;
+        seen.insert(body.player);
+        const Contact now{near->mine, near->theirs, near->gap, near->at};
+        const auto was = contacts_.find(body.player);
+        if (was == contacts_.end()) {
+            if (near->gap > *touch_reach_ || contacts_.size() >= 64) continue;
+            contacts_[body.player] = now;
+            tell("touch", body.player, now);
+        } else if (near->gap <= *touch_reach_ + 0.1f) {
+            was->second = now;
+        } else {
+            contacts_.erase(was);
+            tell("touch_end", body.player, now);
+        }
+        if (state_ != State::running || !touch_reach_) return; // a handler stopped it, or touching
+    }
+    for (auto it = contacts_.begin(); it != contacts_.end();) {
+        if (seen.contains(it->first)) {
+            ++it;
+            continue;
+        }
+        const auto [player, last] = *it;
+        it = contacts_.erase(it);
+        tell("touch_end", player, last);
+        if (state_ != State::running || !touch_reach_) return;
+    }
 }
 
 void Plugin::chat_line(const ChatLine& line) {
@@ -663,6 +747,8 @@ std::optional<plugin_ui::Panel> Plugin::build_screen(const std::vector<plugin_ui
     if (found == screens_.end()) return std::nullopt;
     const auto entry = *found;
     plugin_ui::Panel panel{id_, entry.title, {}, true};
+    panel.dock = entry.dock;
+    panel.width = entry.width;
     pending_ = actions;
     building_ = &panel;
     lua_getref(L_, entry.function);
@@ -685,9 +771,12 @@ void Plugin::set_channel(std::string channel) {
     channel_hash_ = wire::channel_of(channel_);
 }
 
-std::vector<std::pair<std::string, std::string>> Plugin::commands() const {
-    std::vector<std::pair<std::string, std::string>> result;
-    for (const auto& [name, command] : commands_) result.emplace_back(name, command.help);
+std::vector<CommandInfo> Plugin::commands() const {
+    std::vector<CommandInfo> result;
+    for (const auto& [name, command] : commands_) {
+        result.push_back({name, {}, command.help});
+        for (const auto& sub : command.subcommands) result.push_back({name + " " + sub.name, sub.args, sub.help});
+    }
     return result;
 }
 

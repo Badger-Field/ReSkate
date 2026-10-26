@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -19,6 +20,10 @@ namespace dingosdk::mods {
 inline constexpr std::size_t maximum_mod_name = 64;
 // Generated state the SDK owns. Folders beginning with a dot are never mods.
 inline constexpr char generated_folder[] = ".reskate";
+// What plugins save (reskate.files), a folder each: Mods/.reskate_plugin_data/<plugin>/. Not in the
+// generated folder, which every full merge deletes, and not in a mod's folder, which its updates
+// replace.
+inline constexpr char plugin_data_folder[] = ".reskate_plugin_data";
 inline constexpr char mods_folder[] = "Mods";
 inline constexpr char order_file[] = "mods.json";
 // The mod's own description, written by its author or by the park editor:
@@ -67,11 +72,20 @@ struct Variants {
     std::vector<std::string> displaces;
 };
 
+// Separate from displacement: both authors must opt into a bounded native
+// compatibility check. Exact bundle names are used, never prefixes or globs.
+struct VariantAdditions {
+    std::vector<std::string> accept, contribute;
+};
+
 struct Mod {
     std::string name;                 // folder name directly under Mods/
     std::filesystem::path directory;
     bool provides_layout{};           // has layout.toc, so it becomes a layout layer
     bool provides_levels{};           // has reskate-levels.json
+    bool provides_plugin{};           // its reskate-plugin.json names Luau code to run (an "entry")
+    bool provides_objects{};          // has reskate-objects.json (Quick Drop object names and families)
+    bool provides_music{};            // has reskate-music.json (playlists for its songs)
     // Base maps it ships a park for: parks/<map>.park.json (park editor mods).
     std::vector<std::string> park_maps;
     // Presentation, from manifest.json (or reskate-mod.json). `title` falls back to the folder
@@ -89,6 +103,12 @@ struct Mod {
     std::vector<ResidentAssets> resident;
     // From reskate-plugin.json: the variants it holds (Variants), if it declares any.
     std::optional<Variants> variants;
+    VariantAdditions variant_additions;
+    // Validated anew by the catalogue for the currently selected variant.
+    // Values are kind-qualified asset names permitted in that bundle.
+    std::map<std::string, std::set<std::string>, std::less<>> variant_projection;
+    std::map<std::string, std::string, std::less<>> variant_targets;
+    std::set<std::string> variant_authority;
     // From .reskate-studio-patch: whether the mod has one, and the Skate.exe SHA-256 it records.
     bool studio_marker{};
     std::string skate_sha256;
@@ -113,6 +133,11 @@ struct Exclusion {
 };
 // Names, sizes and write times of every file in the mod folder.
 std::string mod_fingerprint(const std::filesystem::path& directory);
+// Plugins' files from before plugin_data_folder (Mods/.reskate/data/<plugin>/, inside the generated
+// folder a full merge deletes) move to Mods/.reskate_plugin_data/<plugin>/: a plugin's folder whole
+// when it has none there yet, else the files it lacks. Run before anything deletes the generated
+// folder. Never throws; returns what it moved, a line each, for the log.
+std::vector<std::string> keep_plugin_data(const std::filesystem::path& mods_root) noexcept;
 std::map<std::string, Exclusion, std::less<>> read_exclusions(const std::filesystem::path& mods_root) noexcept;
 // Replaces the file; an empty map removes it.
 void write_exclusions(const std::filesystem::path& mods_root,
@@ -144,6 +169,11 @@ struct ModList {
 // shader block depot entry `name` is in that bundle, or null.
 bool resident_root(const Mod& mod, std::string_view bundle, std::string_view name) noexcept;
 const ResidentAssets::Shader* resident_shader(const Mod& mod, std::string_view bundle, std::string_view name) noexcept;
+
+// What a mod holds, for a player, what says most about it first: "Map" or "3 maps", "Park" or
+// "Parks", "Plugin", "Game data", "Objects", "Music". Empty when it holds none of these. A plugin
+// that also ships game data reads as a plugin first, since its code is what it is for.
+std::vector<std::string> mod_contents(const Mod& mod);
 
 // Folder names travel into engine paths, so only plain ASCII is accepted:
 // letters, digits, space, '_', '-' and '.', not starting with '.'.

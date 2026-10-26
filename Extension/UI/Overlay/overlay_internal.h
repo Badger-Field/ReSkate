@@ -114,6 +114,9 @@ struct State {
     // buttons use it because Skate's controller mode stops the legacy cursor
     // and button state from updating until the game is paused.
     std::atomic<long> raw_mouse_x{0}, raw_mouse_y{0};
+    // The same movement for read_mouse_look, kept apart so the editor's and the flight look's reads
+    // do not take it; and the wheel, from raw packets and from WM_MOUSEWHEEL (in its 120 a notch).
+    std::atomic<long> look_mouse_x{0}, look_mouse_y{0}, look_wheel_raw{0}, look_wheel_message{0};
     std::atomic<unsigned> raw_mouse_buttons{0}; // physical: 1 left, 2 right, 4 middle
     std::atomic<ULONGLONG> raw_mouse_time{0};
     // The mouse registration in effect has RIDEV_NOLEGACY: Windows does not
@@ -189,6 +192,8 @@ struct State {
     ComPtr<ID3D12Resource> mod_icon_texture, mod_icon_upload;
     // Plugins' pictures (plugin_images.cpp), from the fifth slot on.
     std::array<ComPtr<ID3D12Resource>, 16> plugin_textures, plugin_uploads;
+    // Thunderstore icons for the Mod Manager page (store_icons.cpp), after the screen look's slots.
+    std::array<ComPtr<ID3D12Resource>, 64> store_textures, store_uploads; // store_icon_slots
     ComPtr<ID3D12GraphicsCommandList> commands;
     ComPtr<ID3D12Fence> fence;
     HANDLE fence_event = nullptr;
@@ -279,6 +284,23 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp);
 // Swapchain selection, device objects and the per-frame draw (overlay_render.cpp).
 bool completed(UINT64 value, DWORD timeout_ms);
 void destroy_graphics();
+// Screen captures (frame_grab.cpp): a frame is being asked for, so the overlay keeps working; the
+// presented frame's pixels handed over before the overlay draws on it; its GPU objects let go.
+bool frame_grab_pending();
+void grab_presented_frame(State& s, ID3D12Resource* buffer);
+void release_frame_grab();
+// The depth probe (depth_probe.cpp, `capture depth`): its hook, installed with the overlay's command
+// list; whether it needs this present; and its turn at it.
+void install_depth_probe(ID3D12GraphicsCommandList* list) noexcept;
+bool depth_probe_pending();
+void depth_probe_present(State& s, std::uint32_t width, std::uint32_t height);
+// The depth tap (depth_probe.cpp): while a frame grab runs, the game's main depth buffer is copied
+// every frame. depth_tap_present runs at each present (`wanted`: a grab is running); after the
+// frame's own work is known finished, depth_tap_latest maps the newest copy the GPU has made (or
+// gives null) until depth_tap_done.
+void depth_tap_present(State& s, std::uint32_t width, std::uint32_t height, bool wanted);
+const std::uint8_t* depth_tap_latest(std::uint32_t& width, std::uint32_t& height, std::uint32_t& pitch);
+void depth_tap_done();
 ComPtr<IUnknown> object_identity(IUnknown* object);
 Binding* find_binding(IUnknown* identity);
 void guarded_render(IDXGISwapChain* chain, UINT flags) noexcept;
@@ -326,6 +348,8 @@ bool take_mod_icon_pixels(CardPixels& pixels);
 // draw asks for a picture by its file (its id once on the GPU, 0 until then); the render thread
 // takes one decoded picture a frame to upload and says where it went.
 inline constexpr UINT plugin_image_first_slot = 4, plugin_image_slots = 16;
+// Then the screen look's three (screen_look.h): its copy of the frame and the auto-iris's two targets.
+inline constexpr UINT screen_look_slot = plugin_image_first_slot + plugin_image_slots, screen_look_slots = 3;
 ImTextureID plugin_image(const std::string& path, ImVec2& size);
 struct PluginImageUpload {
     std::string path;
@@ -336,6 +360,22 @@ std::optional<PluginImageUpload> take_plugin_image();
 // id 0: it failed; `later`: the slot was busy, so it waits for another frame.
 void plugin_image_uploaded(const std::string& path, int slot, ImTextureID id, bool later = false);
 void plugin_images_lost();
+// Thunderstore packages' icons for the pause menu's Mod Manager page (store_icons.cpp), the same way,
+// by their URL, in the SRV heap's slots from store_icon_first_slot on.
+inline constexpr UINT store_icon_first_slot = screen_look_slot + screen_look_slots, store_icon_slots = 64;
+ImTextureID store_icon(const std::string& url);
+struct StoreIconUpload {
+    std::string url;
+    int slot{};
+    CardPixels pixels;
+};
+std::optional<StoreIconUpload> take_store_icon();
+void store_icon_uploaded(const std::string& url, int slot, ImTextureID id, bool later = false);
+void store_icons_lost();
+// Mods being applied with the pause menu closed (hub_page.cpp): whether its card is up, and drawing it.
+bool mod_apply_card_pending();
+void draw_mod_apply_card();
+static_assert(std::tuple_size_v<decltype(State::store_textures)> == store_icon_slots);
 void mod_icon_uploaded(ImTextureID texture, unsigned serial);
 void mod_icon_lost();
 // Game debug text (game_text_overlay.cpp): polled every presented frame.

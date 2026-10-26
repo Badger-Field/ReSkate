@@ -12,6 +12,7 @@
 #include "Extension/UI/Overlay/overlay.h"
 #include "Extension/Console/commands.h"
 #include "Extension/Profile/local_profile_runtime.h"
+#include "Extension/Skater/launches.h"
 #include "Extension/Skater/score_hud.h"
 #include "Extension/Skater/trick_watch.h"
 #include "Extension/Trainer/trainer.h"
@@ -70,13 +71,23 @@ public:
         const auto t = trainer::telemetry();
         if (!t.skater) return std::nullopt;
         const float heading = std::remainder(t.heading * std::numbers::pi_v<float> / 180, 2 * std::numbers::pi_v<float>);
-        return SkaterState{t.position, heading, t.speed, t.vertical, t.airborne, t.air_time};
+        SkaterState state{t.position, heading, t.speed, t.vertical, t.airborne, t.air_time};
+        if (const auto facing = launches::facing()) {
+            state.right = facing->right;
+            state.switch_stance = facing->switch_stance;
+        }
+        return state;
     }
     // As the console's tp: refused in a session whose host has turned teleporting (and noclip) off.
-    Teleport teleport(const Vec3& position, float heading) override {
+    Teleport teleport(std::string_view plugin, const Vec3& position, float heading) override {
         // A throwdown mode's own moves (line-ups, recoveries, returns to the start) are the game's:
-        // allowed wherever its match runs and asks for them (the kit's `match.teleports`).
-        if (!session_noclip_allowed() && !throwdowns::kit::match().teleports) return Teleport::forbidden;
+        // allowed while that plugin's own match runs and asks for them (the kit's `match.teleports`),
+        // never for another plugin's calls.
+        if (!session_noclip_allowed()) {
+            const auto flag = throwdowns::kit::flag::state();
+            const bool mine = flag.owned && flag.mode.size() > plugin.size() && flag.mode.starts_with(plugin) && flag.mode[plugin.size()] == '/';
+            if (!throwdowns::kit::allows_teleports(plugin, mine)) return Teleport::forbidden;
+        }
         return teleport_local_skater_heading(position, heading) ? Teleport::sent : Teleport::unavailable;
     }
     std::optional<Vec3> raycast(const Vec3& from, const Vec3& to) override { return local_surface_hit(from, to); }
@@ -179,6 +190,15 @@ std::mutex found_mutex;
 std::vector<Candidate> found;      // under found_mutex
 std::uint64_t found_generation{};  // under found_mutex
 std::uint64_t applied_generation{};
+// A change to the plugins waits for the game window to have the focus: a plugin being edited in
+// another window loads once, when the player comes back to the game, not at every save. The first
+// set loads at once, focused or not.
+bool held_logged{};
+bool game_focused() {
+    DWORD process{};
+    const auto window = GetForegroundWindow();
+    return window && GetWindowThreadProcessId(window, &process) && process == GetCurrentProcessId();
+}
 std::chrono::steady_clock::time_point last_tick{};
 // The local skater's tricks (Extension/Skater/trick_watch.h), and where and when the one going on began.
 tricks::TrickWatch trick_watch;
@@ -298,9 +318,16 @@ void on_client_tick() noexcept {
             {
                 std::lock_guard lock(found_mutex);
                 if (found_generation != applied_generation) {
-                    latest = found;
-                    applied_generation = found_generation;
-                    changed = true;
+                    if (applied_generation && !game_focused()) {
+                        if (!std::exchange(held_logged, true))
+                            logging::write(logging::Level::info, logging::Channel::plugins,
+                                           "Plugins: a change waits for the game to have the focus.");
+                    } else {
+                        latest = found;
+                        applied_generation = found_generation;
+                        changed = true;
+                        held_logged = false;
+                    }
                 }
             }
             if (changed) host->apply(latest);
@@ -427,14 +454,35 @@ std::string list_commands() {
     std::string text;
     const auto add = [&](const std::vector<Status>& all, std::string_view suffix) {
         for (const auto& plugin : all)
-            for (const auto& [name, help] : plugin.commands) {
+            for (const auto& command : plugin.commands) {
                 if (!text.empty()) text += '\n';
-                text += std::format("{} - {} ({}{})", name, help, plugin.id, suffix);
+                text += std::format("{}{}{} - {} ({}{})", command.name, command.args.empty() ? "" : " ", command.args, command.help, plugin.id,
+                                    suffix);
             }
     };
     add(host->status(), "");
     if (serving) add(server_host->status(), "@server"); // run when no player's copy has the command
     return text.empty() ? "No plugin has a console command." : text;
+}
+
+std::vector<CommandHint> command_hints() {
+    static std::vector<CommandHint> hints;
+    static std::uint64_t next{};
+    const auto now = GetTickCount64();
+    if (now < next) return hints;
+    next = now + 500;
+    hints.clear();
+    if (!host) return hints;
+    const auto add = [&](const std::vector<Status>& all, std::string_view suffix) {
+        for (const auto& plugin : all)
+            for (const auto& command : plugin.commands)
+                if (std::none_of(hints.begin(), hints.end(), [&](const auto& hint) { return hint.name == command.name; }))
+                    hints.push_back({command.name, command.args, command.help, plugin.id + std::string(suffix)});
+    };
+    add(host->status(), "");
+    if (serving) add(server_host->status(), "@server");
+    std::sort(hints.begin(), hints.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+    return hints;
 }
 
 // "<id>@server" names a server copy (on this game while it hosts a lobby); a plain id, the player's copy.

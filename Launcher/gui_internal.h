@@ -5,6 +5,7 @@
 #include "launch.h"
 #include "text_encoding.h"
 #include "mod_profiles.h"
+#include "start_maps.h"
 #include "thunderstore.h"
 
 #include "Engine/Vfs/mod_conflicts.h"
@@ -194,6 +195,8 @@ struct Settings {
     bool gpu_diagnostics{};
     bool discord_status{true};
     bool offline{};
+    // The map the game starts in, by its level asset (start_maps.h); empty: San Vansterdam.
+    std::string start_map;
     int menu_key{static_cast<int>(launcher::default_menu_key)};
     int console_key{static_cast<int>(launcher::default_console_key)};
     int log_level{2};
@@ -215,6 +218,14 @@ struct Settings {
     std::uint64_t accepted_privacy{}, accepted_terms{};
     // The version of the home screen's announcement the player hid (0: none): one newer shows.
     std::uint64_t announcement_hidden{};
+    // GET MODS: the Thunderstore categories shown only, and those hidden (thunderstore.h CategoryFilter).
+    std::vector<std::string> mod_categories_only, mod_categories_hidden;
+    // MY MODS: the same for the installed mods, by their Thunderstore categories ("No category" for a
+    // mod Thunderstore does not list, or lists in none).
+    std::vector<std::string> installed_categories_only, installed_categories_hidden;
+    // What the mods gave the game's data at the last launch (launcher_mods::game_data_signature): a
+    // launch with other mods empties the game's shader cache first.
+    std::string shader_cache_mods;
 };
 
 inline constexpr std::array<const char*, 7> log_levels{"trace", "debug", "info", "warning", "error", "critical", "off"};
@@ -433,6 +444,9 @@ struct Ui {
     Changelog notes;
     Legal legal;
     int settings_tab{};         // GAME, DISPLAY, KEYS, ADVANCED, then the game's own pages
+    // The maps Settings offers to start in, read from the Mods folder when GAME is first drawn
+    // after Settings opens.
+    std::optional<std::vector<launcher_start_maps::StartMap>> start_maps;
     int binding{};              // 1 = menu key, 2 = console key, while waiting for a press
     std::string key_error;
     bool mods{};
@@ -489,7 +503,6 @@ struct Store {
 
     // The GET MODS page.
     std::array<char, 96> search{};
-    std::string category;                            // empty = all
     int sort{};
     std::string selected;                            // full_name, while its overview is open
     bool overview{};                                 // the overview popup is showing
@@ -564,12 +577,11 @@ struct ModsPanel {
     std::array<char, 96> search{};
     int filter{};
     int order{};
+    // Each Thunderstore package's categories by the folder it installs into, made again when a listing arrives.
+    std::map<std::string, std::vector<std::string>, std::less<>> categories_by_folder;
     std::set<std::string, std::less<>> marked;
     std::string anchor;                  // the last mod ticked: where a Shift-click range starts
     int place{};                         // typed in a row's "move to position" popup
-    // The installed mods that are official mods (Engine/Vfs/builtin_packs.h), by folder name: found
-    // when the folder is scanned.
-    std::set<std::string, std::less<>> officials;
     int shown_tab{-1};                   // the tab drawn last, so MY MODS reads the folder again when it is opened
     // The conflicts the player settled (gui_mods.cpp): of each pair, (the mod that loads, the one left out).
     std::set<std::pair<std::string, std::string>> conflict_choices;
@@ -605,6 +617,10 @@ struct ModsPanel {
     std::string message;
     bool message_error{};
     std::vector<std::string> confirm_remove;   // folders awaiting "Uninstall" confirmation
+    // The mods those brought in that nothing else needs (launcher_mods::orphaned_dependencies),
+    // offered with them; worked out once for the folders in remove_extras_for.
+    std::vector<std::string> remove_extras, remove_extras_for;
+    std::vector<char> remove_extras_picked;   // per entry of remove_extras: ticked to go too
     fs::path conflict_source;            // install waiting for "Replace" confirmation
     std::string conflict_name;
 
@@ -697,10 +713,14 @@ ImTextureID package_icon(ModsPanel& panel, const thunderstore::Package& package)
 // when the mod never came from Thunderstore.
 void mod_icon(ModsPanel& panel, const thunderstore::Package* package, ImVec2 position, float size);
 void pump_icons(ModsPanel& panel);
+// A category menu for a list of mods (GET MODS, MY MODS): each category shown only, hidden, or either,
+// a click going round them, with how many mods are in each (category_count adds to that). One chosen
+// before that no mod has now stays in the menu. True when the player changed what is chosen.
+int& category_count(std::vector<std::pair<std::string, int>>& categories, const std::string& category);
+bool category_menu(const char* id, std::vector<std::string>& only, std::vector<std::string>& hidden,
+                   std::vector<std::pair<std::string, int>> categories, float width);
 // The GET MODS page body, under the page header.
 void browse_page(Launcher& launcher, const Fonts& fonts, ModsPanel& panel, float height, bool installing);
-// The official mods (official_mods.h): each to install, update or turn off, and how it is doing.
-void official_page(const Fonts& fonts, ModsPanel& panel, float height);
 // Everything Thunderstore knows about one package, in a popup over the page.
 void package_overview(const Fonts& fonts, ModsPanel& panel, ImVec2 size, bool installing);
 // The README section of an overview: the installed mod's own README.md when it has one, else

@@ -114,6 +114,11 @@ void set_local_values(const std::vector<std::pair<std::string, Json>>& values) n
 // read it every frame without touching the database.
 // The ReSkate menu's size: the window's, or (`fullscreen`) the full screen menu's.
 float local_menu_scale(bool fullscreen = false) noexcept;
+// One of the game's OWN gameplay options (the ones its Settings menu edits, by the game's key for it), as the local
+// profile holds it: the same value the game's scripts are answered with. Empty while the player never changed it (the
+// game's default applies). Setting it is the same as changing it in the game's menu.
+std::optional<double> local_game_option(std::string_view key) noexcept;
+bool set_local_game_option(std::string_view key, double value, bool boolean) noexcept;
 bool set_local_menu_scale(float value, bool fullscreen = false) noexcept;
 // Whether the ReSkate menu fills the screen (made for a controller) or is a window. Cached likewise.
 bool local_menu_fullscreen() noexcept;
@@ -152,6 +157,7 @@ bool reset_local_atmosphere_controls(unsigned kind);
 void update_local_world_controls(WorldMap map) noexcept;
 // Execute on the game update thread, never from ImGui's Present callback.
 bool set_local_mission_completed(std::string_view id, bool completed);
+// On false, failure says why, in the words the log uses.
 bool initialize_local_profile(std::uintptr_t image_base, bool authored_offline,
-    const std::filesystem::path& path);
+    const std::filesystem::path& path, std::string& failure);
 }

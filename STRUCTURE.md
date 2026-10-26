@@ -55,8 +55,8 @@ ReSkate/
 ├── External/              vendored third-party code, pinned and hashed
 ├── assets/                files embedded into the binaries
 ├── config/defaults/       default profile/settings JSON embedded into ReSkate.dll
-├── contrib/               plugin mods, server hosting files, design notes, release script
-├── README.md, MACOS-SETUP.md, MUSIC-SETUP.md, LICENSE
+├── contrib/               server hosting files, design notes, release script
+├── README.md, LICENSE
 └── .clangd, .gitattributes, .gitignore
 ```
 
@@ -100,6 +100,7 @@ fixup repair), mesh sets, skeletons, textures, material grids, shader lookup.
 The virtual file system and modding pipeline:
 - `initfs`, `game_archives`, `game_bundles`, `game_textures`, `native_db` — reading the game's data.
 - `mod_list`, `mod_catalog`, `mod_item_sources`, `mod_conflicts`, `mod_scoring` — the `Mods/` folder and `mods.json`.
+- `variant_additions_*` — explicit variant cooperation, native admission and private-asset projection planning.
 - `mod_merge*` — merging mods into the game's data (overrides, combine, grid, textures, loading screens, CAS store, scan cache, build stamp).
 - `content_cache*`, `content_catalogs` — the merged-content cache and its install.
 - `thunderstore_package`, `https_download` — Thunderstore packages.
@@ -147,7 +148,7 @@ commands and a `Test/` folder.
 | `ReplayKeyframes/` | replay keyframe curves and settings |
 | `Scripting/` | Lua startup, custom script loader, native blocking |
 | `Settings/` | gameplay/native/user settings, input bindings, engine tweaks, replay drafts |
-| `Skater/` | first person, noclip, free flight, physics tuning, no-bail, AI skaters, x-ray, breakable deck, grind exits, trick watch |
+| `Skater/` | first person, noclip, free flight, physics tuning, no-bail, AI skaters, x-ray, breakable deck, launches and pad hiding for plugins, trick watch |
 | `Throwdowns/` | native throwdowns, custom (plugin) modes, relay and wire format |
 | `Trainer/` | trick trainer: waypoints, jumps, landings, presets |
 | `Travel/` | location travel |
@@ -193,7 +194,7 @@ The Luau plugin host. A plugin is a folder in `Mods/` with a `reskate-plugin.jso
 | `main.cpp`, `launch` | entry point and starting/injecting the game |
 | `updater` | ReSkate self-update from GitHub releases |
 | `depot_output`, `game_settings` | supported game build download/verification and game settings |
-| `mod_manager`, `mod_profiles`, `thunderstore`, `official_mods` | mods, profiles (r2modman-compatible codes and `.r2z`), Thunderstore |
+| `mod_manager`, `mod_profiles`, `thunderstore` | mods, profiles (r2modman-compatible codes and `.r2z`), Thunderstore |
 | `gui*.cpp` | the window: home, mods (browse, profiles), settings, sign-in, changelog, legal, gamepad |
 | `crash_reporter` | crash reporting host |
 | `Test/` | launcher tests |
@@ -238,14 +239,17 @@ Valve's Steam networking headers, and fonts (Montserrat, Permanent Marker).
 
 | Path | Contents |
 |---|---|
-| `plugins/` | plugin mods: ports of former built-in features (`hall-of-meat`, `grind-exits`, `road-rash`, `board-break`, `fpv-drone`), test plugins (`reskate-test`, `reskate-hostile`, `throwdown-modes-test`), `server-starter`, and `tools/`. See [contrib/plugins/README.md](contrib/plugins/README.md) |
 | `pterodactyl/` | Pterodactyl egg for hosting the server |
 | `reskate-server.service`, `setup-linux-server-libs.sh` | Linux server setup |
 | `package_release_zip.py` | packs release zips |
 | `*.md` | design notes for individual features |
 | `Test/` | tests for contrib scripts |
 
-Each plugin folder looks like:
+Plugin mods (the ports of former built-in features, the test plugins, Fit Check, Animator Studio) are not
+in the repository. Maintainers keep them in `contrib/plugins/`, which is ignored, and
+`dingosdk_plugin_tests` runs the test plugins from there when they are present.
+
+A plugin mod's folder looks like:
 
 ```
 <plugin>/

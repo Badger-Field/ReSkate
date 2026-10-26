@@ -94,14 +94,19 @@ add_library(dingosdk_runtime SHARED
     Extension/World/light_table_guard.cpp
     Extension/World/stack_check_report.cpp
     Extension/World/texture_handle_limit.cpp
+    Extension/World/texture_handle_guard.cpp
+    Extension/World/physics_wake_guard.cpp
+    Extension/World/streaming_copy_guard.cpp
     Extension/Settings/replay_drafts.cpp
     Extension/UI/ui_pointer_skip.cpp
     Extension/Settings/named_settings.cpp
     Extension/World/console_commands.cpp
     Extension/World/world_entities.cpp
+    Extension/World/character_room.cpp
     Extension/World/guid_table_guard.cpp
     Extension/Skater/bone_cam.cpp
     Extension/Skater/trick_gestures.cpp
+    Extension/AnimationStudio/game_clips.cpp
     Extension/Skater/trick_feed.cpp
     Extension/Rendering/console_commands.cpp
     Extension/Progression/console_commands.cpp
@@ -110,6 +115,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Objects/ParkEditor/park_editor_runtime.cpp
     Extension/Objects/ParkEditor/park_editor_preview.cpp
     Extension/Objects/ParkEditor/park_editor_selection.cpp
+    Extension/Objects/ParkEditor/world_pick.cpp
     Extension/Objects/ParkEditor/park_editor_lobby.cpp
     Extension/Objects/ParkEditor/park_editor_operations.cpp
     Extension/Objects/network_object_runtime.cpp
@@ -122,6 +128,9 @@ add_library(dingosdk_runtime SHARED
     Extension/Assets/map_icons.cpp
     Engine/Vfs/thunderstore_package.cpp
     Launcher/mod_manager.cpp
+    Launcher/thunderstore.cpp
+    Extension/Assets/mod_store.cpp
+    Extension/Assets/mod_store_view.cpp
     Extension/Assets/loose_files.cpp
     Extension/Scripting/lua_startup.cpp
     Extension/Scripting/lua_native_block.cpp
@@ -134,13 +143,18 @@ add_library(dingosdk_runtime SHARED
     Extension/Plugins/plugin_sound.cpp
     Extension/Skater/skater_events.cpp
     Extension/Skater/outfit_overlay.cpp
+    Extension/Skater/layer_materials.cpp
     Extension/Skater/board_pose.cpp
     Extension/Skater/skater_physics.cpp
     Extension/Skater/xray.cpp
     Extension/Skater/xray_render.cpp
     Extension/Skater/xray_skeleton.cpp
     Extension/Skater/game_speed.cpp
-    Extension/Skater/grind_exit.cpp
+    Extension/Skater/launches.cpp
+    Extension/Skater/pad_hide.cpp
+    Extension/Skater/trick_rewrite.cpp
+    Extension/Skater/arm_reach.cpp
+    Extension/Skater/carry.cpp
     Extension/UI/hud_corner.cpp
     Extension/Assets/morph_memory_pool.cpp
     Extension/Assets/native_render_resource_pool.cpp
@@ -162,6 +176,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Boot/discord_presence.cpp
     Extension/Customization/developer_hoodie.cpp
     Extension/Customization/developer_board.cpp
+    Extension/Customization/board_material.cpp
     Extension/Skater/skater_model.cpp
     Extension/Skater/skater_observer.cpp
     Extension/Skater/client_source_spawn.cpp
@@ -179,6 +194,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Trainer/trainer_presets.cpp
     Extension/Trainer/trainer_jump.cpp
     Extension/Trainer/trainer_classes.cpp
+    Extension/Trainer/trainer_gamestate.cpp
     Extension/Trainer/trainer_commands.cpp
     Extension/Trainer/trainer_session.cpp
     Extension/Trainer/trainer_waypoint.cpp
@@ -204,6 +220,9 @@ add_library(dingosdk_runtime SHARED
     Extension/Customization/item_origins.cpp
     Extension/Customization/local_customization_runtime.cpp
     Extension/Customization/item_browser.cpp
+    Extension/Customization/worn_items.cpp
+    Extension/Rendering/Capture/capture_runtime.cpp
+    Extension/Rendering/Capture/capture_commands.cpp
     Extension/Progression/local_entitlement_trigger_runtime.cpp
     Extension/Progression/local_neighborhood_runtime.cpp
     Extension/Customization/local_player_card_runtime.cpp
@@ -334,8 +353,7 @@ if(EXISTS "${dingosdk_emotes}/emotes.json" AND EXISTS "${dingosdk_emotes}/emotes
 endif()
 # Game content ReSkate carries itself (Engine/Vfs/builtin_packs.h), one zip each in assets/builtin:
 # the Throwdowns page's logo grid (tools/builtin/build_throwdown_menu_pack.py). A missing zip is
-# left out. (Mods that are content for ReSkate's features, such
-# as Board Break's decks, are official mods the launcher downloads: Launcher/official_mods.h.)
+# left out.
 # Each zip is made into a zstd pack by ReSkateBuiltinPacker as the build goes (again only when the
 # zip changes), which is what the DLL carries: compressed whole, a pack's repeated files cost
 # next to nothing.
@@ -395,3 +413,4 @@ if(EXISTS "${dingosdk_startup_art}")
         "STARTUP_SPLASH RCDATA \"${dingosdk_startup_art_native}\"\n")
     target_sources(dingosdk_runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/startup_art.rc")
 endif()
+target_link_libraries(dingosdk_runtime PRIVATE dingosdk_capture)
