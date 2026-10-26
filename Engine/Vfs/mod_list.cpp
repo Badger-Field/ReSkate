@@ -522,6 +522,10 @@ std::vector<std::string> mod_contents(const Mod& mod) {
     return parts;
 }
 
+bool has_content(const Mod& mod) {
+    return !mod_contents(mod).empty() || mod.variants.has_value();
+}
+
 bool resident_root(const Mod& mod, std::string_view bundle, std::string_view name) noexcept {
     try {
         const auto b = lower(bundle), n = lower(name);
