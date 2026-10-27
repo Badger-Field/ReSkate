@@ -732,6 +732,11 @@ struct FakeGame final : Game {
     std::vector<CaptureStart> capture_starts;
     std::vector<CaptureSave> capture_saves;
     float turned{};
+    std::optional<RoomPose> preview;
+    std::optional<RoomPose> room_pose(bool skater) override {
+        calls.push_back(skater ? "pose skater" : "pose board");
+        return preview;
+    }
     std::string room_turn(std::string_view, float value, int stick) override {
         if (value != 0 && !menu_now.open) return "the game's menu is not open";
         turned = value;
@@ -2076,6 +2081,39 @@ void plugins_touch_hide_and_ray_at_players() {
     )"}})});
     ticks(host, environment, 1);
     check(environment.logged("[sneaky] false false false false"), "session.skaters is needed\n" + environment.all());
+}
+
+// Menu pose observation is permission-gated and never writes board bones.
+void plugins_read_menu_pose() {
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    game.preview = Game::RoomPose{{1, -69, -5}, {0, 0, 0, 1}, 0.01, 42};
+    host.apply({package("observer", {{manifest_file, manifest(R"("room")")}, {"plugin/main.lua", R"(
+        local pose = reskate.room.pose("board")
+        assert(pose.position.y == -69 and pose.rotation[4] == 1)
+        assert(pose.age == 0.01 and pose.sequence == 42)
+        assert(reskate.room.pose("skater"))
+        assert(not pcall(reskate.room.pose, "other"))
+        reskate.log("observed")
+    )"}})});
+    ticks(host, environment, 1);
+    running(host, "observer", environment);
+    check(environment.logged("[observer] observed"), "Menu pose available with room permission\n" + environment.all());
+    check(game.called("pose board") && game.called("pose skater"), "Both subjects are observed");
+    game.preview.reset();
+    host.apply({package("empty", {{manifest_file, manifest(R"("room")")}, {"plugin/main.lua", R"(
+        assert(reskate.room.pose() == nil)
+        reskate.log("no pose")
+    )"}})});
+    ticks(host, environment, 1);
+    check(environment.logged("[empty] no pose"), "An unavailable pose is nil");
+    host.apply({package("denied", {{manifest_file, manifest(R"("capture")")}, {"plugin/main.lua", R"(
+        assert(not pcall(reskate.room.pose, "board"))
+        reskate.log("denied")
+    )"}})});
+    ticks(host, environment, 1);
+    check(environment.logged("[denied] denied"), "room permission is required");
 }
 
 // Typing into a field a plugin draws (only while its screen is open), and the character room.
@@ -4677,6 +4715,7 @@ int main() {
         run(plugins_carry_and_take_a_step_in_the_camera_cycle);
         run(plugins_read_joints_and_tune_physics);
         run(plugins_type_and_use_the_room);
+        run(plugins_read_menu_pose);
         run(plugins_touch_hide_and_ray_at_players);
         run(plugins_use_the_games_clips);
         run(plugins_edit_clips);

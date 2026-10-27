@@ -1255,6 +1255,12 @@ public:
         skater_animation::show_in_room(false);
         character_room::leave();
     }
+    std::optional<RoomPose> room_pose(bool skater) override {
+        if (!game_menu().open) return std::nullopt;
+        const auto pose = skater_animation::preview_pose(skater);
+        if (!pose) return std::nullopt;
+        return RoomPose{pose->place.position, pose->place.rotation, pose->age, pose->sequence};
+    }
     std::string room_turn(std::string_view, float value, int stick) override {
         if (value != 0 && !multiplayer::sample_game_ui_state(base_).in_menu) return "the game's menu is not open";
         overlay::hold_stick(stick, value, 300);

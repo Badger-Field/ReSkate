@@ -213,6 +213,29 @@ struct CaptureApi {
         return result(L, game(plugin).capture_save(plugin.id(), request));
     }
 
+    // Read-only menu rig sample, with room permission and no ownership of the rig.
+    static int room_pose(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "room", "reskate.room.pose");
+        const std::string subject = luaL_optstring(L, 1, "board");
+        if (subject != "board" && subject != "skater") luaL_argerror(L, 1, "board or skater");
+        const auto pose = game(plugin).room_pose(subject == "skater");
+        if (!pose) { lua_pushnil(L); return 1; }
+        lua_createtable(L, 0, 4);
+        lua_pushvector(L, pose->position[0], pose->position[1], pose->position[2]);
+        lua_setfield(L, -2, "position");
+        lua_createtable(L, 4, 0);
+        for (int i = 0; i < 4; ++i) {
+            lua_pushnumber(L, pose->rotation[static_cast<std::size_t>(i)]);
+            lua_rawseti(L, -2, i + 1);
+        }
+        lua_setfield(L, -2, "rotation");
+        lua_pushnumber(L, pose->age);
+        lua_setfield(L, -2, "age");
+        lua_pushnumber(L, static_cast<double>(pose->sequence));
+        lua_setfield(L, -2, "sequence");
+        return 1;
+    }
     // room.turn(value, stick): the game menu's preview turned by a stand-in pad's stick, held 300 ms.
     static int room_turn(lua_State* L) {
         auto& plugin = plugin_of(L);
@@ -385,7 +408,7 @@ struct CaptureApi {
     static void install(lua_State* L) {
         add_functions(L, "capture", {{"start", start}, {"stop", stop}, {"discard", discard}, {"state", state}, {"compare", compare},
                                      {"kept", kept}, {"save", save}});
-        add_functions(L, "room", {{"turn", room_turn}});
+        add_functions(L, "room", {{"turn", room_turn}, {"pose", room_pose}});
         add_functions(L, "menu", {{"game", menu_game}, {"grid", menu_grid}, {"grid_show", grid_show}, {"grid_mark", grid_mark}});
         add_functions(L, "outfit", {{"worn", outfit_worn}, {"board", outfit_board}, {"title", outfit_title}, {"on_top", on_top}, {"on_top_state", on_top_state}});
         add_functions(L, "files", {{"reveal", files_reveal}});
