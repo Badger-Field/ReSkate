@@ -810,14 +810,14 @@ void update_model(std::uintptr_t client, TickState& frame) {
             if (pressed & (0x1000 | 1u << 22)) dingosdk::map_download::answer(dingosdk::map_download::picked());
             else if (pressed & (0x2000 | 1u << 23)) dingosdk::map_download::answer(false);
         }
-        // The question: left and right pick, A takes the pick, B is its second answer.
+        // The question: left and right pick, A takes the pick, B is the answer it names for going back.
         static bool question_before{};
-        if (question_up && question_before) {
+        if (!message_up && question_up && question_before) {
             const auto pressed = buttons & ~buttons_before;
             if (pressed & (0x0004 | 1u << 20)) dingosdk::overlay::question_pick(true);
             if (pressed & (0x0008 | 1u << 21)) dingosdk::overlay::question_pick(false);
             if (pressed & (0x1000 | 1u << 22)) dingosdk::overlay::question_answer(dingosdk::overlay::question_picked());
-            else if (pressed & (0x2000 | 1u << 23)) dingosdk::overlay::question_answer(false);
+            else if (pressed & (0x2000 | 1u << 23)) dingosdk::overlay::question_answer(dingosdk::overlay::question_back());
         }
         question_before = question_up;
         // The vote's popup: left and right move the pick, A votes for it, B closes it.

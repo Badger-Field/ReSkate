@@ -34,6 +34,8 @@ bool known_permission(std::string_view name) noexcept {
     return false;
 }
 
+std::vector<std::string_view> known_permissions() { return {permissions.begin(), permissions.end()}; }
+
 std::string safe_relative_path(std::string_view path) {
     if (path.empty() || path.size() > 260 || path.front() == '/') return {};
     for (const unsigned char c : path)
