@@ -223,7 +223,11 @@ void handle_hid(const InputCaptureHooks::HidRead& read, DWORD size) noexcept {
         SHORT value{};
         if (!overlay_input_access && read.buffer && size <= read.capacity && held_stick(stick, value)) {
             auto* bytes = static_cast<std::uint8_t*>(read.buffer);
-            set_playstation_stick(read.kind, playstation_bluetooth(size), bytes, size, stick, value);
+            if (set_playstation_stick(read.kind, playstation_bluetooth(size), bytes, size, stick, value)) {
+                static std::atomic<bool> reported{};
+                if (!reported.exchange(true)) logging::write(logging::Level::info, logging::Channel::input,
+                    "Menu preview stick hold reached a native PlayStation HID read.");
+            }
         }
     }
 }
