@@ -508,7 +508,45 @@ void test_depth_cut_wide_and_far() {
     }
 }
 
+// Background below wide cuffs must not be extended as though every column ended
+// at a sole. Shadows can differ from the floor colour without being foreground.
+void test_depth_cut_cuff_background() {
+    constexpr std::uint32_t w=200,h=180;
+    for (int background : {0,1,2}) {
+        std::vector<float> depth(std::size_t{w}*h,1.0f/100.0f);
+        std::vector<std::uint8_t> pixels(std::size_t{w}*h*4,90);
+        Image picture(w,h);
+        for (std::uint32_t y=0;y<h;++y) for (std::uint32_t x=0;x<w;++x) {
+            const bool body=x>=65 && x<135 && y>=15 && y<90;
+            const bool cuff=((x>=70 && x<95)||(x>=110 && x<135)) && y>=90 && y<120;
+            const bool ankle=((x>=78 && x<87)||(x>=118 && x<127)) && y>=120 && y<137;
+            const bool shoe=((x>=78 && x<93)||(x>=118 && x<133)) && y>=137 && y<143;
+            const bool sole=((x>=79 && x<92)||(x>=119 && x<132)) && y>=143 && y<147;
+            const bool cuff_gap=!ankle && ((x>=70 && x<95)||(x>=110 && x<135)) && y>=120 && y<127;
+            const auto at=std::size_t{y}*w+x;
+            if (body||cuff||ankle||shoe) depth[at]=1.0f/60.0f;
+            if (sole) depth[at]=1.0f/99.5f;
+            if (cuff_gap && background==1) depth[at]=0;
+            if (cuff_gap && background==2) depth[at]=1.0f/99.0f;
+            for (int c=0;c<3;++c) {
+                const auto colour=static_cast<std::uint8_t>(cuff_gap?45:body||cuff||ankle||shoe||sole?150:90);
+                pixels[at*4+static_cast<std::size_t>(c)]=colour;
+                picture.at(x,y)[c]=colour;
+            }
+        }
+        const PixelView frame{pixels.data(),w,h,w*4,false,reinterpret_cast<const std::uint8_t*>(depth.data()),w*4};
+        expect(depth_mask(frame,{0,0,w,h},picture),"cuffed skater has a depth silhouette");
+        for (std::uint32_t y=120;y<127;++y) for (std::uint32_t x=70;x<78;++x)
+            expect(picture.at(x,y)[3]==0,"contrasting background below trouser cuff stays transparent");
+        for (std::uint32_t y=143;y<147;++y) for (std::uint32_t x=80;x<91;++x)
+            expect(picture.at(x,y)[3]==255,"near-contact soles remain intact after cuff cleanup");
+        for (std::uint32_t y=147;y<155;++y) for (std::uint32_t x=70;x<95;++x)
+            expect(picture.at(x,y)[3]==0,"floor beneath recovered sole remains transparent");
+    }
+}
+
 int main(int argc, char** argv) {
+    test_depth_cut_cuff_background();
     test_depth_cut_wide_and_far();
     test_depth_cut_contact();
     test_depth_cut();
