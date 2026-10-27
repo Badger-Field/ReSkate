@@ -277,6 +277,7 @@ private:
     friend struct KitApi;
     friend struct CaptureApi;
     friend struct PhysicsApi;
+    friend struct EffectsApi;
     std::uint64_t instance_{};
     struct Subcommand { std::string name, args, help; };
     struct Command { std::string help; int function{}; std::vector<Subcommand> subcommands; };
@@ -329,6 +330,9 @@ private:
     std::vector<double> errors_;
     double log_second_{};
     int log_lines_{};
+    std::map<std::uint64_t, bool> effect_handles_; // bool: decal
+    void prune_effects();
+    int effect_calls_{};
     int raycasts_{};                    // since the last tick
     body_query::Budget native_casts_{}; // world.probe's and probe_batch's native casts, failed ones included
     unsigned body_prepares_{};          // explicit native body preparation calls since the last tick

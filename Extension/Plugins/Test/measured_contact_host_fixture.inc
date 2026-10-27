@@ -184,6 +184,8 @@ void measured_contact_host_fixture_v1() {
             check(errors == 1, "A 25-byte page title needs one actual owner-prefixed length-error log");
             f::frame(host, environment);
             check(environment.pages.empty() && environment.panels.empty(), "A 25-character title produced a page");
+            // A failed startup still releases what the plugin may own (Host::load collects it), once.
+            f::only_cleanup(environment,id,1); environment.fake.calls.clear();
         }
         f::no_body_work(environment);
         ++cases;
