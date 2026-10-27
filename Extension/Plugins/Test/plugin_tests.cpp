@@ -2084,6 +2084,39 @@ void plugins_touch_hide_and_ray_at_players() {
 }
 
 // Menu pose observation is permission-gated and never writes board bones.
+void plugins_use_background_capture() {
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    host.apply({package("background", {{manifest_file, manifest(R"("capture")")}, {"plugin/main.lua", R"(
+        assert(reskate.capture.start({background=true,depth=true}))
+        reskate.capture.stop()
+        assert(reskate.capture.start({depth=true}))
+        reskate.on("tick",function()
+            local status=reskate.capture.state()
+            assert(type(status.pending)=="number" and type(status.dropped)=="number")
+            if status.pending==2 and status.dropped==7 then reskate.log("queue metrics") end
+        end)
+        reskate.log("background options")
+    )"}})});
+    ticks(host, environment, 1);
+    running(host, "background", environment);
+    check(game.capture_starts.size() == 2 && game.capture_starts[0].background && !game.capture_starts[1].background,
+          "background processing is opt-in; existing callers stay synchronous\n" + environment.all());
+    game.capture_now.pending = 2;
+    game.capture_now.dropped = 7;
+    ticks(host, environment, 1);
+    check(environment.logged("[background] queue metrics"), "pending and dropped frame metrics reach the plugin");
+    const auto calls = game.capture_starts.size();
+    host.apply({package("denied", {{manifest_file, manifest(R"("room")")}, {"plugin/main.lua", R"(
+        assert(not pcall(function()reskate.capture.start({background=true})end))
+        reskate.log("capture denied")
+    )"}})});
+    ticks(host, environment, 1);
+    check(environment.logged("[denied] capture denied") && game.capture_starts.size() == calls,
+          "background capture still requires capture permission");
+}
+
 void plugins_read_menu_pose() {
     TestEnvironment environment;
     auto& game = environment.fake;
@@ -4716,6 +4749,7 @@ int main() {
         run(plugins_read_joints_and_tune_physics);
         run(plugins_type_and_use_the_room);
         run(plugins_read_menu_pose);
+        run(plugins_use_background_capture);
         run(plugins_touch_hide_and_ray_at_players);
         run(plugins_use_the_games_clips);
         run(plugins_edit_clips);

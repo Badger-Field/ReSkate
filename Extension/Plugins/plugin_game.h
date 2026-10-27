@@ -452,6 +452,7 @@ public:
         bool depth{true};
         std::uint32_t height{}, skip{}, most{2400};
         double seconds{60};
+        bool background{};
     };
     virtual std::string capture_start(std::string_view /*plugin*/, const CaptureStart&) { return unavailable; }
     virtual void capture_stop(std::string_view /*plugin*/) {}
@@ -461,6 +462,7 @@ public:
         std::uint32_t taken{}, kept{};
         bool depth{};
         std::string message, file; // file: its path in the plugin's data folder
+        std::uint32_t dropped{},pending{};
     };
     // Another plugin's capture reads as idle.
     virtual CaptureStatus capture_status(std::string_view /*plugin*/) { return {"idle"}; }

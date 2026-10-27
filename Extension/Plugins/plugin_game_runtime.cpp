@@ -1300,6 +1300,7 @@ public:
         capture::RecordRequest r;
         r.area = {request.left, request.top, request.right, request.bottom, request.menu};
         r.depth = request.depth;
+        r.background = request.background;
         r.height = request.height;
         r.skip = request.skip;
         r.most = request.most;
@@ -1324,6 +1325,7 @@ public:
         static constexpr const char* names[] = {"idle", "recording", "stopped", "saving", "saved", "failed"};
         const auto s = capture::recorder().status();
         CaptureStatus out{names[static_cast<int>(s.state)], s.taken, s.kept, s.depth, s.message, {}};
+        out.dropped=s.dropped;out.pending=s.pending;
         if (s.state == capture::State::saved) out.file = capture_file_;
         return out;
     }

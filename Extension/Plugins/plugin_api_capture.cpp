@@ -94,6 +94,7 @@ struct CaptureApi {
             if (frame != "screen" && frame != "menu") luaL_error(L, "frame is \"screen\" or \"menu\"");
             request.menu = frame == "menu";
             request.depth = flag_option(L, 1, "depth", true);
+            request.background = flag_option(L, 1, "background", false);
             request.height = static_cast<std::uint32_t>(number_option(L, 1, "height", 0, 0, 4096));
             if (request.height && request.height < 64) luaL_error(L, "height is 0 (as on screen) or 64 to 4096");
             request.skip = static_cast<std::uint32_t>(number_option(L, 1, "skip", 0, 0, 600));
@@ -116,8 +117,10 @@ struct CaptureApi {
     static int state(lua_State* L) {
         auto& plugin = capturing(L, "reskate.capture.state");
         const auto now = game(plugin).capture_status(plugin.id());
-        lua_createtable(L, 0, 6);
+        lua_createtable(L, 0, 8);
         push_text(L, now.state, "state");
+        lua_pushinteger(L,static_cast<int>(now.dropped));lua_setfield(L,-2,"dropped");
+        lua_pushinteger(L,static_cast<int>(now.pending));lua_setfield(L,-2,"pending");
         lua_pushinteger(L, static_cast<int>(now.taken));
         lua_setfield(L, -2, "taken");
         lua_pushinteger(L, static_cast<int>(now.kept));

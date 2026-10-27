@@ -586,13 +586,18 @@ ItemPrompts item_browser_prompts() noexcept;
 // A presented frame as the game drew it, before ReSkate's own UI goes on top: 8-bit RGBA rows
 // (BGRA when `bgra`), `pitch` bytes apart. Valid only during the call it is handed to.
 struct GrabbedFrame {
-    const std::uint8_t *data{};
+    const std::uint8_t* data{};
     std::uint32_t width{}, height{}, pitch{};
     bool bgra{};
     // The game's depth for the same frame, when it was found (depth_probe.cpp): 32-bit floats,
     // reversed (1 near, 0 at the far plane), `depth_pitch` bytes a row, the size of the frame.
-    const std::uint8_t *depth{};
+    const std::uint8_t* depth{};
     std::uint32_t depth_pitch{};
+    // Optional cropped colour rectangle; depth still addresses the full source.
+    std::uint32_t origin_x{}, origin_y{}, source_width{}, source_height{};
+};
+struct GrabRegion {
+    std::uint32_t x{}, y{}, width{}, height{};
 };
 // Screen captures (Extension/Rendering/Capture, reskate.capture): asked on every presented frame, on
 // the render thread, whether they want its pixels, and handed them when they do. While `active` says
@@ -600,7 +605,9 @@ struct GrabbedFrame {
 struct FrameGrabHost {
     bool (*active)() noexcept {};
     bool (*wants_frame)() noexcept {};
-    void (*take_frame)(const GrabbedFrame &frame) noexcept {};
+    void (*take_frame)(const GrabbedFrame& frame) noexcept {};
+    // Optional screen-space colour region. Without it the whole frame is copied.
+    GrabRegion (*region)(std::uint32_t width, std::uint32_t height) noexcept {};
 };
 // `host` must stay valid for the life of the process.
 void set_frame_grab(const FrameGrabHost *host) noexcept;
