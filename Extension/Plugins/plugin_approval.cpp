@@ -56,6 +56,7 @@ constexpr Capability capabilities[] = {
     {"camera", "CAMERA", Risk::amber, "Control the camera"},
     {"input", "INPUT", Risk::amber, "Bind your keys, pads and mouse, and read text input"},
     {"capture", "SCREEN", Risk::amber, "Record your screen"},
+    {"viewmodel", "SCREEN", Risk::grey, "Draw a model of its own in front of your camera, such as something held"},
     {"hud", "SCREEN", Risk::amber, "Hide your HUD and change the trick ticker"},
     {"overlay", "SCREEN", Risk::amber, "Draw on your screen, with screen effects, toasts and x-ray view"},
     {"ui.screen", "SCREEN", Risk::grey, "Open its own screens and dialogs"},
@@ -275,6 +276,7 @@ std::string approval_prompt(const std::vector<PermissionGroup>& groups) {
             actions.push_back("bind keys, pads, and mouse, and read text input");
         } else if (group.category == "SCREEN") {
             if (has("capture")) actions.push_back("record your screen");
+            if (has("viewmodel")) actions.push_back("draw a model in front of your camera");
             if (has("hud")) actions.push_back("hide your HUD or change the trick ticker");
             if (has("overlay")) actions.push_back("draw on screen, including screen effects");
             if (has("ui.screen")) actions.push_back("open plugin screens and dialogs");
