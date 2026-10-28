@@ -275,6 +275,7 @@ private:
     friend struct KitApi;
     friend struct CaptureApi;
     friend struct EffectsApi;
+    friend struct ViewmodelApi;
     struct Subcommand { std::string name, args, help; };
     struct Command { std::string help; int function{}; std::vector<Subcommand> subcommands; };
     struct Timer { double due{}, every{}; int function{}; };

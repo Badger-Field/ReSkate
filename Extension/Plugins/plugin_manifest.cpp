@@ -18,15 +18,16 @@ namespace {
 // trick events, the trick list's feed and flick diagrams (reskate.tricks); "throwdowns" the
 // throwdown kit (modes, documents, the native flag); "server.parks" a dedicated server's park mods
 // (reskate.server.parks, park_spawn, park_remove); "variants" choosing which of its own mod's
-// variants is in the game (reskate.package.choose). A manifest's "resident" list and "variants" are
+// variants is in the game (reskate.package.choose); "viewmodel" a model of its own drawn in front of
+// the camera (reskate.viewmodel). A manifest's "resident" list and "variants" are
 // the merge's (Engine/Vfs/mod_list.h ResidentAssets, Variants), not the plugin host's.
-constexpr std::array<std::string_view, 51> permissions{
+constexpr std::array<std::string_view, 52> permissions{
     "console", "storage", "overlay", "menu", "ui.screen", "input", "hud", "events.tricks", "events.skater",
     "skater.read", "skater.teleport", "skater.control", "skater.animation", "trainer", "camera",
     "world.raycast", "world.objects", "world.entities", "world.environment", "world.ai", "travel", "session.read",
     "session.skaters", "session.nametags", "net.session", "net.http", "voice.control", "chat.read",
     "chat.send", "chat.local", "server", "server.parks", "throwdowns", "replay", "music", "progression.read", "settings.read", "audio.ui", "audio", "outfit", "board", "mods.read",
-    "events.physics", "game.speed", "files", "variants", "settings.write", "room", "capture", "effects", "events.physics.geometry"};
+    "events.physics", "game.speed", "files", "variants", "settings.write", "room", "capture", "effects", "events.physics.geometry", "viewmodel"};
 }
 
 bool known_permission(std::string_view name) noexcept {
