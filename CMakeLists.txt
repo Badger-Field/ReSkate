@@ -498,6 +498,10 @@ if(DINGOSDK_BUILD_PLUGIN_TESTS AND WIN32)
     target_compile_options(dingosdk_owned_body_source_tests PRIVATE /Gy /Gw)
     target_link_options(dingosdk_owned_body_source_tests PRIVATE /OPT:REF)
     add_test(NAME owned_body_source COMMAND dingosdk_owned_body_source_tests)
+    # How often reskate.entities.bounds may search every asset domain (world_entities_contract.h).
+    add_executable(dingosdk_world_entities_contract_tests Extension/World/Test/world_entities_contract_tests.cpp)
+    target_include_directories(dingosdk_world_entities_contract_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    add_test(NAME world_entities_contract COMMAND dingosdk_world_entities_contract_tests)
     set_tests_properties(owned_body_source PROPERTIES TIMEOUT 15)
     add_executable(dingosdk_effect_geometry_tests Extension/Rendering/Test/effect_geometry_tests.cpp
         Extension/Skater/skater_physics.cpp Extension/Plugins/plugin_effects.cpp)
