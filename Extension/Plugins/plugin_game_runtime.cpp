@@ -1320,6 +1320,12 @@ public:
         skater_animation::show_in_room(false);
         character_room::leave();
     }
+    std::optional<RoomPose> room_pose(bool skater) override {
+        if (!game_menu().open) return std::nullopt;
+        const auto pose = skater_animation::preview_pose(skater);
+        if (!pose) return std::nullopt;
+        return RoomPose{pose->place.position, pose->place.rotation, pose->age, pose->sequence};
+    }
     std::string room_turn(std::string_view, float value, int stick) override {
         if (value != 0 && !multiplayer::sample_game_ui_state(base_).in_menu) return "the game's menu is not open";
         overlay::hold_stick(stick, value, 300);
@@ -1361,6 +1367,7 @@ public:
         capture::RecordRequest r;
         r.area = {request.left, request.top, request.right, request.bottom, request.menu};
         r.depth = request.depth;
+        r.background = request.background;
         r.height = request.height;
         r.skip = request.skip;
         r.most = request.most;
@@ -1385,6 +1392,7 @@ public:
         static constexpr const char* names[] = {"idle", "recording", "stopped", "saving", "saved", "failed"};
         const auto s = capture::recorder().status();
         CaptureStatus out{names[static_cast<int>(s.state)], s.taken, s.kept, s.depth, s.message, {}};
+        out.dropped=s.dropped;out.pending=s.pending;
         if (s.state == capture::State::saved) out.file = capture_file_;
         return out;
     }

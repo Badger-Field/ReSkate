@@ -424,6 +424,13 @@ public:
     // stick of a stand-in pad: `value` -1..1 of the stick held for 300 ms (call it every tick), 0 lets
     // go; `stick` 0 left x, 1 left y, 2 right x, 3 right y. Only while the game's menu is open.
     virtual std::string room_turn(std::string_view /*plugin*/, float /*value*/, int /*stick*/) { return unavailable; }
+    struct RoomPose {
+        Vec3 position{};
+        std::array<float, 4> rotation{0, 0, 0, 1};
+        double age{};
+        std::uint64_t sequence{};
+    };
+    virtual std::optional<RoomPose> room_pose(bool /*skater*/) { return std::nullopt; }
     // The game's menu: whether it is open, whether it shows the Skaters page, and the navigations of
     // the open page's buttons (how the game names where each goes: "CASPresetPurchase", ...).
     struct GameMenu {
@@ -453,6 +460,7 @@ public:
         bool depth{true};
         std::uint32_t height{}, skip{}, most{2400};
         double seconds{60};
+        bool background{};
     };
     virtual std::string capture_start(std::string_view /*plugin*/, const CaptureStart&) { return unavailable; }
     virtual void capture_stop(std::string_view /*plugin*/) {}
@@ -462,6 +470,7 @@ public:
         std::uint32_t taken{}, kept{};
         bool depth{};
         std::string message, file; // file: its path in the plugin's data folder
+        std::uint32_t dropped{},pending{};
     };
     // Another plugin's capture reads as idle.
     virtual CaptureStatus capture_status(std::string_view /*plugin*/) { return {"idle"}; }

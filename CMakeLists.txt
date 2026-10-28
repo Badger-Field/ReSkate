@@ -237,6 +237,10 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS AND WIN32)
     add_executable(dingosdk_playstation_report_tests Engine/Game/Input/Test/playstation_report_tests.cpp)
     target_include_directories(dingosdk_playstation_report_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     add_test(NAME playstation_report COMMAND dingosdk_playstation_report_tests)
+    add_executable(dingosdk_scripted_pad_tests Extension/UI/Overlay/Test/scripted_pad_tests.cpp
+        Extension/UI/Overlay/scripted_pad.cpp)
+    target_include_directories(dingosdk_scripted_pad_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    add_test(NAME scripted_pad COMMAND dingosdk_scripted_pad_tests)
     add_executable(dingosdk_physics_tuning_tests Extension/Skater/Test/physics_tuning_tests.cpp
         Extension/Skater/physics_tuning_model.cpp)
     target_include_directories(dingosdk_physics_tuning_tests PRIVATE "${PROJECT_SOURCE_DIR}")
