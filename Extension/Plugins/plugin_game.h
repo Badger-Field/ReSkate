@@ -521,6 +521,17 @@ public:
     // the ticker's label `from` shown as `to` (empty: that label is the game's again), and the next
     // trick with one of `from`'s ids, within `within_ms`, recorded as `to`. Empty when done, else why not.
     virtual std::string trick_label(std::string_view /*plugin*/, std::string_view /*from*/, std::string_view /*to*/) { return unavailable; }
+    // ---- strings: the text the game shows for its ids (Extension/Localization/text_overrides.h) ----
+    // Each key (an id, or "#" and 1 to 8 hex digits for one known by its hash) shown as its UTF-8
+    // text, checked by the API; stored over the next ticks. Empty when taken, else why not.
+    virtual std::string strings_set(std::string_view /*plugin*/, const std::vector<std::pair<std::string, std::string>>& /*texts*/) {
+        return unavailable;
+    }
+    // Whether the game has text for the key; nullopt when it cannot say.
+    virtual std::optional<bool> string_exists(std::string_view /*key*/) { return std::nullopt; }
+    // The casing rules the UI's own capitalization follows while the plugin is loaded: "tr" (i to U+0130,
+    // I to U+0131), or "" for the game's. Empty when taken, else why not.
+    virtual std::string strings_case_rules(std::string_view /*plugin*/, std::string_view /*rules*/) { return unavailable; }
     // ---- content: a folder of every enabled mod, as the plugin's manifest names it ("content") -------
     struct ContentFile {
         std::string mod, title; // the mod's folder name and its own name
