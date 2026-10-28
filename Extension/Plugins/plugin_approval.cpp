@@ -55,6 +55,8 @@ constexpr Capability capabilities[] = {
     {"world.raycast", "WORLD", Risk::grey, "Cast rays and pick objects in the world"},
     {"camera", "CAMERA", Risk::amber, "Control the camera"},
     {"input", "INPUT", Risk::amber, "Bind your keys, pads and mouse, and read text input"},
+    // Red: it can relabel anything the game shows, its store's buttons and prices included.
+    {"strings", "SCREEN", Risk::red, "Change the text the game shows, in its menus and its store"},
     {"capture", "SCREEN", Risk::amber, "Record your screen"},
     {"viewmodel", "SCREEN", Risk::grey, "Draw a model of its own in front of your camera, such as something held"},
     {"hud", "SCREEN", Risk::amber, "Hide your HUD and change the trick ticker"},
@@ -275,6 +277,7 @@ std::string approval_prompt(const std::vector<PermissionGroup>& groups) {
         } else if (group.category == "INPUT") {
             actions.push_back("bind keys, pads, and mouse, and read text input");
         } else if (group.category == "SCREEN") {
+            if (has("strings")) actions.push_back("change the text the game shows, in its menus and its store");
             if (has("capture")) actions.push_back("record your screen");
             if (has("viewmodel")) actions.push_back("draw a model in front of your camera");
             if (has("hud")) actions.push_back("hide your HUD or change the trick ticker");
