@@ -78,6 +78,8 @@ ListingVerdict Listings::verdict(std::string_view folder, std::int64_t now) {
     const auto found = records_.find(key);
     if (found == records_.end()) {
         if (!asked_.contains(key)) asked_[key] = 0; // (looked up at the next take_wanted)
+        // Offline, or Thunderstore is down: the check is skipped until it answers.
+        if (unreachable_.contains(key)) return {true, {}};
         return {false, "waiting to look " + *package + " up on Thunderstore: a mod's plugin runs only when Thunderstore lists it as a plugin"};
     }
     (void)now;
@@ -113,11 +115,16 @@ std::vector<std::string> Listings::take_wanted(std::int64_t now) {
 }
 
 void Listings::record(std::string_view package, const ListingAnswer& answer, std::int64_t now) {
-    if (!listing_package(package) || answer.kind == ListingAnswer::Kind::failed) return; // (a failure keeps what was known)
+    if (!listing_package(package)) return;
     Record record;
     record.checked = now;
     std::lock_guard lock(mutex_);
     const auto key = lowered(package);
+    // A failure keeps what was known; with nothing known, the plugin runs without the check (verdict).
+    if (answer.kind == ListingAnswer::Kind::failed) {
+        if (!records_.contains(key)) unreachable_.insert(key);
+        return;
+    }
     if (const auto known = records_.find(key); known != records_.end()) record.was_listed = known->second.was_listed;
     if (answer.kind == ListingAnswer::Kind::missing) {
         record.state = Record::State::missing;
@@ -149,6 +156,7 @@ void Listings::record(std::string_view package, const ListingAnswer& answer, std
         }
     }
     records_[key] = record;
+    unreachable_.erase(key);
     save();
 }
 

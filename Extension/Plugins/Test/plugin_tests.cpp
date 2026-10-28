@@ -6362,7 +6362,8 @@ void reskate_hostile_is_stopped_or_refused_every_time() {
 // A mod's plugin runs only from a package Thunderstore lists as a plugin: one disguised as a
 // cosmetics pack does not, nor one taken off Thunderstore since; a folder that is not a package, or
 // a package Thunderstore never had, is the player's own and runs. Until a package has been looked
-// up, its plugin waits; the answers are kept in a file and asked again after six hours.
+// up, its plugin waits, unless Thunderstore cannot be reached: then the check is skipped until it
+// answers. The answers are kept in a file and asked again after six hours.
 void thunderstore_says_which_packages_run_plugins() {
     const auto file = scratch / "listings.json";
     std::filesystem::remove(file);
@@ -6415,6 +6416,19 @@ void thunderstore_says_which_packages_run_plugins() {
         check(!again.verdict("kokomorning2-Walmart_Cosmetics", now).runs && again.verdict("Team-Speedometer", now).runs &&
                   !again.verdict("Team-Taken_Down", now).runs && again.verdict("Team-Not_Yet_Uploaded", now).runs,
               "The answers are kept across launches");
+    }
+    {
+        // Offline: a package never answered for runs without the check, until Thunderstore answers.
+        Listings offline;
+        check(!offline.verdict("Team-Offline_Pack", now).runs && offline.take_wanted(now).size() == 1, "A package waits for its first lookup");
+        offline.record("Team-Offline_Pack", {ListingAnswer::Kind::failed, {}}, now);
+        check(offline.verdict("Team-Offline_Pack", now).runs, "When Thunderstore cannot be reached, the check is skipped");
+        check(offline.take_wanted(now + Listings::retry_seconds).size() == 1, "and it is asked again a minute later");
+        offline.record("Team-Offline_Pack", answer("Team", "Offline_Pack", {"Cosmetics"}), now + Listings::retry_seconds);
+        check(!offline.verdict("Team-Offline_Pack", now + Listings::retry_seconds).runs, "Once it answers, its answer holds");
+        offline.record("Team-Offline_Pack", {ListingAnswer::Kind::failed, {}}, now + Listings::refresh_seconds * 2);
+        check(!offline.verdict("Team-Offline_Pack", now + Listings::refresh_seconds * 2).runs,
+              "and going offline later does not undo a refusal");
     }
     check(listing_package("Owner-Name-1.2.3") == std::optional<std::string>("Owner-Name") && listing_package("Owner-Name") &&
               !listing_package("Owner-Name-latest") && !listing_package("Owner") && !listing_package("Own er-Name"),

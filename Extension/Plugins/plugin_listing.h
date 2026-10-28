@@ -4,6 +4,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,9 +21,10 @@
 // made, before it is uploaded), is not Thunderstore's to say and runs as before, once the player
 // has turned it on (plugin_approval.h).
 //
-// The answers are kept in a file and asked again every few hours. Until a package has been looked
-// up once, its plugin waits. The game asks thunderstore.io itself (plugin_runtime.cpp); this is the
-// bookkeeping, which the tests drive with answers of their own.
+// The answers are kept in a file and asked again every few hours. A package not looked up yet waits
+// for its first answer; when Thunderstore cannot be reached (offline, or it is down) the check is
+// skipped and the plugin runs, until an answer comes. The game asks thunderstore.io itself
+// (plugin_runtime.cpp); this is the bookkeeping, which the tests drive with answers of their own.
 namespace dingosdk::plugins {
 // What thunderstore.io answered about one package.
 struct ListingAnswer {
@@ -62,6 +64,7 @@ private:
     std::map<std::string, Record, std::less<>> records_;  // by "owner-name", lower case
     std::map<std::string, std::int64_t, std::less<>> asked_; // lower case: when it was last handed out to look up
     std::map<std::string, std::string, std::less<>> names_;  // lower case to the folder's own spelling
+    std::set<std::string, std::less<>> unreachable_;         // lower case: no answer, and the last lookup failed
 };
 // The package a mod folder is named as ("Owner-Name"), or nothing.
 std::optional<std::string> listing_package(std::string_view folder);
