@@ -1,4 +1,5 @@
 #include "plugin_game_runtime.h"
+#include "Extension/Rendering/plugin_effects.h"
 #include "plugin_session_feed.h"
 #include "plugin_content.h"
 #include "Runtime/runtime_internal.h"
@@ -65,6 +66,7 @@
 #include <filesystem>
 #include "Extension/UI/Overlay/overlay.h"
 #include "Extension/UI/Overlay/screen_look.h"
+#include "Extension/UI/Overlay/viewmodel.h"
 #include "Extension/UI/Overlay/scripted_pad.h"
 #include "Extension/World/character_room.h"
 #include "Extension/Rendering/Capture/capture_runtime.h"
@@ -513,6 +515,7 @@ public:
     }
     std::string board_hide(std::string_view plugin, int bone, bool everyone) override { return board_pose::hide(plugin, bone, everyone); }
     void board_clear(std::string_view plugin, int bone) override { board_pose::clear(plugin, bone); }
+    std::string board_scale(std::string_view plugin, int bone, std::optional<Vec3> size) override { return board_pose::scale(plugin, bone, size); }
     void board_park(std::string_view plugin, std::vector<int> bones) override { board_pose::park(plugin, std::move(bones)); }
     std::string board_toss(std::string_view plugin, std::vector<int> bones, const Vec3& velocity, const Vec3& spin, float ground) override {
         return board_pose::toss(plugin, std::move(bones), velocity, spin, ground);
@@ -584,6 +587,14 @@ public:
         auto layers = outfit_overlay::layers(plugin);
         return {std::move(layers.items), std::move(layers.worn), std::move(layers.note)};
     }
+    std::uint64_t effect_create(std::string_view plugin, const EffectRequest& request) override { return effects::create(plugin, request); }
+    void effect_move(std::string_view plugin, std::uint64_t id, const EffectMatrix& transform) override { effects::move(plugin, id, transform); }
+    void effect_stop(std::string_view plugin, std::uint64_t id) override { effects::stop(plugin, id); }
+    void effect_opacity(std::string_view plugin, std::uint64_t id, float value) override { effects::opacity(plugin, id, value); }
+    void effect_release(std::string_view plugin, std::uint64_t id) override { effects::release(plugin, id); }
+    std::vector<std::uint64_t> effects_live(std::string_view plugin) override { return effects::live(plugin); }
+    void effects_clear(std::string_view plugin) override { effects::clear(plugin); }
+    std::pair<bool, std::uint64_t> effects_state() override { return effects::status(); }
     // ---- the skater's physics ------------------------------------------------------------------------
     SkaterNews take_skater_news() override {
         skater_events::want();
@@ -602,16 +613,20 @@ public:
     std::vector<PhysicsStep> take_physics_steps() override {
         skater_events::want_steps();
         std::vector<PhysicsStep> out;
+        NoBailSkater owner;
+        const bool owned = no_bail_skater(owner);
         for (const auto& news : skater_events::take_steps()) {
+            if (!owned || news.entity != owner.entity || news.rig != owner.rig) continue;
             const auto& s = news.step;
-            PhysicsStep step{news.at, s.seconds, s.wipeout, s.airborne, s.ragdoll, std::nullopt, s.spin, {}};
+            PhysicsStep step{news.at, s.seconds, s.wipeout, s.airborne, s.ragdoll, std::nullopt, s.spin, {}, {}, s.state};
             if (s.velocity) step.velocity = Vec3{(*s.velocity)[0], (*s.velocity)[1], (*s.velocity)[2]};
             for (std::size_t i = 1; i < skater_body::count; ++i) {
                 const auto& c = s.body.bodies[i];
+                if (const auto& pose = s.poses[i]) step.poses.emplace(skater_body::names[i], PhysicsStep::Pose{pose->transform, pose->velocity});
                 if (!c.touching) continue;
                 const float slide = std::sqrt(c.slide[0] * c.slide[0] + c.slide[1] * c.slide[1] + c.slide[2] * c.slide[2]);
                 step.bodies.push_back({skater_body::names[i], c.impact, std::isfinite(slide) ? slide : 0.0f, c.hit.board, c.hit.vehicle,
-                                      c.hit.world || c.hit.kind_5 || c.hit.kind_11});
+                                      c.hit.world || c.hit.kind_5 || c.hit.kind_11, c.point, c.normal});
             }
             out.push_back(std::move(step));
         }
@@ -900,12 +915,18 @@ public:
         if (!pad.valid) return std::nullopt;
         return PadInput{pad.left_x, pad.left_y, pad.right_x, pad.right_y, pad.left_trigger, pad.right_trigger, pad.buttons, pad.playstation};
     }
-    std::optional<StickInput> joystick() override {
+    std::optional<StickInput> joystick(int device) override {
         if (!joystick::game_in_foreground()) return std::nullopt;
-        const auto sample = joystick::poll();
+        const auto sample = joystick::poll(device);
         if (!sample.valid) return std::nullopt;
-        overlay::note_joystick(sample.buttons, sample.axes);
-        return StickInput{sample.axes, sample.buttons, sample.name};
+        // (Binds take a joystick's first six axes.)
+        overlay::note_joystick(sample.buttons, {sample.axes[0], sample.axes[1], sample.axes[2], sample.axes[3], sample.axes[4], sample.axes[5]});
+        return StickInput{sample.axes, sample.buttons, sample.name, sample.device};
+    }
+    std::vector<StickDevice> joysticks() override {
+        std::vector<StickDevice> out;
+        for (const auto& sample : joystick::list()) out.push_back({sample.device, sample.name});
+        return out;
     }
     std::string capture_input(std::string_view plugin, bool on) override {
         if (!on) {
@@ -1002,6 +1023,62 @@ public:
         s.text = look->text;
         screen_look::set(s);
         return {};
+    }
+    // ---- viewmodel -----------------------------------------------------------------------------------
+    std::string viewmodel_load(std::string_view plugin, const std::filesystem::path& file) override {
+        if (!viewmodeler_.empty() && viewmodeler_ != plugin) return viewmodeler_ + " has the viewmodel";
+        viewmodeler_ = plugin;
+        viewmodel::load(file);
+        return {};
+    }
+    void viewmodel_unload(std::string_view plugin) override {
+        if (viewmodeler_ != plugin) return;
+        viewmodel::unload();
+        viewmodeler_.clear();
+    }
+    std::optional<ViewmodelInfo> viewmodel_info(std::string_view plugin) override {
+        if (viewmodeler_ != plugin) return std::nullopt;
+        const auto now = viewmodel::info();
+        ViewmodelInfo out;
+        out.status = now.status == viewmodel::Status::ready ? "ready" : now.status == viewmodel::Status::failed ? "failed" : "loading";
+        out.why = now.why;
+        for (const auto& clip : now.clips) out.clips.emplace_back(clip.name, clip.duration);
+        out.bones = now.bones;
+        return out;
+    }
+    std::string viewmodel_show(std::string_view plugin, std::optional<ViewmodelLook> look) override {
+        if (viewmodeler_ != plugin) return "this plugin has no viewmodel loaded";
+        // Never over the game's own menu (paused, the customization pages): the plugin is told why.
+        if (!look || (base_ && multiplayer::sample_game_ui_state(base_).in_menu)) {
+            viewmodel::hide();
+            return look ? "the game's menu is open" : std::string{};
+        }
+        viewmodel::Look v;
+        v.offset = look->offset;
+        v.yaw = look->yaw, v.pitch = look->pitch, v.roll = look->roll, v.fov = look->fov;
+        v.light = look->light, v.light_colour = look->light_colour, v.sky = look->sky, v.ground = look->ground;
+        v.ambient = look->ambient, v.brightness = look->brightness;
+        viewmodel::show(v);
+        return {};
+    }
+    std::string viewmodel_play(std::string_view plugin, std::string_view clip, bool loop, float speed, float fade) override {
+        if (viewmodeler_ != plugin) return "this plugin has no viewmodel loaded";
+        return viewmodel::play(clip, {-1, loop, speed, fade});
+    }
+    void viewmodel_stop(std::string_view plugin) override {
+        if (viewmodeler_ == plugin) viewmodel::stop();
+    }
+    std::optional<ViewmodelState> viewmodel_state(std::string_view plugin) override {
+        if (viewmodeler_ != plugin) return std::nullopt;
+        const auto now = viewmodel::state();
+        if (now.clip.empty()) return std::nullopt;
+        return ViewmodelState{now.clip, now.time, now.duration, now.done};
+    }
+    std::optional<ViewmodelBone> viewmodel_bone(std::string_view plugin, std::string_view name) override {
+        if (viewmodeler_ != plugin) return std::nullopt;
+        const auto found = viewmodel::bone(name);
+        if (!found) return std::nullopt;
+        return ViewmodelBone{found->position, found->x, found->y, found->z};
     }
     std::string screen_slap(std::string_view plugin) override {
         if (looker_ != plugin || GetTickCount64() >= look_at_ + 300) return "only over this plugin's screen look";
@@ -1250,7 +1327,9 @@ public:
     }
     GameMenu game_menu() override {
         GameMenu menu;
-        menu.open = multiplayer::sample_game_ui_state(base_).in_menu;
+        const auto state = multiplayer::sample_game_ui_state(base_);
+        menu.open = state.in_menu;
+        menu.known = state.available;
         if (!menu.open) return menu;
         const auto buttons = character_room::menu_buttons(base_);
         menu.skaters = character_room::is_skaters_page(buttons);
@@ -1628,6 +1707,7 @@ public:
         stop_clip(plugin);
         text_overrides::release(plugin);
         plugin_sound::stop_all(plugin);
+        effects::clear(plugin);
         outfit_overlay::clear(plugin);
         item_browser::release_owner(plugin);
         (void)outfit_overlay::set_layers(std::string(plugin), {});
@@ -1659,6 +1739,10 @@ public:
         if (looker_ == plugin) {
             screen_look::clear();
             looker_.clear();
+        }
+        if (viewmodeler_ == plugin) {
+            viewmodel::unload();
+            viewmodeler_.clear();
         }
         if (poser_ == plugin) {
             skater_animation::pose({}, 1);
@@ -1715,6 +1799,7 @@ private:
     std::string room_owner_; // the plugin in the character room (room_open)
     std::uint64_t pose_at_{};
     std::string looker_;  // the plugin whose look is on the screen (screen_look)
+    std::string viewmodeler_; // the plugin whose viewmodel is loaded (viewmodel_load)
     std::uint64_t look_at_{};
     std::uint64_t reach_at_{};
     struct MouseReader {
