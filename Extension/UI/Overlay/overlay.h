@@ -454,11 +454,13 @@ void show_message(std::string title, std::string text) noexcept;
 bool message_asking() noexcept;
 void message_dismiss() noexcept;
 // A question with two answers, in the message's look (message_card.cpp), held and answered by the
-// runtime as the message is: left and right pick, A takes the pick, B is the second answer. `label`
+// runtime as the message is: left and right pick, A takes the pick, B goes back. `label`
 // says what is asking ("MOD MANAGER"); `answer` is called once, with true for the first answer, on
-// whichever thread answers it. A message to say OK to goes over it. Any thread.
+// whichever thread answers it. Esc or B (going back) gives the second
+// answer, or the first when `back_is_yes`. A message to say OK to goes over it. Any thread.
 void ask_question(std::string label, std::string title, std::string text, std::string yes, std::string no,
-                  std::function<void(bool)> answer) noexcept;
+                  std::function<void(bool)> answer, bool back_is_yes = false) noexcept;
+bool question_back() noexcept;
 bool question_asking() noexcept;
 void question_pick(bool yes) noexcept;
 bool question_picked() noexcept;

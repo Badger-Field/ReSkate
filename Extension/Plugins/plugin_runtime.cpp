@@ -1,10 +1,13 @@
 #include "plugin_runtime.h"
+#include "plugin_approval.h"
 #include "plugin_discovery.h"
 #include "plugin_host.h"
 #include "plugin_camera.h"
 #include "plugin_http.h"
 #include "plugin_game_runtime.h"
 #include "plugin_wire.h"
+#include "Engine/Vfs/thunderstore_package.h"
+#include "Engine/Vfs/initfs.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Game/Multiplayer/session_tools.h"
 #include "Extension/Multiplayer/Session/session.h"
@@ -21,16 +24,32 @@
 #include <ShlObj.h>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <format>
 #include <mutex>
 #include <numbers>
+#include <set>
 #include <thread>
 
 namespace dingosdk::plugins {
 namespace {
 std::uintptr_t base{};
+// What the player let run (plugin_approval.h), and that it changed: the host reads it again.
+Approvals* approvals{};
+std::atomic<bool> reapply{};
+// id and plugin fingerprint of the files the discovery thread has hashed again since they were answered for.
+std::mutex verified_mutex;
+std::set<std::string> verified; // under verified_mutex
+bool is_verified(const Candidate& candidate) {
+    std::lock_guard lock(verified_mutex);
+    return verified.contains(candidate.id + "|" + candidate.plugin_fingerprint);
+}
+void forget_verified(const std::string& id, const std::string& print) {
+    std::lock_guard lock(verified_mutex);
+    verified.erase(id + "|" + print);
+}
 // What the discovery thread last found of the Mods folder (reskate.mods).
 std::mutex mods_mutex;
 std::vector<ModInfo> found_mods; // under mods_mutex
@@ -61,6 +80,15 @@ public:
         return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
     }
     std::filesystem::path storage_root() override { return storage_; }
+    // On only for files the discovery thread has hashed again since the answer (verified): its cache goes
+    // by size and time, and what loads must be what was answered for. The game thread hashes nothing.
+    std::optional<bool> approved(const Candidate& candidate) override {
+        return candidate.sources && approvals->state(candidate.id, candidate.plugin_fingerprint) == Approval::on && is_verified(candidate);
+    }
+    void approve(const Candidate& candidate, bool on) override {
+        approvals->set(candidate.id, candidate.plugin_fingerprint, on);
+        if (!on) forget_verified(candidate.id, candidate.plugin_fingerprint);
+    }
     bool builtin_command(std::string_view word) override {
         const auto& commands = console::game_commands();
         return commands.find(word) || !commands.under(word).empty();
@@ -190,6 +218,14 @@ std::mutex found_mutex;
 std::vector<Candidate> found;      // under found_mutex
 std::uint64_t found_generation{};  // under found_mutex
 std::uint64_t applied_generation{};
+struct ReloadRequest {
+    std::string id, mod_fingerprint, plugin_fingerprint;
+    bool server{};
+};
+std::mutex reload_mutex;
+std::map<std::string, ReloadRequest, std::less<>> reload_requests; // awaiting a fresh discovery snapshot
+std::map<std::string, ReloadRequest, std::less<>> reload_ready; // safe to reload on the client thread
+std::string reload_key(std::string_view id, bool server) { return std::string(server ? "server|" : "client|") + std::string(id); }
 // A change to the plugins waits for the game window to have the focus: a plugin being edited in
 // another window loads once, when the player comes back to the game, not at every save. The first
 // set loads at once, focused or not.
@@ -253,24 +289,136 @@ void read_tricks() {
     host->trick(news);
 }
 
+// A plugin the player can be asked about or has answered for: shown in the menu's PLUGINS page.
+struct Row {
+    std::string id, title, author, fingerprint;
+    std::vector<PermissionGroup> can; // plugin_approval.h's groups
+};
+std::mutex rows_mutex;
+std::vector<Row> rows; // under rows_mutex: the plugins discovery found that may load
+std::atomic<bool> prompt_open{};
+
+// Asks about the first plugin that has no answer, when nothing else is being asked: one prompt at
+// a time. Called by the discovery thread, which is not the game's.
+void ask_next() {
+    static std::chrono::steady_clock::time_point asked_at; // (this thread's)
+    // Ours was replaced, or never shown: the answer will not come. Five seconds from when it was last
+    // seen up, so an answer given late is not asked again before it is saved.
+    if (overlay::question_asking()) asked_at = std::chrono::steady_clock::now();
+    if (prompt_open && !overlay::question_asking() && std::chrono::steady_clock::now() - asked_at > std::chrono::seconds(5)) prompt_open = false;
+    if (prompt_open || overlay::question_asking() || overlay::message_asking()) return;
+    Row row;
+    {
+        std::lock_guard lock(rows_mutex);
+        const auto next = std::find_if(rows.begin(), rows.end(), [](const Row& r) { return approvals->state(r.id, r.fingerprint) == Approval::asking; });
+        if (next == rows.end()) return;
+        row = *next;
+    }
+    std::string text = approval_prompt(row.can);
+    prompt_open = true;
+    asked_at = std::chrono::steady_clock::now();
+    // A long title is cut to fit the card, not in the middle of a character.
+    auto cut = std::min<std::size_t>(row.title.size(), 37);
+    while (cut > 0 && cut < row.title.size() && (static_cast<unsigned char>(row.title[cut]) & 0xC0) == 0x80) --cut;
+    const auto title = row.title.size() > 40 ? row.title.substr(0, cut) + "..." : row.title;
+    // The first answer is Keep off, and Esc or B means it too: only a click or press on Turn on turns it on.
+    overlay::ask_question("PLUGINS", title, std::move(text), "Keep off", "Turn on", [row](bool first) {
+        approvals->set(row.id, row.fingerprint, !first);
+        if (first) forget_verified(row.id, row.fingerprint);
+        reapply = true;
+        prompt_open = false;
+    }, true);
+}
+
 void watch() {
     FileChecks checks;
     for (;;) {
         try {
+            std::vector<ReloadRequest> rechecks;
+            {
+                std::lock_guard lock(reload_mutex);
+                for (const auto& [key, request] : reload_requests) rechecks.push_back(request);
+            }
+            for (const auto& request : rechecks) checks.forget_plugin(request.id, request.mod_fingerprint);
             std::vector<ModInfo> mods;
             auto plugins = discover(data_root, checks, &mods);
+            bool verified_new = false;
+            for (auto& candidate : plugins) {
+                if (!candidate.refusal.empty() || approvals->state(candidate.id, candidate.plugin_fingerprint) != Approval::on || is_verified(candidate)) continue;
+                auto fresh = plugin_snapshot(candidate.directory);
+                if (fresh.fingerprint == candidate.plugin_fingerprint && fresh.error.empty()) {
+                    candidate.sources = fresh.sources;
+                    checks.plugins[candidate.id + "|" + candidate.fingerprint] = fresh;
+                    std::lock_guard lock(verified_mutex);
+                    verified.insert(candidate.id + "|" + fresh.fingerprint);
+                    verified_new = true;
+                } else {
+                    // (The cache was stale: the files are not the ones answered for. The cache is corrected too.)
+                    candidate.plugin_fingerprint = fresh.fingerprint;
+                    candidate.sources = fresh.sources;
+                    if (!fresh.error.empty()) {
+                        if (!candidate.refusal.empty()) candidate.refusal += "; ";
+                        candidate.refusal += "plugin source snapshot: " + fresh.error;
+                    }
+                    checks.plugins[candidate.id + "|" + candidate.fingerprint] = std::move(fresh);
+                }
+            }
+            if (!rechecks.empty()) {
+                std::lock_guard lock(reload_mutex);
+                for (const auto& request : rechecks) {
+                    const auto key = reload_key(request.id, request.server);
+                    const auto pending = reload_requests.find(key);
+                    if (pending == reload_requests.end()) continue;
+                    const auto current = std::find_if(plugins.begin(), plugins.end(), [&](const Candidate& candidate) { return candidate.id == request.id; });
+                    if (current == plugins.end() || !current->refusal.empty() || current->fingerprint != request.mod_fingerprint ||
+                        current->plugin_fingerprint != request.plugin_fingerprint) {
+                        reload_requests.erase(pending); // a new candidate takes the ordinary approval and apply path
+                        continue;
+                    }
+                    if (approvals->state(current->id, current->plugin_fingerprint) != Approval::on) {
+                        reload_requests.erase(pending);
+                        continue;
+                    }
+                    if (approvals->state(current->id, current->plugin_fingerprint) == Approval::on && is_verified(*current) && current->sources) {
+                        reload_ready[key] = request;
+                        reload_requests.erase(pending);
+                    }
+                }
+            }
             {
                 std::lock_guard lock(mods_mutex);
-                found_mods = std::move(mods);
+                found_mods = mods;
             }
             std::lock_guard lock(found_mutex);
             if (plugins != found || !found_generation) {
+                std::vector<Row> built;
+                for (const auto& candidate : plugins) {
+                    const auto manifest = candidate.refusal.empty() && candidate.sources ? read_manifest(*candidate.sources) : std::nullopt;
+                    if (!manifest) continue;
+                    const auto mod = std::find_if(mods.begin(), mods.end(), [&](const ModInfo& m) { return m.folder == candidate.id; });
+                    // A title a player reads: the mod's own, else its package's name; no underscores.
+                    auto title = mod != mods.end() && !mod->title.empty() ? mod->title : candidate.id;
+                    auto author = mod != mods.end() ? mod->author : std::string{};
+                    if (title == candidate.id)
+                        if (const auto name = thunderstore_package::parse_name(candidate.id)) {
+                            title = name->name;
+                            if (author.empty()) author = name->owner;
+                        }
+                    std::replace(title.begin(), title.end(), '_', ' ');
+                    built.push_back({candidate.id, std::move(title), std::move(author), candidate.plugin_fingerprint, permission_groups(*manifest)});
+                }
+                {
+                    std::lock_guard rows_lock(rows_mutex);
+                    rows = std::move(built);
+                }
                 found = std::move(plugins);
                 ++found_generation;
             }
+            if (verified_new) reapply = true; // (what waited for the check loads now)
         } catch (const std::exception& error) {
             logging::log(logging::Level::warning, logging::Channel::plugins, "Looking for plugins failed: {}", error.what());
         }
+        try { ask_next(); } catch (const std::exception&) {}
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
 }
@@ -296,6 +444,8 @@ bool start(std::uintptr_t image_base) noexcept {
         data_root = std::filesystem::path(std::wstring(path.data(), length)).parent_path();
         auto storage = local_storage();
         if (storage.empty()) storage = data_root / L"ReSkate.Plugins";
+        approvals = new Approvals(storage.parent_path() / L"plugin_approvals.json");
+        try { approvals->set_developer(initfs::plugin_developer_mode(data_root)); } catch (const std::exception&) {}
         server_environment = new GameEnvironment(storage / L"server", true);
         environment = new GameEnvironment(std::move(storage), false);
         host = new Host(*environment, Side::client);
@@ -331,6 +481,15 @@ void on_client_tick() noexcept {
                 }
             }
             if (changed) host->apply(latest);
+            if (reapply.exchange(false)) {
+                std::vector<Candidate> now;
+                {
+                    std::lock_guard lock(found_mutex);
+                    now = found;
+                }
+                host->apply(now);
+                if (serving) server_host->apply(now);
+            }
             // The server copies run while this game hosts a lobby (a dedicated server runs its own).
             const auto session = environment->session();
             local_player = 0;
@@ -352,6 +511,18 @@ void on_client_tick() noexcept {
                     server_mail = {};
                 }
             } else if (serving && changed) server_host->apply(latest);
+        }
+        std::vector<ReloadRequest> ready_reloads_now;
+        {
+            std::lock_guard lock(reload_mutex);
+            for (const auto& [key, request] : reload_ready) ready_reloads_now.push_back(request);
+            reload_ready.clear();
+        }
+        for (const auto& request : ready_reloads_now) {
+            const auto message = request.server
+                ? (serving ? server_host->reload(request.id) : "error: server copies no longer run here.")
+                : host->reload(request.id);
+            environment->console(message);
         }
         const auto now = std::chrono::steady_clock::now();
         const double dt = last_tick == std::chrono::steady_clock::time_point{} ? 0
@@ -437,10 +608,15 @@ std::string describe() {
             plugins.push_back(std::move(status));
         }
     if (plugins.empty()) return "No plugins. A plugin is a mod in Mods with a reskate-plugin.json.";
-    std::string text;
+    std::string text = developer_mode() ? "Plugin developer mode is on: plugins you approved keep their approval when their files change." : "";
+    const auto answers = installed();
     for (const auto& plugin : plugins) {
         if (!text.empty()) text += '\n';
-        text += std::format("{}: {}", plugin.id, plugin.state);
+        // A plugin nobody has answered for is held too, but it is waiting, not switched off.
+        const bool waiting = plugin.state == "switched off" && std::any_of(answers.begin(), answers.end(), [&](const Installed& row) {
+            return row.approval == Approval::asking && (plugin.id == row.id || plugin.id == row.id + "@server");
+        });
+        text += std::format("{}: {}", plugin.id, waiting ? "waiting for approval" : plugin.state);
         if (plugin.state == "running")
             text += std::format(", {:.1f} MB, {:.3f} ms a tick, {} command{}", plugin.memory / 1048576.0, plugin.tick_ms,
                 plugin.commands.size(), plugin.commands.size() == 1 ? "" : "s");
@@ -497,7 +673,79 @@ template <class Do> std::string either(std::string_view id, Do&& act) {
     return act(*host, id);
 }
 }
-std::string reload(std::string_view id) { return either(id, [](Host& h, std::string_view i) { return h.reload(i); }); }
-std::string switch_off(std::string_view id) { return either(id, [](Host& h, std::string_view i) { return h.switch_off(i); }); }
-std::string switch_on(std::string_view id) { return either(id, [](Host& h, std::string_view i) { return h.switch_on(i); }); }
+std::string reload(std::string_view id) {
+    if (!host) return "error: Plugins did not start.";
+    constexpr std::string_view server_suffix = "@server";
+    const bool server = id.ends_with(server_suffix);
+    if (server && !serving) return "error: server copies run only while this game hosts a lobby.";
+    const auto plugin_id = server ? id.substr(0, id.size() - server_suffix.size()) : id;
+    auto* target = server ? server_host : host;
+    Candidate candidate;
+    bool found_candidate = false;
+    {
+        std::lock_guard lock(found_mutex);
+        const auto current = std::find_if(found.begin(), found.end(), [&](const Candidate& item) { return item.id == plugin_id; });
+        if (current != found.end()) {
+            candidate = *current;
+            found_candidate = true;
+        }
+    }
+    const auto statuses = target->status();
+    if (!found_candidate || std::none_of(statuses.begin(), statuses.end(), [&](const Status& status) { return status.id == plugin_id; }) ||
+        !candidate.refusal.empty() || !candidate.sources || approvals->state(candidate.id, candidate.plugin_fingerprint) != Approval::on ||
+        !is_verified(candidate))
+        return target->reload(plugin_id);
+    const auto key = reload_key(plugin_id, server);
+    {
+        std::lock_guard lock(reload_mutex);
+        if (reload_requests.contains(key) || reload_ready.contains(key))
+            return std::format("Plugin {} is already being checked before reload.", plugin_id);
+        reload_requests.emplace(key, ReloadRequest{candidate.id, candidate.fingerprint, candidate.plugin_fingerprint, server});
+    }
+    return std::format("Plugin {} will reload after its source files are checked.", plugin_id);
+}
+std::string switch_off(std::string_view id) {
+    auto text = either(id, [](Host& h, std::string_view i) { return h.switch_off(i); });
+    reapply = true; // (a server copy follows what the player's copy was set to)
+    return text;
+}
+std::string switch_on(std::string_view id) {
+    auto text = either(id, [](Host& h, std::string_view i) { return h.switch_on(i); });
+    reapply = true;
+    return text;
+}
+bool developer_mode() { return approvals && approvals->developer(); }
+
+bool set_developer_mode(bool on) noexcept {
+    if (!approvals) return false;
+    try { initfs::set_plugin_developer_mode(data_root, on); } catch (const std::exception&) { return false; }
+    approvals->set_developer(on);
+    return true;
+}
+
+std::vector<Installed> installed() {
+    std::vector<Installed> result;
+    if (!approvals) return result;
+    std::lock_guard lock(rows_mutex);
+    for (const auto& row : rows) result.push_back({row.id, row.title, row.author, row.can, approvals->state(row.id, row.fingerprint)});
+    // Waiting for an answer first, then the rest by title, on or off, so a row stays put when it is switched.
+    std::sort(result.begin(), result.end(), [](const Installed& a, const Installed& b) {
+        const bool a_asking = a.approval == Approval::asking, b_asking = b.approval == Approval::asking;
+        if (a_asking != b_asking) return a_asking;
+        return std::lexicographical_compare(a.title.begin(), a.title.end(), b.title.begin(), b.title.end(),
+                                            [](unsigned char x, unsigned char y) { return std::tolower(x) < std::tolower(y); });
+    });
+    return result;
+}
+
+void set_enabled(std::string_view id, bool on) {
+    if (!approvals) return;
+    std::lock_guard lock(rows_mutex);
+    for (const auto& row : rows)
+        if (row.id == id) {
+            approvals->set(row.id, row.fingerprint, on);
+            if (!on) forget_verified(row.id, row.fingerprint);
+            reapply = true;
+        }
+}
 }

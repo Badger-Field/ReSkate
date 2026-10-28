@@ -661,7 +661,8 @@ struct ApiFunctions {
         for (const auto& candidate : candidates) {
             const auto path = package_path(L, plugin, candidate, false);
             std::error_code code;
-            if (std::filesystem::is_regular_file(path, code)) {
+            const bool exists = plugin.sources_ ? plugin.sources_->contains(plugin_source_key(candidate)) : std::filesystem::is_regular_file(path, code);
+            if (exists) {
                 key = candidate;
                 file = path;
                 break;

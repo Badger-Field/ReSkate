@@ -1,5 +1,6 @@
 // The plugin host apart from the game: manifests, the reskate API, storage, modules, hot reload,
 // and the sandbox against plugins written to break it (loops, memory, error floods, escapes).
+#include "Extension/Plugins/plugin_approval.h"
 #include "Extension/Plugins/plugin_content.h"
 #include "Extension/Plugins/plugin_discovery.h"
 #include "Extension/Plugins/plugin_host.h"
@@ -860,6 +861,7 @@ struct TestEnvironment final : Environment {
     double now = 1000;
     void log(LogLevel, std::string_view text) override { logs.emplace_back(text); }
     void console(std::string_view text) override { lines.emplace_back(text); }
+    std::optional<bool> approved(const Candidate&) override { return std::nullopt; }
     double now_ms() override { return now; }
     std::filesystem::path storage_root() override { return scratch / "storage"; }
     bool builtin_command(std::string_view word) override { return word == "perf" || word == "load"; }
@@ -1306,6 +1308,187 @@ void physics_steps_include_optional_geometry() {
     environment.fake.steps.push_back(value);
     ticks(host, environment, 1);
     check(environment.logged("missing geometry stays absent"), environment.all());
+}
+
+void plugin_approval_follows_the_plugins_own_files() {
+    const auto mod = scratch / "approval-mod";
+    std::filesystem::remove_all(mod);
+    write(mod / manifest_file, manifest(R"("settings.write")"));
+    write(mod / "plugin" / "main.lua", "print('a')");
+    write(mod / "clothes" / "shirt.dat", "cloth");
+    const auto first = plugin_fingerprint(mod);
+    write(mod / "clothes" / "shirt.dat", "a different shirt");
+    write(mod / "clothes" / "new.dat", "more");
+    check(plugin_fingerprint(mod) == first, "A cosmetic asset of the mod does not change the plugin's fingerprint");
+    write(mod / "plugin" / "main.lua", "print('b')");
+    const auto second = plugin_fingerprint(mod);
+    check(second != first, "A change to a plugin file does");
+    write(mod / "plugin" / "extra.lua", "return 1");
+    check(plugin_fingerprint(mod) != second, "and so does a new file in the plugin's folder");
+    write(mod / manifest_file, manifest(R"("settings.write", "console")"));
+    check(plugin_fingerprint(mod) != second, "and its manifest");
+
+    // Bytes moved between the end of one file and the next file's name must not give the same print.
+    const auto split = scratch / "approval-split", merged = scratch / "approval-merged";
+    for (const auto& folder : {split, merged}) {
+        std::filesystem::remove_all(folder);
+        write(folder / manifest_file, manifest());
+    }
+    // As the first version of the print laid it out: a file's name in UTF-16, then "|", then its bytes.
+    const auto named = [](std::string_view name) {
+        std::string bytes;
+        for (const char c : name) bytes += {c, '\0'};
+        return bytes + '|';
+    };
+    write(split / "plugin" / "a.dat", "X" + named("plugin/b.lua") + "EVIL");
+    write(split / "plugin" / "c.lua", "C");
+    write(split / "plugin" / "d.lua", "D");
+    write(merged / "plugin" / "a.dat", "X");
+    write(merged / "plugin" / "b.lua", "EVIL");
+    write(merged / "plugin" / "c.lua", "C" + named("plugin/d.lua") + "D");
+    check(plugin_fingerprint(split) != plugin_fingerprint(merged), "Moving bytes between a file and the next one's name changes the print");
+    check(plugin_fingerprint(mod).size() > 60, "The print is a SHA-256");
+
+    const auto file = scratch / "approvals" / "plugin_approvals.json";
+    std::filesystem::remove_all(file.parent_path());
+    {
+        Approvals approvals(file);
+        check(approvals.state("pack", "1-a") == Approval::asking, "A plugin nobody answered for asks");
+        approvals.set("pack", "1-a", true);
+        approvals.set("other", "2-b", false);
+        check(approvals.state("pack", "1-a") == Approval::on && approvals.state("other", "2-b") == Approval::off, "Answers are kept");
+        check(approvals.state("pack", "1-changed") == Approval::asking, "An answer is void for other files");
+    }
+    Approvals again(file);
+    check(again.state("pack", "1-a") == Approval::on && again.state("other", "2-b") == Approval::off, "Answers come back from the file");
+    check(again.state("pack", "1-changed") == Approval::asking && again.state("unknown", "1-a") == Approval::asking, "and a changed or unknown plugin asks again");
+    again.set_developer(true);
+    check(again.state("pack", "1-changed") == Approval::on, "In developer mode an approved plugin keeps its approval when its files change");
+    check(again.state("other", "3-c") == Approval::off, "and a refusal holds as well");
+    check(again.state("unknown", "1-a") == Approval::asking, "but a plugin nobody answered for still asks");
+    again.set_developer(false);
+    check(again.state("pack", "1-changed") == Approval::on && again.state("pack", "1-a") == Approval::asking,
+          "The answer moved to the new files, so the old ones ask again");
+
+    const auto groups = permission_groups(parse_manifest(manifest(R"("net.http", "audio", "files", "audio.ui", "settings.write", "storage")")));
+    check(groups.size() == 5 && groups[0].risk == Risk::red && groups[1].risk == Risk::red && groups[2].risk == Risk::amber &&
+              groups[3].risk == Risk::grey && groups[4].risk == Risk::grey,
+          "Permissions come under a category each, the riskiest first");
+    const auto sound = std::find_if(groups.begin(), groups.end(), [](const auto& g) { return g.category == "SOUND"; });
+    check(sound != groups.end() && sound->phrases.size() == 2 && sound->risk == Risk::grey, "A category lists each of its permissions once");
+    const auto none = permission_groups(parse_manifest(manifest()));
+    check(none.size() == 1 && none.front().category == "BASIC" && none.front().risk == Risk::grey &&
+              none.front().phrases.front().starts_with("No special permissions"),
+          "A plugin with no permissions says so");
+    for (const auto name : known_permissions())
+        check(!permission_category(name).empty(), "Every known permission has a category: " + std::string(name));
+
+    auto summary_manifest = manifest(R"("net.http", "chat.read", "settings.write")");
+    summary_manifest.pop_back();
+    summary_manifest += R"(, "domains": ["api.example.com"]})";
+    const auto summary_groups = permission_groups(parse_manifest(summary_manifest));
+    const auto summary_prompt = approval_prompt(summary_groups);
+    check(summary_prompt.starts_with("This mod includes a plugin - a script that runs inside your game.\n\nWhat it can do\n"),
+          "The question introduces the plugin and its capabilities in plain language");
+    check(summary_prompt.find("Change game settings") != std::string::npos && summary_prompt.find("Read chat") != std::string::npos &&
+              summary_prompt.find("Send requests over the internet") != std::string::npos,
+          "The summary follows the permissions this manifest actually requested");
+    check(summary_prompt.find("Send chat") == std::string::npos && summary_prompt.find("throwdowns") == std::string::npos &&
+              summary_prompt.find("api.example.com") == std::string::npos,
+          "It leaves unrequested capabilities and full domain details out of the question");
+    check(summary_prompt.find("! ") == std::string::npos && summary_prompt.find("harmless") == std::string::npos &&
+              summary_prompt.find("SETTINGS") == std::string::npos && summary_prompt.find("WEB") == std::string::npos,
+          "It does not show risk marks, category headings, or harmless labels");
+    const auto web = std::find_if(summary_groups.begin(), summary_groups.end(), [](const auto& group) { return group.category == "WEB"; });
+    check(web != summary_groups.end() && web->phrases.front().find("api.example.com") != std::string::npos,
+          "The full domain detail remains available in Plugin Manager");
+    check(summary_prompt.find("Only turn it on if you trust its source. Full permissions: Insert menu -> Plugins -> Plugin Manager.") != std::string::npos &&
+              summary_prompt.ends_with("The rest of the mod works with the plugin off."),
+          "The question gives the approved trust, navigation, and off-state wording");
+    check(approval_prompt(none).find("No special permissions") != std::string::npos,
+          "A permissionless plugin says it has no special permissions");
+    for (const auto name : known_permissions()) {
+        auto requested = std::string("\"") + std::string(name) + "\"";
+        if (name == "events.physics.geometry") requested = R"("events.physics", "events.physics.geometry")";
+        const auto requested_prompt = approval_prompt(permission_groups(parse_manifest(manifest(requested))));
+        check(requested_prompt.find("\n- ") != std::string::npos && requested_prompt.find("No special permissions") == std::string::npos,
+              "A request for " + std::string(name) + " has a capability summary");
+        if (name == "room")
+            check(requested_prompt.find("character room, where others see your skater") != std::string::npos,
+                  "The room permission says others can see the skater");
+        if (name == "events.physics.geometry")
+            check(requested_prompt.find("Follow detailed skater physics, including geometry, each step") != std::string::npos,
+                  "The geometry permission says it adds detailed physics geometry");
+    }
+
+    // Every requested permission group contributes a capability summary, while the card remains bounded.
+    {
+        std::string all;
+        for (const auto name : known_permissions()) all += (all.empty() ? "\"" : ", \"") + std::string(name) + "\"";
+        const auto everything = permission_groups(parse_manifest(manifest(all)));
+        const auto prompt = approval_prompt(everything);
+        check(prompt.size() < 3000, "Summaries for every capability stay concise enough for the question");
+        for (const auto& group : everything)
+            check(approval_prompt(std::vector<PermissionGroup>{group}).find("\n- ") != std::string::npos,
+                  "The question summarizes requested capabilities for " + group.category);
+        check(prompt.find("!") == std::string::npos && prompt.find("harmless") == std::string::npos,
+              "The all-permissions summary does not restore risk marks or harmless wording");
+
+        std::string domains = R"("domains":[)";
+        constexpr std::string_view digits = "0123456789abcdef";
+        for (std::size_t i = 0; i < digits.size(); ++i) {
+            if (i) domains += ", ";
+            std::string label(63, 'a');
+            label.back() = digits[i];
+            const auto host = label + "." + std::string(63, 'b') + "." + std::string(63, 'c') + "." + std::string(61, 'd');
+            check(host.size() == 253, "The long-host fixture uses the manifest's maximum host length");
+            domains += "\"" + host + "\"";
+        }
+        domains += "]";
+        auto maximal_manifest = manifest(all);
+        maximal_manifest.pop_back();
+        maximal_manifest += ", " + domains + "}";
+        const auto maximal_groups = permission_groups(parse_manifest(maximal_manifest));
+        const auto maximal_prompt = approval_prompt(maximal_groups);
+        check(maximal_prompt.size() < 3000, "Maximum domain names do not expand the concise prompt");
+        const auto maximal_web = std::find_if(maximal_groups.begin(), maximal_groups.end(), [](const auto& group) { return group.category == "WEB"; });
+        const auto first_host = std::string(62, 'a') + "0." + std::string(63, 'b') + "." + std::string(63, 'c') + "." + std::string(61, 'd');
+        check(maximal_web != maximal_groups.end() &&
+                  std::any_of(maximal_web->phrases.begin(), maximal_web->phrases.end(), [&](const auto& phrase) {
+                      return phrase.find(first_host) != std::string::npos;
+                  }),
+              "The complete host list remains in the full permission details");
+        for (std::size_t i = 0; i < digits.size(); ++i) {
+            std::string label(63, 'a');
+            label.back() = digits[i];
+            const auto host = label + "." + std::string(63, 'b') + "." + std::string(63, 'c') + "." + std::string(61, 'd');
+            check(maximal_prompt.find(host) == std::string::npos, "The prompt omits full host " + std::to_string(i));
+        }
+    }
+    check(permission_groups(parse_manifest(manifest(R"("audio", "settings.read", "settings.write")"))).front().category == "SETTINGS",
+          "A category is as risky as its riskiest permission");
+
+    // A host with an environment that has not approved the plugin holds it until the player does.
+    struct Strict final : Environment {
+        bool allowed{};
+        void log(LogLevel, std::string_view) override {}
+        void console(std::string_view) override {}
+        double now_ms() override { return 0; }
+        std::filesystem::path storage_root() override { return scratch / "approval-storage"; }
+        bool builtin_command(std::string_view) override { return false; }
+        std::optional<bool> approved(const Candidate&) override { return allowed; }
+        void approve(const Candidate&, bool on) override { allowed = on; }
+    } environment;
+    write(mod / manifest_file, manifest());
+    Host host(environment, Side::client);
+    const std::vector<Candidate> found{{"approval-mod", mod, "1", {}, "p"}};
+    host.apply(found);
+    check(host.status().front().state == "switched off", "A plugin that is not approved does not load");
+    check(host.switch_on("approval-mod").find("started") != std::string::npos && host.status().front().state == "running", "and runs once turned on");
+    environment.allowed = false;
+    host.apply(found);
+    check(host.status().front().state == "switched off", "An approval taken back unloads it");
+    host.shutdown();
 }
 
 void a_manifest_says_what_a_plugin_is() {
@@ -3348,6 +3531,107 @@ void discovery_finds_the_plugins_among_the_mods_left_on() {
     check(again[0].fingerprint != before, "A changed file changes the fingerprint, which reloads it");
 }
 
+void discovery_can_recheck_sources_when_mod_metadata_is_unchanged() {
+    const auto root = scratch / "same-metadata-game";
+    const auto mods = root / "Mods";
+    const auto directory = mods / "Snapshot";
+    const auto source = directory / "plugin" / "main.lua";
+    write(directory / manifest_file, manifest());
+    write(source, "old-code");
+    check(mods::set_mod_enabled(mods, "Snapshot", true), "mods.json records the plugin as enabled");
+    FileChecks checks;
+    const auto found = discover(root, checks);
+    check(found.size() == 1 && found.front().sources, "Discovery captures the source files with the candidate");
+    const auto old = found.front();
+    const auto timestamp = std::filesystem::last_write_time(source);
+    write(source, "new-code");
+    std::filesystem::last_write_time(source, timestamp);
+    check(mods::mod_fingerprint(directory) == old.fingerprint, "Same-size bytes with the old timestamp keep the mod metadata fingerprint");
+    const auto cached = discover(root, checks);
+    check(cached.front().plugin_fingerprint == old.plugin_fingerprint && cached.front().sources == old.sources,
+          "The normal discovery cache keeps its already-approved snapshot");
+    checks.forget_plugin(old);
+    const auto refreshed = discover(root, checks);
+    check(refreshed.front().plugin_fingerprint != old.plugin_fingerprint &&
+              refreshed.front().sources->at(plugin_source_key("plugin/main.lua")) == "new-code",
+          "A manual reload can request a fresh snapshot even when size and timestamp match");
+    auto same_bytes = plugin_snapshot(directory);
+    auto verified = refreshed.front();
+    verified.sources = same_bytes.sources;
+    check(verified.sources != refreshed.front().sources && verified == refreshed.front(),
+          "A fresh pointer to identical source bytes is not a plugin change");
+}
+
+void an_approved_plugin_runs_only_the_source_snapshot_it_was_shown() {
+    const auto directory = scratch / "snapshot-plugin";
+    const auto entry = directory / "plugin" / "main.lua";
+    const auto module = directory / "plugin" / "Helper.lua";
+    std::filesystem::remove_all(directory);
+    write(directory / manifest_file, manifest());
+    write(entry, R"(reskate.log("entry-old") reskate.on("tick", function() reskate.log(require("helper").version) end))");
+    write(module, R"(return {version = "module-old"})");
+    auto snapshot = plugin_snapshot(directory);
+    check(snapshot.error.empty() && snapshot.sources, "The complete source snapshot is ready to load");
+
+    struct ApprovalEnvironment final : Environment {
+        std::string approved_fingerprint;
+        bool allowed{true};
+        std::vector<std::string> logs;
+        void log(LogLevel, std::string_view text) override { logs.emplace_back(text); }
+        void console(std::string_view) override {}
+        double now_ms() override { return 1000; }
+        std::filesystem::path storage_root() override { return scratch / "snapshot-storage"; }
+        bool builtin_command(std::string_view) override { return false; }
+        std::optional<bool> approved(const Candidate& candidate) override {
+            return allowed && candidate.plugin_fingerprint == approved_fingerprint;
+        }
+        void approve(const Candidate& candidate, bool on) override {
+            approved_fingerprint = candidate.plugin_fingerprint;
+            allowed = on;
+        }
+        bool logged(std::string_view text) const {
+            return std::any_of(logs.begin(), logs.end(), [&](const auto& line) { return line.find(text) != std::string::npos; });
+        }
+    } environment;
+    environment.approved_fingerprint = snapshot.fingerprint;
+
+    Candidate candidate{"snapshot", directory, "mod-fingerprint", {}, snapshot.fingerprint, snapshot.sources};
+    Host host(environment, Side::client);
+    host.apply({candidate});
+    check(environment.logged("entry-old"), "The approved entry source runs");
+    const auto entry_time = std::filesystem::last_write_time(entry);
+    const auto module_time = std::filesystem::last_write_time(module);
+    const auto original_entry_size = std::filesystem::file_size(entry);
+    const auto original_module_size = std::filesystem::file_size(module);
+    write(entry, R"(reskate.log("entry-new") reskate.on("tick", function() reskate.log(require("helper").version) end))");
+    write(module, R"(return {version = "module-new"})");
+    std::filesystem::last_write_time(entry, entry_time);
+    std::filesystem::last_write_time(module, module_time);
+    check(std::filesystem::file_size(entry) == original_entry_size && std::filesystem::file_size(module) == original_module_size,
+          "The changed entry and lazy module keep their original sizes");
+    check(plugin_fingerprint(directory) != candidate.plugin_fingerprint, "The actual changed source bytes have a new approval fingerprint");
+
+    host.tick(16);
+    check(environment.logged("module-old") && !environment.logged("module-new"),
+          "A first-time require reads the approved snapshot after its disk file changes");
+    check(host.reload("snapshot").find("reloaded") != std::string::npos, "The unchanged approved snapshot can still be reloaded");
+    host.tick(16);
+    check(environment.logged("entry-old") && !environment.logged("entry-new"),
+          "Reload does not execute changed entry bytes under the old approval");
+    check(!environment.logged("module-new"), "Reload also keeps a lazy module on the approved snapshot");
+
+    auto changed_snapshot = plugin_snapshot(directory);
+    auto changed = candidate;
+    changed.plugin_fingerprint = changed_snapshot.fingerprint;
+    changed.sources = changed_snapshot.sources;
+    host.apply({changed});
+    check(status_of(host, "snapshot").state == "switched off" && !environment.logged("entry-new"),
+          "A changed snapshot stays held until the player approves its new fingerprint");
+    check(host.switch_on("snapshot").find("started") != std::string::npos, "A new explicit approval starts the changed snapshot");
+    check(environment.logged("entry-new"), "The new entry runs only after the new approval");
+    host.shutdown();
+}
+
 // contrib/plugins, kept on this machine and out of the repository: a test of one that is not here
 // is skipped (main reports it), not failed.
 struct Absent {
@@ -4869,6 +5153,8 @@ int main() {
         scratch = std::filesystem::temp_directory_path() / "reskate-plugin-tests";
         std::filesystem::remove_all(scratch);
         run(a_manifest_says_what_a_plugin_is);
+        run(plugin_approval_follows_the_plugins_own_files);
+        run(an_approved_plugin_runs_only_the_source_snapshot_it_was_shown);
         run(effects_require_resident_roots);
         run(expired_effects_return_their_quota);
         run(plugins_render_private_effects);
@@ -4921,6 +5207,7 @@ int main() {
         run(timers_run_when_due);
         run(a_package_with_a_program_or_on_the_wrong_side_is_not_loaded);
         run(discovery_finds_the_plugins_among_the_mods_left_on);
+        run(discovery_can_recheck_sources_when_mod_metadata_is_unchanged);
         run(blood_renders_an_impact_through_the_host);
         run(reskate_test_passes_its_own_checks);
         run(road_rash_marks_the_skater_as_it_bails);

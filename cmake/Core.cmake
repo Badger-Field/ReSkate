@@ -141,6 +141,7 @@ target_link_libraries(dingosdk_world_layer_scan PUBLIC dingosdk_json PRIVATE din
 # VMs and the API; finding plugins among the mods needs the mod list, so it is Windows only for now.
 add_library(dingosdk_plugins STATIC
     Extension/Plugins/plugin_manifest.cpp
+    Extension/Plugins/plugin_approval.cpp
     Extension/Plugins/plugin_vm.cpp
     Extension/Plugins/plugin_api.cpp
     Extension/Plugins/plugin_api_ui.cpp
@@ -162,7 +163,7 @@ add_library(dingosdk_plugins STATIC
     Extension/AnimationStudio/anim_core.cpp
     Extension/Skater/pose_place.cpp
     Extension/Plugins/plugin_wave.cpp)
-target_link_libraries(dingosdk_plugins PUBLIC dingosdk_json dingosdk_console_core PRIVATE dingosdk_luau)
+target_link_libraries(dingosdk_plugins PUBLIC dingosdk_json dingosdk_console_core PRIVATE dingosdk_luau dingosdk_launcher_support)
 if(WIN32)
     target_sources(dingosdk_plugins PRIVATE Extension/Plugins/plugin_discovery.cpp)
     target_link_libraries(dingosdk_plugins PUBLIC dingosdk_mod_list)
