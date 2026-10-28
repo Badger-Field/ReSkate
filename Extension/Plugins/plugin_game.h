@@ -948,6 +948,40 @@ public:
     // from take_presses as (plugin, action), only while the game itself has the input.
     virtual std::string bind(std::string_view /*plugin*/, std::string_view, std::uint32_t) { return unavailable; }
     virtual std::vector<std::pair<std::string, std::string>> take_presses() { return {}; }
+    // ---- viewmodel: a rigged, animated model in front of the camera (Extension/UI/Overlay/viewmodel.h) --
+    // One plugin's at a time: the one that loaded it, until it unloads it or stops. Its file (.rsvm,
+    // from contrib/viewmodel_export.py) and pictures are read in the background.
+    virtual std::string viewmodel_load(std::string_view /*plugin*/, const std::filesystem::path& /*file*/) { return unavailable; }
+    virtual void viewmodel_unload(std::string_view /*plugin*/) {}
+    struct ViewmodelInfo {
+        std::string status;  // "loading", "ready" or "failed"
+        std::string why;
+        std::vector<std::pair<std::string, double>> clips; // name, seconds
+        std::vector<std::string> bones;
+    };
+    virtual std::optional<ViewmodelInfo> viewmodel_info(std::string_view /*plugin*/) { return std::nullopt; }
+    // Where and how it is drawn, for the next 300 ms (view space: x right, y up, z forward, metres).
+    struct ViewmodelLook {
+        Vec3 offset{};
+        float yaw{}, pitch{}, roll{}, fov{60};
+        Vec3 light{-0.35f, 0.75f, -0.55f}, light_colour{1.0f, 0.96f, 0.9f}, sky{0.55f, 0.62f, 0.75f}, ground{0.32f, 0.29f, 0.26f};
+        float ambient{0.6f}, brightness{1};
+    };
+    virtual std::string viewmodel_show(std::string_view /*plugin*/, std::optional<ViewmodelLook>) { return unavailable; }
+    virtual std::string viewmodel_play(std::string_view /*plugin*/, std::string_view /*clip*/, bool /*loop*/, float /*speed*/, float /*fade*/) {
+        return unavailable;
+    }
+    virtual void viewmodel_stop(std::string_view /*plugin*/) {}
+    struct ViewmodelState {
+        std::string clip;
+        double time{}, duration{};
+        bool done{};
+    };
+    virtual std::optional<ViewmodelState> viewmodel_state(std::string_view /*plugin*/) { return std::nullopt; }
+    struct ViewmodelBone {
+        Vec3 position{}, x{}, y{}, z{};
+    };
+    virtual std::optional<ViewmodelBone> viewmodel_bone(std::string_view /*plugin*/, std::string_view /*bone*/) { return std::nullopt; }
     // Everything a plugin holds of the game (its HUD hide, nametags, binds), when it stops.
     virtual void release(std::string_view /*plugin*/) {}
 };

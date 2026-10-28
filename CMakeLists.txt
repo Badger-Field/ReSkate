@@ -464,6 +464,11 @@ if(DINGOSDK_BUILD_PLUGIN_TESTS)
     # It also runs the test plugins in contrib/plugins.
     target_compile_definitions(dingosdk_plugin_tests PRIVATE "RESKATE_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
     add_test(NAME plugins COMMAND dingosdk_plugin_tests)
+    # reskate.viewmodel's file and clips (Extension/UI/Overlay/viewmodel_model.h), and the FPS plugin's
+    # exported pistol when contrib/plugins has it.
+    add_executable(dingosdk_viewmodel_tests Extension/UI/Overlay/Test/viewmodel_model_tests.cpp Extension/UI/Overlay/viewmodel_model.cpp)
+    target_include_directories(dingosdk_viewmodel_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    add_test(NAME viewmodel COMMAND dingosdk_viewmodel_tests "${PROJECT_SOURCE_DIR}/contrib/plugins/fps/viewmodel/pistol.rsvm")
 endif()
 if(DINGOSDK_BUILD_PLUGIN_TESTS AND WIN32)
     add_executable(dingosdk_effect_geometry_tests Extension/Rendering/Test/effect_geometry_tests.cpp

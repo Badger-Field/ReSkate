@@ -65,6 +65,7 @@
 #include <filesystem>
 #include "Extension/UI/Overlay/overlay.h"
 #include "Extension/UI/Overlay/screen_look.h"
+#include "Extension/UI/Overlay/viewmodel.h"
 #include "Extension/UI/Overlay/scripted_pad.h"
 #include "Extension/World/character_room.h"
 #include "Extension/Rendering/Capture/capture_runtime.h"
@@ -1021,6 +1022,62 @@ public:
         screen_look::set(s);
         return {};
     }
+    // ---- viewmodel -----------------------------------------------------------------------------------
+    std::string viewmodel_load(std::string_view plugin, const std::filesystem::path& file) override {
+        if (!viewmodeler_.empty() && viewmodeler_ != plugin) return viewmodeler_ + " has the viewmodel";
+        viewmodeler_ = plugin;
+        viewmodel::load(file);
+        return {};
+    }
+    void viewmodel_unload(std::string_view plugin) override {
+        if (viewmodeler_ != plugin) return;
+        viewmodel::unload();
+        viewmodeler_.clear();
+    }
+    std::optional<ViewmodelInfo> viewmodel_info(std::string_view plugin) override {
+        if (viewmodeler_ != plugin) return std::nullopt;
+        const auto now = viewmodel::info();
+        ViewmodelInfo out;
+        out.status = now.status == viewmodel::Status::ready ? "ready" : now.status == viewmodel::Status::failed ? "failed" : "loading";
+        out.why = now.why;
+        for (const auto& clip : now.clips) out.clips.emplace_back(clip.name, clip.duration);
+        out.bones = now.bones;
+        return out;
+    }
+    std::string viewmodel_show(std::string_view plugin, std::optional<ViewmodelLook> look) override {
+        if (viewmodeler_ != plugin) return "this plugin has no viewmodel loaded";
+        // Never over the game's own menu (paused, the customization pages): the plugin is told why.
+        if (!look || (base_ && multiplayer::sample_game_ui_state(base_).in_menu)) {
+            viewmodel::hide();
+            return look ? "the game's menu is open" : std::string{};
+        }
+        viewmodel::Look v;
+        v.offset = look->offset;
+        v.yaw = look->yaw, v.pitch = look->pitch, v.roll = look->roll, v.fov = look->fov;
+        v.light = look->light, v.light_colour = look->light_colour, v.sky = look->sky, v.ground = look->ground;
+        v.ambient = look->ambient, v.brightness = look->brightness;
+        viewmodel::show(v);
+        return {};
+    }
+    std::string viewmodel_play(std::string_view plugin, std::string_view clip, bool loop, float speed, float fade) override {
+        if (viewmodeler_ != plugin) return "this plugin has no viewmodel loaded";
+        return viewmodel::play(clip, {-1, loop, speed, fade});
+    }
+    void viewmodel_stop(std::string_view plugin) override {
+        if (viewmodeler_ == plugin) viewmodel::stop();
+    }
+    std::optional<ViewmodelState> viewmodel_state(std::string_view plugin) override {
+        if (viewmodeler_ != plugin) return std::nullopt;
+        const auto now = viewmodel::state();
+        if (now.clip.empty()) return std::nullopt;
+        return ViewmodelState{now.clip, now.time, now.duration, now.done};
+    }
+    std::optional<ViewmodelBone> viewmodel_bone(std::string_view plugin, std::string_view name) override {
+        if (viewmodeler_ != plugin) return std::nullopt;
+        const auto found = viewmodel::bone(name);
+        if (!found) return std::nullopt;
+        return ViewmodelBone{found->position, found->x, found->y, found->z};
+    }
     std::string screen_slap(std::string_view plugin) override {
         if (looker_ != plugin || GetTickCount64() >= look_at_ + 300) return "only over this plugin's screen look";
         screen_look::slap();
@@ -1671,6 +1728,10 @@ public:
             screen_look::clear();
             looker_.clear();
         }
+        if (viewmodeler_ == plugin) {
+            viewmodel::unload();
+            viewmodeler_.clear();
+        }
         if (poser_ == plugin) {
             skater_animation::pose({}, 1);
             poser_.clear();
@@ -1726,6 +1787,7 @@ private:
     std::string room_owner_; // the plugin in the character room (room_open)
     std::uint64_t pose_at_{};
     std::string looker_;  // the plugin whose look is on the screen (screen_look)
+    std::string viewmodeler_; // the plugin whose viewmodel is loaded (viewmodel_load)
     std::uint64_t look_at_{};
     std::uint64_t reach_at_{};
     struct MouseReader {

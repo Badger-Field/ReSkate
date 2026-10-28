@@ -2611,10 +2611,21 @@ struct WorldApi {
         return 1;
     }
     // settings.set(name, value): a game setting held at `value` while the plugin keeps it; nil lets go.
+    // Whether a game setting is about sound: how loud the game, its music, its voices and its
+    // speakers are. No plugin changes those: a plugin that turned every volume up to scare the
+    // player is why (plugin_listing.h).
+    static bool sound_setting(std::string_view name) {
+        std::string lower(name);
+        for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        for (const char* word : {"volume", "audio", "sound", "mute", "loud", "speaker", "voip", "voice", "sfx", "dynamicrange"})
+            if (lower.find(word) != std::string::npos) return true;
+        return false;
+    }
     static int setting_set(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "settings.write", "reskate.settings.set");
         const auto name = checked_text(L, 1, 120, "a setting's name");
+        if (sound_setting(name)) return result(L, "sound settings are the player's: no plugin changes how loud the game is");
         std::optional<std::string> value;
         if (lua_type(L, 2) == LUA_TBOOLEAN) value = lua_toboolean(L, 2) ? "true" : "false";
         else if (lua_type(L, 2) == LUA_TNUMBER) value = std::format("{}", lua_tonumber(L, 2));
