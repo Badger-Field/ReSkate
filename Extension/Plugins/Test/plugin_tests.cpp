@@ -727,6 +727,7 @@ struct FakeGame final : Game {
     // The game menu, its item grid, what is worn, and a screen capture of something turning once
     // every `turning` frames (reskate.capture, room.turn, menu.game/grid, outfit.board).
     GameMenu menu_now;
+    unsigned menu_reads{};
     std::optional<MenuGrid> grid_now;
     std::vector<WornItem> board_now, outfit_now;
     std::vector<std::string> render_settings; // more settings, each on
@@ -741,7 +742,7 @@ struct FakeGame final : Game {
         calls.push_back(std::format("turn {:.2f} {}", value, stick));
         return {};
     }
-    GameMenu game_menu() override { return menu_now; }
+    GameMenu game_menu() override { ++menu_reads; return menu_now; }
     std::optional<MenuGrid> menu_grid() override { return grid_now; }
     std::vector<WornItem> board_parts() override { return board_now; }
     std::vector<WornItem> outfit_worn() override { return outfit_now; }
@@ -2958,6 +2959,64 @@ void declared_board_colours_through_the_api() {
     check(environment.fake.declared_holds.empty(), "Unloading lets go of every one (the game puts them back to their defaults)");
 }
 
+void game_menu_distinguishes_unknown_from_closed() {
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    host.apply({script("menu-reader", R"(
+        local function snapshot(known, open, skaters, count)
+            local row = reskate.menu.game()
+            local fields = 0
+            for key in pairs(row) do
+                assert(key == "known" or key == "open" or key == "skaters" or key == "buttons", key)
+                fields += 1
+            end
+            assert(fields == 4 and type(row.known) == "boolean" and type(row.open) == "boolean"
+                and type(row.skaters) == "boolean" and type(row.buttons) == "table")
+            assert(row.known == known and row.open == open and row.skaters == skaters and #row.buttons == count)
+            return row
+        end
+        reskate.console.command("menu_unknown", "x", function()
+            snapshot(false, false, false, 0)
+            reskate.log("unknown menu preserved")
+        end)
+        reskate.console.command("menu_closed", "x", function()
+            snapshot(true, false, false, 0)
+            reskate.log("known closed menu preserved")
+        end)
+        reskate.console.command("menu_open", "x", function()
+            local row = snapshot(true, true, true, 2)
+            assert(row.buttons[1] == "Skaters" and row.buttons[2] == "Board")
+            reskate.log("known open menu preserved")
+        end)
+        reskate.console.command("menu_buttons", "x", function()
+            local row = snapshot(true, true, false, 64)
+            assert(row.buttons[1] == "1" and row.buttons[64] == "64")
+            reskate.log("menu button bound preserved")
+        end)
+    )", R"("menu", "console")"), script("menu-denied", R"(
+        local ok, why = pcall(reskate.menu.game)
+        assert(not ok and why:find('needs the "menu" permission', 1, true), tostring(why))
+        reskate.log("menu permission denied")
+    )")});
+    running(host, "menu-reader", environment);
+    running(host, "menu-denied", environment);
+    check(environment.logged("menu permission denied") && game.menu_reads == 0,
+          "Without menu permission the backend is not entered\n" + environment.all());
+    check(host.run_console("menu_unknown") && environment.logged("unknown menu preserved"),
+          "An unknown menu retains every old field\n" + environment.all());
+    game.menu_now = {false, true, {}, true};
+    check(host.run_console("menu_closed") && environment.logged("known closed menu preserved"),
+          "A known closed menu still suppresses Skaters\n" + environment.all());
+    game.menu_now = {true, true, {"Skaters", "Board"}, true};
+    check(host.run_console("menu_open") && environment.logged("known open menu preserved"),
+          "A known open menu retains the page and button order\n" + environment.all());
+    game.menu_now = {true, false, {}, true};
+    for (unsigned i = 1; i <= 65; ++i) game.menu_now.buttons.push_back(std::to_string(i));
+    check(host.run_console("menu_buttons") && environment.logged("menu button bound preserved") && game.menu_reads == 4,
+          "The old button limit and call count remain unchanged\n" + environment.all());
+}
+
 void the_wider_set_reaches_the_game() {
     TestEnvironment environment;
     auto& game = environment.fake;
@@ -4707,6 +4766,7 @@ int main() {
         run(plugins_follow_the_session_and_message_each_other);
         run(plugins_call_and_hear_each_other);
         run(web_requests_go_only_to_listed_domains);
+        run(game_menu_distinguishes_unknown_from_closed);
         run(the_wider_set_reaches_the_game);
         run(declared_board_colours_through_the_api);
         run(key_names_become_binds);

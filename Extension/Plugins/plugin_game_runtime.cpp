@@ -1268,7 +1268,9 @@ public:
     }
     GameMenu game_menu() override {
         GameMenu menu;
-        menu.open = multiplayer::sample_game_ui_state(base_).in_menu;
+        const auto state = multiplayer::sample_game_ui_state(base_);
+        menu.open = state.in_menu;
+        menu.known = state.available;
         if (!menu.open) return menu;
         const auto buttons = character_room::menu_buttons(base_);
         menu.skaters = character_room::is_skaters_page(buttons);
