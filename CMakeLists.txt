@@ -62,6 +62,12 @@ if(DINGOSDK_BUILD_PARK_EDITOR_TESTS AND WIN32)
     add_executable(dingosdk_object_categories_tests Extension/Objects/Test/object_categories_tests.cpp)
     target_link_libraries(dingosdk_object_categories_tests PRIVATE dingosdk_local_profile)
     add_test(NAME object_categories COMMAND dingosdk_object_categories_tests)
+    # The park editor's native ray (Extension/Objects/ParkEditor/park_editor_surface.h) over a
+    # constructed result: the editor's own rules and exclusions, and the counted cast behind
+    # reskate.world.probe and the ray batches (clear, hit and malformed results, presets and
+    # measured contact normals).
+    add_executable(dingosdk_surface_probe_tests Extension/Objects/ParkEditor/Test/surface_probe_tests.cpp)
+    add_test(NAME surface_probe COMMAND dingosdk_surface_probe_tests)
 endif()
 option(DINGOSDK_BUILD_MULTIPLAYER_TESTS "Build multiplayer protocol regression tests" OFF)
 if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
@@ -455,6 +461,14 @@ endif()
 option(DINGOSDK_BUILD_PLUGIN_TESTS "Build plugin host regression tests" OFF)
 if(DINGOSDK_BUILD_PLUGIN_TESTS)
     enable_testing()
+    # The owned-body contracts behind reskate.world.physics (Engine/Game/World): definitions, the
+    # command mailbox, ray batches and their budget, hit identity, measured contact and shape
+    # categories, over constructed values and fake memory.
+    foreach(test owned_body body_query body_contact_read body_shape_categories)
+        add_executable(dingosdk_${test}_tests Engine/Game/World/Test/${test}_tests.cpp)
+        target_include_directories(dingosdk_${test}_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+        add_test(NAME ${test} COMMAND dingosdk_${test}_tests)
+    endforeach()
     # The plugin host apart from the game: manifests, the reskate API, storage, modules, hot reload,
     # and the sandbox against plugins written to break it. These build on Linux too, so they can be
     # run without Windows.
@@ -475,6 +489,16 @@ if(DINGOSDK_BUILD_PLUGIN_TESTS)
     add_test(NAME viewmodel COMMAND dingosdk_viewmodel_tests "${PROJECT_SOURCE_DIR}/contrib/plugins/fps/viewmodel/pistol.rsvm")
 endif()
 if(DINGOSDK_BUILD_PLUGIN_TESTS AND WIN32)
+    # The owned-body service itself (Extension/World/owned_bodies.cpp), over a constructed local
+    # client, physics world and TLS: ray batches, measured contact, presets, categories and
+    # preparation. The test includes owned_bodies.cpp once and defines the hook, No Bail, session
+    # and ray functions it calls; do not add a second object for any of them.
+    add_executable(dingosdk_owned_body_source_tests Extension/World/Test/owned_body_source_tests.cpp)
+    target_include_directories(dingosdk_owned_body_source_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_compile_options(dingosdk_owned_body_source_tests PRIVATE /Gy /Gw)
+    target_link_options(dingosdk_owned_body_source_tests PRIVATE /OPT:REF)
+    add_test(NAME owned_body_source COMMAND dingosdk_owned_body_source_tests)
+    set_tests_properties(owned_body_source PROPERTIES TIMEOUT 15)
     add_executable(dingosdk_effect_geometry_tests Extension/Rendering/Test/effect_geometry_tests.cpp
         Extension/Skater/skater_physics.cpp Extension/Plugins/plugin_effects.cpp)
     target_include_directories(dingosdk_effect_geometry_tests PRIVATE "${PROJECT_SOURCE_DIR}")
