@@ -29,7 +29,7 @@ void register_plugin_commands(Commands& registry) {
     reload.run = [](const Model&, const Values& args, const Output& out) { out(plugins::reload(std::get<std::string>(args[0]))); };
     registry.add(std::move(reload));
 
-    auto off = action("plugin off", "Switch a plugin off until plugin on", Group::console, {plugin_id()});
+    auto off = action("plugin off", "Switch a plugin off until plugin on (all: every plugin, as Ctrl+Shift+End does)", Group::console, {plugin_id()});
     off.run = [](const Model&, const Values& args, const Output& out) { out(plugins::switch_off(std::get<std::string>(args[0]))); };
     registry.add(std::move(off));
 

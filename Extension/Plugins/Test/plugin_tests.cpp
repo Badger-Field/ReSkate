@@ -4,6 +4,7 @@
 #include "Extension/Plugins/plugin_content.h"
 #include "Extension/Plugins/plugin_discovery.h"
 #include "Extension/Plugins/plugin_host.h"
+#include "Extension/Plugins/plugin_listing.h"
 #include "Extension/Plugins/plugin_manifest.h"
 #include "Extension/Plugins/plugin_session_feed.h"
 #include "Extension/Plugins/plugin_wire.h"
@@ -2271,6 +2272,11 @@ void plugins_read_joints_and_tune_physics() {
         assert(circle:find("in a circle"), circle)
         assert(reskate.settings.set("Camera.Height", 1.5) and reskate.settings.set("Chat.Show", true) and
             reskate.settings.set("Render.Mode", "fast") and reskate.settings.set("Camera.Height", nil))
+        -- How loud the game is stays the player's: a plugin that turned every volume up to scare them is why.
+        for _, name in ipairs({"Audio.MasterVolume", "Sound.SfxVolume", "Music.Volume", "Audio.Mute", "VoIP.Enabled"}) do
+            local ok, why = reskate.settings.set(name, 1)
+            assert(not ok and why:find("sound settings"), name)
+        end
         reskate.log("tuned")
     )";
     host.apply({package("tuner", {{manifest_file, manifest(R"("skater.read", "skater.control", "session.skaters", "settings.write", "skater.animation")")}, {"plugin/main.lua", main}})});
@@ -5139,6 +5145,68 @@ void reskate_hostile_is_stopped_or_refused_every_time() {
 }
 }
 
+// A mod's plugin runs only from a package Thunderstore lists as a plugin: one disguised as a
+// cosmetics pack does not, nor one taken off Thunderstore since; a folder that is not a package, or
+// a package Thunderstore never had, is the player's own and runs. Until a package has been looked
+// up, its plugin waits; the answers are kept in a file and asked again after six hours.
+void thunderstore_says_which_packages_run_plugins() {
+    const auto file = scratch / "listings.json";
+    std::filesystem::remove(file);
+    const auto answer = [](std::string owner, std::string name, std::vector<std::string> categories, std::string review = "approved") {
+        std::string list;
+        for (const auto& category : categories) list += (list.empty() ? "\"" : ",\"") + category + "\"";
+        return ListingAnswer{ListingAnswer::Kind::listed,
+                             R"({"namespace":")" + owner + R"(","name":")" + name + R"(","community_listings":[{"community":"reskate","categories":[)" +
+                                 list + R"(],"review_status":")" + review + R"("}]})"};
+    };
+    std::int64_t now = 1'800'000'000;
+    {
+        Listings listings(file);
+        check(listings.verdict("My Plugin", now).runs && listings.verdict("myplugin", now).runs, "A folder that is not a package runs its plugin");
+        const auto waiting = listings.verdict("kokomorning2-Walmart_Cosmetics-1.0.0", now);
+        check(!waiting.runs && waiting.why.find("waiting") != std::string::npos, "A package not looked up yet waits");
+        (void)listings.verdict("Team-Speedometer", now);
+        (void)listings.verdict("Team-Taken_Down", now);
+        (void)listings.verdict("Team-Not_Yet_Uploaded", now);
+        (void)listings.verdict("Team-Rejected", now);
+        auto wanted = listings.take_wanted(now);
+        std::sort(wanted.begin(), wanted.end());
+        check(wanted == std::vector<std::string>{"Team-Not_Yet_Uploaded", "Team-Rejected", "Team-Speedometer", "Team-Taken_Down",
+                                                 "kokomorning2-Walmart_Cosmetics"},
+              "Each package is looked up once, under the folder's spelling and without its version");
+        check(listings.take_wanted(now + 1).empty(), "and not again at once");
+        listings.record("kokomorning2-Walmart_Cosmetics", answer("kokomorning2", "Walmart_Cosmetics", {"Cosmetics", "Skateboards"}), now);
+        listings.record("Team-Speedometer", answer("Team", "Speedometer", {"Plugins", "Misc"}), now);
+        listings.record("Team-Taken_Down", answer("Team", "Taken_Down", {"Plugins"}), now);
+        listings.record("Team-Not_Yet_Uploaded", {ListingAnswer::Kind::missing, {}}, now);
+        listings.record("Team-Rejected", answer("Team", "Rejected", {"Plugins"}, "rejected"), now);
+        const auto disguised = listings.verdict("kokomorning2-Walmart_Cosmetics-1.0.0", now);
+        check(!disguised.runs && disguised.why.find("not list") != std::string::npos && disguised.why.find("Cosmetics, Skateboards") != std::string::npos,
+              "A cosmetics package's plugin does not run, and the player is told what it is listed as: " + disguised.why);
+        check(listings.verdict("Team-Speedometer", now).runs, "A package listed as a plugin runs it");
+        check(listings.verdict("Team-Not_Yet_Uploaded", now).runs, "A package Thunderstore never had runs, as a plugin of the player's own");
+        check(!listings.verdict("Team-Rejected", now).runs, "A package the moderators rejected does not");
+        listings.record("Team-Speedometer", {ListingAnswer::Kind::failed, {}}, now + 10);
+        check(listings.verdict("Team-Speedometer", now + 10).runs, "A failed lookup keeps what was known");
+        listings.record("Team-Speedometer", answer("Someone", "Else", {"Plugins"}), now + 10);
+        check(listings.verdict("Team-Speedometer", now + 10).runs, "An answer about another package changes nothing");
+        listings.record("Team-Taken_Down", {ListingAnswer::Kind::missing, {}}, now + 20);
+        const auto gone = listings.verdict("Team-Taken_Down", now + 20);
+        check(!gone.runs && gone.why.find("taken off") != std::string::npos, "A plugin taken off Thunderstore stops");
+        check(listings.take_wanted(now + 100).empty(), "Known answers are not asked again soon");
+        check(listings.take_wanted(now + Listings::refresh_seconds + 30).size() == 5, "but are after six hours");
+    }
+    {
+        Listings again(file);
+        check(!again.verdict("kokomorning2-Walmart_Cosmetics", now).runs && again.verdict("Team-Speedometer", now).runs &&
+                  !again.verdict("Team-Taken_Down", now).runs && again.verdict("Team-Not_Yet_Uploaded", now).runs,
+              "The answers are kept across launches");
+    }
+    check(listing_package("Owner-Name-1.2.3") == std::optional<std::string>("Owner-Name") && listing_package("Owner-Name") &&
+              !listing_package("Owner-Name-latest") && !listing_package("Owner") && !listing_package("Own er-Name"),
+          "A folder is named as a package, or not");
+}
+
 int main() {
     unsigned skipped = 0;
     const auto run = [&](void (*test)()) {
@@ -5163,6 +5231,7 @@ int main() {
         run(physics_steps_include_optional_geometry);
         run(a_plugin_loads_ticks_runs_its_commands_and_unloads);
         run(a_permission_must_be_declared);
+        run(thunderstore_says_which_packages_run_plugins);
         run(command_names_are_checked);
         run(storage_is_kept_across_loads_and_has_a_quota);
         run(packages_json_and_modules);

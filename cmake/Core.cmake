@@ -142,6 +142,7 @@ target_link_libraries(dingosdk_world_layer_scan PUBLIC dingosdk_json PRIVATE din
 add_library(dingosdk_plugins STATIC
     Extension/Plugins/plugin_manifest.cpp
     Extension/Plugins/plugin_approval.cpp
+    Extension/Plugins/plugin_listing.cpp
     Extension/Plugins/plugin_vm.cpp
     Extension/Plugins/plugin_api.cpp
     Extension/Plugins/plugin_api_ui.cpp

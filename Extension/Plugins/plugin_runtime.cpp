@@ -1,6 +1,8 @@
 #include "plugin_runtime.h"
 #include "plugin_approval.h"
 #include "plugin_discovery.h"
+#include "plugin_listing.h"
+#include "Engine/Vfs/https_download.h"
 #include "plugin_host.h"
 #include "plugin_camera.h"
 #include "plugin_http.h"
@@ -330,6 +332,38 @@ void ask_next() {
     }, true);
 }
 
+// Thunderstore's answers about the plugins' packages (plugin_listing.h), and the ones the player
+// has been told about this run.
+Listings* listings{};
+std::set<std::string> told_listing;
+std::int64_t unix_now() {
+    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+// Looks packages up on thunderstore.io as discovery asks for them, a few seconds apart: off the
+// discovery thread, so a slow or absent connection never holds up finding plugins.
+void look_up_listings() {
+    for (;;) {
+        try {
+            for (const auto& package : listings->take_wanted(unix_now())) {
+                const auto name = thunderstore_package::parse_name(package);
+                if (!name) continue;
+                https::Download result;
+                const auto answer = https::get_text(thunderstore_package::details_url(*name), 512 * 1024, 15, L"ReSkate", &result, nullptr);
+                ListingAnswer got;
+                if (answer) got = {ListingAnswer::Kind::listed, *answer};
+                else if (result.http_status == 404) got.kind = ListingAnswer::Kind::missing;
+                listings->record(package, got, unix_now());
+                if (got.kind == ListingAnswer::Kind::failed)
+                    logging::log(logging::Level::info, logging::Channel::plugins, "Plugins: {} could not be looked up on Thunderstore (HTTP {}, error {}); trying again in a minute.",
+                                 package, result.http_status, result.error);
+            }
+        } catch (const std::exception& error) {
+            logging::log(logging::Level::warning, logging::Channel::plugins, "Plugins: a Thunderstore lookup failed: {}", error.what());
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+    }
+}
+
 void watch() {
     FileChecks checks;
     for (;;) {
@@ -342,6 +376,17 @@ void watch() {
             for (const auto& request : rechecks) checks.forget_plugin(request.id, request.mod_fingerprint);
             std::vector<ModInfo> mods;
             auto plugins = discover(data_root, checks, &mods);
+            // Luau code runs only from a package Thunderstore lists as a plugin (plugin_listing.h).
+            for (auto& candidate : plugins) {
+                if (!candidate.refusal.empty()) continue;
+                const auto listed = listings->verdict(candidate.id, unix_now());
+                if (listed.runs) continue;
+                candidate.refusal = listed.why;
+                if (!listed.why.starts_with("waiting") && told_listing.insert(candidate.id).second) {
+                    logging::log(logging::Level::warning, logging::Channel::plugins, "Plugins: {}: {}", candidate.id, listed.why);
+                    overlay::notify(overlay::NoticeLevel::warning, "Plugin not run", candidate.id + ": " + listed.why);
+                }
+            }
             bool verified_new = false;
             for (auto& candidate : plugins) {
                 if (!candidate.refusal.empty() || approvals->state(candidate.id, candidate.plugin_fingerprint) != Approval::on || is_verified(candidate)) continue;
@@ -445,12 +490,14 @@ bool start(std::uintptr_t image_base) noexcept {
         auto storage = local_storage();
         if (storage.empty()) storage = data_root / L"ReSkate.Plugins";
         approvals = new Approvals(storage.parent_path() / L"plugin_approvals.json");
+        listings = new Listings(storage.parent_path() / L"plugin_listings.json");
         try { approvals->set_developer(initfs::plugin_developer_mode(data_root)); } catch (const std::exception&) {}
         server_environment = new GameEnvironment(storage / L"server", true);
         environment = new GameEnvironment(std::move(storage), false);
         host = new Host(*environment, Side::client);
         server_host = new Host(*server_environment, Side::server, {}, "@server");
         std::thread(watch).detach();
+        std::thread(look_up_listings).detach();
         logging::write(logging::Level::info, logging::Channel::plugins, "Plugins: looking in Mods for reskate-plugin.json every 2 s.");
         return true;
     } catch (const std::exception& error) {
@@ -462,6 +509,21 @@ bool start(std::uintptr_t image_base) noexcept {
 void on_client_tick() noexcept {
     if (!host) return;
     try {
+        // Ctrl+Shift+End switches every plugin off, whatever they draw or hold: read from the keys
+        // themselves, which no plugin can keep from ReSkate.
+        {
+            static bool was_down{};
+            DWORD pid{};
+            GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+            const bool down = pid == GetCurrentProcessId() && (GetAsyncKeyState(VK_CONTROL) & 0x8000) &&
+                              (GetAsyncKeyState(VK_SHIFT) & 0x8000) && (GetAsyncKeyState(VK_END) & 0x8000);
+            if (down && !was_down) {
+                const auto said = switch_off("all");
+                logging::log(logging::Level::info, logging::Channel::plugins, "Plugins: Ctrl+Shift+End: {}", said);
+                overlay::notify(overlay::NoticeLevel::info, "Plugins off", said);
+            }
+            was_down = down;
+        }
         {
             std::vector<Candidate> latest;
             bool changed = false;
@@ -705,6 +767,20 @@ std::string reload(std::string_view id) {
     return std::format("Plugin {} will reload after its source files are checked.", plugin_id);
 }
 std::string switch_off(std::string_view id) {
+    // "all": every plugin running on this game, as Ctrl+Shift+End does.
+    if (id == "all") {
+        if (!host) return "error: Plugins are not running.";
+        std::size_t count = 0;
+        for (const auto& status : host->status())
+            if (status.state == "running") {
+                (void)host->switch_off(status.id);
+                ++count;
+            }
+        reapply = true;
+        return count ? std::format("{} {} switched off. Turn {} on again in Insert, Plugins, Plugin Manager.", count,
+                                   count == 1 ? "plugin" : "plugins", count == 1 ? "it" : "them")
+                     : "No plugin is running.";
+    }
     auto text = either(id, [](Host& h, std::string_view i) { return h.switch_off(i); });
     reapply = true; // (a server copy follows what the player's copy was set to)
     return text;
