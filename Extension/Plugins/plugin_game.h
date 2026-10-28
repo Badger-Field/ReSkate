@@ -429,6 +429,7 @@ public:
     struct GameMenu {
         bool open{}, skaters{};
         std::vector<std::string> buttons;
+        bool known{}; // The native screen model was resolved; false is not a known closed menu.
     };
     virtual GameMenu game_menu() { return {}; }
     // The customization grid that has the focus (Extension/Customization/item_browser.h), when one does.

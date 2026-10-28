@@ -229,7 +229,9 @@ struct CaptureApi {
         auto& plugin = plugin_of(L);
         need(L, plugin, "menu", "reskate.menu.game");
         const auto menu = game(plugin).game_menu();
-        lua_createtable(L, 0, 3);
+        lua_createtable(L, 0, 4);
+        lua_pushboolean(L, menu.known);
+        lua_setfield(L, -2, "known");
         lua_pushboolean(L, menu.open);
         lua_setfield(L, -2, "open");
         lua_pushboolean(L, menu.open && menu.skaters);
