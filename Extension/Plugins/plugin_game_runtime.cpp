@@ -513,6 +513,7 @@ public:
     }
     std::string board_hide(std::string_view plugin, int bone, bool everyone) override { return board_pose::hide(plugin, bone, everyone); }
     void board_clear(std::string_view plugin, int bone) override { board_pose::clear(plugin, bone); }
+    std::string board_scale(std::string_view plugin, int bone, std::optional<Vec3> size) override { return board_pose::scale(plugin, bone, size); }
     void board_park(std::string_view plugin, std::vector<int> bones) override { board_pose::park(plugin, std::move(bones)); }
     std::string board_toss(std::string_view plugin, std::vector<int> bones, const Vec3& velocity, const Vec3& spin, float ground) override {
         return board_pose::toss(plugin, std::move(bones), velocity, spin, ground);

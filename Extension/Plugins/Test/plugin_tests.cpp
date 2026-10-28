@@ -105,6 +105,11 @@ struct FakeGame final : Game {
         return {};
     }
     void board_park(std::string_view plugin, std::vector<int> bones) override { calls.push_back(std::format("board park {} {}", plugin, bones.size())); }
+    std::string board_scale(std::string_view plugin, int bone, std::optional<Vec3> size) override {
+        if (!size) calls.push_back(std::format("board scale {} {} none", plugin, bone));
+        else calls.push_back(std::format("board scale {} {} {:.1f} {:.1f} {:.1f}", plugin, bone, (*size)[0], (*size)[1], (*size)[2]));
+        return {};
+    }
     // The Example declared-input deck as the game holds it: seven live selectors, and the eight colours (and a
     // number) its mod declares for its shader. What plugins hold of it is kept by the same rules as
     // the game's (board_material.h: take, listed, release). Off: no deck declares anything.
@@ -1349,6 +1354,8 @@ void a_permission_must_be_declared() {
         ok, err = pcall(reskate.board.set_parameter, "grip", "graphic", {r = 1, g = 0, b = 0})
         assert(not ok and err:find("needs the \"board\" permission"), err)
         ok, err = pcall(reskate.board.parameters, "deck")
+        assert(not ok and err:find("needs the \"board\" permission"), err)
+        ok, err = pcall(reskate.board.scale, 6, 1.5)
         assert(not ok and err:find("needs the \"board\" permission"), err)
         ok, err = pcall(reskate.input.joysticks)
         assert(not ok and err:find("needs the \"input\" permission"), err)
@@ -2985,6 +2992,9 @@ void the_wider_set_reaches_the_game() {
             assert(not pcall(reskate.board.set, 1, {position = vector.create(0, 0, 0)}), "bone 1 places the board")
             assert(reskate.board.hide(3))
             reskate.board.park({12, 13, 14, 15})
+            assert(reskate.board.scale(6, 1.5) and reskate.board.scale(7, vector.create(1, 2, 3)) and reskate.board.scale(10))
+            assert(not pcall(reskate.board.scale, 1, 2), "bone 1 places the board")
+            assert(not pcall(reskate.board.scale, 6, "big"), "a size is a number or a vector")
             assert(reskate.board.toss({12, 4}, {velocity = vector.create(1, 3, 0), spin = vector.create(0, 5, 0), ground = -2}))
             local grip = reskate.board.parameters("grip")
             assert(#grip == 4 and grip[1].key == "873f48af36e50d59" and grip[1].name == "graphic" and grip[1].type == "colour", "the grip's parameters")
@@ -3133,7 +3143,8 @@ void the_wider_set_reaches_the_game() {
           "A plugin wears items over the outfit\n" + environment.all());
     host.run_console("deck");
     check(environment.logged("[wide] deck fine") && game.called("board wide 12 2.0 world") && game.called("board hide wide 3") &&
-              game.called("board park wide 4") && game.called("board toss wide 2 3 -2"),
+              game.called("board park wide 4") && game.called("board toss wide 2 3 -2") && game.called("board scale wide 6 1.5 1.5 1.5") &&
+              game.called("board scale wide 7 1.0 2.0 3.0") && game.called("board scale wide 10 none"),
           "A plugin changes what is drawn of the board\n" + environment.all());
     check(game.called("board parameter wide 1 873f48af36e50d59 colour 1.0") && game.called("board parameter wide 0 841c7d74837f1d39 number 2.5") &&
               game.called("board parameter clear wide 1 8c46cd354b18a9e2") && game.called("board parameter clear wide -1 all"),
