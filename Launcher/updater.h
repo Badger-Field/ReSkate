@@ -91,6 +91,10 @@ void replace_file(const std::filesystem::path& target, const RemoteFile& file, c
 // Renames the running launcher to .old and moves the verified update into place.
 void replace_running_launcher(const std::filesystem::path& self, const RemoteFile& file,
                               const Progress& progress = {});
+// The second half of that: `verified` (a downloaded copy of `file`) takes the running launcher's
+// place. When the new launcher is not `file` once it is there (antivirus took it), the previous
+// one goes back and this fails, so the folder is never left without a launcher.
+void install_launcher(const std::filesystem::path& self, const std::filesystem::path& verified, const RemoteFile& file);
 // Removes ReSkateLauncher.exe.old left by a previous self-update.
 void remove_previous_launcher(const std::filesystem::path& self) noexcept;
 
