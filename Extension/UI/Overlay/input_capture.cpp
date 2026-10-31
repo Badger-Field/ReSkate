@@ -942,7 +942,7 @@ DWORD WINAPI captured_xinput(DWORD user, XINPUT_STATE* output) {
             output->dwPacketNumber ^= 0x40000000u;
         }
     }
-    if (!capture) apply_virtual_press(outer, user, result, output);
+    if (!capture) apply_virtual_press(game_poll, user, result, output);
     return result;
 }
 template<std::size_t I>
