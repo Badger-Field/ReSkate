@@ -1,8 +1,8 @@
 #include "session_internal.h"
 #include "Engine/Core/Json/json.h"
 #include "Extension/Profile/local_profile_runtime.h"
-#include "Extension/Skater/drone_beacon.h"
 #include "Extension/Multiplayer/Net/wire_codec.h"
+#include "Extension/Plugins/plugin_wire.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Game/Build/supported_build.h"
 #include <algorithm>
@@ -291,9 +291,7 @@ void apply_roster(Session &s, const Packet &p, std::uint64_t now) {
     apply_object_limit(s, p.object_limit); // after server_admin, which exempts an admin
     apply_object_scaling(s, !dedicated_host(s) || p.object_scaling);
     s.sync_effects = !dedicated_host(s) || p.sync_effects;
-    s.sync_drones = !dedicated_host(s) || p.sync_drones;
-    drone::beacon::server_allows().store(s.sync_drones);
-    apply_guest_tools(s, p.guest_noclip, p.guest_no_bail, p.guest_boosts);
+    apply_guest_tools(s, p.guest_noclip, p.guest_no_bail, p.guest_boosts, p.guest_ollies);
     s.enforce_tuning = p.enforce_tuning;
     s.server_votes = dedicated_host(s) ? p.server_votes : 0;
     s.server_polls = dedicated_host(s) ? p.server_polls : 0;
@@ -383,10 +381,6 @@ bool accept_data(Peer &peer, const Packet &p, std::uint64_t now) {
             for (const auto &impact : p.impacts) peer.impacts.emplace_back(due, impact);
             while (peer.impacts.size() > 64) peer.impacts.pop_front();
         }
-    } else if (p.kind == PacketKind::drone) {
-        accepted = drone::beacon::server_allows().load(std::memory_order_relaxed) && peer.effect_budget.accept(now);
-        if (accepted)
-            drone::beacon::receive(peer.member.id, peer.member.name, p.drone_position, p.drone_rotation, p.drone_active);
     } else if (p.kind == PacketKind::pose)
         accepted = peer.poses.push_validated(p, now);
     if (accepted) {
@@ -786,6 +780,8 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             s.join_destination = p.destination;
             s.map_label = p.map_label;
             s.map_package = p.map_package;
+            // (Only a dedicated server needs plugins of its players.)
+            if (dedicated_host(s)) s.required_plugins = p.required_plugins;
             s.world = p.world;
             s.join_map_authorized |= p.map_authorized;
             link->last_packet = now;
@@ -985,7 +981,7 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
                 apply_object_limit(s, s.object_limit);
                 apply_object_placement(s, s.object_placement);
                 apply_object_scaling(s, s.object_scaling);
-                apply_guest_tools(s, s.guest_noclip, s.guest_no_bail, s.guest_boosts);
+                apply_guest_tools(s, s.guest_noclip, s.guest_no_bail, s.guest_boosts, s.guest_ollies);
                 publish(s);
                 publish_chat(s);
             }
@@ -1116,13 +1112,16 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             if (direct_link || !sender || !sender->handshaken || p.map != s.map || p.world != s.world ||
                 !routed_source(p, sender->member, message.peer, s.mode == Mode::host, s.host_id))
                 continue;
-            if (!sender->throwdown_budget.accept(now, throwdown_burst)) continue;
+            if (!(plugins::wire::is_plugin(p.throwdown) ? sender->plugin_budget.accept(now, plugin_burst)
+                                                        : sender->throwdown_budget.accept(now, throwdown_burst)))
+                continue;
             sender->last_packet = now;
             // A player whose mods change scoring or physics takes part in nothing linked: the host
             // passes none of theirs on.
             if (sender->member.scoring) continue;
             if (s.throwdown_inbox.size() < 256) s.throwdown_inbox.emplace_back(p.source, p.throwdown);
-            if (s.mode == Mode::host) broadcast(s, p, true, false, now, p.source);
+            // A plugin message for the authority alone stays here (plugin_wire.h).
+            if (s.mode == Mode::host && plugins::wire::relayed(p.throwdown)) broadcast(s, p, true, false, now, p.source);
             continue;
         }
         // A host-ready notice and its fresh cosmetics can share one receive
@@ -1231,6 +1230,7 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
         }
     }
     update_scoring(s, now); // before the roster, so a host's own flag goes out with it
+    update_presence(s, now);
     tick_host_parties(s, now); // and the lobby's parties, which the roster carries
     if (s.mode == Mode::host && world_playing(s, local) && (s.roster_dirty || now - s.last_roster > 2000000))
         send_roster(s, now);
@@ -1239,14 +1239,17 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
         std::any_of(peers.begin(), peers.end(), [](const auto &peer) { return peer.handshaken && !peer.world_ready; })) &&
         (!s.last_world_state || now - s.last_world_state >= 1000000) && (s.travelling || s.world > 1))
         send_world_state(s, now);
-    if (s.mode == Mode::join && s.world > 1 && (s.travelling || !s.last_world_ready) &&
-        (!s.last_world_ready || now - s.last_world_ready >= 1000000)) {
+    // (And through a reload of its own, begin_local_reload, whatever the world: the host or server hears
+    // it is loading, not silent, and when it is back.)
+    if (s.mode == Mode::join && (s.world > 1 || s.local_reload || s.reload_ready_due) && (s.travelling || !s.last_world_ready || s.reload_ready_due) &&
+        (!s.last_world_ready || now - s.last_world_ready >= 1000000 || s.reload_ready_due)) {
         if (const auto *host_peer = find_peer(s, s.host_id); host_peer && host_peer->handshaken) {
             auto ready = packet(s, PacketKind::world_ready, now);
             ready.world_ready = local.ready && !s.awaiting_map;
             ready.map_fetching = !ready.world_ready && s.fetching_since != 0;
             send_required(s, s.host_id, encode_wire(ready));
             s.last_world_ready = now;
+            s.reload_ready_due = false;
         }
     }
     if (s.listed_host)

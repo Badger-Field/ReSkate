@@ -50,6 +50,8 @@ jobs:
           -DDINGOSDK_RELEASE_REPO="${{ github.repository }}"
           -DDINGOSDK_LAUNCHER_AUTO_UPDATE=ON
           -DDINGOSDK_CRASH_REPORT_URL=""
+          -DDINGOSDK_MOD_ID=Badger_Field
+          -DDINGOSDK_MOD_VERSION="$VERSION"
       - name: The Spotify device from earlier runs (cargo)
         id: cargo
         uses: actions/cache/restore@v4

@@ -41,6 +41,8 @@ std::string last_status;
 Progress merge_progress; // under state_mutex, while merging
 std::optional<std::vector<std::filesystem::path>> pending_levels;
 std::optional<std::vector<std::string>> applied; // set by a live apply; the launch's list before one
+// Each level the mods in effect register, and the folder of the mod that does: set by a live apply.
+std::optional<std::vector<std::pair<std::string, std::filesystem::path>>> applied_levels;
 std::string current_level;
 
 template <std::size_t N> bool matches(std::uintptr_t address, const std::array<std::uint8_t, N> &prefix) {
@@ -278,6 +280,30 @@ bool refresh_toc(const std::string &superbundle, const std::filesystem::path &fi
     return swapped != 0;
 }
 
+// True when everything a mod changes only matters once one of its maps is
+// loaded: its TOCs are level superbundles (the root included, which every load
+// re-reads) and globals, where maps register themselves. Such a mod needs no
+// reload of the level being played; a player sees it by loading the map.
+bool scan_maps_only(const std::filesystem::path &directory) {
+    std::error_code error;
+    for (std::filesystem::recursive_directory_iterator at(directory, error), end; !error && at != end; at.increment(error)) {
+        if (!at->is_regular_file(error) || _wcsicmp(at->path().extension().c_str(), L".toc") != 0) continue;
+        auto relative = mods::ascii_path(std::filesystem::relative(at->path(), directory, error));
+        std::ranges::transform(relative, relative.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (relative == "layout.toc" || relative == "win32/globals.toc" || relative.starts_with("win32/levels/")) continue;
+        return false;
+    }
+    return !error;
+}
+// Cached per folder: the overlay asks every time it redraws its apply button.
+bool maps_only(const std::filesystem::path &directory) {
+    static std::mutex cache_mutex;
+    static std::map<std::wstring, bool> cache;
+    std::lock_guard lock(cache_mutex);
+    const auto key = directory.wstring();
+    if (const auto found = cache.find(key); found != cache.end()) return found->second;
+    return cache[key] = scan_maps_only(directory);
+}
 // Whether the mods switched on or off since the last apply change anything the
 // level being played shows (cosmetics, settings), rather than only maps.
 bool changes_current_level(const mods::Catalog &catalog, const std::vector<std::string> &before) {
@@ -294,7 +320,7 @@ bool changes_current_level(const mods::Catalog &catalog, const std::vector<std::
     };
     const auto changed = [&](const std::string &name) {
         const auto folder = directory(name);
-        return !folder || !maps_only_cached(*folder); // a folder since removed: assume the worst
+        return !folder || !maps_only(*folder); // a folder since removed: assume the worst
     };
     for (const auto &name : now)
         if (!named(before, name) && changed(name)) return true;
@@ -323,6 +349,7 @@ void apply_now() {
     mods::MergeReport report;
     std::string left_out;
     for (int round = 0;; ++round) {
+        mods::reconcile_variant_additions(catalog);
         // The mods in the game now were checked against the store when they went in.
         report = mods::merge_mods(catalog, [](const mods::MergeProgress &now) {
             std::lock_guard lock(state_mutex);
@@ -413,10 +440,13 @@ void apply_now() {
         std::lock_guard lock(state_mutex);
         // Set with the manifests, so the client tick sees both in one update.
         if (needed) reload_ready = true;
-        mods::board_break_applied(catalog);
+        mods::variants_applied(catalog);
         pending_levels = mods::level_manifest_paths(catalog);
         applied.emplace();
         for (const auto &mod : catalog.mods) applied->push_back(mod.name);
+        applied_levels.emplace();
+        for (const auto &mod : catalog.mods)
+            for (const auto &level : mod.levels) applied_levels->emplace_back(level, mod.directory);
     }
     if (!left_out.empty()) problem += (problem.empty() ? "left out " : "; left out ") + left_out + ", which could not be merged cleanly";
     // Where the time went, step by step, as the launch's merge logs it.
@@ -468,13 +498,47 @@ ApplyEffect preview(const mods::ModList &list) {
         std::lock_guard lock(state_mutex);
         level = current_level;
     }
-    return preview_of(list, applied_mods(), level);
+    const auto before = applied_mods();
+    const auto named = [](const std::vector<std::string> &names, const std::string &name) {
+        return std::ranges::any_of(names, [&](const std::string &other) { return _stricmp(other.c_str(), name.c_str()) == 0; });
+    };
+    std::vector<std::string> now;
+    for (const auto &entry : list.entries)
+        if (entry.enabled) now.push_back(entry.mod.name);
+    const auto entry_of = [&](const std::string &name) -> const mods::ModEntry * {
+        for (const auto &entry : list.entries)
+            if (_stricmp(entry.mod.name.c_str(), name.c_str()) == 0) return &entry;
+        return nullptr;
+    };
+    bool reload{};
+    for (const auto &name : before) {
+        // A variant stands for the mod that holds it (mod_catalog.h).
+        if (const auto owner = mods::variant_owner(name); named(now, owner.empty() ? name : owner)) continue;
+        const auto *entry = entry_of(name);
+        // Content ReSkate keeps itself (builtin_packs.h) is in no mod list, and stays.
+        if (!entry && (name.starts_with("reskate-builtin-") || mods::kept_by_reskate(list.root, name))) continue;
+        // A folder deleted since: what it held is unknown, so assume the worst.
+        if (!entry) {
+            reload = true;
+            continue;
+        }
+        if (!level.empty() && std::ranges::any_of(entry->mod.levels, [&](const std::string &asset) {
+                return _stricmp(asset.c_str(), level.c_str()) == 0;
+            }))
+            return ApplyEffect::leave_level;
+        reload |= !maps_only(entry->mod.directory);
+    }
+    for (const auto &name : now)
+        if (!named(before, name))
+            if (const auto *entry = entry_of(name)) reload |= !maps_only(entry->mod.directory);
+    return reload ? ApplyEffect::reload_level : ApplyEffect::maps_only;
 }
 bool busy() noexcept { return merging.load(); }
 Progress progress() {
     std::lock_guard lock(state_mutex);
     return merge_progress;
 }
+bool only_maps(const std::filesystem::path& directory) { return scan_maps_only(directory); }
 std::string status() {
     std::lock_guard lock(state_mutex);
     return last_status;
@@ -496,5 +560,21 @@ bool placed_at_launch(const std::string &name) {
 std::optional<std::vector<std::filesystem::path>> take_level_manifests() {
     std::lock_guard lock(state_mutex);
     return std::exchange(pending_levels, std::nullopt);
+}
+std::filesystem::path level_mod_directory(std::string_view asset) {
+    const auto same = [&](const std::string &level) {
+        return level.size() == asset.size() && _strnicmp(level.data(), asset.data(), asset.size()) == 0;
+    };
+    {
+        std::lock_guard lock(state_mutex);
+        if (applied_levels) {
+            for (const auto &[level, directory] : *applied_levels)
+                if (same(level)) return directory;
+            return {};
+        }
+    }
+    for (const auto &mod : mods::catalog().mods)
+        if (std::ranges::any_of(mod.levels, same)) return mod.directory;
+    return {};
 }
 } // namespace dingosdk::live_mods
