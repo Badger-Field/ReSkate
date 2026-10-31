@@ -13,6 +13,7 @@
 | LZ4 | `1.10.0` | BSD-2-Clause | [lz4/lz4](https://github.com/lz4/lz4/releases/tag/v1.10.0) |
 | Zstandard | `1.5.7` | BSD-3-Clause (dual-licensed with GPLv2; used under BSD) | [facebook/zstd](https://github.com/facebook/zstd/releases/tag/v1.5.7) |
 | Monocypher | `4.0.2` (`0d85f98c9d9b0227e42cf795cb527dff372b40a4`) | CC0-1.0 or BSD-2-Clause (used under BSD-2-Clause) | [LoupVaillant/Monocypher](https://github.com/LoupVaillant/Monocypher/tree/4.0.2) |
+| Luau | `2d88f9b5facaa9e4ec91247b39ae8251bd49a244` | MIT (with Lua's MIT notice, `lua_LICENSE.txt`) | [luau-lang/luau](https://github.com/luau-lang/luau/tree/2d88f9b5facaa9e4ec91247b39ae8251bd49a244) |
 | Montserrat font | `fonts/Montserrat-*.ttf` | SIL Open Font License 1.1 | [JulietaUla/Montserrat](https://github.com/JulietaUla/Montserrat) |
 | Permanent Marker font | `fonts/PermanentMarker-Regular.ttf` | Apache 2.0 | [Google Fonts](https://fonts.google.com/specimen/Permanent+Marker) |
 

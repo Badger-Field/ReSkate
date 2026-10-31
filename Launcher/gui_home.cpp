@@ -4,6 +4,7 @@
 #include "mod_manager.h"
 
 #include "problem.h"
+#include "launcher_update_config.h"
 
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Log/logging.h"
@@ -395,7 +396,7 @@ void refresh_announcement(Announcement& news, double time) {
         bool read{};
         try {
             std::string body;
-            launcher_update::http_stream(L"https://api.reskate.dev/api/v1/announcement", 64 * 1024, 15000,
+            launcher_update::http_stream(launcher_update::launcher_announcement_url, 64 * 1024, 15000,
                                          [&](const char* data, DWORD size) { body.append(data, size); });
             const auto root = Json::parse(body);
             const auto& entry = root.at("announcement");
@@ -518,8 +519,10 @@ void frame(Launcher& launcher, const Fonts& fonts, HWND window, Ui& ui, ModsPane
     prepare_mods(mods_panel, launcher.session());
     // Whether the privacy policy or terms changed since the player agreed (looked up once).
     check_legal_versions(ui, launcher.settings());
-    // The team's announcement for the home screen (offline: none is read).
-    if (!launcher.settings().offline) refresh_announcement(ui.announcement, time);
+    // The team's announcement for the home screen (offline, or built without an announcement URL:
+    // none is read).
+    if (!launcher.settings().offline && launcher_update::launcher_announcement_url[0])
+        refresh_announcement(ui.announcement, time);
     // A mod dropped on the window opens the Mods panel and installs it.
     {
         std::lock_guard lock(g_dropped_mutex);

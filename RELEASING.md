@@ -99,9 +99,12 @@ checking its hash against the pin.
 
 The DLL has OpenSSL, Abseil, Protocol Buffers and WebRTC's ICE compiled in. Their licences ask for
 their notices to go with every copy, so each release adds
-`contrib/direct-multiplayer/GameNetworkingSockets-NOTICES.txt` beside the DLL, both in the zip and as
-an asset, named `THIRD-PARTY-NOTICES.txt`. When the pin changes to a build with other components,
-update that file too.
+`contrib/direct-multiplayer/GameNetworkingSockets-NOTICES.txt` to `THIRD-PARTY-NOTICES.txt`, both in the
+zip and as an asset. When the pin changes to a build with other components, update that file too.
+
+`THIRD-PARTY-NOTICES.txt` also carries the licence of every library in `External/` that the binaries
+use (`.github/scripts/third_party_notices.py`), as `External/README.md` asks. A new library in
+`External/` goes in that script's list too.
 
 When the pin changes, add a new `gns-<commit>` release with the new DLL.
 

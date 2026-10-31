@@ -5,4 +5,7 @@ inline constexpr bool launcher_binary_updates = @launcher_binary_updates@;
 
 // Public GitHub releases source ("owner/repo"): launcher.json in its latest release.
 inline constexpr wchar_t launcher_release_repo[] = L"@launcher_release_repo@";
+
+// The home screen's announcement (DINGOSDK_ANNOUNCEMENT_URL); empty: none is read.
+inline constexpr wchar_t launcher_announcement_url[] = L"@launcher_announcement_url@";
 }
