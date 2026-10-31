@@ -75,6 +75,7 @@ jobs:
         shell: bash
         run: |
           out=release && mkdir -p "$out/ReSkate-$VERSION"
+          gns_notices=()
           bin=build/vs2022-x64/Release
           cp "$bin/ReSkateLauncher.exe" "$bin/ReSkate.dll" "$out/"
           cp "$bin/ReSkateLauncher.exe" "$bin/ReSkate.dll" "$out/ReSkate-$VERSION/"
@@ -94,9 +95,12 @@ jobs:
             fi
             cp gns/GameNetworkingSockets.dll "$out/" && cp gns/GameNetworkingSockets.dll "$out/ReSkate-$VERSION/"
             # Its licences (OpenSSL, Abseil, protobuf, WebRTC and GameNetworkingSockets itself) go with it.
-            notices=contrib/direct-multiplayer/GameNetworkingSockets-NOTICES.txt
-            cp "$notices" "$out/ReSkate-$VERSION/THIRD-PARTY-NOTICES.txt" && cp "$notices" "$out/THIRD-PARTY-NOTICES.txt"
+            gns_notices=(--extra contrib/direct-multiplayer/GameNetworkingSockets-NOTICES.txt)
           fi
+          # The licences of the libraries in External/ that the binaries carry (External/README.md), and
+          # GameNetworkingSockets.dll's when it ships.
+          python .github/scripts/third_party_notices.py --out "$out/THIRD-PARTY-NOTICES.txt" "${gns_notices[@]}"
+          cp "$out/THIRD-PARTY-NOTICES.txt" "$out/ReSkate-$VERSION/"
           cp LICENSE "$out/ReSkate-$VERSION/"
           (cd "$out" && 7z a -tzip "ReSkate-$VERSION.zip" "ReSkate-$VERSION" > /dev/null)
           7z a -tzip "$out/ReSkate-$VERSION-symbols.zip" "$bin/ReSkateLauncher.pdb" "$bin/ReSkate.pdb" > /dev/null || true
@@ -113,8 +117,9 @@ jobs:
 
           **Update:** the launcher updates itself and \`ReSkate.dll\` from this repository's latest release.
           NOTES
-          files=(release/ReSkate-$VERSION.zip release/ReSkateLauncher.exe release/ReSkate.dll release/launcher.json release/SHA256SUMS.txt)
-          [ -f release/GameNetworkingSockets.dll ] && files+=(release/GameNetworkingSockets.dll release/THIRD-PARTY-NOTICES.txt)
+          files=(release/ReSkate-$VERSION.zip release/ReSkateLauncher.exe release/ReSkate.dll release/launcher.json release/SHA256SUMS.txt
+                 release/THIRD-PARTY-NOTICES.txt)
+          [ -f release/GameNetworkingSockets.dll ] && files+=(release/GameNetworkingSockets.dll)
           [ -f release/ReSkate-$VERSION-symbols.zip ] && files+=(release/ReSkate-$VERSION-symbols.zip)
           gh release create "v$VERSION" "${files[@]}" --draft --target "$GITHUB_SHA" \
             --title "ReSkate $VERSION" --notes-file notes.md --generate-notes
