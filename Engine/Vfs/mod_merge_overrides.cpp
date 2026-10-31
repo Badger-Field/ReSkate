@@ -3,6 +3,7 @@
 #include "Engine/Resource/ebx_document.h"
 #include "Engine/Resource/ebx_merge.h"
 #include "Engine/Resource/ebx_writer.h"
+#include "Engine/Resource/texture.h"
 
 #include <Windows.h>
 
@@ -102,6 +103,7 @@ struct ModRead {
 ModRead read_mod(const Mod& mod, const RelativeFiles& files, const CasStore& store, const fs::path& baseRoot,
                  const fs::path& gameRoot, Shared<GameToc>& gameTocs, Shared<GameBundle>& gameBundles) {
     ModRead read;
+    std::size_t texturesKept = 0;   // changed textures other mods' copies cannot take (#311)
     auto& [candidates, companions, bundleChunks, chunkDefaults, unreadable, addedIn, newChunks, imported, changes, scripts, notes, failure] = read;
     const auto decoded = [&](std::span<const std::byte> encoded) {
         return fb::ebx::read_document(fb::decode_cas(encoded, {gameRoot}));
@@ -133,9 +135,11 @@ ModRead read_mod(const Mod& mod, const RelativeFiles& files, const CasStore& sto
                         made.original.emplace(lower(manifest.ebx[index].name), std::pair{manifest.ebx[index].sha1, index});
                     // Maps carry stock SkaterLoader too. Replacing it only in the game's
                     // bundles loses custom cosmetic material targets on a map transition.
+                    // And the game's textures (#311): a repainted HUD texture reverted on a map.
                     // Other resource types retain their own table/dependency merge rules.
                     for (const auto& asset : manifest.resources) {
-                        if (asset.resourceType == luaScriptResourceType) made.scripts.emplace(lower(asset.name), &asset);
+                        if (asset.resourceType == luaScriptResourceType || asset.resourceType == fb::texture_resource_type)
+                            made.scripts.emplace(lower(asset.name), &asset);
                         made.resources.insert(lower(asset.name));
                     }
                 });
@@ -184,7 +188,8 @@ ModRead read_mod(const Mod& mod, const RelativeFiles& files, const CasStore& sto
                 }
                 for (std::size_t index = 0; index < modListing->manifest.resources.size(); ++index) {
                     const auto& asset = modListing->manifest.resources[index];
-                    if (asset.resourceType != luaScriptResourceType) continue;
+                    const bool texture = asset.resourceType == fb::texture_resource_type;
+                    if (asset.resourceType != luaScriptResourceType && !texture) continue;
                     const auto name = lower(asset.name);
                     const auto originalScript = known.scripts.find(name);
                     if (originalScript == known.scripts.end() || originalScript->second->sha1 == asset.sha1 ||
@@ -197,10 +202,28 @@ ModRead read_mod(const Mod& mod, const RelativeFiles& files, const CasStore& sto
                     if (at >= modListing->files.size()) continue;
                     const auto& file = modListing->files[at];
                     try {
-                        scripts.push_back({name, originalScript->second->sha1,
-                            AssetOverride{mod.name, asset.sha1, asset.originalSize,
-                                store.read(file.location.patch ? mod.directory : baseRoot,
-                                           file.location, file.offset, file.size), asset}});
+                        AssetOverride value{mod.name, asset.sha1, asset.originalSize,
+                            store.read(file.location.patch ? mod.directory : baseRoot,
+                                       file.location, file.offset, file.size), asset};
+                        if (texture) {
+                            // Its pixels have to be found wherever it goes, or the game waits for
+                            // them for ever: carried only when they are the game's own chunk (just
+                            // the header changed) or a chunk the mod adds to this TOC, which then
+                            // goes with it. In the mod's bundle or unreadable, every copy keeps the
+                            // game's texture, as before.
+                            const auto chunk = fb::read_texture_header(fb::decode_cas(value.encoded, {gameRoot}),
+                                                                       asset.resourceMeta).chunk;
+                            const bool added = std::ranges::any_of(own.chunks, [&](const fb::TocChunk& listed) {
+                                return listed.guid == chunk && !listed.removed && listed.location.patch &&
+                                       !game.chunks.contains(listed.guid);
+                            });
+                            if (!added && !game.chunks.contains(chunk)) {
+                                ++texturesKept;
+                                continue;
+                            }
+                            value.toc_chunks = added;
+                        }
+                        scripts.push_back({name, originalScript->second->sha1, std::move(value)});
                     } catch (const std::exception& failed) {
                         // Read whether or not it will be wanted, so a failure is only this
                         // script's: where a higher mod's version stands, it is nobody's and
@@ -241,6 +264,9 @@ ModRead read_mod(const Mod& mod, const RelativeFiles& files, const CasStore& sto
                 ": its changes could not be read for other mods' copies (" + failed.what() + ")");
         }
     }
+    if (texturesKept)
+        notes.push_back(mod.name + ": " + std::to_string(texturesKept) + " changed texture(s) keep the game's "
+            "texture in other mods' copies (a map's): their pixels are in the mod's bundle, not its TOC");
     // Each added document's guid, and the guids of the documents it refers to in turn.
     unreadable.assign(candidates.size(), false);
     for (std::size_t index = 0; index < candidates.size(); ++index) {
@@ -520,6 +546,12 @@ AssetOverrides collect_asset_overrides(const std::vector<const Mod*>& mods,
                     if (addition.mod == mod->name && (addition.asset.kind == fb::AssetKind::ebx ||
                                                      addition.asset.kind == fb::AssetKind::resource)) try {
                         carried.push_back(fb::decode_cas(addition.encoded, {gameRoot}));
+                    } catch (const std::exception&) {}
+            // And the changed textures it carries whose pixels it adds (#311).
+            for (const auto& [name, versions] : out.scripts)
+                for (const auto& [game, version] : versions)
+                    if (version.mod == mod->name && version.toc_chunks) try {
+                        carried.push_back(fb::decode_cas(version.encoded, {gameRoot}));
                     } catch (const std::exception&) {}
             // Each carried asset is gone through once, for all the chunks together: looking for
             // every chunk in every asset in turn took most of a merge with many of either.

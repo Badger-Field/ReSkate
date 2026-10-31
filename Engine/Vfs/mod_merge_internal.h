@@ -312,9 +312,12 @@ struct AssetOverride {
     fb::Sha1 sha1;                    // the mod's version
     std::uint64_t originalSize{};
     std::vector<std::byte> encoded;   // its payload, as stored in cas
-    // Present for a Lua resource replacement: its identity and metadata must
-    // travel with the script bytes, including source and bytecode sizes.
+    // Present for a Lua resource or texture replacement: its identity and metadata must
+    // travel with the bytes, including a script's source and bytecode sizes.
     std::optional<fb::BundleAsset> resource;
+    // A changed texture whose pixels are a chunk its mod adds to the TOC: wherever the texture
+    // goes, that chunk is listed too (a map's superbundle resolves chunks from its own TOC).
+    bool toc_chunks{};
     // The documents the changed EBX refers to that its mod added to the bundle it
     // made the change in, by their guids. They go wherever the change goes: the
     // game keeps a list in more bundles than one, each with what the list names.
@@ -350,7 +353,8 @@ struct AssetOverrides {
     std::map<std::string,ChunkDefaults,std::less<>> bundle_chunk_defaults;
     // By lower-case asset name, then the game's sha1 the change replaces.
     std::map<std::string, std::map<fb::Sha1, AssetOverride>, std::less<>> changed;
-    // Separate from EBX: a script's EBX wrapper can have the same asset name.
+    // The game's Lua scripts and textures a mod changed, separate from EBX: a script's EBX
+    // wrapper can have the same asset name.
     std::map<std::string, std::map<fb::Sha1, AssetOverride>, std::less<>> scripts;
     // By lower-case bundle name, in priority order.
     std::map<std::string, std::vector<AssetAddition>, std::less<>> added;

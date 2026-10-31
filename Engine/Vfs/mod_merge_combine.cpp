@@ -630,6 +630,9 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                         asset.sha1 = change->second.sha1;
                         asset.originalSize = change->second.originalSize;
                         if (resource) asset.resourceMeta = resource->resourceMeta;
+                        // A changed texture's own pixels: listed in this superbundle's TOC as an
+                        // added asset's are (#311).
+                        if (change->second.toc_chunks) addedFrom.insert(change->second.mod);
                         wanted.insert(change->second.names.begin(), change->second.names.end());
                         if (example.empty()) example = asset.name + " from " + change->second.mod;
                     } catch (const std::exception& error) {
