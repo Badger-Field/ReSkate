@@ -315,13 +315,13 @@ struct AssetOverride {
     // Present for a Lua resource or texture replacement: its identity and metadata must
     // travel with the bytes, including a script's source and bytecode sizes.
     std::optional<fb::BundleAsset> resource;
-    // A changed texture whose pixels are a chunk its mod adds to the TOC: wherever the texture
-    // goes, that chunk is listed too (a map's superbundle resolves chunks from its own TOC).
-    bool toc_chunks{};
     // The documents the changed EBX refers to that its mod added to the bundle it
     // made the change in, by their guids. They go wherever the change goes: the
     // game keeps a list in more bundles than one, each with what the list names.
     std::set<fb::Guid> names;
+    // A changed texture whose pixels are a chunk its mod adds to the TOC: wherever the texture
+    // goes, that chunk is listed too (a map's superbundle resolves chunks from its own TOC).
+    bool toc_chunks{};
 };
 inline constexpr std::uint32_t luaScriptResourceType = 0xEC383B87;
 // An EBX asset a mod added to one of the game's bundles, or a resource it added
