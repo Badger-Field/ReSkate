@@ -235,6 +235,14 @@ set(launcher_release_repo "${DINGOSDK_RELEASE_REPO}")
 if(NOT launcher_release_repo MATCHES "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
     message(FATAL_ERROR "DINGOSDK_RELEASE_REPO must be owner/repo")
 endif()
+# The home screen's announcement (gui_home.cpp) is read from this URL; empty, none is read and the
+# card never shows. Upstream's builds read its team's news (https://api.reskate.dev/api/v1/announcement);
+# this edition posts none, so its default is empty.
+set(DINGOSDK_ANNOUNCEMENT_URL "" CACHE STRING "HTTPS URL of the launcher's home screen announcement (empty: none)")
+set(launcher_announcement_url "${DINGOSDK_ANNOUNCEMENT_URL}")
+if(launcher_announcement_url AND NOT launcher_announcement_url MATCHES "^https://[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+$")
+    message(FATAL_ERROR "DINGOSDK_ANNOUNCEMENT_URL must be an https:// URL")
+endif()
 if(DINGOSDK_LAUNCHER_AUTO_UPDATE)
     set(launcher_binary_updates true)
 else()
