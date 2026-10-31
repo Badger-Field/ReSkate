@@ -2,7 +2,6 @@
 #include "Engine/Vfs/mod_list.h"
 #include <filesystem>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -39,9 +38,6 @@ enum class ApplyEffect {
     leave_level,  // the map being played goes away, so San Van is loaded
 };
 ApplyEffect preview(const mods::ModList& list);
-// preview()'s reasoning with the mods in effect (`before`) and the level being played given, not
-// read from the game; it reads only the mod folders (live_mods_preview.cpp, which needs no game).
-ApplyEffect preview_of(const mods::ModList& list, std::span<const std::string> before, std::string_view level);
 // The apply button's label for an effect, shared by the overlay and native menu.
 inline const char* apply_label(ApplyEffect effect) {
     return effect == ApplyEffect::maps_only ? "Apply"
@@ -68,9 +64,10 @@ bool placed_at_launch(const std::string& name);
 // Whether a mod folder holds maps and nothing else: level bundles and the two files maps
 // register themselves in (its layout and globals). Reads the folder; not cached.
 bool only_maps(const std::filesystem::path& directory);
-// The same, remembered per folder: the overlay asks each time it draws its apply button.
-bool maps_only_cached(const std::filesystem::path& directory);
 // reskate-levels.json of every mod a live apply left enabled, highest
 // priority first; handed out once per successful apply.
 std::optional<std::vector<std::filesystem::path>> take_level_manifests();
+// The folder of the mod in effect that registers the level `asset` (any case): the last live
+// apply's mods, else the launch's. Empty for a level no mod registers. Any thread.
+std::filesystem::path level_mod_directory(std::string_view asset);
 }

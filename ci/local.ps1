@@ -34,7 +34,7 @@ function Use-VisualStudio {
 # No crash uploads from CI builds: built with no endpoint, and every process the tests start is
 # told not to upload (RESKATE_NO_CRASH_UPLOAD, Engine/Core/Debug/protocol.h) whatever it was built with.
 $env:RESKATE_NO_CRASH_UPLOAD = "1"
-$options = @("-DDINGOSDK_CRASH_REPORT_URL=", "-DDINGOSDK_BUILD_LAUNCHER_TESTS=ON")
+$options = @("-DDINGOSDK_CRASH_REPORT_URL=", "-DDINGOSDK_BUILD_LAUNCHER_TESTS=ON", "-DDINGOSDK_BUILD_PLUGIN_TESTS=ON")
 if ($Ninja) {
     Use-VisualStudio
     if (Get-Command sccache.exe -ErrorAction SilentlyContinue) {
