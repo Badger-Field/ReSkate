@@ -1,5 +1,7 @@
 // Launcher mod manager: install from .zip and folders, the Mods list and mods.json.
 #include "Launcher/mod_manager.h"
+#include "Launcher/updater.h"
+#include "Engine/Core/Platform/launcher_support.h"
 
 #include "Engine/Vfs/builtin_pack_format.h"
 #include "Engine/Vfs/builtin_packs.h"
@@ -644,6 +646,29 @@ int main() {
         fs::remove_all(waiting_mods / L"Held Mod");
         launcher_mods::apply_pending(waiting_mods);
         check(!fs::exists(waiting_mods / launcher_mods::pending_folder), "pending: uninstalls of mods already gone are dropped");
+    }
+
+    // A launcher update: the running launcher goes to .old and the verified copy takes its place.
+    // When the copy in place is not the update (antivirus took or changed it, #268), the previous
+    // launcher is put back and the update fails.
+    {
+        const auto folder = root / L"self-update";
+        const auto self = folder / L"ReSkateLauncher.exe";
+        write(self, "old launcher");
+        write(folder / L"update.new", "new launcher");
+        launcher_update::RemoteFile update{"9.9.9", L"", launcher::sha256_file(folder / L"update.new"), 12};
+        launcher_update::install_launcher(self, folder / L"update.new", update);
+        check(read(self) == "new launcher" && read(fs::path(self.wstring() + L".old")) == "old launcher",
+              "self-update: the update takes the launcher's place and the old one is kept as .old");
+        launcher_update::remove_previous_launcher(self);
+        check(!fs::exists(self.wstring() + L".old"), "self-update: the .old goes on the next start");
+
+        write(self, "old launcher");
+        write(folder / L"update.new", "changed on the way in");
+        check(!error_of([&] { launcher_update::install_launcher(self, folder / L"update.new", update); }).empty(),
+              "self-update: a launcher that is not the update once in place fails the update");
+        check(read(self) == "old launcher" && !fs::exists(self.wstring() + L".old") && !fs::exists(folder / L"update.new"),
+              "self-update: the previous launcher is put back and nothing else is left");
     }
 
     std::error_code ignored;

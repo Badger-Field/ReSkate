@@ -613,7 +613,10 @@ fs::path previous_launcher(const fs::path& self, int index) {
 } // namespace
 
 void replace_running_launcher(const fs::path& self, const RemoteFile& file, const Progress& progress) {
-    const auto verified = download_verified(self, file, progress);
+    install_launcher(self, download_verified(self, file, progress), file);
+}
+
+void install_launcher(const fs::path& self, const fs::path& verified, const RemoteFile& file) {
     // Windows allows renaming, but not overwriting, a running executable. A .old that is still
     // there belongs to a launcher that has not exited (or is held by antivirus) and cannot be
     // deleted, so the next free name is used instead.
@@ -632,6 +635,15 @@ void replace_running_launcher(const fs::path& self, const RemoteFile& file, cons
         error = GetLastError();
         MoveFileExW(previous.c_str(), self.c_str(), MOVEFILE_WRITE_THROUGH);
         fail(std::format("Cannot install the launcher update (Windows error {})", error));
+    }
+    // Antivirus can take an unsigned launcher as soon as it lands, leaving only the .old (#268).
+    // Reading it back has it scanned now: when it is gone or changed, the previous launcher goes
+    // back, as a failed update.
+    if (!file_matches(self, file)) {
+        DeleteFileW(self.c_str());
+        MoveFileExW(previous.c_str(), self.c_str(), MOVEFILE_WRITE_THROUGH);
+        fail("The new launcher was removed or changed as soon as it was installed, most likely by antivirus. "
+             "The previous launcher was put back. Allow ReSkateLauncher.exe in your antivirus and update again.");
     }
 }
 
