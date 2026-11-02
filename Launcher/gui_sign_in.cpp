@@ -24,12 +24,17 @@ void open_sign_in(Launcher& launcher, Ui& ui, bool validate) {
 }
 
 void sign_in_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui) {
-    const auto panel = begin_panel("##sign_in_panel", size, ImVec2(S(480), S(520)));
+    // The panel is a fixed, non-scrolling window (begin_panel uses NoDecoration), so its height has
+    // to hold whatever is shown or content draws over the pinned CANCEL row. Grow it only while the
+    // password form is open; collapsed it stays compact instead of leaving a large empty gap.
+    // ui.password_open is last frame's header state (the size is fixed before the header is drawn) —
+    // one frame of lag on toggle, which is imperceptible.
+    const auto panel = begin_panel("##sign_in_panel", size, ImVec2(S(480), ui.password_open ? S(600) : S(380)));
     auto& settings = launcher.settings();
     panel_title(fonts, "SIGN IN TO STEAM");
     ImGui::PushTextWrapPos(0);
     ImGui::TextDisabled("skate. is downloaded from Steam with DepotDownloader, so the account must own it. "
-                        "Your password is passed straight to Steam and never saved.");
+                        "Scanning the QR code with the Steam app is the recommended way in.");
     ImGui::PopTextWrapPos();
     ImGui::Spacing();
     const auto start = [&](bool qr) {
@@ -44,30 +49,43 @@ void sign_in_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui)
     pop_primary_button();
     if (qr) start(true);
     ImGui::Spacing();
-    ImGui::PushFont(fonts.caption);
-    ImGui::TextDisabled("OR SIGN IN WITH YOUR ACCOUNT");
-    ImGui::PopFont();
-    if (ui.focus) { ImGui::SetKeyboardFocusHere(); ui.focus = false; }
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputTextWithHint("##username", "Steam account name", ui.username.data(), ui.username.size(),
-        ImGuiInputTextFlags_CharsNoBlank);
-    ImGui::SetNextItemWidth(-1);
-    const bool entered = ImGui::InputTextWithHint("##password", "Password (empty if remembered)", ui.password.data(),
-        ui.password.size(), ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
-    ImGui::Checkbox("Remember me on this PC", &settings.steam_remember);
-    ImGui::Checkbox("Type a Steam Guard code instead of approving in the app", &settings.steam_prefer_code);
-    const std::string_view username(ui.username.data());
-    const bool valid = !username.empty() && username.find_first_not_of(
-        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == std::string_view::npos;
+    // The password form is collapsed by default so the QR path is the obvious one; opening it is a
+    // deliberate choice. Before this, the password field sat beside the QR button and took the
+    // keyboard focus, so it read as the intended way in — which is what prompted the "why is it
+    // asking for my Steam password" distrust. The fallback that routes the password through this
+    // process must not look like the default.
+    const bool password_open = ImGui::CollapsingHeader("Sign in with a password instead");
+    ui.password_open = password_open;   // sizes the panel next frame
+    if (password_open) {
+        ImGui::PushTextWrapPos(0);
+        // State the trust boundary plainly: unlike the QR code or a Steam Guard code, the password
+        // is handled by this process on its way to Steam's downloader. "Not saved" is about disk,
+        // not about that hop, so say both.
+        ImGui::TextDisabled("Your password is typed into ReSkate and passed to Steam's downloader to sign in; "
+                            "it is not saved to disk. The QR code and a Steam Guard code never expose a reusable secret.");
+        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
+        // Focus lands on the field only once the form is deliberately opened, never while collapsed.
+        if (ui.focus) { ImGui::SetKeyboardFocusHere(); ui.focus = false; }
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputTextWithHint("##username", "Steam account name", ui.username.data(), ui.username.size(),
+            ImGuiInputTextFlags_CharsNoBlank);
+        ImGui::SetNextItemWidth(-1);
+        const bool entered = ImGui::InputTextWithHint("##password", "Password (empty if remembered)", ui.password.data(),
+            ui.password.size(), ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::Checkbox("Remember me on this PC", &settings.steam_remember);
+        ImGui::Checkbox("Type a Steam Guard code instead of approving in the app", &settings.steam_prefer_code);
+        const std::string_view username(ui.username.data());
+        const bool valid = !username.empty() && username.find_first_not_of(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == std::string_view::npos;
+        ImGui::BeginDisabled(!valid);
+        // Not the primary button: QR above is the recommended path, so this stays visually quieter.
+        const bool sign_in = ImGui::Button("SIGN IN WITH PASSWORD", ImVec2(-1, S(36)));
+        if (sign_in || (entered && valid)) start(false);
+        ImGui::EndDisabled();
+    }
     ImGui::SetCursorPosY(panel.y - S(24) - ImGui::GetFrameHeight());
     if (ImGui::Button("CANCEL", ImVec2(S(110), 0))) { wipe(ui.password); ui.sign_in = false; }
-    ImGui::SameLine(panel.x - S(28) - S(130));
-    ImGui::BeginDisabled(!valid);
-    push_primary_button();
-    const bool sign_in = ImGui::Button("SIGN IN", ImVec2(S(130), 0));
-    pop_primary_button();
-    if (sign_in || (entered && valid)) start(false);
-    ImGui::EndDisabled();
     ImGui::End();
 }
 
