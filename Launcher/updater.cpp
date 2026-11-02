@@ -737,7 +737,7 @@ fs::path ensure_depot_downloader(const RemoteFile& file, const Progress& progres
 DWORD run_depot_downloader(const fs::path& depot_downloader, const GameBuild& game,
                            const fs::path& directory, bool validate, const SteamLogin& login,
                            const std::function<void(std::string_view)>& on_line,
-                           const PromptHandler& on_prompt, const std::atomic<bool>& cancel) {
+                           const PromptHandler& on_prompt, const std::atomic<bool>& cancel, bool console) {
     std::wstring command = quote_argument(depot_downloader.wstring()) +
         std::format(L" -app {} -depot {} -manifest {} -dir ", game.app_id, game.depot_id, widen(game.manifest_id)) +
         quote_argument(directory.wstring()) + L" -max-downloads 16";
@@ -753,6 +753,43 @@ DWORD run_depot_downloader(const fs::path& depot_downloader, const GameBuild& ga
     logging::write(logging::Level::info, logging::Channel::launcher, L"Running DepotDownloader: " + command +
         (user.empty() ? L"" : L" -username <hidden>") + options);
     command += user + options;
+
+    if (console) {
+        // Sign in in DepotDownloader's own console window: the user types their Steam password and
+        // any Steam Guard code into the official tool, so ReSkate never sees them. Nothing is piped
+        // and no prompt is relayed; we only wait for it to finish (on_line/on_prompt go unused here).
+        std::vector<wchar_t> command_buffer(command.begin(), command.end());
+        command_buffer.push_back(L'\0');
+        STARTUPINFOW startup_console{sizeof(startup_console)};
+        PROCESS_INFORMATION process{};
+        // The job ends DepotDownloader with the launcher, even if the launcher is killed.
+        Handle job{CreateJobObjectW(nullptr, nullptr)};
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (!job.value || !SetInformationJobObject(job.value, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
+            fail("Cannot create the DepotDownloader job");
+        // CREATE_NEW_CONSOLE gives it its own window and no inherited/redirected stdio, so its stdin
+        // is a real console the user types into, not a pipe this process could read.
+        if (!CreateProcessW(depot_downloader.c_str(), command_buffer.data(), nullptr, nullptr, FALSE,
+                CREATE_NEW_CONSOLE | CREATE_SUSPENDED, nullptr, depot_downloader.parent_path().c_str(),
+                &startup_console, &process))
+            fail(std::format("Cannot start DepotDownloader (Windows error {})", GetLastError()));
+        Handle thread{process.hThread};
+        Handle child{process.hProcess};
+        if (!AssignProcessToJobObject(job.value, child.value)) {
+            TerminateProcess(child.value, ERROR_CANCELLED);
+            fail(std::format("Cannot start DepotDownloader (Windows error {})", GetLastError()));
+        }
+        ResumeThread(thread.value);
+        bool cancelled{};
+        while (WaitForSingleObject(child.value, 100) == WAIT_TIMEOUT)
+            if (cancel && !cancelled) { cancelled = true; TerminateProcess(child.value, ERROR_CANCELLED); }
+        DWORD exit_code{};
+        GetExitCodeProcess(child.value, &exit_code);
+        logging::log(logging::Level::info, logging::Channel::launcher,
+            "DepotDownloader (console) exited with code {}{}", exit_code, cancelled ? " (cancelled)" : "");
+        return exit_code;
+    }
 
     SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
     Handle read_pipe, write_pipe;
