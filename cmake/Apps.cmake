@@ -176,6 +176,14 @@ if(DINGOSDK_BUILD_LAUNCHER_TESTS AND WIN32)
     add_executable(dingosdk_ebx_pick Engine/Vfs/Test/ebx_pick.cpp)
     target_link_libraries(dingosdk_ebx_pick PRIVATE dingosdk_frostbite)
     target_include_directories(dingosdk_ebx_pick PRIVATE "${PROJECT_SOURCE_DIR}")
+    # A deadlocked mod merge (or conflict pool) must fail the test loudly, not hang CI until the
+    # Release/Build workflow's own 90-minute timeout. These run the real merge worker pool / conflict
+    # pool on a game root; 300s leaves ~15-20x headroom over their normal run (tens of seconds) while
+    # catching a true hang within minutes.
+    set_tests_properties(
+        world_layer_scan mod_merge_grid mod_conflicts mod_scoring mod_merge_added_assets
+        item_list_merge mod_merge_audit store_copies
+        PROPERTIES TIMEOUT 300)
 endif()
 # "Use the game on this PC" (Launcher/local_game.h): plain std::filesystem, so it runs on Linux too.
 if(DINGOSDK_BUILD_LAUNCHER_TESTS)

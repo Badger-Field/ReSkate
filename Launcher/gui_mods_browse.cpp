@@ -470,6 +470,9 @@ void start_store_install(ModsPanel& panel, std::vector<thunderstore::Package> pa
     const auto root = panel.root;
     panel.worker = std::thread([&panel, root, packages = std::move(packages), brought = std::move(brought)] {
         std::string name, error, note;
+        // Before downloading, wait out any conflict check that is reading the mods this will replace.
+        // Say so: otherwise the modal sits on "Starting download..." for up to ~10s and reads as a freeze.
+        set_activity(panel, "Checking current mods...");
         wait_for_conflict_check(panel);   // (it may be reading the mods these replace)
         std::size_t done = 0;
         // One that fails does not stop the ones after it: each is its own download, and the

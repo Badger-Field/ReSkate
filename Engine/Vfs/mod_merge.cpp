@@ -530,6 +530,10 @@ MergeReport merge_mods(const Catalog& supplied, const MergeObserver& observe, co
         } stopOnExit{stopJobs};
         const std::size_t wantedWorkers = jobs.size() < 2 ? 0
             : std::min<std::size_t>({jobs.size(), options.live ? std::max(1U, cores / 2) : cores, options.live ? 6U : 8U});
+        // Workers still alive. The waiter below uses it to notice when every worker has stopped while
+        // the job it needs is still not done (a worker that claimed a job and then skipped it on
+        // stopJobs), and fail loudly instead of waiting on that job forever.
+        std::atomic<std::size_t> activeWorkers{wantedWorkers};
         try {
             // Threads of their own, not the system's pool: the launcher holds the pool's
             // threads back while the game starts (see world_layer_scan.cpp).
@@ -539,7 +543,7 @@ MergeReport merge_mods(const Catalog& supplied, const MergeObserver& observe, co
                     if (options.live) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
                     for (;;) {
                         const auto mine = nextJob.fetch_add(1);
-                        if (mine >= jobs.size() || stopJobs) return;
+                        if (mine >= jobs.size() || stopJobs) break;
                         run(jobs[mine]);
                         {
                             std::lock_guard lock(jobsMutex);
@@ -547,6 +551,10 @@ MergeReport merge_mods(const Catalog& supplied, const MergeObserver& observe, co
                         }
                         jobDone.notify_all();
                     }
+                    // Wake the waiter on the way out so it can see every worker has stopped, rather
+                    // than block forever on a job a worker claimed and then skipped.
+                    activeWorkers.fetch_sub(1);
+                    jobDone.notify_all();
                 });
         } catch (const std::system_error&) {} // fewer threads, or none: this one does the rest
         std::size_t settledJobs{};
@@ -566,7 +574,10 @@ MergeReport merge_mods(const Catalog& supplied, const MergeObserver& observe, co
                 run(job);
             } else {
                 std::unique_lock lock(jobsMutex);
-                jobDone.wait(lock, [&] { return job.done; });
+                jobDone.wait(lock, [&] { return job.done || activeWorkers.load() == 0; });
+                if (!job.done)
+                    throw std::runtime_error("mod merge stalled: every worker stopped before finishing " +
+                                             fs::path(relative).string());
             }
             if (job.failure) std::rethrow_exception(job.failure);
             // What it wrote goes into the patch's archives now, and what points at it follows.
