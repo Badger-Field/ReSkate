@@ -24,7 +24,12 @@ void open_sign_in(Launcher& launcher, Ui& ui, bool validate) {
 }
 
 void sign_in_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui) {
-    const auto panel = begin_panel("##sign_in_panel", size, ImVec2(S(480), S(520)));
+    // The panel is a fixed, non-scrolling window (begin_panel uses NoDecoration), so its height has
+    // to hold whatever is shown or content draws over the pinned CANCEL row. Grow it only while the
+    // password form is open; collapsed it stays compact instead of leaving a large empty gap.
+    // ui.password_open is last frame's header state (the size is fixed before the header is drawn) —
+    // one frame of lag on toggle, which is imperceptible.
+    const auto panel = begin_panel("##sign_in_panel", size, ImVec2(S(480), ui.password_open ? S(600) : S(380)));
     auto& settings = launcher.settings();
     panel_title(fonts, "SIGN IN TO STEAM");
     ImGui::PushTextWrapPos(0);
@@ -49,7 +54,9 @@ void sign_in_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui)
     // keyboard focus, so it read as the intended way in — which is what prompted the "why is it
     // asking for my Steam password" distrust. The fallback that routes the password through this
     // process must not look like the default.
-    if (ImGui::CollapsingHeader("Sign in with a password instead")) {
+    const bool password_open = ImGui::CollapsingHeader("Sign in with a password instead");
+    ui.password_open = password_open;   // sizes the panel next frame
+    if (password_open) {
         ImGui::PushTextWrapPos(0);
         // State the trust boundary plainly: unlike the QR code or a Steam Guard code, the password
         // is handled by this process on its way to Steam's downloader. "Not saved" is about disk,

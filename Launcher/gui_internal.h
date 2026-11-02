@@ -472,6 +472,7 @@ struct Ui {
     bool get_game{};            // the GET THE GAME panel: copy from this PC, choose a folder, or Steam
     bool sign_in_validate{};
     bool focus{};
+    bool password_open{};       // sign-in password form expanded; the panel grows to fit it (see sign_in_window)
     std::array<char, 65> username{};
     std::array<char, 256> password{};
     std::array<char, 16> code{};
