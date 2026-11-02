@@ -263,12 +263,13 @@ void Launcher::install_here() {
 }
 void Launcher::apply_updates() { start([this] { run_updates(); }); }
 
-void Launcher::download(bool validate, bool qr, std::string password) {
+void Launcher::download(bool validate, bool qr, std::string password, bool console) {
     {
         std::lock_guard lock(mutex_);
         wipe(password_);
         password_ = std::move(password);
         qr_login_ = qr;
+        console_login_ = console;
     }
     // Data of another build is put right by checking every file, not only fetching what is missing.
     const bool verify = validate || launcher_app::game_data_mismatched(session_.paths);
@@ -551,11 +552,16 @@ void Launcher::run_download(bool validate) {
     login.username = settings_.steam_username;
     login.remember = settings_.steam_remember;
     login.prefer_code = settings_.steam_prefer_code;
+    bool console{};
     {
         std::lock_guard lock(mutex_);
         if (qr_login_) login.username.clear();
+        console = console_login_;
     }
-    if (!login.username.empty()) set(Phase::downloading, "Signing in to Steam", login.username);
+    if (console)
+        set(Phase::downloading, "Finish signing in in the Steam window",
+            "A DepotDownloader window has opened. Type your Steam password and any Steam Guard code there.");
+    else if (!login.username.empty()) set(Phase::downloading, "Signing in to Steam", login.username);
     const auto code = update::run_depot_downloader(depot_downloader, config->game,
         session_.paths.directory, validate, login, [&](std::string_view line) {
             // DepotDownloader names the account it signs in ("Logging 'name' into Steam3"); the log
@@ -588,7 +594,7 @@ void Launcher::run_download(bool validate) {
             } else if (state_.qr.empty() && !output.message.empty() && output.message != state_.detail) {
                 state_.detail = output.message;
             }
-        }, [this](const update::Prompt& prompt) { return this->prompt(prompt); }, cancel_);
+        }, [this](const update::Prompt& prompt) { return this->prompt(prompt); }, cancel_, console);
     {
         std::lock_guard lock(mutex_);
         state_.qr.clear();

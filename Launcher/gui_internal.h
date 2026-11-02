@@ -295,10 +295,12 @@ public:
     // Where the game reads Mods from: the game folder, or -dataPath.
     fs::path mods_data_root() const;
     void apply_updates();
-    // `qr` signs in with a QR code; otherwise the saved Steam username is used.
-    // The password only lives in memory until DepotDownloader asks for it; it
-    // may be empty when DepotDownloader remembers the login.
-    void download(bool validate, bool qr, std::string password);
+    // Starts a Steam depot download. `qr` shows a QR code in the launcher (no password). `console`
+    // opens DepotDownloader in its own console window, where the user types their Steam password and
+    // any Steam Guard code into the official tool - so they never pass through ReSkate; the saved
+    // username pre-fills it. `password` is only for the legacy in-GUI prompt path and is normally
+    // empty (the sign-in UI no longer captures one).
+    void download(bool validate, bool qr, std::string password, bool console = false);
     // "Use the game on this PC": copies the skate. in `source` into ReSkate's folder, when it is the
     // supported build. `source` is only read. No network, no Steam.
     void copy_game(fs::path source);
@@ -328,6 +330,7 @@ private:
     State state_;
     std::string password_;
     bool qr_login_{true};
+    bool console_login_{};   // sign in via DepotDownloader's own console window; no password reaches ReSkate
     std::optional<std::string> answer_;
     bool has_answer_{};
     std::thread worker_;

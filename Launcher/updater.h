@@ -125,9 +125,12 @@ using PromptHandler = std::function<std::optional<std::string>(const Prompt&)>;
 // Runs DepotDownloader hidden and hands each stdout/stderr line to `on_line`.
 // Password and Steam Guard prompts go to `on_prompt`; answers are written to
 // its stdin, never its command line. Setting `cancel` terminates it.
+// With `console`, it runs in its OWN console window instead: the user types the
+// password and any Steam Guard code straight into DepotDownloader, so they never
+// pass through ReSkate, and `on_line`/`on_prompt` are not called in that mode.
 DWORD run_depot_downloader(const std::filesystem::path& depot_downloader, const GameBuild& game,
                            const std::filesystem::path& directory, bool validate, const SteamLogin& login,
                            const std::function<void(std::string_view line)>& on_line,
-                           const PromptHandler& on_prompt, const std::atomic<bool>& cancel);
+                           const PromptHandler& on_prompt, const std::atomic<bool>& cancel, bool console = false);
 
 } // namespace dingosdk::launcher_update

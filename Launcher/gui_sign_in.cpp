@@ -29,7 +29,7 @@ void sign_in_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui)
     // password form is open; collapsed it stays compact instead of leaving a large empty gap.
     // ui.password_open is last frame's header state (the size is fixed before the header is drawn) —
     // one frame of lag on toggle, which is imperceptible.
-    const auto panel = begin_panel("##sign_in_panel", size, ImVec2(S(480), ui.password_open ? S(600) : S(380)));
+    const auto panel = begin_panel("##sign_in_panel", size, ImVec2(S(480), ui.password_open ? S(520) : S(380)));
     auto& settings = launcher.settings();
     panel_title(fonts, "SIGN IN TO STEAM");
     ImGui::PushTextWrapPos(0);
@@ -37,51 +37,49 @@ void sign_in_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui)
                         "Scanning the QR code with the Steam app is the recommended way in.");
     ImGui::PopTextWrapPos();
     ImGui::Spacing();
-    const auto start = [&](bool qr) {
+    const auto start = [&](bool qr, bool console) {
+        // Save the account name (not a secret) so it pre-fills next time and the console path can use
+        // it. No password is ever passed from here: QR signs in on the phone, and the account path
+        // hands off to DepotDownloader's own console window, so ReSkate never captures a password.
         if (!qr) settings.steam_username = ui.username.data();
         launcher.save();
-        launcher.download(ui.sign_in_validate, qr, qr ? std::string() : std::string(ui.password.data()));
+        launcher.download(ui.sign_in_validate, qr, std::string(), console);
         wipe(ui.password);
         ui.sign_in = false;
     };
     push_primary_button();
     const bool qr = ImGui::Button("SCAN A QR CODE WITH THE STEAM APP", ImVec2(-1, S(46)));
     pop_primary_button();
-    if (qr) start(true);
+    if (qr) start(true, false);
     ImGui::Spacing();
-    // The password form is collapsed by default so the QR path is the obvious one; opening it is a
-    // deliberate choice. Before this, the password field sat beside the QR button and took the
-    // keyboard focus, so it read as the intended way in — which is what prompted the "why is it
-    // asking for my Steam password" distrust. The fallback that routes the password through this
-    // process must not look like the default.
-    const bool password_open = ImGui::CollapsingHeader("Sign in with a password instead");
+    // The account path is behind a collapsed header so QR stays the obvious default. It never takes a
+    // password in ReSkate: it opens DepotDownloader (Steam's downloader) in its own console window,
+    // where the user signs in. That removes the "why is a fork asking for my Steam password" distrust
+    // the in-GUI field caused - the password only ever reaches Steam through the official tool.
+    const bool password_open = ImGui::CollapsingHeader("Sign in with an account instead");
     ui.password_open = password_open;   // sizes the panel next frame
     if (password_open) {
         ImGui::PushTextWrapPos(0);
-        // State the trust boundary plainly: unlike the QR code or a Steam Guard code, the password
-        // is handled by this process on its way to Steam's downloader. "Not saved" is about disk,
-        // not about that hop, so say both.
-        ImGui::TextDisabled("Your password is typed into ReSkate and passed to Steam's downloader to sign in; "
-                            "it is not saved to disk. The QR code and a Steam Guard code never expose a reusable secret.");
+        ImGui::TextDisabled("This opens a Steam sign-in window (DepotDownloader). Type your Steam password and "
+                            "any Steam Guard code there - ReSkate never sees them. Use this if you don't have "
+                            "the Steam mobile app for the QR code.");
         ImGui::PopTextWrapPos();
         ImGui::Spacing();
-        // Focus lands on the field only once the form is deliberately opened, never while collapsed.
+        // Focus the account name only once the section is deliberately opened, never while collapsed.
         if (ui.focus) { ImGui::SetKeyboardFocusHere(); ui.focus = false; }
         ImGui::SetNextItemWidth(-1);
-        ImGui::InputTextWithHint("##username", "Steam account name", ui.username.data(), ui.username.size(),
-            ImGuiInputTextFlags_CharsNoBlank);
-        ImGui::SetNextItemWidth(-1);
-        const bool entered = ImGui::InputTextWithHint("##password", "Password (empty if remembered)", ui.password.data(),
-            ui.password.size(), ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
+        // Enter in the account-name field opens the window too. A username is required: with it,
+        // DepotDownloader does a password sign-in; without one it would fall back to a QR code.
+        const bool entered = ImGui::InputTextWithHint("##username", "Steam account name", ui.username.data(),
+            ui.username.size(), ImGuiInputTextFlags_CharsNoBlank | ImGuiInputTextFlags_EnterReturnsTrue);
         ImGui::Checkbox("Remember me on this PC", &settings.steam_remember);
-        ImGui::Checkbox("Type a Steam Guard code instead of approving in the app", &settings.steam_prefer_code);
         const std::string_view username(ui.username.data());
         const bool valid = !username.empty() && username.find_first_not_of(
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == std::string_view::npos;
         ImGui::BeginDisabled(!valid);
         // Not the primary button: QR above is the recommended path, so this stays visually quieter.
-        const bool sign_in = ImGui::Button("SIGN IN WITH PASSWORD", ImVec2(-1, S(36)));
-        if (sign_in || (entered && valid)) start(false);
+        const bool open_window = ImGui::Button("OPEN STEAM SIGN-IN WINDOW", ImVec2(-1, S(36)));
+        if (open_window || (entered && valid)) start(false, true);
         ImGui::EndDisabled();
     }
     ImGui::SetCursorPosY(panel.y - S(24) - ImGui::GetFrameHeight());
